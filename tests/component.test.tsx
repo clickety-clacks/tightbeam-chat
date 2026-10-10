@@ -81,4 +81,31 @@ describe('embedded surface', () => {
     expect(renderMessage.mock.calls.some(([record, context]) =>
       record.kind === 'message' && record.raw.custom === 42 && context.recordKey === 'B')).toBe(true);
   });
+
+  it('keeps the visible record at the same reading position when older rows are prepended', async () => {
+    const runtime = new FakeRuntime('anchor');
+    const adapter: TightbeamAdapter = { open: () => runtime };
+    render(<TightbeamChat sessionKey="anchor" adapter={adapter} />);
+    await screen.findByText('<script>plain anchor</script>');
+    const viewport = screen.getByRole('log') as HTMLElement;
+    const rect = (top: number, bottom: number): DOMRect => ({
+      top, bottom, left: 0, right: 600, width: 600, height: bottom - top,
+      x: 0, y: top, toJSON: () => ({}),
+    });
+    const original = HTMLElement.prototype.getBoundingClientRect;
+    const bounds = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this === viewport) return rect(100, 200);
+      if (this.dataset.recordKey) {
+        const rows = [...viewport.querySelectorAll<HTMLElement>('[data-record-key]')];
+        const top = 100 + rows.indexOf(this) * 50 - viewport.scrollTop;
+        return rect(top, top + 50);
+      }
+      return original.call(this);
+    });
+    viewport.scrollTop = 20;
+    fireEvent.click(screen.getByRole('button', { name: 'Load earlier messages' }));
+    await screen.findByText('<script>plain old-anchor</script>');
+    expect(viewport.scrollTop).toBe(70);
+    bounds.mockRestore();
+  });
 });
