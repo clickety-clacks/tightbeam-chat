@@ -152,6 +152,29 @@ describe('embedded surface', () => {
     await waitFor(() => expect(viewport.scrollTop).toBe(50));
     bounds.mockRestore();
   });
+
+  it('shows recoverable local submissions while an unchanged principal has an unsupported target', async () => {
+    const runtime = new FakeRuntime('recovery');
+    render(<TightbeamChat sessionKey="recovery" adapter={{ open: () => runtime }} />);
+    await screen.findByText('<script>plain recovery</script>');
+    runtime.state = { ...runtime.state, status: 'unsupported', records: [], hasOlder: false,
+      sends: [
+        { sessionKey: 'recovery', deviceId: 'device', clientMessageId: 'accepted-id',
+          content: 'accepted visible text', status: 'accepted', reconciled: true },
+        { sessionKey: 'recovery', deviceId: 'device', clientMessageId: 'pending-id',
+          content: '  exact recoverable text  ', status: 'uncertain', reconciled: false,
+          reason: 'Outcome unknown' },
+      ] };
+    for (const listener of runtime.listeners) listener();
+    expect(await screen.findByText('accepted visible text')).toBeTruthy();
+    expect(screen.getByText('exact recoverable text').textContent).toBe('  exact recoverable text  ');
+    fireEvent.click(screen.getByRole('button', { name: 'Restore to composer' }));
+    const composer = screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement;
+    expect(composer.value).toBe('  exact recoverable text  ');
+    expect(composer.disabled).toBe(true);
+    expect(screen.getByRole('button', { name: 'Send message' }).hasAttribute('disabled')).toBe(true);
+    expect(screen.queryByRole('button', { name: 'Check and retry this send' })).toBeNull();
+  });
 });
 
 function deferred<T>() {

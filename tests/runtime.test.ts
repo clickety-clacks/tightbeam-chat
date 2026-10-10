@@ -251,6 +251,35 @@ describe('framework-independent runtime', () => {
     second.dispose();
   });
 
+  it('preserves same-principal send recovery state when an older page becomes unsupported', async () => {
+    const transport = new ControlledTransport();
+    const pendingAck = deferred<HumanSendResult>();
+    let attempt = 0;
+    transport.nextSend = async () => ++attempt === 1 ? { outcome: 'accepted' } : pendingAck.promise;
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await runtime.rebuild();
+    const acceptedId = runtime.send('known accepted')!;
+    await vi.waitFor(() => expect(runtime.getSnapshot().sends[0].status).toBe('accepted'));
+    const pendingId = runtime.send('  exact pending text  ')!;
+    expect(transport.submissions).toHaveLength(2);
+    transport.readOlder = async () => { throw new UnsupportedTargetError('history schema changed'); };
+    await runtime.loadOlder();
+    const state = runtime.getSnapshot();
+    expect(state.status).toBe('unsupported');
+    expect(state.sends).toEqual([
+      expect.objectContaining({ clientMessageId: acceptedId, content: 'known accepted', status: 'accepted' }),
+      expect.objectContaining({ clientMessageId: pendingId, content: '  exact pending text  ',
+        sessionKey, deviceId: 'device', status: 'uncertain' }),
+    ]);
+    expect(runtime.send('blocked new send')).toBeNull();
+    await runtime.retrySend(pendingId);
+    pendingAck.resolve({ outcome: 'accepted' });
+    await settle();
+    expect(runtime.getSnapshot().sends[1].status).toBe('uncertain');
+    expect(transport.submissions).toHaveLength(2);
+    runtime.dispose();
+  });
+
   it('keeps ack, canonical reconciliation, refusal, uncertainty and exact retry identity distinct', async () => {
     const transport = new ControlledTransport();
     const ack = deferred<HumanSendResult>();

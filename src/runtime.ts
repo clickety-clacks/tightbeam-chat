@@ -254,6 +254,12 @@ class SessionRuntime implements ChatRuntime {
     this.generation++;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = undefined;
+    const sends = status === 'unsupported'
+      ? Object.freeze(this.state.sends.map((send) => send.status === 'pending'
+        ? { ...send, status: 'uncertain' as const,
+          reason: 'Target became unsupported before acknowledgement; send outcome is unknown.' }
+        : send))
+      : Object.freeze([]);
     this.controller?.abort();
     this.connection?.close();
     this.connection = undefined;
@@ -266,7 +272,7 @@ class SessionRuntime implements ChatRuntime {
     this.restoreDepth = 0;
     this.publish({
       generation: this.generation, status, statusDetail: reason,
-      records: Object.freeze([]), sends: Object.freeze([]), session: undefined,
+      records: Object.freeze([]), sends, session: undefined,
       hasOlder: false, loadingOlder: false, historyError: undefined,
     });
   }
@@ -490,6 +496,7 @@ class SessionRuntime implements ChatRuntime {
 
   retrySend = async (clientMessageId: string): Promise<void> => {
     if (this.disposed || !this.checkIdentity()) return;
+    if (this.state.status === 'unsupported') return;
     const send = this.state.sends.find((item) => item.clientMessageId === clientMessageId);
     if (!send || send.status !== 'uncertain' || send.reconciled || !this.profile.capabilities.humanSendDedupe) return;
     // Rebuild/query first. Absence from a bounded tail does not mean rejection.

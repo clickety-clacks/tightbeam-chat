@@ -164,12 +164,13 @@ function ChatBody({ runtime, renderMessage, className }: {
       aria-label="Conversation transcript" aria-live="polite" aria-relevant="additions">
       {state.status === 'ready' && state.records.length === 0 && <p className="tb-chat-empty">No messages yet.</p>}
       {state.records.map((record) => <RecordRow key={record.id} record={record} renderMessage={renderMessage} />)}
-      {state.sends.filter((send) => !send.reconciled).map((send) =>
+      {state.sends.filter((send) => !send.reconciled || state.status === 'unsupported').map((send) =>
         <article className="tb-chat-row tb-chat-local" key={send.clientMessageId}>
           <strong>Your message · {send.status}</strong>
           <p className="tb-chat-content">{send.content}</p>
           {send.reason && <p role="alert">{send.reason}</p>}
-          {send.status === 'uncertain' && <button type="button" onClick={() => void runtime.retrySend(send.clientMessageId)}>
+          {send.status === 'uncertain' && state.status !== 'unsupported' &&
+            <button type="button" onClick={() => void runtime.retrySend(send.clientMessageId)}>
             Check and retry this send
           </button>}
           {(send.status === 'failed' || send.status === 'uncertain') &&
