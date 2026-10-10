@@ -108,4 +108,54 @@ describe('embedded surface', () => {
     expect(viewport.scrollTop).toBe(70);
     bounds.mockRestore();
   });
+
+  it('keeps the reading anchor through a live append and respects a later reader scroll', async () => {
+    const runtime = new FakeRuntime('pending');
+    const gate = deferred<void>();
+    const originalLoadOlder = runtime.loadOlder;
+    runtime.loadOlder = async () => {
+      runtime.state = { ...runtime.state, loadingOlder: true };
+      for (const listener of runtime.listeners) listener();
+      await gate.promise;
+      await originalLoadOlder();
+      runtime.state = { ...runtime.state, loadingOlder: false };
+      for (const listener of runtime.listeners) listener();
+    };
+    render(<TightbeamChat sessionKey="pending" adapter={{ open: () => runtime }} />);
+    await screen.findByText('<script>plain pending</script>');
+    const viewport = screen.getByRole('log') as HTMLElement;
+    Object.defineProperty(viewport, 'scrollHeight', { configurable: true, value: 500 });
+    Object.defineProperty(viewport, 'clientHeight', { configurable: true, value: 100 });
+    const rect = (top: number, bottom: number): DOMRect => ({
+      top, bottom, left: 0, right: 600, width: 600, height: bottom - top,
+      x: 0, y: top, toJSON: () => ({}),
+    });
+    const original = HTMLElement.prototype.getBoundingClientRect;
+    const bounds = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this === viewport) return rect(100, 200);
+      if (this.dataset.recordKey) {
+        const rows = [...viewport.querySelectorAll<HTMLElement>('[data-record-key]')];
+        const top = 100 + rows.indexOf(this) * 50 - viewport.scrollTop;
+        return rect(top, top + 50);
+      }
+      return original.call(this);
+    });
+    viewport.scrollTop = 20;
+    fireEvent.click(screen.getByRole('button', { name: 'Load earlier messages' }));
+    runtime.state = { ...runtime.state, records: [...runtime.state.records, row('pending', 'new-pending')] };
+    for (const listener of runtime.listeners) listener();
+    await screen.findByText('<script>plain new-pending</script>');
+    viewport.scrollTop = 0;
+    fireEvent.scroll(viewport);
+    gate.resolve();
+    await screen.findByText('<script>plain old-pending</script>');
+    await waitFor(() => expect(viewport.scrollTop).toBe(50));
+    bounds.mockRestore();
+  });
 });
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}

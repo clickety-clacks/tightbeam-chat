@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createTightbeamAdapter } from '../src/runtime';
-import { AuthorizationError } from '../src/types';
+import { AuthorizationError, UnsupportedTargetError } from '../src/types';
 import type {
   CanonicalMessage, CanonicalTransition, ChangeCallbacks, ChatTransport,
   ConversationPage, ConversationRecord, HostIdentity, HumanSendResult,
@@ -175,6 +175,80 @@ describe('framework-independent runtime', () => {
     expect(runtime.getSnapshot().records[0].id).toBe('m1');
     runtime.dispose();
     vi.useRealTimers();
+  });
+
+  it('keeps a versioned notice for an older row while its stale page is in flight', async () => {
+    const transport = new ControlledTransport();
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await runtime.rebuild();
+    const gate = deferred<void>();
+    const readOlder = transport.readOlder;
+    transport.readOlder = async (key, before) => {
+      const stalePage = await readOlder(key, before);
+      await gate.promise;
+      return stalePage;
+    };
+    const loading = runtime.loadOlder();
+    await vi.waitFor(() => expect(transport.readOlderCalls).toBe(1));
+    const changed = message(5, { rowVersion: 2, content: 'updated during page read' });
+    const inserted = message(5.5, { content: 'inserted during page read' });
+    transport.rows = [...transport.rows.map((record) => record.id === changed.id ? changed : record), inserted]
+      .sort((a, b) => a.seq - b.seq);
+    transport.emit(changed);
+    transport.emit(inserted);
+    const appended = message(9, { content: 'appended during page read' });
+    transport.rows.push(appended);
+    transport.emit(appended);
+    transport.reset();
+    gate.resolve();
+    await loading;
+    expect((runtime.getSnapshot().records.find((record) => record.id === 'm5') as CanonicalMessage).content)
+      .toBe('updated during page read');
+    expect(runtime.getSnapshot().records.some((record) => record.id === 'm5.5')).toBe(true);
+    expect(runtime.getSnapshot().records.some((record) => record.id === 'm9')).toBe(true);
+    expect(runtime.getSnapshot().session?.activity).toBe('reset');
+    runtime.dispose();
+  });
+
+  it('restores across the old reading coordinate when that anchor row was deleted', async () => {
+    const transport = new ControlledTransport();
+    transport.rows = Array.from({ length: 30 }, (_, index) => message(index + 1));
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await runtime.rebuild();
+    await runtime.loadOlder();
+    const oldStart = runtime.getSnapshot().records[0];
+    transport.rows = [
+      ...transport.rows.filter((record) => record.id !== oldStart.id),
+      ...Array.from({ length: 6 }, (_, index) => message(index + 31)),
+    ];
+    const before = transport.readOlderCalls;
+    await runtime.rebuild();
+    expect(runtime.getSnapshot().status).toBe('ready');
+    expect(runtime.getSnapshot().records[0].seq).toBeLessThan(oldStart.seq);
+    expect(transport.readOlderCalls - before).toBeLessThanOrEqual(5);
+    runtime.dispose();
+  });
+
+  it('fails closed when an older page violates the pinned target contract', async () => {
+    const transport = new ControlledTransport();
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await runtime.rebuild();
+    transport.readOlder = async () => ({ records: [{ ...message(4), sessionKey: 'other' }],
+      oldestCursor: 'bad', hasOlder: true, coverage: 'fixture' });
+    await runtime.loadOlder();
+    expect(runtime.getSnapshot().status).toBe('unsupported');
+    expect(runtime.getSnapshot().records).toHaveLength(0);
+    expect(runtime.send('must not send')).toBeNull();
+    expect(transport.closed).toBeGreaterThan(0);
+    runtime.dispose();
+
+    const thrown = new ControlledTransport();
+    const second = createTightbeamAdapter(thrown, profile).open(sessionKey);
+    await second.rebuild();
+    thrown.readOlder = async () => { throw new UnsupportedTargetError('wire schema changed'); };
+    await second.loadOlder();
+    expect(second.getSnapshot().status).toBe('unsupported');
+    second.dispose();
   });
 
   it('keeps ack, canonical reconciliation, refusal, uncertainty and exact retry identity distinct', async () => {

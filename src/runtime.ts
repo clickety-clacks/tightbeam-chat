@@ -50,6 +50,8 @@ class SessionRuntime implements ChatRuntime {
   private readonly identity: HostIdentity;
   private readonly rows = new Map<string, ConversationRecord>();
   private readonly tombstones = new Map<string, number>();
+  // Notices for rows below the loaded slice can race an older-page read.
+  private readonly pendingHistoryUpserts = new Map<string, ConversationRecord>();
   private readonly sendControllers = new Map<string, AbortController>();
   private readonly pendingReconciledIds = new Set<string>();
   private connection: ChangeConnection | undefined;
@@ -105,6 +107,7 @@ class SessionRuntime implements ChatRuntime {
     this.sendControllers.clear();
     this.rows.clear();
     this.tombstones.clear();
+    this.pendingHistoryUpserts.clear();
     this.publish({
       generation: this.generation, status: 'unauthorized',
       statusDetail: 'Host principal or device changed. Open a new component lifetime.',
@@ -125,7 +128,10 @@ class SessionRuntime implements ChatRuntime {
     }
   }
 
-  private put(record: ConversationRecord): void {
+  private put(pageRecord: ConversationRecord): void {
+    const pending = this.pendingHistoryUpserts.get(pageRecord.id);
+    this.pendingHistoryUpserts.delete(pageRecord.id);
+    const record = pending && pending.rowVersion > pageRecord.rowVersion ? pending : pageRecord;
     if (record.sessionKey !== this.sessionKey) return;
     if ((this.tombstones.get(record.id) ?? -1) >= record.rowVersion) return;
     const previous = this.rows.get(record.id);
@@ -146,6 +152,14 @@ class SessionRuntime implements ChatRuntime {
     }
   }
 
+  private reconcilePendingHistory(hasOlder: boolean): void {
+    const oldest = [...this.rows.values()].sort(compareRecords)[0];
+    for (const record of this.pendingHistoryUpserts.values()) {
+      // A page may have been captured before a newly inserted row appeared.
+      if (!hasOlder || (oldest && compareRecords(record, oldest) >= 0)) this.put(record);
+    }
+  }
+
   private apply(notice: ChangeNotice): boolean {
     switch (notice.operation) {
       case 'upsert': {
@@ -153,7 +167,15 @@ class SessionRuntime implements ChatRuntime {
         if (record.sessionKey !== this.sessionKey) return false;
         const oldest = [...this.rows.values()].sort(compareRecords)[0];
         // A notice below the loaded slice cannot create a disconnected history island.
-        if (oldest && compareRecords(record, oldest) < 0 && !this.rows.has(record.id)) return false;
+        if (oldest && compareRecords(record, oldest) < 0 && !this.rows.has(record.id)) {
+          if (!this.initializing && !this.state.hasOlder) {
+            this.put(record);
+            return true;
+          }
+          const prior = this.pendingHistoryUpserts.get(record.id);
+          if (!prior || record.rowVersion > prior.rowVersion) this.pendingHistoryUpserts.set(record.id, record);
+          return false;
+        }
         this.put(record);
         return true;
       }
@@ -161,6 +183,9 @@ class SessionRuntime implements ChatRuntime {
         if (notice.sessionKey !== this.sessionKey) return false;
         const prior = this.tombstones.get(notice.id) ?? -1;
         if (notice.rowVersion > prior) this.tombstones.set(notice.id, notice.rowVersion);
+        if ((this.pendingHistoryUpserts.get(notice.id)?.rowVersion ?? -1) <= notice.rowVersion) {
+          this.pendingHistoryUpserts.delete(notice.id);
+        }
         const row = this.rows.get(notice.id);
         if (row && notice.rowVersion >= row.rowVersion) this.rows.delete(notice.id);
         return true;
@@ -225,8 +250,10 @@ class SessionRuntime implements ChatRuntime {
     }, delay);
   }
 
-  private denyAccess(reason: string): void {
+  private failClosed(status: 'unauthorized' | 'unsupported', reason: string): void {
     this.generation++;
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = undefined;
     this.controller?.abort();
     this.connection?.close();
     this.connection = undefined;
@@ -234,10 +261,13 @@ class SessionRuntime implements ChatRuntime {
     this.sendControllers.clear();
     this.rows.clear();
     this.tombstones.clear();
+    this.pendingHistoryUpserts.clear();
+    this.cursor = null;
+    this.restoreDepth = 0;
     this.publish({
-      generation: this.generation, status: 'unauthorized', statusDetail: reason,
+      generation: this.generation, status, statusDetail: reason,
       records: Object.freeze([]), sends: Object.freeze([]), session: undefined,
-      hasOlder: false, loadingOlder: false,
+      hasOlder: false, loadingOlder: false, historyError: undefined,
     });
   }
 
@@ -266,6 +296,7 @@ class SessionRuntime implements ChatRuntime {
     this.buffered = [];
     this.bufferedSession = undefined;
     this.pendingReconciledIds.clear();
+    this.pendingHistoryUpserts.clear();
     this.initializing = true;
     this.publish({
       generation, status: this.state.records.length ? 'stale' : 'loading',
@@ -302,7 +333,8 @@ class SessionRuntime implements ChatRuntime {
       let restored = 0;
       // Restore the previously visible depth from fresh canonical pages after a gap.
       while (hasOlder && cursor && priorOldest &&
-        (restored < priorDepth || !candidate.has(priorOldest.id))) {
+        (restored < priorDepth ||
+          [...candidate.values()].every((record) => compareRecords(record, priorOldest) > 0))) {
         const page = await this.transport.readOlder(this.sessionKey, cursor, controller.signal);
         if (!this.isCurrent(generation) || !this.checkIdentity()) return;
         this.validatePage(page);
@@ -327,6 +359,7 @@ class SessionRuntime implements ChatRuntime {
       this.restoreDepth = restored;
       for (const record of candidate.values()) this.put(record);
       for (const notice of prefix) this.apply(notice);
+      this.reconcilePendingHistory(hasOlder);
       if (!this.isCurrent(generation)) return;
       this.initializing = false;
       this.retryDelayMs = 250;
@@ -349,8 +382,8 @@ class SessionRuntime implements ChatRuntime {
       this.connection = undefined;
       const status = error instanceof AuthorizationError ? 'unauthorized'
         : error instanceof UnsupportedTargetError ? 'unsupported' : 'error';
-      if (status === 'unauthorized') {
-        this.denyAccess(errorText(error));
+      if (status === 'unauthorized' || status === 'unsupported') {
+        this.failClosed(status, errorText(error));
         return;
       }
       this.publish({ status, statusDetail: errorText(error) });
@@ -384,17 +417,25 @@ class SessionRuntime implements ChatRuntime {
       this.validatePage(page);
       if (page.hasOlder && page.oldestCursor === cursor) throw new InvalidCursorError('Older cursor did not advance.');
       for (const record of page.records) this.put(record);
+      this.reconcilePendingHistory(page.hasOlder);
       this.cursor = page.oldestCursor;
       this.restoreDepth++;
       this.publish({ records: recordsFrom(this.rows), hasOlder: page.hasOlder, loadingOlder: false });
     } catch (error) {
       if (!this.isCurrent(generation) || signal.aborted) return;
       if (error instanceof AuthorizationError) {
-        this.denyAccess(errorText(error));
+        this.failClosed('unauthorized', errorText(error));
+        return;
+      }
+      if (error instanceof UnsupportedTargetError) {
+        this.failClosed('unsupported', errorText(error));
+        return;
+      }
+      if (error instanceof InvalidCursorError) {
+        this.doubt(errorText(error), generation);
         return;
       }
       this.publish({ loadingOlder: false, historyError: errorText(error) });
-      if (error instanceof InvalidCursorError) this.scheduleRebuild();
     }
   };
 
@@ -428,7 +469,7 @@ class SessionRuntime implements ChatRuntime {
     } catch (error) {
       if (this.isCurrent(generation) && !controller.signal.aborted) {
         if (error instanceof AuthorizationError) {
-          this.denyAccess(errorText(error));
+          this.failClosed('unauthorized', errorText(error));
           return;
         }
         this.updateSend(submission.clientMessageId, (send) => send.reconciled ? send

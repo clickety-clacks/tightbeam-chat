@@ -101,6 +101,12 @@ function ChatBody({ runtime, renderMessage, className }: {
     const box = viewport.current;
     if (!box) return;
     if (anchor.current) {
+      // A live append can arrive before the requested older page settles.
+      if (state.status === 'ready' && state.loadingOlder) return;
+      if (state.status !== 'ready' || state.historyError) {
+        anchor.current = null;
+        return;
+      }
       const saved = anchor.current;
       const row = [...box.querySelectorAll<HTMLElement>('[data-record-key]')]
         .find((element) => element.dataset.recordKey === saved.id);
@@ -114,12 +120,18 @@ function ChatBody({ runtime, renderMessage, className }: {
     } else if (initialScrollDone.current && atBottom.current) {
       box.scrollTop = box.scrollHeight;
     }
-  }, [state.records, state.status]);
+  }, [state.records, state.status, state.loadingOlder, state.historyError]);
 
   const handleScroll = () => {
     const box = viewport.current;
     if (!box) return;
     atBottom.current = box.scrollHeight - box.scrollTop - box.clientHeight < 48;
+    if (state.loadingOlder && anchor.current) {
+      // If the reader moves during the request, preserve their new position.
+      if (atBottom.current) anchor.current = null;
+      else captureAnchor();
+      return;
+    }
     if (box.scrollTop < 80 && state.status === 'ready' && state.hasOlder && !state.loadingOlder) loadOlder();
   };
 
