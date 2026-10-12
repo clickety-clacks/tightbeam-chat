@@ -53,6 +53,8 @@ export interface Public019Config {
   sha: string;
   host: Public019Host;
   responseTimeoutMs?: number;
+  /** ChangeSocket normally emits a heartbeat every 15 seconds; default allows three intervals. */
+  heartbeatTimeoutMs?: number;
 }
 
 const record = (value: unknown): Record<string, unknown> => {
@@ -83,6 +85,18 @@ const positiveInteger = (row: Record<string, unknown>, key: string): number => {
   return value as number;
 };
 
+function messageTime(row: Record<string, unknown>): string {
+  const at = row.at;
+  if (!Number.isSafeInteger(at) || (at as number) < 0) {
+    throw new UnsupportedTargetError('Invalid millisecond at timestamp in public 0.1.9 message.');
+  }
+  const date = new Date(at as number);
+  if (!Number.isFinite(date.getTime())) {
+    throw new UnsupportedTargetError('Message at timestamp is outside the supported date range.');
+  }
+  return date.toISOString();
+}
+
 /** Decode only the source-backed REST/Firehose item shape, preserving all metadata. */
 export function decodePublic019Message(value: unknown, sessionKey: string): CanonicalMessage {
   const row = record(value);
@@ -105,7 +119,7 @@ export function decodePublic019Message(value: unknown, sessionKey: string): Cano
     content: typeof row.content === 'string' ? row.content : requiredString(row, 'content'),
     sender: optionalString(row, 'sender'),
     messageType: optionalString(row, 'messageType'),
-    createdAt: optionalString(row, 'at'),
+    createdAt: messageTime(row),
     attachments: Object.freeze([...attachments]),
     clientMessageId: optionalString(row, 'clientMessageId'),
     deviceId: optionalString(row, 'deviceId'),
@@ -165,10 +179,12 @@ function checkedBaseUrl(raw: string): string {
 export function createPublic019Transport(config: Public019Config): { transport: ChatTransport; profile: TargetProfile } {
   const baseUrl = checkedBaseUrl(config.baseUrl);
   const timeoutMs = config.responseTimeoutMs ?? 15_000;
+  const heartbeatTimeoutMs = config.heartbeatTimeoutMs ?? 45_000;
   if (!Number.isSafeInteger(config.build) || config.build < 1 ||
       config.sha.length < 8 || !PUBLIC_019_SOURCE.startsWith(config.sha) ||
-      !Number.isSafeInteger(timeoutMs) || timeoutMs < 1) {
-    throw new Error('Expected an exact public 0.1.9 build, source SHA, and positive response timeout.');
+      !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 ||
+      !Number.isSafeInteger(heartbeatTimeoutMs) || heartbeatTimeoutMs < 1) {
+    throw new Error('Expected an exact public 0.1.9 build, source SHA, and positive timeouts.');
   }
   const expectedIdentity = identity('0.1.9', config.build, config.sha);
   const profile: TargetProfile = Object.freeze({
@@ -214,12 +230,14 @@ export function createPublic019Transport(config: Public019Config): { transport: 
       let ready = false;
       let lastSeq = 0;
       let stopListening = () => {};
-      let timer: ReturnType<typeof setTimeout> | undefined;
+      let readyTimer: ReturnType<typeof setTimeout> | undefined;
+      let heartbeatTimer: ReturnType<typeof setTimeout> | undefined;
       const subscriptionId = `chat:${sessionKey}`;
       const close = () => {
         if (closed) return;
         closed = true;
-        if (timer) clearTimeout(timer);
+        if (readyTimer) clearTimeout(readyTimer);
+        if (heartbeatTimer) clearTimeout(heartbeatTimer);
         stopListening();
         signal.removeEventListener('abort', onAbort);
         channel.close();
@@ -228,6 +246,16 @@ export function createPublic019Transport(config: Public019Config): { transport: 
       let resolveReady: () => void = () => {};
       const readyPromise = new Promise<void>((resolve, reject) => { resolveReady = resolve; rejectReady = reject; });
       const onAbort = () => { close(); rejectReady(new Error('Change subscription aborted.')); };
+      const doubt = (reason: string) => {
+        if (closed) return;
+        close();
+        callbacks.onDoubt(reason);
+      };
+      const watchHeartbeat = () => {
+        if (closed) return;
+        if (heartbeatTimer) clearTimeout(heartbeatTimer);
+        heartbeatTimer = setTimeout(() => doubt('Firehose heartbeat or change timed out.'), heartbeatTimeoutMs);
+      };
       signal.addEventListener('abort', onAbort, { once: true });
       stopListening = channel.listen((raw) => {
         if (closed) return;
@@ -236,7 +264,8 @@ export function createPublic019Transport(config: Public019Config): { transport: 
           if (!ready) {
             if (frame.type === 'subscription_ready' && frame.subscriptionId === subscriptionId) {
               ready = true;
-              if (timer) clearTimeout(timer);
+              if (readyTimer) clearTimeout(readyTimer);
+              watchHeartbeat();
               resolveReady();
             } else if (frame.type === 'error' || frame.type === 'auth_result') {
               throw new UnsupportedTargetError('Protocol-2 subscription was refused.');
@@ -244,13 +273,13 @@ export function createPublic019Transport(config: Public019Config): { transport: 
             return;
           }
           if (frame.type !== 'change' && frame.type !== 'heartbeat') {
-            callbacks.onDoubt('Unexpected Firehose frame after subscription readiness.');
+            doubt('Unexpected Firehose frame after subscription readiness.');
             return;
           }
           if (!Number.isSafeInteger(frame.seq) || (frame.seq as number) < lastSeq ||
               (frame.type === 'change' && frame.seq !== lastSeq + 1) ||
               (frame.type === 'heartbeat' && frame.seq !== lastSeq)) {
-            callbacks.onDoubt('Firehose sequence gap or regression.');
+            doubt('Firehose sequence gap or regression.');
             return;
           }
           lastSeq = frame.seq as number;
@@ -258,9 +287,10 @@ export function createPublic019Transport(config: Public019Config): { transport: 
             if (frame.subscriptionId !== subscriptionId) throw new UnsupportedTargetError('Wrong Firehose subscription.');
             callbacks.onNotice(decodePublic019Notice(frame, sessionKey));
           }
+          watchHeartbeat();
         } catch (error) {
           if (!ready) { close(); rejectReady(error); }
-          else callbacks.onDoubt(error instanceof Error ? error.message : String(error));
+          else doubt(error instanceof Error ? error.message : String(error));
         }
       }, () => {
         if (closed) return;
@@ -270,8 +300,10 @@ export function createPublic019Transport(config: Public019Config): { transport: 
       });
       if (signal.aborted) onAbort();
       else if (!closed) {
-        timer = setTimeout(() => { close(); rejectReady(new Error('Firehose subscription readiness timed out.')); }, timeoutMs);
-        channel.send({ type: 'subscribe', protocolVersion: 2, subscriptionId, filters: { sessionKey } });
+        readyTimer = setTimeout(() => { close(); rejectReady(new Error('Firehose subscription readiness timed out.')); }, timeoutMs);
+        try {
+          channel.send({ type: 'subscribe', protocolVersion: 2, subscriptionId, filters: { sessionKey } });
+        } catch (error) { close(); rejectReady(error); }
       }
       await readyPromise;
       return { close };
@@ -287,7 +319,10 @@ export function createPublic019Transport(config: Public019Config): { transport: 
       }
       let channel: Public019Channel;
       try { channel = await config.host.openAuthenticatedHuman(signal); }
-      catch (error) { return { outcome: 'uncertain', reason: error instanceof Error ? error.message : String(error) }; }
+      catch (error) {
+        if (error instanceof AuthorizationError) throw error;
+        return { outcome: 'uncertain', reason: error instanceof Error ? error.message : String(error) };
+      }
       const connectedIdentity = config.host.currentIdentity();
       if (connectedIdentity.deviceId !== submittingIdentity.deviceId ||
           connectedIdentity.principalKey !== submittingIdentity.principalKey) {

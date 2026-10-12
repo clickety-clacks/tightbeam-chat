@@ -4,13 +4,13 @@ import {
   PUBLIC_019_SOURCE, createPublic019Transport, decodePublic019Message,
   decodePublic019Notice, type Public019Channel, type Public019Host,
 } from '../src/public019';
-import { UnsupportedTargetError } from '../src/types';
+import { AuthorizationError, UnsupportedTargetError } from '../src/types';
 
 const sessionKey = 's-public';
 const identity = { principalKey: 'person-1', deviceId: 'device-1' };
 const version = { server: 'tightbeam', version: '0.1.9', build: 2334, sha: PUBLIC_019_SOURCE.slice(0, 8), protocolVersion: 1 };
 const item = {
-  id: 'm_1', seq: 9, sessionKey, role: 'user', content: 'hello', at: '2026-10-12T00:00:00Z',
+  id: 'm_1', seq: 9, sessionKey, role: 'user', content: 'hello', at: Date.parse('2026-10-12T00:00:00Z'),
   sender: 'person-1', deviceId: 'device-1', clientMessageId: 'c_1', attachments: [],
   rowVersion: 9, model: 'source-supplied-model', unknownMetadata: { preserved: true },
 };
@@ -32,7 +32,7 @@ class Channel implements Public019Channel {
   disconnect() { this.disconnected?.(); }
 }
 
-function setup() {
+function setup(heartbeatTimeoutMs?: number) {
   const changes = new Channel();
   const human = new Channel();
   const paths: string[] = [];
@@ -48,7 +48,8 @@ function setup() {
     openAuthenticatedHuman: async () => human,
   };
   const { transport, profile } = createPublic019Transport({
-    baseUrl: 'https://host.example', build: 2334, sha: version.sha, host, responseTimeoutMs: 1000,
+    baseUrl: 'https://host.example', build: 2334, sha: version.sha, host,
+    responseTimeoutMs: 1000, heartbeatTimeoutMs,
   });
   return { transport, profile, paths, changes, human };
 }
@@ -61,8 +62,11 @@ describe('public 0.1.9 source mapping and unsupported gates', () => {
     expect(await transport.readSession(sessionKey, signal)).toMatchObject({ sessionKey, rowVersion: 4, raw: { clearedThroughSeq: 7 } });
     expect(paths).toEqual(['https://host.example/version', 'https://host.example/api/sessions/s-public']);
     expect(decodePublic019Message(item, sessionKey)).toMatchObject({
-      id: 'm_1', seq: 9, clientMessageId: 'c_1', raw: { unknownMetadata: { preserved: true } },
+      id: 'm_1', seq: 9, createdAt: '2026-10-12T00:00:00.000Z',
+      clientMessageId: 'c_1', raw: { at: item.at, unknownMetadata: { preserved: true } },
     });
+    expect(() => decodePublic019Message({ ...item, at: '2026-10-12T00:00:00Z' }, sessionKey))
+      .toThrow(UnsupportedTargetError);
   });
 
   it('rejects a fabricated source SHA and refuses a different observed build', async () => {
@@ -102,7 +106,8 @@ describe('public 0.1.9 source mapping and unsupported gates', () => {
       class: 'message.created', resource: 'messages', op: 'upsert',
       refs: { sessionKey, messageId: 'm_1' }, payload: item,
     };
-    expect(decodePublic019Notice(notice, sessionKey)).toMatchObject({ operation: 'upsert', record: { id: 'm_1' } });
+    expect(decodePublic019Notice(notice, sessionKey)).toMatchObject({ operation: 'upsert',
+      record: { id: 'm_1', createdAt: '2026-10-12T00:00:00.000Z', raw: { at: item.at } } });
     expect(() => decodePublic019Notice({ ...notice, payload: { ...item, messageType: 'marker' } }, sessionKey))
       .toThrow(UnsupportedTargetError);
     expect(decodePublic019Notice({ ...notice, class: 'turn.started', resource: 'turns' }, sessionKey))
@@ -111,7 +116,7 @@ describe('public 0.1.9 source mapping and unsupported gates', () => {
       .toThrow(UnsupportedTargetError);
   });
 
-  it('subscribes after host auth, waits for readiness, and flags sequence gaps and disconnect', async () => {
+  it('subscribes after host auth, waits for readiness, and fails closed on a sequence gap', async () => {
     const { transport, changes } = setup();
     const notices: string[] = [];
     const doubts: string[] = [];
@@ -128,10 +133,58 @@ describe('public 0.1.9 source mapping and unsupported gates', () => {
       refs: { sessionKey, messageId: 'm_1' }, payload: item });
     expect(notices).toEqual(['upsert']);
     changes.emit({ type: 'heartbeat', seq: 3 });
-    changes.disconnect();
-    expect(doubts).toHaveLength(2);
-    connection.close();
+    expect(doubts).toHaveLength(1);
     expect(changes.closed).toBe(true);
+    connection.close();
+    expect(doubts).toHaveLength(1);
+  });
+
+  it('detects absent post-readiness heartbeats, renews on healthy frames, and cancels on close', async () => {
+    vi.useFakeTimers();
+    try {
+      const silent = setup(50);
+      const silentDoubts: string[] = [];
+      const silentPending = silent.transport.openChanges(sessionKey, {
+        onNotice: () => {}, onDoubt: (reason) => silentDoubts.push(reason),
+      }, new AbortController().signal);
+      await Promise.resolve();
+      silent.changes.emit({ type: 'subscription_ready', subscriptionId: 'chat:s-public' });
+      await silentPending;
+      await vi.advanceTimersByTimeAsync(51);
+      expect(silentDoubts).toEqual(['Firehose heartbeat or change timed out.']);
+      expect(silent.changes.closed).toBe(true);
+
+      const healthy = setup(50);
+      const healthyDoubts: string[] = [];
+      const healthyPending = healthy.transport.openChanges(sessionKey, {
+        onNotice: () => {}, onDoubt: (reason) => healthyDoubts.push(reason),
+      }, new AbortController().signal);
+      await Promise.resolve();
+      healthy.changes.emit({ type: 'subscription_ready', subscriptionId: 'chat:s-public' });
+      const connection = await healthyPending;
+      await vi.advanceTimersByTimeAsync(40);
+      healthy.changes.emit({ type: 'heartbeat', seq: 0 });
+      await vi.advanceTimersByTimeAsync(40);
+      expect(healthyDoubts).toEqual([]);
+      connection.close();
+      await vi.advanceTimersByTimeAsync(60);
+      expect(healthyDoubts).toEqual([]);
+      expect(healthy.changes.closed).toBe(true);
+
+      const disconnected = setup(50);
+      const disconnectDoubts: string[] = [];
+      const disconnectPending = disconnected.transport.openChanges(sessionKey, {
+        onNotice: () => {}, onDoubt: (reason) => disconnectDoubts.push(reason),
+      }, new AbortController().signal);
+      await Promise.resolve();
+      disconnected.changes.emit({ type: 'subscription_ready', subscriptionId: 'chat:s-public' });
+      await disconnectPending;
+      disconnected.changes.disconnect();
+      expect(disconnectDoubts).toEqual(['Firehose disconnected.']);
+      expect(disconnected.changes.closed).toBe(true);
+      await vi.advanceTimersByTimeAsync(60);
+      expect(disconnectDoubts).toHaveLength(1);
+    } finally { vi.useRealTimers(); }
   });
 
   it('sends human /ws frames with the same client ID and distinguishes ack, refusal, uncertainty', async () => {
@@ -173,5 +226,23 @@ describe('public 0.1.9 source mapping and unsupported gates', () => {
       .toMatchObject({ outcome: 'refused' });
     expect(channel.sent).toEqual([]);
     expect(channel.closed).toBe(true);
+  });
+
+  it('preserves typed human authentication rejection without posting a frame', async () => {
+    const sendSpy = vi.spyOn(Channel.prototype, 'send');
+    const rejection = new AuthorizationError('device revoked');
+    const host: Public019Host = {
+      currentIdentity: () => identity,
+      fetch: async () => new Response(JSON.stringify(version), { status: 200 }),
+      openAuthenticatedChanges: async () => new Channel(),
+      openAuthenticatedHuman: async () => { throw rejection; },
+    };
+    const { transport } = createPublic019Transport({ baseUrl: 'https://host.example',
+      build: 2334, sha: version.sha, host });
+    await expect(transport.sendHuman({ sessionKey, deviceId: 'device-1',
+      clientMessageId: 'c_1', content: 'hello' }, new AbortController().signal))
+      .rejects.toBe(rejection);
+    expect(sendSpy).not.toHaveBeenCalled();
+    sendSpy.mockRestore();
   });
 });
