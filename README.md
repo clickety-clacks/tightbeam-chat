@@ -4,7 +4,7 @@ An original, embeddable TypeScript/React transcript and plain-text composer for 
 
 ## Current status
 
-The component and local fixture are runnable. **No Tightbeam backend version is supported or claimed compatible yet.** The inspected `v0.1.9+2269` source (`d90612da5dfaf353082d8035318c29409e8f60c0`) starts the REST collection at the oldest offset and rejects stable `before` paging. It cannot supply this component's bounded newest tail and deep backward history contract. A `0.2.0` version label observed elsewhere is not a verified alternative. The exact transition source, snapshot/notice coverage rule, approved browser transport/principal, and real-response evidence remain open. The example is a **local synthetic fixture**, not a gateway response.
+The component and local fixture are runnable. **No Tightbeam backend version is supported or claimed compatible yet.** The source-pinned [public 0.1.9 transport profile](docs/public-019-profile.md) maps verified REST detail, protocol-2 notice, and human `/ws` frame shapes at `d33c510fb62b0baa51e6b89021b064d8091800b8`. Its message collection is still oldest-first numeric-offset pagination without stable `before` access, and its REST/Firehose message projection omits the stored transition fields. The profile therefore fails the runtime's required capability gate. Snapshot/notice coverage, an approved browser principal/route, and real-response evidence remain open. The example is a **local synthetic fixture**, not a gateway response.
 
 The intended repository license is MIT, but the copyright holder's exact text has not been provided. No guessed `LICENSE` is included. This source is not ready for a license-complete release until the holder and required notices are confirmed.
 
@@ -33,8 +33,8 @@ npm run build
 import { TightbeamChat, createTightbeamAdapter } from '@clickety-clacks/tightbeam-chat';
 import '@clickety-clacks/tightbeam-chat/style.css';
 
-// transport and profile are host-owned and must be verified against the
-// exact elected target. No real-backend implementation is shipped yet.
+// transport and profile must be verified against the exact elected target.
+// The shipped public 0.1.9 profile is deliberately unsupported for this UI.
 const adapter = createTightbeamAdapter(transport, profile);
 
 <TightbeamChat
@@ -64,6 +64,6 @@ If a history response makes the target unsupported, the component blocks new sen
 
 ## Evidence and limits
 
-The automated tests use controlled synthetic transports and DOM fixtures. They exercise readiness ordering, snapshot overlap, older history across resets and switches, reconnect, exact retry identity, unsupported targets, principal changes, rendering, copy, composer, and session disposal. They do **not** establish browser access to an authorized Tightbeam gateway, a real transition source, or a released backend contract. Before claiming compatibility, the delivery owner must elect an exact source/build and obtain approved real-response and browser evidence for these paths. The runtime deliberately reports an unsupported target when its pinned identity or required capabilities fail inspection or coverage proof.
+The automated tests use controlled synthetic transports, literal source-shaped wire frames, and DOM fixtures. They exercise readiness ordering, snapshot overlap, older history across resets and switches, reconnect, exact retry identity, unsupported targets, principal changes, wire decoding, send outcomes, rendering, copy, composer, and session disposal. They do **not** establish browser access to an authorized Tightbeam gateway, a usable real transition projection, or a released backend contract. Before claiming compatibility, the delivery owner must elect an exact source/build and obtain approved real-response and browser evidence for these paths. The runtime deliberately reports an unsupported target when its pinned identity or required capabilities fail inspection or coverage proof.
 
 All application source and fixture content here was authored for this repository. No T3 Code or production T3 Chat source, assets, or runtime were copied. Dependency/license details are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
