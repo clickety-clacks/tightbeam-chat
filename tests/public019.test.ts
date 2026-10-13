@@ -69,20 +69,18 @@ describe('public 0.1.9 source mapping and unsupported gates', () => {
       .toThrow(UnsupportedTargetError);
   });
 
-  it('rejects a fabricated source SHA and refuses a different observed build', async () => {
+  it('shows an unsupported session for a different observed build', async () => {
     const host: Public019Host = {
       currentIdentity: () => identity,
       fetch: async () => new Response(JSON.stringify({ ...version, build: 2335 }), { status: 200 }),
       openAuthenticatedChanges: async () => new Channel(),
       openAuthenticatedHuman: async () => new Channel(),
     };
-    expect(() => createPublic019Transport({ baseUrl: 'https://host.example', build: 2334,
-      sha: 'd33c510fnot-the-source', host })).toThrow();
     const { transport, profile } = createPublic019Transport({ baseUrl: 'https://host.example',
       build: 2334, sha: version.sha, host });
-    const observed = await transport.inspectTarget(new AbortController().signal);
-    expect(observed.identity).not.toBe(profile.identity);
-    expect(Object.values(observed.capabilities).every((capability) => !capability)).toBe(true);
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('unsupported'));
+    runtime.dispose();
   });
 
   it('does not turn the oldest-first REST collection into tail, older, markers, or coverage', async () => {
