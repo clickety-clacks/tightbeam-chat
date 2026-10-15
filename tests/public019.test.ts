@@ -40,8 +40,10 @@ function setup(heartbeatTimeoutMs?: number) {
     currentIdentity: () => identity,
     fetch: async (path) => {
       paths.push(path);
-      const body = path.endsWith('/version') ? version :
-        { schemaVersion: 1, resource: 'sessions', item: session };
+      const body = path.endsWith('/version') ? version : path.includes('/messages?')
+        ? { schemaVersion: 1, resource: 'transcript messages', items: [item],
+          page: { oldestCursor: 'older-cursor', hasMoreBefore: true } }
+        : { schemaVersion: 1, resource: 'sessions', item: session };
       return new Response(JSON.stringify(body), { status: 200 });
     },
     openAuthenticatedChanges: async () => changes,
@@ -54,7 +56,7 @@ function setup(heartbeatTimeoutMs?: number) {
   return { transport, profile, paths, changes, human };
 }
 
-describe('public 0.1.9 source mapping and unsupported gates', () => {
+describe('public 0.1.9 released wire mapping and capability gates', () => {
   it('pins the exact observed build, retains raw metadata, and reads session detail', async () => {
     const { transport, profile, paths } = setup();
     const signal = new AbortController().signal;
@@ -69,19 +71,28 @@ describe('public 0.1.9 source mapping and unsupported gates', () => {
       .toThrow(UnsupportedTargetError);
   });
 
-  it('does not turn the oldest-first REST collection into tail, older, markers, or coverage', async () => {
-    const { transport, profile, paths, changes } = setup();
-    const signal = new AbortController().signal;
-    await expect(transport.readTail(sessionKey, signal)).rejects.toThrow(UnsupportedTargetError);
-    await expect(transport.readOlder(sessionKey, 'opaque', signal)).rejects.toThrow(UnsupportedTargetError);
-    expect(transport.proveCoverage({ sessionKey, rowVersion: 4, raw: session },
-      { records: [], oldestCursor: null, hasOlder: false, coverage: null }, [])).toBe(false);
-    expect(() => decodePublic019Message({ ...item, messageType: 'marker' }, sessionKey)).toThrow(UnsupportedTargetError);
+  it('reads bounded tail and opaque before pages and gates coverage on an active subscription', async () => {
+    const { transport, profile, changes, paths } = setup();
     const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
-    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('unsupported'));
-    expect(paths).toEqual(['https://host.example/version']);
-    expect(changes.sent).toEqual([]);
+    await vi.waitFor(() => expect(changes.sent).toHaveLength(1));
+    changes.emit({ type: 'subscription_ready', subscriptionId: 'chat:s-public' });
+    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+    expect(runtime.getSnapshot().records).toHaveLength(1);
+    const page = await transport.readOlder(sessionKey, 'opaque+/=', new AbortController().signal);
+    expect(page.oldestCursor).toBe('older-cursor');
+    expect(paths.some((path) => path.endsWith('limit=50&tail=true'))).toBe(true);
+    expect(paths.some((path) => path.endsWith('before=opaque%2B%2F%3D'))).toBe(true);
+    expect(transport.proveCoverage({ sessionKey, rowVersion: 4, raw: {} }, page, [])).toBe(true);
     runtime.dispose();
+    expect(transport.proveCoverage({ sessionKey, rowVersion: 4, raw: {} }, page, [])).toBe(false);
+  });
+
+  it('decodes all released stored marker kinds without guessing from message text', () => {
+    for (const [kind, transition] of [['harness-switch', 'harness'], ['model-retune', 'model'], ['session-restart', 'restart']]) {
+      expect(decodePublic019Message({ ...item, messageType: 'marker',
+        marker: { kind, from: 'old', to: 'new' } }, sessionKey)).toMatchObject({ kind: 'transition', transition, from: 'old', to: 'new' });
+    }
+    expect(() => decodePublic019Message({ ...item, messageType: 'marker' }, sessionKey)).toThrow(UnsupportedTargetError);
   });
 
   it('decodes protocol-2 selected-session notices and refuses fabricated marker data', () => {

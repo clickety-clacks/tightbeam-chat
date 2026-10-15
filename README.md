@@ -4,20 +4,32 @@ An original, embeddable TypeScript/React transcript and plain-text composer for 
 
 ## Current status
 
-The component and local fixture are runnable. **No Tightbeam backend version is supported or claimed compatible yet.** The source-pinned [public 0.1.9 transport profile](docs/public-019-profile.md) maps verified REST detail, protocol-2 notice, and human `/ws` frame shapes at `d33c510fb62b0baa51e6b89021b064d8091800b8`. Its message collection is still oldest-first numeric-offset pagination without stable `before` access, and its REST/Firehose message projection omits the stored transition fields. The profile therefore fails the runtime's required capability gate. Snapshot/notice coverage, an approved browser principal/route, and real-response evidence remain open. The example is a **local synthetic fixture**, not a gateway response.
+The browser example connects the existing component to a selected Tightbeam 0.1.9 gateway and session. It loads the newest 50 retained messages, pages backward, subscribes to live changes, renders stored switch/restart markers, and sends human messages. See the [released wire mapping and coverage limits](docs/public-019-profile.md). Automated validation uses synthetic wire responses; live-gateway acceptance remains to be done.
 
 The intended repository license is MIT, but the copyright holder's exact text has not been provided. No guessed `LICENSE` is included. This source is not ready for a license-complete release until the holder and required notices are confirmed.
 
-## Run the fixture example
+## Open a real session
 
-Node 24 or later is recommended. In a fresh checkout:
+Run on your development computer with Node 24 or later:
 
 ```sh
 npm ci
 npm run example
 ```
 
-Open the local URL printed by Vite. The page embeds `TightbeamChat` beside unrelated host controls. Its 124 synthetic messages include old history, source-shaped switch records, an unknown message kind, attachment metadata, an agent-context reset, and a simulated send acknowledgement. The controls are visibly labelled as fixture actions. No credentials or network gateway are involved.
+Open a link with this shape:
+
+```text
+http://127.0.0.1:5173/?gateway=https%3A%2F%2Fgateway.example&session=SESSION_KEY
+```
+
+URL-encode the gateway origin and full session key. `gateway` accepts an HTTP(S) origin including an optional port, without a path, query, fragment, or credentials. The local server must be able to reach that gateway and trust its TLS certificate. Only `gateway` and `session` are accepted in the link. Never add a token to a URL.
+
+Sign in separately on the page. You need an approved **device ID and device token** belonging to a user who can access the selected session. An administrator device can access other users' sessions. To create a credential, keep the generated device ID, click **Pair device**, ask the gateway administrator to approve that displayed ID through their normal device-approval workflow, then click **Pair device** again. The gateway fills the token field after approval. Click **Sign in**. Alternatively enter an existing paired device's matching ID and token.
+
+A session credential alone is insufficient: the release accepts it for selected-session reads and changes, but human sending requires a paired device token. The org CLI token is also unsuitable. Do not copy an agent's credential files to use this page. Pairing creates a device on the selected gateway; it may require approval before any chat can be shown.
+
+The example stores credentials only in memory. Sign-out or reload discards them. It shows the newest messages at the top; **Load earlier messages** adds older history below. Sending posts a real human message to the selected session and can wake its agent. The local Vite server supplies a same-origin HTTP/WebSocket bridge, so no gateway CORS changes are required. Keep it on loopback. A static HTML deployment alone does not include this bridge.
 
 ```sh
 npm run check
@@ -25,7 +37,7 @@ npm test
 npm run build
 ```
 
-`npm run build` emits `dist/index.js`, declarations, and `dist/index.css`. This repository is not published to npm. A consuming app can import the source or built package and its CSS after the license is settled.
+`npm run build` emits the component library into `dist`. It does not build or deploy the example server. This repository is not published to npm.
 
 ## Embed one selected session
 
@@ -34,7 +46,7 @@ import { TightbeamChat, createTightbeamAdapter } from '@clickety-clacks/tightbea
 import '@clickety-clacks/tightbeam-chat/style.css';
 
 // transport and profile must be verified against the exact elected target.
-// The shipped public 0.1.9 profile is deliberately unsupported for this UI.
+// createPublic019Transport supplies the released 0.1.9 wire mapping.
 const adapter = createTightbeamAdapter(transport, profile);
 
 <TightbeamChat
@@ -48,7 +60,7 @@ const adapter = createTightbeamAdapter(transport, profile);
 />;
 ```
 
-The host chooses `sessionKey`, owns the human principal and authenticated REST/Firehose/human `/ws` connections, and changes `identityKey` when that principal or transport lifetime changes. The component opens one isolated runtime for that selection and disposes it on switch or unmount. There is no sidebar, picker, terminal, provider control, attachment composition, or credential UI. See [the runnable fixture](examples/main.tsx) for a complete local host and [the adapter contract](docs/adapter-contract.md) before connecting a real target.
+The host chooses `sessionKey`, owns the human principal and authenticated REST/Firehose/human `/ws` connections, and changes `identityKey` when that principal or transport lifetime changes. The component opens one isolated runtime for that selection and disposes it on switch or unmount. There is no sidebar, picker, terminal, provider control, attachment composition, or credential UI. See [the browser example](examples/main.tsx) for a complete local host and [the adapter contract](docs/adapter-contract.md) before connecting a real target.
 
 `renderMessage` receives the intact canonical record and its stable key, session, default renderer, and copy operation. Return `undefined` for the default. Message `role`/`sender` remain attribution; only optional `messageType` distinguishes a message kind. Unknown and legacy kinds remain readable and copyable. Recorded transitions are separate canonical entries, ordered with messages and never inferred from message text or current session settings. Attachment metadata is displayed as text; no attachment action is promised.
 
@@ -64,6 +76,8 @@ If a history response makes the target unsupported, the component blocks new sen
 
 ## Evidence and limits
 
-The automated tests use controlled synthetic transports, literal source-shaped wire frames, and DOM fixtures. They exercise readiness ordering, snapshot overlap, older history across resets and switches, reconnect, exact retry identity, unsupported targets, principal changes, wire decoding, send outcomes, rendering, copy, composer, and session disposal. They do **not** establish browser access to an authorized Tightbeam gateway, a usable real transition projection, or a released backend contract. Before claiming compatibility, the delivery owner must elect an exact source/build and obtain approved real-response and browser evidence for these paths. The runtime deliberately reports an unsupported target when its pinned identity or required capabilities fail inspection or coverage proof.
+The automated tests use controlled synthetic transports, source-shaped wire frames, and DOM fixtures. They cover readiness ordering, snapshot overlap, paging across resets and switches, reconnect, retries, target/principal changes, wire decoding, rendering, copy, composer, and disposal. Browser checks against a simulated gateway exercise the local bridge and sign-in flow. Live-gateway use still needs owner validation with an approved credential and reachable gateway.
+
+The example does not provide session discovery, token persistence, attachment upload/download, Markdown rendering, or token streaming. Attachment metadata and plain text remain readable. An ack confirms gateway acceptance, not completion of the agent's turn.
 
 All application source and fixture content here was authored for this repository. No T3 Code or production T3 Chat source, assets, or runtime were copied. Dependency/license details are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

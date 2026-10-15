@@ -1,36 +1,12 @@
-# Public 0.1.9 source profile
+# Tightbeam 0.1.9 transport
 
-`createPublic019Transport` maps the verified public `clickety-clacks/tightbeam` `0.1.9` branch at [`d33c510fb62b0baa51e6b89021b064d8091800b8`](https://github.com/clickety-clacks/tightbeam/tree/d33c510fb62b0baa51e6b89021b064d8091800b8). This is a source-backed **partial transport**, not Chat backend acceptance, a release claim, or a route to an approved gateway. The host supplies authenticated `fetch` and fresh, already authenticated sockets; this package never acquires or stores credentials. `baseUrl` must be an approved HTTP(S) route without embedded credentials. A host can use a same-origin browser route or another separately approved route.
+The mapping was checked against [`0.1.9` at `2db1db82`](https://github.com/clickety-clacks/tightbeam/tree/2db1db82b443c85ee44ea7af03c98aaeee3c6bb7), replacing the older `d33c510f` snapshot. `PUBLIC_019_SOURCE` records the inspected source, not a mandatory gateway SHA. The host elects the gateway's build/SHA from `/version`; runtime rebuilds reject identity changes. The version must be `0.1.9`. A different gateway advertising that version must implement the same routes and shapes.
 
-The mapping covers:
+- [`router.ex`](https://github.com/clickety-clacks/tightbeam/blob/2db1db82b443c85ee44ea7af03c98aaeee3c6bb7/lib/tightbeam/wire/router.ex) exposes `GET /api/sessions/:sessionKey` and `/api/sessions/:sessionKey/messages?limit=50&tail=true`. The latter returns `resource: "transcript messages"`, `items`, and `page.oldestCursor`, `hasMoreBefore`, `newestCursor`, `hasMoreAfter`. History uses opaque `before` cursors unchanged. `tail` and cursors are mutually exclusive. The collection selects the newest bounded slice and emits that slice ascending. The example displays it newest first. No context-reset visibility filter is applied.
+- [`state_resources.ex`](https://github.com/clickety-clacks/tightbeam/blob/2db1db82b443c85ee44ea7af03c98aaeee3c6bb7/lib/tightbeam/state_resources.ex) emits `marker: {kind, from, to}` on stored marker rows. `harness-switch`, `model-retune`, and `session-restart` become ordered transitions. Unknown or incomplete markers fail decoding. All raw metadata remains available.
+- [`change_socket.ex`](https://github.com/clickety-clacks/tightbeam/blob/2db1db82b443c85ee44ea7af03c98aaeee3c6bb7/lib/tightbeam/wire/change_socket.ex) authenticates `/ws/changes?protocolVersion=2` with an `auth` frame, then completes `Hub.subscribe` before emitting `subscription_ready`. The runtime waits for that readiness before REST reads, buffers notices during reads, and unions immutable transcript rows by identity/version. This gives overlap coverage for retained append-only history. It is not a server snapshot watermark or durable event replay. Sequence gaps, unknown selected-session notices, disconnects, and missing heartbeats trigger a fresh subscription and REST rebuild.
+- [`socket.ex`](https://github.com/clickety-clacks/tightbeam/blob/2db1db82b443c85ee44ea7af03c98aaeee3c6bb7/lib/tightbeam/wire/socket.ex) authenticates human `/ws` with a paired device token, then emits `sync_complete`. Sending uses that separate connection and a `c_` client ID. Correlated ack means acceptance, not agent completion. Retry retains the exact ID/device/content for gateway deduplication. Session tokens work for their own session's REST/changes reads but **cannot send through human `/ws`**. Org CLI tokens cannot read these routes.
 
-| Public source | Implemented behavior |
-| --- | --- |
-| [`GET /version`](https://github.com/clickety-clacks/tightbeam/blob/d33c510fb62b0baa51e6b89021b064d8091800b8/lib/tightbeam/wire/router.ex#L166-L182) | Compare exact `version`, `build`, and `sha` to the host's expected identity. `/version.protocolVersion: 1` describes human chat, not Firehose protocol 2. |
-| [`GET /api/sessions/:sessionKey`](https://github.com/clickety-clacks/tightbeam/blob/d33c510fb62b0baa51e6b89021b064d8091800b8/lib/tightbeam/wire/router.ex#L395-L410) | Decode `schemaVersion:1`, `resource:sessions`, `item` and retain raw metadata including `clearedThroughSeq`. The message projection's integer millisecond `at` becomes canonical ISO display time while the original integer remains in `raw`. |
-| [`/ws/changes?protocolVersion=2`](https://github.com/clickety-clacks/tightbeam/blob/d33c510fb62b0baa51e6b89021b064d8091800b8/lib/tightbeam/wire/change_socket.ex#L176-L210) | On a fresh host-authenticated socket, send a selected-session subscription and wait for `subscription_ready`; decode source-backed `message.created`/`session.*` notices, preserve row versions, and signal sequence or connection doubt. A post-readiness watchdog detects missing heartbeats/changes after three normal 15-second heartbeat intervals by default, closes the channel, and reports doubt. Unknown selected-session classes request a rebuild. |
-| [Human `/ws` message/ack/error](https://github.com/clickety-clacks/tightbeam/blob/d33c510fb62b0baa51e6b89021b064d8091800b8/lib/tightbeam/wire/socket.ex#L418-L467) | On a fresh host-authenticated human socket after `sync_complete`, send the exact `c_` client ID, selected session, and content. Correlated `ack` means accepted; correlated `error.messageId` means refused; disconnect, abort or timeout stays uncertain. A typed host authentication rejection remains `AuthorizationError` for the runtime's unauthorized fail-closed path. The runtime retains the exact submission for an authorized retry. |
+The browser host keeps credentials in memory, sends REST bearer headers and WebSocket auth frames, and checks device/principal identity. It does not treat human replay as canonical history. The local example server forwards selected read routes and WebSocket frames without requiring gateway CORS support. It does not follow REST redirects or log tokens. This development bridge must stay bound to loopback; it is not a deployment server.
 
-The source [collection route](https://github.com/clickety-clacks/tightbeam/blob/d33c510fb62b0baa51e6b89021b064d8091800b8/lib/tightbeam/wire/router.ex#L753-L831) selects every session message ascending, starts at numeric offset zero, and accepts only `after`, not stable `before`. It cannot furnish a bounded newest tail or safe older-page anchor. The source [message serializer](https://github.com/clickety-clacks/tightbeam/blob/d33c510fb62b0baa51e6b89021b064d8091800b8/lib/tightbeam/state_resources.ex#L1347-L1385) omits `markerKind`, `markerFrom`, and `markerTo` despite their [stored columns](https://github.com/clickety-clacks/tightbeam/blob/d33c510fb62b0baa51e6b89021b064d8091800b8/lib/tightbeam/schema.ex#L594-L602). A `messageType:marker` row is rejected rather than guessed from content or current session settings. The collection retains pre-reset human rows; `clearedThroughSeq` is an agent-context boundary, not a Chat visibility filter. No source-backed snapshot-to-notice coverage proof is available here, so `proveCoverage` returns `false`.
-
-The exported profile sets `newestTail`, `stableOlderCursor`, `orderedTransitions`, and `snapshotCoverage` to `false`. `createTightbeamAdapter` therefore reports **unsupported** before opening a socket, loading history, or enabling the composer. `readTail` and `readOlder` also throw `UnsupportedTargetError` if called directly. Version string or exact `/version` match cannot override these gates.
-
-```ts
-import { createPublic019Transport, createTightbeamAdapter } from '@clickety-clacks/tightbeam-chat';
-
-const { transport, profile } = createPublic019Transport({
-  baseUrl: approvedBaseUrl,
-  build: expectedBuild,
-  sha: expectedSha,
-  host: {
-    currentIdentity: () => hostIdentity,
-    fetch: hostAuthenticatedFetch,
-    openAuthenticatedChanges: hostChangesSocket, // fresh /ws/changes socket after auth_result
-    openAuthenticatedHuman: hostHumanSocket,     // fresh /ws socket after auth_result and sync_complete
-  },
-});
-const adapter = createTightbeamAdapter(transport, profile);
-// Opening a runtime shows unsupported until the missing source capabilities exist.
-```
-
-The source-shaped tests use literal synthetic responses and controlled channels. They prove local mapping and fail-closed behavior only. They do not show a real 0.1.9 response, authorized principal, browser route, send, reconnect, or backend acceptance. Those need separate source repair, isolated real-response validation, and product review.
+Tests cover source-shaped responses and browser interaction with a simulated gateway. They do not establish acceptance against a live gateway. Production hosting, token persistence, attachment operations, and token streaming are outside this example.

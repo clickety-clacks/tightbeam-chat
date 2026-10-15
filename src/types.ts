@@ -24,7 +24,7 @@ export interface CanonicalTransition {
   readonly sessionKey: string;
   readonly seq: number;
   readonly rowVersion: number;
-  readonly transition: 'harness' | 'model';
+  readonly transition: 'harness' | 'model' | 'restart';
   readonly from?: string;
   readonly to: string;
   readonly createdAt?: string;

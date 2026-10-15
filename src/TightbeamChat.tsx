@@ -16,12 +16,13 @@ export interface TightbeamChatProps {
   readonly identityKey?: string;
   readonly renderMessage?: (record: ConversationRecord, context: RenderContext) => ReactNode | undefined;
   readonly className?: string;
+  readonly newestFirst?: boolean;
 }
 
 function defaultBody(record: ConversationRecord): ReactNode {
   if (record.kind === 'transition') {
     return <>
-      <strong>{record.transition === 'harness' ? 'Harness' : 'Model'} switched</strong>
+      <strong>{record.transition === 'restart' ? 'Session restarted' : `${record.transition === 'harness' ? 'Harness' : 'Model'} switched`}</strong>
       <span>{record.from ? ` from ${record.from}` : ''} to {record.to}</span>
     </>;
   }
@@ -71,10 +72,11 @@ function RecordRow({ record, renderMessage }: {
   </article>;
 }
 
-function ChatBody({ runtime, renderMessage, className }: {
+function ChatBody({ runtime, renderMessage, className, newestFirst }: {
   runtime: ChatRuntime;
   renderMessage?: TightbeamChatProps['renderMessage'];
   className?: string;
+  newestFirst?: boolean;
 }) {
   const state = useSyncExternalStore(runtime.subscribe, runtime.getSnapshot, runtime.getSnapshot);
   const [draft, setDraft] = useState('');
@@ -99,7 +101,7 @@ function ChatBody({ runtime, renderMessage, className }: {
 
   useLayoutEffect(() => {
     const box = viewport.current;
-    if (!box) return;
+    if (!box || newestFirst) return;
     if (anchor.current) {
       // A live append can arrive before the requested older page settles.
       if (state.status === 'ready' && state.loadingOlder) return;
@@ -132,7 +134,7 @@ function ChatBody({ runtime, renderMessage, className }: {
       else captureAnchor();
       return;
     }
-    if (box.scrollTop < 80 && state.status === 'ready' && state.hasOlder && !state.loadingOlder) loadOlder();
+    if (!newestFirst && box.scrollTop < 80 && state.status === 'ready' && state.hasOlder && !state.loadingOlder) loadOlder();
   };
 
   const submit = (event: FormEvent) => {
@@ -163,7 +165,7 @@ function ChatBody({ runtime, renderMessage, className }: {
     <div className="tb-chat-viewport" ref={viewport} onScroll={handleScroll} role="log"
       aria-label="Conversation transcript" aria-live="polite" aria-relevant="additions">
       {state.status === 'ready' && state.records.length === 0 && <p className="tb-chat-empty">No messages yet.</p>}
-      {state.records.map((record) => <RecordRow key={record.id} record={record} renderMessage={renderMessage} />)}
+      {(newestFirst ? [...state.records].reverse() : state.records).map((record) => <RecordRow key={record.id} record={record} renderMessage={renderMessage} />)}
       {state.sends.filter((send) => !send.reconciled || state.status === 'unsupported').map((send) =>
         <article className="tb-chat-row tb-chat-local" key={send.clientMessageId}>
           <strong>Your message · {send.status}</strong>
@@ -187,7 +189,7 @@ function ChatBody({ runtime, renderMessage, className }: {
 }
 
 /** One host-selected session. Changing selection/identity disposes the old runtime. */
-export function TightbeamChat({ sessionKey, adapter, identityKey, renderMessage, className }: TightbeamChatProps) {
+export function TightbeamChat({ sessionKey, adapter, identityKey, renderMessage, className, newestFirst }: TightbeamChatProps) {
   const key = `${sessionKey}\u0000${identityKey || ''}`;
   const [opened, setOpened] = useState<{ key: string; adapter: TightbeamAdapter; runtime: ChatRuntime } | null>(null);
   useEffect(() => {
@@ -198,5 +200,5 @@ export function TightbeamChat({ sessionKey, adapter, identityKey, renderMessage,
   if (!opened || opened.key !== key || opened.adapter !== adapter) {
     return <section className={`tb-chat ${className || ''}`} aria-label="Tightbeam conversation" role="status">Loading conversation…</section>;
   }
-  return <ChatBody key={key} runtime={opened.runtime} renderMessage={renderMessage} className={className} />;
+  return <ChatBody key={key} runtime={opened.runtime} renderMessage={renderMessage} className={className} newestFirst={newestFirst} />;
 }

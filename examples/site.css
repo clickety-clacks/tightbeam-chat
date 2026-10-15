@@ -8,3 +8,7 @@ aside button { display: block; margin: .6rem 0; padding: .45rem; }
 .chat-slot { height: min(75vh, 700px); min-height: 380px; }
 .chat-slot .tb-chat { height: 100%; }
 @media (max-width: 700px) { .layout { grid-template-columns: 1fr; } .chat-slot { height: 70vh; } }
+form label { display: block; margin: .75rem 0; }
+input { display: block; width: min(95%, 32rem); padding: .5rem; }
+button { cursor: pointer; padding: .5rem .8rem; }
+.chat-slot { margin-top: 1rem; }
