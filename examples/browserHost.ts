@@ -1,27 +1,12 @@
 import { AuthorizationError, type HostIdentity } from '../src/types';
 import type { Public019Channel, Public019Host } from '../src/public019';
-
-/** Only nonsecret gateway/session selection is accepted from the link. */
-export function selection(search: string) {
-  const params = new URLSearchParams(search);
-  if ([...params.keys()].some((key) => !['gateway', 'session'].includes(key))) {
-    throw new Error('Only gateway and session parameters are allowed. Never put credentials in a link.');
-  }
-  const gateway = new URL(params.get('gateway') ?? '');
-  if (!['http:', 'https:'].includes(gateway.protocol) || gateway.username || gateway.password ||
-      gateway.search || gateway.hash || gateway.pathname !== '/') throw new Error('Supply an HTTP(S) gateway origin without credentials.');
-  const sessionKey = params.get('session');
-  if (!sessionKey?.trim()) throw new Error('Supply the session key in the link.');
-  return { gateway: gateway.origin, sessionKey };
-}
+import { gatewayBridgeUrl } from './entry';
 
 // Tokens stay in this closure. No persistence, URL auth, or console logging.
 export function browserHost(gateway: string, token: string, deviceId: string): Public019Host {
   let identity: HostIdentity = { principalKey: 'pending', deviceId };
-  const base = `/gateway/${encodeURIComponent(gateway)}`;
   async function open(path: string, human: boolean, signal: AbortSignal): Promise<Public019Channel> {
-    const url = new URL(`${base}${path}`, window.location.origin);
-    url.protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const url = gatewayBridgeUrl(window.location.href, gateway, path, 'websocket');
     const socket = new WebSocket(url);
     return new Promise((resolve, reject) => {
       let ready = false;
@@ -72,38 +57,10 @@ export function browserHost(gateway: string, token: string, deviceId: string): P
   }
   return {
     currentIdentity: () => identity,
-    fetch: (input, init) => fetch(`${base}${new URL(input).pathname}${new URL(input).search}`, {
+    fetch: (input, init) => fetch(gatewayBridgeUrl(window.location.href, gateway, input, 'http'), {
       ...init, redirect: 'error', headers: { Authorization: `Bearer ${token}` },
     }),
     openAuthenticatedChanges: (signal) => open('/ws/changes?protocolVersion=2', false, signal),
     openAuthenticatedHuman: (signal) => open('/ws', true, signal),
   };
-}
-
-/** Explicit user action creates a separate browser device through normal pairing. */
-export function pairDevice(gateway: string, deviceId: string): Promise<string> {
-  const url = new URL(`/gateway/${encodeURIComponent(gateway)}/ws`, window.location.origin);
-  url.protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  return new Promise((resolve, reject) => {
-    const socket = new WebSocket(url);
-    const finish = (error?: Error, token?: string) => {
-      clearTimeout(timer); socket.close();
-      if (error) reject(error); else resolve(token!);
-    };
-    const timer = setTimeout(() => finish(new Error('Pairing timed out.')), 15000);
-    socket.onopen = () => socket.send(JSON.stringify({ type: 'pair_request', protocolVersion: 1,
-      deviceId, claimedName: 'Tightbeam Chat browser', deviceInfo: { platform: 'web', model: 'chat-example' } }));
-    socket.onmessage = (event) => {
-      try {
-        const frame = JSON.parse(String(event.data));
-        if (frame.type !== 'pair_result') return;
-        if (frame.success && typeof frame.token === 'string') finish(undefined, frame.token);
-        else finish(new Error(frame.reason === 'pair_pending'
-          ? `Ask the gateway administrator to approve device ${deviceId}, then click Pair device again.`
-          : `Pairing refused: ${frame.reason ?? 'unknown reason'}`));
-      } catch { finish(new Error('Invalid pairing response.')); }
-    };
-    socket.onerror = () => finish(new Error('Could not connect for pairing.'));
-    socket.onclose = () => finish(new Error('Pairing connection closed.'));
-  });
 }
