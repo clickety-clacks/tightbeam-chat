@@ -10,6 +10,8 @@ The repository has a standard [MIT LICENSE](LICENSE) with Copyright (c) 2026 Mik
 
 ## Open Chat with a selected target
 
+To ask an agent for a complete link by target name, install the [named-target Chat skill](skills/README.md). It resolves the target and keeps human sign-in separate.
+
 The browser entry accepts a nonsecret `gateway` origin and exact `session` key. It uses URL query APIs so reserved characters in either value round-trip. The gateway must be an HTTP(S) origin without credentials, path, query, or fragment. Only those two parameters are accepted; tokens and other credentials never belong in the link.
 
 For a configured root with no query string, the private server supplies `GET /chat-config.json` at the Chat origin. It returns JSON with a canonical `gateway` origin and the exact nonempty `sessionKey`, for example `{ "gateway": "https://gateway.example", "sessionKey": "agent:example/chat" }`. These values select a target; they are not credentials. The browser fetches this configuration at runtime, so one built asset set can serve different private deployments. A complete valid link overrides the configured default. A malformed, incomplete, duplicate, or extra query parameter is rejected without displaying its raw value or connecting to the requested target; when a valid default exists, Chat offers an explicit link back to the configured entry. Missing or invalid configuration is shown as an error rather than replaced with a placeholder target.
