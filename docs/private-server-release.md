@@ -4,7 +4,7 @@
 
 A `vMAJOR.MINOR.PATCH` tag runs the Chat checks, builds the browser application and packages a deployable server release. The published GitHub Release contains:
 
-- `tightbeam-chat-<tag>.tar.gz`, with the browser assets, persistent server, updater, service unit, license and dependency notices;
+- `tightbeam-chat-<tag>.tar.gz`, with the browser assets, persistent server, checksum-verifying updater, hourly release watcher, Chat service and watcher units, license and dependency notices;
 - `SHA256SUMS`, which records the bundle checksum; and
 - `release-provenance.json`, which records the tag, exact source commit, asset name, checksum and build tool versions.
 
@@ -37,7 +37,13 @@ node ~/.local/share/tightbeam-chat/current/bin/update-chat-release.mjs rollback
 
 For an initial installation, first download a published bundle and its `SHA256SUMS`, verify the bundle with `sha256sum -c SHA256SUMS`, and extract it into a temporary directory. Run that verified bundle's `bin/update-chat-release.mjs install <tag>` to fetch and verify the release again before it stages anything.
 
-The updater accepts only a published Chat release with the exact requested version tag, one matching server archive, a matching checksum, and provenance whose source commit resolves from that GitHub tag. It stages a verified version under `~/.local/share/tightbeam-chat/releases`, atomically switches the `current` pointer, restarts only the Chat user service and checks the served tag and source commit. If staging, restart or the served-version check fails, it restores the prior Chat pointer and restarts that version. The explicit rollback command switches to the last verified Chat version and checks its served identity.
+The updater accepts only a published Chat release with the exact requested version tag, one matching server archive, a matching checksum, and provenance whose source commit resolves from that GitHub tag. It stages a verified version under `~/.local/share/tightbeam-chat/releases`, atomically switches the `current` pointer, restarts only the Chat user service and checks the served tag and source commit. If staging, restart or the served-version check fails, it restores the prior Chat pointer and restarts that version. The first release containing the watcher installs a user-level hourly timer after Chat health passes; later releases keep its existing enabled or disabled state. An older installed updater cannot install the new timer during the first upgrade, so after that release is active, run its updater once for the same tag to install the timer:
+
+```sh
+~/.local/share/tightbeam-chat/current/bin/update-chat-release.mjs install v0.1.2
+```
+
+The watcher looks up the latest published stable Chat tag and delegates installation to the same checksum- and provenance-verifying updater. A failed activation that restores the prior release is held so the timer does not repeatedly activate the same failed tag; a newer release or an explicit operator retry remains available. Rolling back to a release without the watcher disables and removes its timer and service units. The explicit rollback command switches to the last verified Chat version and checks its served identity.
 
 The updater does not change the gateway, other services, credentials, target configuration, HTTPS ingress or public repository refs. It reports only the release identity and failure reason; it does not log target values or authorization headers.
 

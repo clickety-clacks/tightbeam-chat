@@ -8,6 +8,8 @@ import { fileURLToPath } from 'node:url';
 export const CHAT_RELEASE_REPOSITORY = 'clickety-clacks/tightbeam-chat';
 export const CHAT_SERVICE_NAME = 'tightbeam-chat.service';
 export const CHAT_SERVICE_PORT = 4178;
+export const CHAT_RELEASE_WATCH_SERVICE_NAME = 'tightbeam-chat-release-watch.service';
+export const CHAT_RELEASE_WATCH_TIMER_NAME = 'tightbeam-chat-release-watch.timer';
 
 const API_ROOT = `https://api.github.com/repos/${CHAT_RELEASE_REPOSITORY}`;
 const TAG_PATTERN = /^v\d+\.\d+\.\d+$/;
@@ -152,7 +154,9 @@ function inspectArchive(archivePath) {
       relative === 'release.json' || relative === 'server' || relative === 'server/chat-server.mjs' ||
       relative === 'public' || relative.startsWith('public/') || relative === 'bin' ||
       /^bin\/[a-z0-9-]+\.mjs$/.test(relative) || relative === 'packaging' ||
-      relative === 'packaging/tightbeam-chat.service';
+      relative === 'packaging/tightbeam-chat.service' ||
+      relative === `packaging/${CHAT_RELEASE_WATCH_SERVICE_NAME}` ||
+      relative === `packaging/${CHAT_RELEASE_WATCH_TIMER_NAME}`;
     if (!allowed) throw new Error(`The Chat bundle contains an unexpected path: ${relative}.`);
   }
 }
@@ -247,7 +251,10 @@ async function validateStagedBundle(directory, provenance) {
     'server/chat-server.mjs',
     'bin/update-chat-release.mjs',
     'bin/chat-release-updater.mjs',
+    'bin/chat-release-watch.mjs',
     'packaging/tightbeam-chat.service',
+    `packaging/${CHAT_RELEASE_WATCH_SERVICE_NAME}`,
+    `packaging/${CHAT_RELEASE_WATCH_TIMER_NAME}`,
     'LICENSE',
     'THIRD_PARTY_NOTICES.md',
   ];
@@ -267,6 +274,73 @@ function systemctl(args) {
   }
 }
 
+async function readOptionalText(filename) {
+  try {
+    return await fs.readFile(filename, 'utf8');
+  } catch (error) {
+    if (error?.code === 'ENOENT') return undefined;
+    throw error;
+  }
+}
+
+async function inspectReleaseWatcher({ homeDir, releaseDir, serviceManager, allowMissingRelease = false }) {
+  const servicePath = path.join(homeDir, '.config/systemd/user', CHAT_RELEASE_WATCH_SERVICE_NAME);
+  const timerPath = path.join(homeDir, '.config/systemd/user', CHAT_RELEASE_WATCH_TIMER_NAME);
+  const packagedService = releaseDir
+    ? await readOptionalText(path.join(releaseDir, 'packaging', CHAT_RELEASE_WATCH_SERVICE_NAME))
+    : undefined;
+  const packagedTimer = releaseDir
+    ? await readOptionalText(path.join(releaseDir, 'packaging', CHAT_RELEASE_WATCH_TIMER_NAME))
+    : undefined;
+  const priorService = await readOptionalText(servicePath);
+  const priorTimer = await readOptionalText(timerPath);
+  const timerEnabled = await serviceManager.isWatchTimerEnabled();
+
+  if (packagedService === undefined || packagedTimer === undefined) {
+    if (!allowMissingRelease || packagedService !== undefined || packagedTimer !== undefined) {
+      throw new Error('The selected Chat release does not contain complete release watcher units.');
+    }
+    if (priorService !== undefined || priorTimer !== undefined || timerEnabled) {
+      throw new Error('Chat watcher units exist but no adjacent verified release supplies their expected contents.');
+    }
+    return { servicePath, timerPath, installed: false, timerEnabled: false };
+  }
+
+  if ((priorService === undefined) !== (priorTimer === undefined)) {
+    throw new Error('The Chat release watcher units are only partially installed; no release was staged.');
+  }
+  if (priorService !== undefined && (priorService !== packagedService || priorTimer !== packagedTimer)) {
+    throw new Error('The Chat release watcher units have local changes; no release was staged.');
+  }
+  if (priorService === undefined && timerEnabled) {
+    throw new Error('The Chat release watcher timer is enabled without its managed units; no release was staged.');
+  }
+
+  return {
+    servicePath,
+    timerPath,
+    packagedService,
+    packagedTimer,
+    installed: priorService !== undefined,
+    timerEnabled,
+  };
+}
+
+async function installNewReleaseWatcher(watcher, serviceManager) {
+  await writeAtomic(watcher.servicePath, watcher.packagedService);
+  await writeAtomic(watcher.timerPath, watcher.packagedTimer);
+  await serviceManager.reload();
+  await serviceManager.enableWatchTimer();
+}
+
+async function removeNewReleaseWatcher(watcher, serviceManager) {
+  if (await serviceManager.isWatchTimerEnabled()) await serviceManager.disableWatchTimer();
+  if (await exists(watcher.servicePath)) await serviceManager.stopWatchService();
+  await fs.rm(watcher.servicePath, { force: true });
+  await fs.rm(watcher.timerPath, { force: true });
+  await serviceManager.reload();
+}
+
 const defaultServiceManager = {
   async reload() { systemctl(['daemon-reload']); },
   async isEnabled() {
@@ -276,6 +350,13 @@ const defaultServiceManager = {
   async enable() { systemctl(['enable', CHAT_SERVICE_NAME]); },
   async restart() { systemctl(['restart', CHAT_SERVICE_NAME]); },
   async stopAndDisable() { systemctl(['disable', '--now', CHAT_SERVICE_NAME]); },
+  async isWatchTimerEnabled() {
+    try { return systemctl(['is-enabled', CHAT_RELEASE_WATCH_TIMER_NAME]) === 'enabled'; }
+    catch { return false; }
+  },
+  async enableWatchTimer() { systemctl(['enable', '--now', CHAT_RELEASE_WATCH_TIMER_NAME]); },
+  async disableWatchTimer() { systemctl(['disable', '--now', CHAT_RELEASE_WATCH_TIMER_NAME]); },
+  async stopWatchService() { systemctl(['stop', CHAT_RELEASE_WATCH_SERVICE_NAME]); },
 };
 
 async function defaultHealthCheck(expected) {
@@ -406,22 +487,57 @@ export async function installChatRelease(tag, {
     }
   }
 
+  const watcher = await inspectReleaseWatcher({ homeDir, releaseDir: target, serviceManager });
+
   if (priorCurrent === target) {
     if (priorUnit === undefined) throw new Error('The active Chat release has no managed service unit; no update was attempted.');
     await healthCheck({ tag, sourceCommit: verified.provenance.sourceCommit });
-    return { tag, sourceCommit: verified.provenance.sourceCommit, assetSha256: verified.provenance.sha256, unchanged: true };
+    if (!watcher.installed) {
+      try {
+        await installNewReleaseWatcher(watcher, serviceManager);
+      } catch (error) {
+        try {
+          await removeNewReleaseWatcher(watcher, serviceManager);
+        } catch (cleanupError) {
+          const detail = cleanupError instanceof Error ? cleanupError.message : 'unknown watcher cleanup failure';
+          throw new Error(`Chat is already current, but release watcher setup failed and cleanup was incomplete: ${detail}`);
+        }
+        throw new Error(`Chat is already current, but release watcher setup failed: ${error instanceof Error ? error.message : 'unknown watcher failure'}`);
+      }
+    }
+    return {
+      tag,
+      sourceCommit: verified.provenance.sourceCommit,
+      assetSha256: verified.provenance.sha256,
+      unchanged: true,
+      automaticUpdates: watcher.installed ? (watcher.timerEnabled ? 'enabled' : 'disabled') : 'enabled',
+    };
   }
 
   const unitWasPresent = priorUnit !== undefined;
+  const watcherWasInstalledHere = !watcher.installed;
   try {
     if (!unitWasPresent) await writeAtomic(unitPath, packagedUnit);
+    if (watcherWasInstalledHere) {
+      await writeAtomic(watcher.servicePath, watcher.packagedService);
+      await writeAtomic(watcher.timerPath, watcher.packagedTimer);
+    }
     await serviceManager.reload();
     if (!unitWasPresent) await serviceManager.enable();
     await atomicSymlink(currentLink, target);
     if (priorCurrent) await atomicSymlink(previousLink, priorCurrent);
     await serviceManager.restart();
     await healthCheck({ tag, sourceCommit: verified.provenance.sourceCommit });
+    if (watcherWasInstalledHere) await serviceManager.enableWatchTimer();
   } catch (error) {
+    let watcherRollbackError;
+    if (watcherWasInstalledHere) {
+      try {
+        await removeNewReleaseWatcher(watcher, serviceManager);
+      } catch (cleanupError) {
+        watcherRollbackError = cleanupError instanceof Error ? cleanupError.message : 'unknown watcher cleanup failure';
+      }
+    }
     try {
       await rollbackAfterFailedActivation({
         currentLink,
@@ -437,12 +553,19 @@ export async function installChatRelease(tag, {
     } catch (rollbackError) {
       const activation = error instanceof Error ? error.message : 'Chat activation failed.';
       const rollback = rollbackError instanceof Error ? rollbackError.message : 'unknown rollback failure';
+      const watcherDetail = watcherRollbackError ? ` Release watcher cleanup also failed: ${watcherRollbackError}.` : '';
       if (!priorCurrent) {
-        throw new Error(`${activation} No prior Chat release existed; first-install cleanup failed: ${rollback}. The candidate may still be running.`);
+        throw new Error(`${activation} No prior Chat release existed; first-install cleanup failed: ${rollback}.${watcherDetail} The candidate may still be running.`);
       }
-      throw new Error(`${activation} Chat rollback failed: ${rollback}`);
+      throw new Error(`${activation} Chat rollback failed: ${rollback}.${watcherDetail}`);
     }
     const activation = error instanceof Error ? error.message : 'Chat activation failed.';
+    if (watcherRollbackError) {
+      if (!priorCurrent) {
+        throw new Error(`${activation} No prior Chat release existed; the Chat candidate was stopped and disabled, but watcher cleanup failed: ${watcherRollbackError}.`);
+      }
+      throw new Error(`${activation} The prior Chat version was restored, but release watcher cleanup failed: ${watcherRollbackError}.`);
+    }
     if (!priorCurrent) {
       throw new Error(`${activation} No prior Chat release existed; the first-install candidate was stopped and disabled, and its active pointers and service unit were removed.`);
     }
@@ -455,6 +578,7 @@ export async function installChatRelease(tag, {
     assetSha256: verified.provenance.sha256,
     staged: stagedHere,
     unchanged: false,
+    automaticUpdates: watcherWasInstalledHere ? 'enabled' : (watcher.timerEnabled ? 'enabled' : 'disabled'),
   };
 }
 
@@ -487,22 +611,89 @@ export async function rollbackChatRelease({
     throw new Error('A Chat version identity is missing; no rollback was attempted.');
   }
 
-  await atomicSymlink(currentLink, priorPrevious);
-  await atomicSymlink(previousLink, priorCurrent);
+  const previousHasWatcher = await exists(path.join(priorPrevious, 'bin/chat-release-watch.mjs'));
+  const currentHasWatcher = await exists(path.join(priorCurrent, 'bin/chat-release-watch.mjs'));
+  const watcherSource = currentHasWatcher ? priorCurrent : previousHasWatcher ? priorPrevious : undefined;
+  const watcher = await inspectReleaseWatcher({
+    homeDir,
+    releaseDir: watcherSource,
+    serviceManager,
+    allowMissingRelease: true,
+  });
+  let watcherRemoved = false;
+  if (!previousHasWatcher && watcher.installed) {
+    try {
+      if (watcher.timerEnabled) await serviceManager.disableWatchTimer();
+      await serviceManager.stopWatchService();
+      await fs.rm(watcher.servicePath, { force: true });
+      await fs.rm(watcher.timerPath, { force: true });
+      await serviceManager.reload();
+      watcherRemoved = true;
+    } catch (error) {
+      try {
+        await writeAtomic(watcher.servicePath, watcher.packagedService);
+        await writeAtomic(watcher.timerPath, watcher.packagedTimer);
+        await serviceManager.reload();
+        if (watcher.timerEnabled) await serviceManager.enableWatchTimer();
+      } catch (restoreError) {
+        const detail = restoreError instanceof Error ? restoreError.message : 'unknown watcher restoration failure';
+        throw new Error(`The release watcher could not be disabled for rollback and its previous state could not be restored: ${detail}`);
+      }
+      throw new Error(`The release watcher could not be disabled for rollback: ${error instanceof Error ? error.message : 'unknown watcher error'}`);
+    }
+  }
+
+  let watcherInstalledHere = false;
   try {
+    await atomicSymlink(currentLink, priorPrevious);
+    await atomicSymlink(previousLink, priorCurrent);
     await serviceManager.reload();
     await serviceManager.restart();
     await healthCheck({ tag: previousIdentity.tag, sourceCommit: previousIdentity.sourceCommit });
+    if (previousHasWatcher && !watcher.installed) {
+      watcherInstalledHere = true;
+      await installNewReleaseWatcher(watcher, serviceManager);
+    }
   } catch (error) {
-    await restoreSymlink(currentLink, priorCurrent);
-    await restoreSymlink(previousLink, priorPrevious);
+    try {
+      await restoreSymlink(currentLink, priorCurrent);
+      await restoreSymlink(previousLink, priorPrevious);
+    } catch (restoreError) {
+      const detail = restoreError instanceof Error ? restoreError.message : 'unknown pointer restoration failure';
+      throw new Error(`Chat rollback failed and its active pointers could not be restored: ${detail}`);
+    }
+    let watcherRestoreError;
+    if (watcherInstalledHere) {
+      try {
+        await removeNewReleaseWatcher(watcher, serviceManager);
+      } catch (cleanupError) {
+        watcherRestoreError = cleanupError instanceof Error ? cleanupError.message : 'unknown watcher cleanup failure';
+      }
+    }
+    if (watcherRemoved) {
+      try {
+        await writeAtomic(watcher.servicePath, watcher.packagedService);
+        await writeAtomic(watcher.timerPath, watcher.packagedTimer);
+        await serviceManager.reload();
+        if (watcher.timerEnabled) await serviceManager.enableWatchTimer();
+      } catch {
+        throw new Error('Chat rollback failed and the release watcher could not be restored.');
+      }
+    }
     try {
       await serviceManager.restart();
       await healthCheck({ tag: currentIdentity.tag, sourceCommit: currentIdentity.sourceCommit });
     } catch {
       throw new Error('Chat rollback failed and the current Chat service could not be restored.');
     }
+    if (watcherRestoreError) {
+      throw new Error(`${error instanceof Error ? error.message : 'Chat rollback failed.'} The current Chat version was restored, but watcher cleanup failed: ${watcherRestoreError}.`);
+    }
     throw new Error(`${error instanceof Error ? error.message : 'Chat rollback failed.'} The current Chat version was restored.`);
   }
-  return { tag: previousIdentity.tag, sourceCommit: previousIdentity.sourceCommit };
+  return {
+    tag: previousIdentity.tag,
+    sourceCommit: previousIdentity.sourceCommit,
+    automaticUpdates: previousHasWatcher && (watcher.installed ? watcher.timerEnabled : true) ? 'enabled' : 'disabled',
+  };
 }

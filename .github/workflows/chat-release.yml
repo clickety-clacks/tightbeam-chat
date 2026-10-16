@@ -26,6 +26,7 @@ jobs:
       - run: npm run release:assert-tag
       - run: npm run check
       - run: npm test
+      - run: npm run test:release-watch
       - run: npm run build
       - run: npm run build:chat-server
       - run: npm run package:chat-release
