@@ -63,7 +63,7 @@ export function HostPage({ defaultTarget, configurationError }: {
       {resolution.canRecoverToConfigured &&
         <a href={window.location.pathname || '/'}>Use configured default target</a>}
     </div>}
-    {!secureContext && <p role="alert">
+    {selected && !secureContext && <p role="alert">
       Sign-in requires a secure browser context. Open Chat over private HTTPS; localhost is available for local development.
     </p>}
     {selected && (adapter ? <>
