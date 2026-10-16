@@ -18,8 +18,15 @@ import {
 const SOURCE_COMMIT = '1234567890abcdef1234567890abcdef12345678';
 const createdServers = [];
 const temporaryRoots = [];
+const serverConnections = new WeakMap();
 
 async function listen(server, port = 0) {
+  const sockets = new Set();
+  serverConnections.set(server, sockets);
+  server.on('connection', (socket) => {
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
+  });
   await new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(port, '127.0.0.1', resolve);
@@ -38,6 +45,7 @@ async function unusedPort() {
 async function closeServer(server) {
   const index = createdServers.indexOf(server);
   if (index >= 0) createdServers.splice(index, 1);
+  for (const socket of serverConnections.get(server) ?? []) socket.destroy();
   await new Promise((resolve) => server.close(() => resolve()));
 }
 
@@ -275,7 +283,7 @@ function fixtureFetch(tag, sourceCommit, fixture, { corruptAsset, failAsset, abs
       if (assetName === failAsset) return new Response('', { status: 503 });
       let bytes = fixture.assets.get(assetName);
       if (assetName === corruptAsset) bytes = Buffer.concat([bytes, Buffer.from('corrupt')]);
-      return new Response(bytes);
+      return new Response(Uint8Array.from(bytes));
     }
     return new Response('', { status: 404 });
   };
@@ -459,7 +467,7 @@ describe('Chat release packaging and updater', () => {
     const tag = 'v1.2.3';
     const cases = [
       { label: 'unpublished', options: { absentRelease: true }, message: /HTTP 404/ },
-      { label: 'corrupt', options: { corruptAsset: `tightbeam-chat-${tag}.tar.gz` }, message: /provenance/ },
+      { label: 'corrupt', options: { corruptAsset: `tightbeam-chat-${tag}.tar.gz` }, message: /size does not match/ },
       { label: 'failed transfer', options: { failAsset: 'SHA256SUMS' }, message: /HTTP 503/ },
     ];
     for (const scenario of cases) {
