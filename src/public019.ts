@@ -21,6 +21,10 @@ export const PUBLIC_019_SOURCE = 'f724fc41089335887e6eb76bfd89d9b6d50db7cd';
 export const PUBLIC_019_BUILD = 2476;
 /** The release's /version.sha is a short build stamp. */
 export const PUBLIC_019_GATEWAY_SHA = 'f724fc41';
+/** Later 0.1.9 source assessed against the same required Chat wire behavior. */
+export const PUBLIC_019_SOURCE_2844 = 'ad3e0f802d5706f6ab77bae8f84c87492ba2cf56';
+export const PUBLIC_019_BUILD_2844 = 2844;
+export const PUBLIC_019_GATEWAY_SHA_2844 = 'ad3e0f80';
 
 const capabilities: TargetCapabilities = Object.freeze({
   newestTail: true,
@@ -229,7 +233,8 @@ export function createPublic019Transport(config: Public019Config): { transport: 
     throw new Error('Expected an exact public 0.1.9 build, source SHA, and positive timeouts.');
   }
   const expectedIdentity = identity('0.1.9', config.build, config.sha);
-  const sourceBacked = config.build === PUBLIC_019_BUILD && config.sha === PUBLIC_019_GATEWAY_SHA;
+  const sourceBacked = (config.build === PUBLIC_019_BUILD && config.sha === PUBLIC_019_GATEWAY_SHA) ||
+    (config.build === PUBLIC_019_BUILD_2844 && config.sha === PUBLIC_019_GATEWAY_SHA_2844);
   const profile: TargetProfile = Object.freeze({
     identity: expectedIdentity,
     label: `Tightbeam 0.1.9 build ${config.build}`,

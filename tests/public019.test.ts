@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createTightbeamAdapter } from '../src/runtime';
 import {
-  PUBLIC_019_BUILD, PUBLIC_019_GATEWAY_SHA, createPublic019Transport, decodePublic019Message,
+  PUBLIC_019_BUILD, PUBLIC_019_GATEWAY_SHA, PUBLIC_019_BUILD_2844, PUBLIC_019_GATEWAY_SHA_2844,
+  createPublic019Transport, decodePublic019Message,
   decodePublic019Notice, type Public019Channel, type Public019Host,
 } from '../src/public019';
 import { AuthorizationError, UnsupportedTargetError } from '../src/types';
@@ -9,6 +10,7 @@ import { AuthorizationError, UnsupportedTargetError } from '../src/types';
 const sessionKey = 's-public';
 const identity = { principalKey: 'person-1', deviceId: 'device-1' };
 const version = { server: 'tightbeam', version: '0.1.9', build: PUBLIC_019_BUILD, sha: PUBLIC_019_GATEWAY_SHA, protocolVersion: 1 };
+const assessed2844 = { ...version, build: PUBLIC_019_BUILD_2844, sha: PUBLIC_019_GATEWAY_SHA_2844 };
 const item = {
   id: 'm_1', seq: 9, sessionKey, role: 'user', content: 'hello', at: Date.parse('2026-10-12T00:00:00Z'),
   sender: 'person-1', deviceId: 'device-1', clientMessageId: 'c_1', attachments: [],
@@ -32,7 +34,7 @@ class Channel implements Public019Channel {
   disconnect() { this.disconnected?.(); }
 }
 
-function setup(heartbeatTimeoutMs?: number, observedVersion = version) {
+function setup(heartbeatTimeoutMs?: number, observedVersion = version, configuredVersion = observedVersion) {
   const changes = new Channel();
   const human = new Channel();
   const paths: string[] = [];
@@ -50,16 +52,18 @@ function setup(heartbeatTimeoutMs?: number, observedVersion = version) {
     openAuthenticatedHuman: async () => human,
   };
   const { transport, profile } = createPublic019Transport({
-    baseUrl: 'https://host.example', build: observedVersion.build, sha: observedVersion.sha, host,
+    baseUrl: 'https://host.example', build: configuredVersion.build, sha: configuredVersion.sha, host,
     responseTimeoutMs: 1000, heartbeatTimeoutMs,
   });
   return { transport, profile, paths, changes, human };
 }
 
 describe('public 0.1.9 released wire mapping and capability gates', () => {
-  it('keeps unexamined 0.1.9 build and source identities unsupported while the released build opens', async () => {
+  it('opens only either assessed build/SHA pair and refuses unexamined or mixed pairs', async () => {
     for (const observed of [{ ...version, build: version.build + 1 },
-      { ...version, sha: '00000000' }]) {
+      { ...version, sha: '00000000' },
+      { ...version, sha: assessed2844.sha },
+      { ...assessed2844, sha: version.sha }]) {
       const other = setup(undefined, observed);
       const runtime = createTightbeamAdapter(other.transport, other.profile).open(sessionKey);
       await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('unsupported'));
@@ -70,12 +74,27 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
       runtime.dispose();
     }
 
-    const supported = setup();
-    const ready = createTightbeamAdapter(supported.transport, supported.profile).open(sessionKey);
-    await vi.waitFor(() => expect(supported.changes.sent).toHaveLength(1));
-    supported.changes.emit({ type: 'subscription_ready', subscriptionId: 'chat:s-public' });
-    await vi.waitFor(() => expect(ready.getSnapshot().status).toBe('ready'));
-    ready.dispose();
+    for (const assessed of [version, assessed2844]) {
+      const supported = setup(undefined, assessed);
+      const ready = createTightbeamAdapter(supported.transport, supported.profile).open(sessionKey);
+      await vi.waitFor(() => expect(supported.changes.sent).toHaveLength(1));
+      supported.changes.emit({ type: 'subscription_ready', subscriptionId: 'chat:s-public' });
+      await vi.waitFor(() => expect(ready.getSnapshot().status).toBe('ready'));
+      expect(ready.getSnapshot().records.map((record) => record.id)).toEqual(['m_1']);
+      ready.dispose();
+    }
+  });
+
+  it('refuses an observed target that differs from its assessed configuration before subscribing', async () => {
+    for (const observed of [version, { ...assessed2844, sha: '00000000' }]) {
+      const mismatched = setup(undefined, observed, assessed2844);
+      const runtime = createTightbeamAdapter(mismatched.transport, mismatched.profile).open(sessionKey);
+      await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('unsupported'));
+      expect(runtime.getSnapshot().statusDetail).toContain('identity');
+      expect(mismatched.changes.sent).toHaveLength(0);
+      expect(runtime.send('must not post')).toBeNull();
+      runtime.dispose();
+    }
   });
 
   it('refreshes activity after a committed turn arrives during the history read', async () => {
