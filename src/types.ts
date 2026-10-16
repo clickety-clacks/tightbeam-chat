@@ -24,7 +24,7 @@ export interface CanonicalTransition {
   readonly sessionKey: string;
   readonly seq: number;
   readonly rowVersion: number;
-  readonly transition: 'harness' | 'model';
+  readonly transition: 'harness' | 'model' | 'restart';
   readonly from?: string;
   readonly to: string;
   readonly createdAt?: string;
@@ -53,6 +53,7 @@ export type ChangeNotice =
   | { readonly operation: 'upsert'; readonly record: ConversationRecord }
   | { readonly operation: 'delete'; readonly sessionKey: string; readonly id: string; readonly rowVersion: number }
   | { readonly operation: 'session'; readonly session: SessionRecord }
+  | { readonly operation: 'ignore'; readonly sessionKey: string; readonly resource: string }
   | { readonly operation: 'observe' | 'unknown'; readonly sessionKey: string; readonly resource: string };
 
 export interface HostIdentity {

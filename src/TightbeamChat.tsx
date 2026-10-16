@@ -21,7 +21,7 @@ export interface TightbeamChatProps {
 function defaultBody(record: ConversationRecord): ReactNode {
   if (record.kind === 'transition') {
     return <>
-      <strong>{record.transition === 'harness' ? 'Harness' : 'Model'} switched</strong>
+      <strong>{record.transition === 'restart' ? 'Session restarted' : `${record.transition === 'harness' ? 'Harness' : 'Model'} switched`}</strong>
       <span>{record.from ? ` from ${record.from}` : ''} to {record.to}</span>
     </>;
   }

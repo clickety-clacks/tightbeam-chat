@@ -58,6 +58,19 @@ describe('embedded surface', () => {
     expect(runtime.sent).toEqual(['  exact  ']);
   });
 
+  it('keeps chronological row order when loading older history', async () => {
+    const runtime = new FakeRuntime('order');
+    runtime.state = { ...runtime.state,
+      records: [row('order', 'earlier'), row('order', 'newest')] };
+    render(<TightbeamChat sessionKey="order" adapter={{ open: () => runtime }} />);
+    const recordKeys = () => [...document.querySelectorAll('[data-record-key]')].map((element) =>
+      element.getAttribute('data-record-key'));
+    expect(recordKeys()).toEqual(['earlier', 'newest']);
+    fireEvent.click(screen.getByRole('button', { name: 'Load earlier messages' }));
+    await screen.findByText('<script>plain old-order</script>');
+    expect(recordKeys()).toEqual(['old-order', 'earlier', 'newest']);
+  });
+
   it('disposes the previous selection, drops its draft, and passes intact metadata to host rendering', async () => {
     const runtimes: FakeRuntime[] = [];
     const adapter: TightbeamAdapter = { open: (key) => {

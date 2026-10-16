@@ -1,5 +1,78 @@
-import { defineConfig } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 import { resolve } from 'node:path';
+import http from 'node:http';
+import https from 'node:https';
 
-export default defineConfig({ root: resolve(import.meta.dirname), plugins: [react()] });
+// Development-only same-origin bridge. Never expose this server to a network.
+function gatewayBridge(): Plugin {
+  return {
+    name: 'chat-gateway-bridge',
+    configureServer(server) {
+      function target(raw = '') {
+        const match = /^\/gateway\/([^/]+)(\/.*)$/.exec(raw);
+        if (!match) return null;
+        const base = new URL(decodeURIComponent(match[1]));
+        if (!['http:', 'https:'].includes(base.protocol) || base.username || base.password ||
+            base.search || base.hash || base.pathname !== '/') throw new Error('Invalid gateway origin');
+        const path = match[2];
+        if (!/^\/(version|api\/sessions(?:\/|$)|ws(?:\?|$|\/changes))/.test(path)) throw new Error('Unsupported route');
+        return { base, path };
+      }
+      const allowed = (req: http.IncomingMessage) => {
+        const origin = req.headers.origin;
+        return !origin || origin === `http://${req.headers.host}`;
+      };
+      server.middlewares.use((req, res, next) => {
+        if (!req.url?.startsWith('/gateway/')) return next();
+        try {
+          if (!allowed(req) || req.method !== 'GET') { res.writeHead(403).end(); return; }
+          const route = target(req.url);
+          if (!route) { res.writeHead(404).end(); return; }
+          const upstream = (route.base.protocol === 'https:' ? https : http).request(route.base, {
+            path: route.path, method: 'GET',
+            headers: { ...(req.headers.authorization ? { authorization: req.headers.authorization } : {}) },
+          }, (reply) => {
+            res.writeHead(reply.statusCode ?? 502, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+            reply.pipe(res);
+          });
+          upstream.setTimeout(15000, () => upstream.destroy(new Error('Gateway timeout')));
+          upstream.on('error', () => { if (!res.headersSent) res.writeHead(502); res.end('Gateway unavailable'); });
+          res.on('close', () => upstream.destroy());
+          upstream.end();
+        } catch { res.writeHead(400).end('Invalid gateway request'); }
+      });
+      server.httpServer?.on('upgrade', (req, socket, head) => {
+        if (!req.url?.startsWith('/gateway/')) return;
+        try {
+          if (!allowed(req)) { socket.destroy(); return; }
+          const route = target(req.url);
+          if (!route || !route.path.startsWith('/ws')) { socket.destroy(); return; }
+          const upstream = (route.base.protocol === 'https:' ? https : http).request(route.base, {
+            path: route.path,
+            headers: { host: route.base.host, connection: 'Upgrade', upgrade: 'websocket',
+              'sec-websocket-key': String(req.headers['sec-websocket-key']),
+              'sec-websocket-version': '13' },
+          });
+          upstream.on('upgrade', (reply, remote, remoteHead) => {
+            socket.write(`HTTP/1.1 101 Switching Protocols\r\n${Object.entries(reply.headers)
+              .map(([key, value]) => `${key}: ${value}`).join('\r\n')}\r\n\r\n`);
+            if (remoteHead.length) socket.write(remoteHead);
+            if (head.length) remote.write(head);
+            socket.pipe(remote).pipe(socket);
+            socket.on('error', () => remote.destroy());
+            remote.on('error', () => socket.destroy());
+            socket.on('close', () => remote.destroy());
+          });
+          upstream.on('response', () => { socket.destroy(); upstream.destroy(); });
+          upstream.on('error', () => socket.destroy());
+          socket.on('close', () => upstream.destroy());
+          upstream.end();
+        } catch { socket.destroy(); }
+      });
+    },
+  };
+}
+
+export default defineConfig({ root: resolve(import.meta.dirname), plugins: [react(), gatewayBridge()],
+  server: { host: '127.0.0.1', port: 5173, strictPort: true } });

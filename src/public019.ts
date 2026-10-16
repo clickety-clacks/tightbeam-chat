@@ -1,7 +1,8 @@
 import {
   AuthorizationError,
+  InvalidCursorError,
   UnsupportedTargetError,
-  type CanonicalMessage,
+  type ConversationRecord,
   type ChangeConnection,
   type ChangeNotice,
   type ChatTransport,
@@ -15,18 +16,39 @@ import {
   type TargetProfile,
 } from './types';
 
-/** Exact public 0.1.9 branch source inspected for this mapping. This is not a supported release. */
-export const PUBLIC_019_SOURCE = 'd33c510fb62b0baa51e6b89021b064d8091800b8';
+/** Released 0.1.9 build inspected for this mapping. */
+export const PUBLIC_019_SOURCE = 'f724fc41089335887e6eb76bfd89d9b6d50db7cd';
+export const PUBLIC_019_BUILD = 2476;
+/** The release's /version.sha is a short build stamp. */
+export const PUBLIC_019_GATEWAY_SHA = 'f724fc41';
 
 const capabilities: TargetCapabilities = Object.freeze({
-  newestTail: false,
-  stableOlderCursor: false,
+  newestTail: true,
+  stableOlderCursor: true,
   retainedHistoryAcrossResets: true,
-  orderedTransitions: false,
-  snapshotCoverage: false,
+  orderedTransitions: true,
+  snapshotCoverage: true,
   versionedNotices: true,
   humanSendDedupe: true,
 });
+
+const unsupportedCapabilities: TargetCapabilities = Object.freeze({
+  newestTail: false, stableOlderCursor: false, retainedHistoryAcrossResets: false,
+  orderedTransitions: false, snapshotCoverage: false, versionedNotices: false,
+  humanSendDedupe: false,
+});
+
+// These released Firehose classes report actions, not canonical row changes.
+const observationalClasses = new Set([
+  'verb.accepted', 'verb.denied', 'rail.denied', 'lifecycle.boot',
+  'lifecycle.clean_shutdown', 'lifecycle.dirty_exit', 'lifecycle.takeover',
+  'prod.fired', 'lifecycle.terminal_credential_opened',
+  'lifecycle.terminal_credential_suppression_activated',
+  'lifecycle.terminal_credential_redirect_observed',
+  'lifecycle.terminal_credential_recovery_claimed',
+  'lifecycle.terminal_credential_recovery_outcome',
+  'lifecycle.terminal_credential_resolved',
+]);
 
 /** A fresh, host-authenticated socket. The host owns credentials and the auth handshake. */
 export interface Public019Channel {
@@ -48,7 +70,7 @@ export interface Public019Host {
 export interface Public019Config {
   /** Approved host route; no credentials, query, or fragment. */
   baseUrl: string;
-  /** Exact /version.build and /version.sha expected of the elected isolated target. */
+  /** Exact /version.build and /version.sha observed by the host. */
   build: number;
   sha: string;
   host: Public019Host;
@@ -98,14 +120,25 @@ function messageTime(row: Record<string, unknown>): string {
 }
 
 /** Decode only the source-backed REST/Firehose item shape, preserving all metadata. */
-export function decodePublic019Message(value: unknown, sessionKey: string): CanonicalMessage {
+export function decodePublic019Message(value: unknown, sessionKey: string): ConversationRecord {
   const row = record(value);
   if (requiredString(row, 'sessionKey') !== sessionKey) {
     throw new UnsupportedTargetError('Message belongs to a different session.');
   }
   if (row.messageType === 'marker') {
-    // d33c510f stores markerKind/From/To, but StateResources.message/1 omits them.
-    throw new UnsupportedTargetError('Public 0.1.9 message projection omits stored transition marker fields.');
+    const marker = record(row.marker);
+    const kind = requiredString(marker, 'kind');
+    if (!['harness-switch', 'model-retune', 'session-restart'].includes(kind)) {
+      throw new UnsupportedTargetError('Unknown stored marker kind.');
+    }
+    return Object.freeze({
+      kind: 'transition', id: requiredString(row, 'id'), sessionKey,
+      seq: positiveInteger(row, 'seq'), rowVersion: positiveInteger(row, 'rowVersion'),
+      transition: kind === 'harness-switch' ? 'harness' : kind === 'model-retune' ? 'model' : 'restart',
+      from: typeof marker.from === 'string' ? marker.from : requiredString(marker, 'from'),
+      to: typeof marker.to === 'string' ? marker.to : requiredString(marker, 'to'),
+      createdAt: messageTime(row), raw: Object.freeze({ ...row }),
+    });
   }
   const attachments = row.attachments;
   if (!Array.isArray(attachments)) throw new UnsupportedTargetError('Invalid attachments in message.');
@@ -155,6 +188,20 @@ export function decodePublic019Notice(value: unknown, sessionKey: string): Chang
       frame.resource === 'sessions' && frame.op === 'upsert') {
     return { operation: 'session', session: decodePublic019Session(frame.payload, sessionKey) };
   }
+  // Turn and wake events can affect the selected session's activity without
+  // carrying a complete session projection. Refresh that projection instead.
+  if ((frame.class === 'turn.started' || frame.class === 'turn.ended') &&
+      frame.resource === 'turns' && frame.op === 'upsert') {
+    return { operation: 'observe', sessionKey, resource: frame.class };
+  }
+  if (['wake.scheduled', 'wake.fired', 'wake.canceled'].includes(frame.class) &&
+      frame.resource === 'wakes' && frame.op === 'upsert') {
+    return { operation: 'observe', sessionKey, resource: frame.class };
+  }
+  if (observationalClasses.has(frame.class) && frame.op === 'observe' &&
+      (frame.resource === undefined || frame.resource === null)) {
+    return { operation: 'ignore', sessionKey, resource: frame.class };
+  }
   return { operation: 'unknown', sessionKey, resource: frame.class };
 }
 
@@ -170,34 +217,46 @@ function checkedBaseUrl(raw: string): string {
   return url.href.replace(/\/$/, '');
 }
 
-/**
- * Wire mapping for public 0.1.9 d33c510f. Its profile deliberately cannot pass
- * createTightbeamAdapter's required capability gate. It is useful for exact
- * target inspection and fixture-independent transport checks while the source
- * history/marker/coverage repair is pending.
- */
+/** Released 0.1.9 REST history, protocol-2 changes, and human sending. */
 export function createPublic019Transport(config: Public019Config): { transport: ChatTransport; profile: TargetProfile } {
   const baseUrl = checkedBaseUrl(config.baseUrl);
   const timeoutMs = config.responseTimeoutMs ?? 15_000;
   const heartbeatTimeoutMs = config.heartbeatTimeoutMs ?? 45_000;
   if (!Number.isSafeInteger(config.build) || config.build < 1 ||
-      config.sha.length < 8 || !PUBLIC_019_SOURCE.startsWith(config.sha) ||
+      !/^([a-f0-9]{8,40})$/.test(config.sha) ||
       !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 ||
       !Number.isSafeInteger(heartbeatTimeoutMs) || heartbeatTimeoutMs < 1) {
     throw new Error('Expected an exact public 0.1.9 build, source SHA, and positive timeouts.');
   }
   const expectedIdentity = identity('0.1.9', config.build, config.sha);
+  const sourceBacked = config.build === PUBLIC_019_BUILD && config.sha === PUBLIC_019_GATEWAY_SHA;
   const profile: TargetProfile = Object.freeze({
     identity: expectedIdentity,
-    label: `Public Tightbeam 0.1.9 source ${PUBLIC_019_SOURCE.slice(0, 8)} (unsupported Chat history)`,
-    capabilities,
+    label: `Tightbeam 0.1.9 build ${config.build}`,
+    capabilities: sourceBacked ? capabilities : unsupportedCapabilities,
   });
 
   async function get(path: string, signal: AbortSignal): Promise<Record<string, unknown>> {
     const response = await config.host.fetch(`${baseUrl}${path}`, { method: 'GET', signal, cache: 'no-store' });
     if (response.status === 401 || response.status === 403) throw new AuthorizationError('Human REST principal is not authorized.');
+    if (response.status === 400 && path.includes('/messages?')) throw new InvalidCursorError('History cursor was rejected.');
     if (!response.ok) throw new Error(`Tightbeam REST request failed with HTTP ${response.status}.`);
     return record(await response.json());
+  }
+
+  const activeSessions = new Set<string>();
+  async function readPage(sessionKey: string, query: string, signal: AbortSignal): Promise<ConversationPage> {
+    const body = await get(`/api/sessions/${encodeURIComponent(sessionKey)}/messages?limit=50&${query}`, signal);
+    if (body.schemaVersion !== 1 || body.resource !== 'transcript messages' || !Array.isArray(body.items)) {
+      throw new UnsupportedTargetError('Unexpected transcript collection envelope.');
+    }
+    const page = record(body.page);
+    const oldestCursor = optionalString(page, 'oldestCursor') ?? null;
+    if (typeof page.hasMoreBefore !== 'boolean' || (page.hasMoreBefore && !oldestCursor)) {
+      throw new UnsupportedTargetError('Invalid transcript page metadata.');
+    }
+    return { records: body.items.map((item) => decodePublic019Message(item, sessionKey))
+      .sort((a, b) => a.seq - b.seq), oldestCursor, hasOlder: page.hasMoreBefore, coverage: sessionKey };
   }
 
   const transport: ChatTransport = {
@@ -205,10 +264,8 @@ export function createPublic019Transport(config: Public019Config): { transport: 
     async inspectTarget(signal): Promise<TargetObservation> {
       const version = await get('/version', signal);
       const observed = identity(String(version.version), Number(version.build), String(version.sha));
-      return { identity: observed, capabilities: observed === expectedIdentity ? capabilities : {
-        newestTail: false, stableOlderCursor: false, retainedHistoryAcrossResets: false,
-        orderedTransitions: false, snapshotCoverage: false, versionedNotices: false, humanSendDedupe: false,
-      } };
+      return { identity: observed,
+        capabilities: sourceBacked && observed === expectedIdentity ? capabilities : unsupportedCapabilities };
     },
     async readSession(sessionKey, signal) {
       const body = await get(`/api/sessions/${encodeURIComponent(sessionKey)}`, signal);
@@ -217,13 +274,13 @@ export function createPublic019Transport(config: Public019Config): { transport: 
       }
       return decodePublic019Session(body.item, sessionKey);
     },
-    async readTail(_sessionKey, _signal): Promise<ConversationPage> {
-      throw new UnsupportedTargetError('Public 0.1.9 d33c510f has no bounded newest transcript tail.');
-    },
-    async readOlder(_sessionKey, _before, _signal): Promise<ConversationPage> {
-      throw new UnsupportedTargetError('Public 0.1.9 d33c510f rejects stable before cursors.');
-    },
-    proveCoverage: () => false,
+    readTail: (sessionKey, signal) => readPage(sessionKey, 'tail=true', signal),
+    readOlder: (sessionKey, before, signal) => readPage(sessionKey, `before=${encodeURIComponent(before)}`, signal),
+    // Hub.subscribe completes before subscription_ready. Runtime subscribes first,
+    // then reads retained append-only rows and unions buffered versioned notices.
+    // This is overlap coverage, not a server snapshot watermark or replay promise.
+    proveCoverage: (session, page, buffered) => activeSessions.has(session.sessionKey) &&
+      page.coverage === session.sessionKey && !buffered.some((notice) => notice.operation === 'unknown'),
     async openChanges(sessionKey, callbacks, signal): Promise<ChangeConnection> {
       const channel = await config.host.openAuthenticatedChanges(signal);
       let closed = false;
@@ -236,6 +293,7 @@ export function createPublic019Transport(config: Public019Config): { transport: 
       const close = () => {
         if (closed) return;
         closed = true;
+        activeSessions.delete(sessionKey);
         if (readyTimer) clearTimeout(readyTimer);
         if (heartbeatTimer) clearTimeout(heartbeatTimer);
         stopListening();
@@ -264,6 +322,7 @@ export function createPublic019Transport(config: Public019Config): { transport: 
           if (!ready) {
             if (frame.type === 'subscription_ready' && frame.subscriptionId === subscriptionId) {
               ready = true;
+              activeSessions.add(sessionKey);
               if (readyTimer) clearTimeout(readyTimer);
               watchHeartbeat();
               resolveReady();
