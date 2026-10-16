@@ -202,6 +202,8 @@ class SessionRuntime implements ChatRuntime {
           this.publish({ session: notice.session });
         }
         return false;
+      case 'ignore':
+        return false;
       case 'observe':
       case 'unknown':
         if (notice.sessionKey === this.sessionKey) this.doubt(`State notice ${notice.resource} requires a fresh snapshot.`, this.generation);

@@ -53,6 +53,7 @@ export type ChangeNotice =
   | { readonly operation: 'upsert'; readonly record: ConversationRecord }
   | { readonly operation: 'delete'; readonly sessionKey: string; readonly id: string; readonly rowVersion: number }
   | { readonly operation: 'session'; readonly session: SessionRecord }
+  | { readonly operation: 'ignore'; readonly sessionKey: string; readonly resource: string }
   | { readonly operation: 'observe' | 'unknown'; readonly sessionKey: string; readonly resource: string };
 
 export interface HostIdentity {

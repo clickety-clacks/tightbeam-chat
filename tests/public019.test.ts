@@ -132,6 +132,44 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
     runtime.dispose();
   });
 
+  it('keeps history and human acknowledgement live across ordinary observational notices', async () => {
+    const base = setup();
+    let releaseTail!: () => void;
+    const tailGate = new Promise<void>((resolve) => { releaseTail = resolve; });
+    let readingTail = false;
+    const transport = { ...base.transport, readTail: async (...args: Parameters<typeof base.transport.readTail>) => {
+      readingTail = true;
+      await tailGate;
+      return base.transport.readTail(...args);
+    } };
+    const accepted = (seq: number) => ({
+      type: 'change', schemaVersion: 2, subscriptionId: 'chat:s-public', seq,
+      class: 'verb.accepted', op: 'observe', refs: { sessionKey }, payload: { verb: 'post' },
+    });
+    const runtime = createTightbeamAdapter(transport, base.profile).open(sessionKey);
+    await vi.waitFor(() => expect(base.changes.sent).toHaveLength(1));
+    base.changes.emit({ type: 'subscription_ready', subscriptionId: 'chat:s-public' });
+    await vi.waitFor(() => expect(readingTail).toBe(true));
+    base.changes.emit(accepted(1));
+    releaseTail();
+    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+    expect(runtime.getSnapshot().records.map((record) => record.id)).toEqual(['m_1']);
+    expect(runtime.getSnapshot().session?.sessionKey).toBe(sessionKey);
+    const id = runtime.send('one exact human post');
+    expect(id).toBeTruthy();
+    await vi.waitFor(() => expect(base.human.sent).toHaveLength(1));
+    expect(runtime.getSnapshot().sends[0]).toMatchObject({ clientMessageId: id, status: 'pending' });
+    base.changes.emit(accepted(2));
+    base.changes.emit({ type: 'heartbeat', seq: 2 });
+    expect(runtime.getSnapshot().status).toBe('ready');
+    expect(runtime.getSnapshot().sends[0].status).toBe('pending');
+    expect(base.changes.closed).toBe(false);
+    base.human.emit({ type: 'ack', id });
+    await vi.waitFor(() => expect(runtime.getSnapshot().sends[0].status).toBe('accepted'));
+    expect(base.human.sent).toHaveLength(1);
+    runtime.dispose();
+  });
+
   it('refuses an unknown selected-session state notice during a history read', async () => {
     const base = setup();
     let releaseTail!: () => void;
@@ -208,6 +246,17 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
       .toEqual({ operation: 'observe', sessionKey, resource: 'turn.started' });
     expect(decodePublic019Notice({ ...notice, class: 'wake.fired', resource: 'wakes' }, sessionKey))
       .toEqual({ operation: 'observe', sessionKey, resource: 'wake.fired' });
+    for (const observationalClass of ['verb.accepted', 'verb.denied', 'rail.denied',
+      'lifecycle.boot', 'prod.fired']) {
+      expect(decodePublic019Notice({ ...notice, class: observationalClass,
+        op: 'observe', resource: undefined }, sessionKey))
+        .toEqual({ operation: 'ignore', sessionKey, resource: observationalClass });
+    }
+    expect(decodePublic019Notice({ ...notice, class: 'verb.accepted' }, sessionKey))
+      .toEqual({ operation: 'unknown', sessionKey, resource: 'verb.accepted' });
+    expect(decodePublic019Notice({ ...notice, class: 'unrecognized.state',
+      op: 'observe', resource: undefined }, sessionKey))
+      .toEqual({ operation: 'unknown', sessionKey, resource: 'unrecognized.state' });
     expect(decodePublic019Notice({ ...notice, class: 'unrecognized.state', resource: 'turns' }, sessionKey))
       .toEqual({ operation: 'unknown', sessionKey, resource: 'unrecognized.state' });
     expect(() => decodePublic019Notice({ ...notice, refs: { sessionKey: 'other' } }, sessionKey))

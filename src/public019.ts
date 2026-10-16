@@ -38,6 +38,18 @@ const unsupportedCapabilities: TargetCapabilities = Object.freeze({
   humanSendDedupe: false,
 });
 
+// These released Firehose classes report actions, not canonical row changes.
+const observationalClasses = new Set([
+  'verb.accepted', 'verb.denied', 'rail.denied', 'lifecycle.boot',
+  'lifecycle.clean_shutdown', 'lifecycle.dirty_exit', 'lifecycle.takeover',
+  'prod.fired', 'lifecycle.terminal_credential_opened',
+  'lifecycle.terminal_credential_suppression_activated',
+  'lifecycle.terminal_credential_redirect_observed',
+  'lifecycle.terminal_credential_recovery_claimed',
+  'lifecycle.terminal_credential_recovery_outcome',
+  'lifecycle.terminal_credential_resolved',
+]);
+
 /** A fresh, host-authenticated socket. The host owns credentials and the auth handshake. */
 export interface Public019Channel {
   send(frame: Readonly<Record<string, unknown>>): void;
@@ -185,6 +197,10 @@ export function decodePublic019Notice(value: unknown, sessionKey: string): Chang
   if (['wake.scheduled', 'wake.fired', 'wake.canceled'].includes(frame.class) &&
       frame.resource === 'wakes' && frame.op === 'upsert') {
     return { operation: 'observe', sessionKey, resource: frame.class };
+  }
+  if (observationalClasses.has(frame.class) && frame.op === 'observe' &&
+      (frame.resource === undefined || frame.resource === null)) {
+    return { operation: 'ignore', sessionKey, resource: frame.class };
   }
   return { operation: 'unknown', sessionKey, resource: frame.class };
 }
