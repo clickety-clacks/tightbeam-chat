@@ -544,7 +544,7 @@ describe('Chat release packaging and updater', () => {
 
     expect(await fs.readlink(path.join(root, 'current'))).toBe(path.relative(root, oldVersion));
     await expect(fs.lstat(path.join(root, 'releases', tag))).rejects.toMatchObject({ code: 'ENOENT' });
-    expect(serviceManager.calls).toEqual([]);
+    expect(serviceManager.calls).toEqual(['is-enabled']);
   });
 
   it('preserves the serving version when the published asset is missing, corrupt, or transferred incompletely', async () => {
