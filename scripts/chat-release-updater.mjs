@@ -256,10 +256,7 @@ const defaultServiceManager = {
   },
   async enable() { systemctl(['enable', CHAT_SERVICE_NAME]); },
   async restart() { systemctl(['restart', CHAT_SERVICE_NAME]); },
-  async stopAndDisable() {
-    try { systemctl(['disable', '--now', CHAT_SERVICE_NAME]); }
-    catch { /* A first install may not have created the unit link. */ }
-  },
+  async stopAndDisable() { systemctl(['disable', '--now', CHAT_SERVICE_NAME]); },
 };
 
 async function defaultHealthCheck(expected) {
@@ -292,6 +289,21 @@ async function rollbackAfterFailedActivation({
   healthCheck,
   priorIdentity,
 }) {
+  if (!priorCurrent) {
+    await serviceManager.stopAndDisable();
+    try {
+      await restoreSymlink(currentLink, priorCurrent);
+      await restoreSymlink(previousLink, priorPrevious);
+      if (priorUnit === undefined) await fs.rm(unitPath, { force: true });
+      else await writeAtomic(unitPath, priorUnit);
+      await serviceManager.reload();
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : 'unknown cleanup failure';
+      throw new Error(`The first-install Chat service was stopped and disabled, but its files could not be fully cleaned up: ${detail}`);
+    }
+    return;
+  }
+
   await restoreSymlink(currentLink, priorCurrent);
   await restoreSymlink(previousLink, priorPrevious);
   if (priorUnit === undefined) await fs.rm(unitPath, { force: true });
@@ -302,7 +314,6 @@ async function rollbackAfterFailedActivation({
       await serviceManager.restart();
       await healthCheck({ tag: priorIdentity.tag, sourceCommit: priorIdentity.sourceCommit });
     }
-    else await serviceManager.stopAndDisable();
   } catch {
     throw new Error('Chat activation failed and the prior Chat service could not be restarted.');
   }
@@ -405,9 +416,18 @@ export async function installChatRelease(tag, {
         priorIdentity,
       });
     } catch (rollbackError) {
-      throw rollbackError;
+      const activation = error instanceof Error ? error.message : 'Chat activation failed.';
+      const rollback = rollbackError instanceof Error ? rollbackError.message : 'unknown rollback failure';
+      if (!priorCurrent) {
+        throw new Error(`${activation} No prior Chat release existed; first-install cleanup failed: ${rollback}. The candidate may still be running.`);
+      }
+      throw new Error(`${activation} Chat rollback failed: ${rollback}`);
     }
-    throw new Error(`${error instanceof Error ? error.message : 'Chat activation failed.'} The prior Chat version was restored.`);
+    const activation = error instanceof Error ? error.message : 'Chat activation failed.';
+    if (!priorCurrent) {
+      throw new Error(`${activation} No prior Chat release existed; the first-install candidate was stopped and disabled, and its active pointers and service unit were removed.`);
+    }
+    throw new Error(`${activation} The prior Chat version was restored.`);
   }
 
   return {

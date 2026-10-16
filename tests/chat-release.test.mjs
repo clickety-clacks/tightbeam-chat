@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { EventEmitter } from 'node:events';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 import http from 'node:http';
@@ -42,6 +43,29 @@ async function unusedPort() {
   return port;
 }
 
+function collectSocketBytes(socket, length) {
+  return new Promise((resolve, reject) => {
+    let bytes = Buffer.alloc(0);
+    const cleanup = () => {
+      socket.off('data', onData);
+      socket.off('error', onError);
+      socket.off('close', onClose);
+    };
+    const onData = (chunk) => {
+      bytes = Buffer.concat([bytes, chunk]);
+      if (bytes.length >= length) {
+        cleanup();
+        resolve(bytes.subarray(0, length));
+      }
+    };
+    const onError = (error) => { cleanup(); reject(error); };
+    const onClose = () => { cleanup(); reject(new Error('Socket closed before the frame was complete.')); };
+    socket.on('data', onData);
+    socket.once('error', onError);
+    socket.once('close', onClose);
+  });
+}
+
 async function closeServer(server) {
   const index = createdServers.indexOf(server);
   if (index >= 0) createdServers.splice(index, 1);
@@ -61,6 +85,14 @@ afterEach(async () => {
 });
 
 describe('persistent Chat server', () => {
+  it('accumulates a WebSocket frame across separate data chunks', async () => {
+    const socket = new EventEmitter();
+    const frame = collectSocketBytes(socket, 4);
+    socket.emit('data', Buffer.from([0x81, 0x02]));
+    socket.emit('data', Buffer.from([0x6f, 0x6b]));
+    await expect(frame).resolves.toEqual(Buffer.from([0x81, 0x02, 0x6f, 0x6b]));
+  });
+
   it('serves runtime target configuration and verified Chat identity without caching', async () => {
     const rootDir = await temporaryDirectory();
     const publicDir = path.join(rootDir, 'public');
@@ -152,9 +184,14 @@ describe('persistent Chat server', () => {
       observed.push({ url: request.url, host: request.headers.host, origin: request.headers.origin });
       const accept = crypto.createHash('sha1').update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest('base64');
       socket.write(`HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
-      socket.once('data', (frame) => {
+      collectSocketBytes(socket, 8).then((frame) => {
         observed.push({ frame: frame.toString('hex') });
-        socket.write(Buffer.from([0x81, 0x02, 0x6f, 0x6b]));
+        const echo = Buffer.from([0x81, 0x02, 0x6f, 0x6b]);
+        // Separate writes exercise frame accumulation regardless of TCP chunk boundaries.
+        socket.write(echo.subarray(0, 1));
+        setTimeout(() => socket.write(echo.subarray(1)), 10);
+      }).catch((error) => {
+        socket.destroy(error);
       });
     });
     const gatewayPort = await listen(gateway);
@@ -201,12 +238,16 @@ describe('persistent Chat server', () => {
           socket.destroy();
           return;
         }
-        socket.once('data', (data) => {
+        collectSocketBytes(socket, 4).then((data) => {
           clearTimeout(timer);
           socket.destroy();
           resolve(data);
+        }).catch((error) => {
+          clearTimeout(timer);
+          reject(error);
         });
-        socket.write(clientFrame);
+        socket.write(clientFrame.subarray(0, 3));
+        setTimeout(() => socket.write(clientFrame.subarray(3)), 10);
       });
       request.end();
     });
@@ -289,7 +330,7 @@ function fixtureFetch(tag, sourceCommit, fixture, { corruptAsset, failAsset, abs
   };
 }
 
-function mockServiceManager({ enabled = true } = {}) {
+function mockServiceManager({ enabled = true, restartError, stopAndDisableError } = {}) {
   const calls = [];
   let currentEnabled = enabled;
   return {
@@ -297,8 +338,28 @@ function mockServiceManager({ enabled = true } = {}) {
     async reload() { calls.push('reload'); },
     async isEnabled() { calls.push('is-enabled'); return currentEnabled; },
     async enable() { calls.push('enable'); currentEnabled = true; },
-    async restart() { calls.push(`restart:${CHAT_SERVICE_NAME}`); },
-    async stopAndDisable() { calls.push('stop-and-disable'); currentEnabled = false; },
+    async restart() {
+      calls.push(`restart:${CHAT_SERVICE_NAME}`);
+      if (restartError) throw restartError;
+    },
+    async stopAndDisable() {
+      calls.push('stop-and-disable');
+      if (stopAndDisableError) throw stopAndDisableError;
+      currentEnabled = false;
+    },
+  };
+}
+
+async function setupFirstChatInstall(homeDir) {
+  const root = path.join(homeDir, '.local/share/tightbeam-chat');
+  const releases = path.join(root, 'releases');
+  const configPath = path.join(homeDir, '.config/tightbeam-chat/server.env');
+  await fs.mkdir(path.dirname(configPath), { recursive: true });
+  await fs.writeFile(configPath, 'CHAT_PUBLIC_ORIGIN=https://chat.example\n');
+  return {
+    root,
+    releases,
+    unitPath: path.join(homeDir, '.config/systemd/user/tightbeam-chat.service'),
   };
 }
 
@@ -484,6 +545,55 @@ describe('Chat release packaging and updater', () => {
       expect(await fs.readlink(path.join(root, 'current'))).toBe(path.relative(root, oldVersion));
       expect(serviceManager.calls).toEqual([]);
     }
+  });
+
+  it('reports successful first-install cleanup without claiming a prior version was restored', async () => {
+    const homeDir = await temporaryDirectory('chat-updater-first-install-cleanup-');
+    const { root, unitPath } = await setupFirstChatInstall(homeDir);
+    const tag = 'v1.2.3';
+    const fixture = await createBundleFixture(tag, SOURCE_COMMIT);
+    const serviceManager = mockServiceManager({
+      enabled: false,
+      restartError: new Error('candidate restart failed'),
+    });
+
+    await expect(installChatRelease(tag, {
+      homeDir,
+      fetchImpl: fixtureFetch(tag, SOURCE_COMMIT, fixture),
+      serviceManager,
+      healthCheck: async () => { throw new Error('must not be reached'); },
+    })).rejects.toThrow(/candidate restart failed.*No prior Chat release existed; the first-install candidate was stopped and disabled, and its active pointers and service unit were removed/);
+
+    await expect(fs.lstat(path.join(root, 'current'))).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.lstat(unitPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(serviceManager.calls).toEqual([
+      'reload', 'enable', 'restart:tightbeam-chat.service', 'stop-and-disable', 'reload',
+    ]);
+  });
+
+  it('reports failed first-install cleanup and leaves the candidate pointer available for recovery', async () => {
+    const homeDir = await temporaryDirectory('chat-updater-first-install-cleanup-failed-');
+    const { root, unitPath } = await setupFirstChatInstall(homeDir);
+    const tag = 'v1.2.3';
+    const fixture = await createBundleFixture(tag, SOURCE_COMMIT);
+    const serviceManager = mockServiceManager({
+      enabled: false,
+      restartError: new Error('candidate restart failed'),
+      stopAndDisableError: new Error('service stop was refused'),
+    });
+
+    await expect(installChatRelease(tag, {
+      homeDir,
+      fetchImpl: fixtureFetch(tag, SOURCE_COMMIT, fixture),
+      serviceManager,
+      healthCheck: async () => { throw new Error('must not be reached'); },
+    })).rejects.toThrow(/candidate restart failed.*No prior Chat release existed; first-install cleanup failed: service stop was refused\. The candidate may still be running/);
+
+    expect(await fs.readlink(path.join(root, 'current'))).toBe(path.relative(root, path.join(root, 'releases', tag)));
+    await expect(fs.readFile(unitPath, 'utf8')).resolves.toBe(await fs.readFile(path.resolve('packaging/tightbeam-chat.service'), 'utf8'));
+    expect(serviceManager.calls).toEqual([
+      'reload', 'enable', 'restart:tightbeam-chat.service', 'stop-and-disable',
+    ]);
   });
 
   it('restores the previous Chat pointer and service when the new version fails its served-version check', async () => {
