@@ -13,6 +13,8 @@ const API_ROOT = `https://api.github.com/repos/${CHAT_RELEASE_REPOSITORY}`;
 const TAG_PATTERN = /^v\d+\.\d+\.\d+$/;
 const SHA_PATTERN = /^[a-f0-9]{40}$/;
 const HASH_PATTERN = /^[a-f0-9]{64}$/;
+// Preserve the complete lock-verified MIT notice required by the bundled React runtime.
+const REACT_MIT_NOTICE_SHA256 = 'da6d3703ed11cbe42bd212c725957c98da23cbff1998c05fa4b3d976d1a58e93';
 
 function assetNameFor(tag) {
   return `tightbeam-chat-${tag}.tar.gz`;
@@ -218,6 +220,22 @@ async function writeAtomic(filename, content) {
   await fs.rename(temporary, filename);
 }
 
+function validateReactRuntimeNotice(noticeText) {
+  for (const name of ['react', 'react-dom', 'scheduler']) {
+    const row = new RegExp(`\\| ${name} \\| [^|]+ \\| [^|]+ \\| MIT \\|`);
+    if (!row.test(noticeText)) throw new Error('The Chat bundle is missing a required React runtime notice.');
+  }
+
+  const start = noticeText.indexOf('MIT License\n\n');
+  const ending = start < 0 ? -1 : noticeText.indexOf('SOFTWARE.\n', start);
+  if (start < 0 || ending < 0) throw new Error('The Chat bundle is missing the complete React runtime license notice.');
+  const license = noticeText.slice(start, ending + 'SOFTWARE.\n'.length);
+  const hash = crypto.createHash('sha256').update(license).digest('hex');
+  if (hash !== REACT_MIT_NOTICE_SHA256) {
+    throw new Error('The Chat bundle contains an incomplete React runtime license notice.');
+  }
+}
+
 async function validateStagedBundle(directory, provenance) {
   const release = await readJson(path.join(directory, 'release.json'));
   if (release?.product !== 'tightbeam-chat' || release.tag !== provenance.tag ||
@@ -238,6 +256,7 @@ async function validateStagedBundle(directory, provenance) {
       throw new Error(`The Chat bundle is missing ${relative}.`);
     }
   }
+  validateReactRuntimeNotice(await fs.readFile(path.join(directory, 'THIRD_PARTY_NOTICES.md'), 'utf8'));
 }
 
 function systemctl(args) {
