@@ -1,14 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createTightbeamAdapter } from '../src/runtime';
 import {
-  PUBLIC_019_SOURCE, createPublic019Transport, decodePublic019Message,
+  PUBLIC_019_BUILD, PUBLIC_019_GATEWAY_SHA, createPublic019Transport, decodePublic019Message,
   decodePublic019Notice, type Public019Channel, type Public019Host,
 } from '../src/public019';
 import { AuthorizationError, UnsupportedTargetError } from '../src/types';
 
 const sessionKey = 's-public';
 const identity = { principalKey: 'person-1', deviceId: 'device-1' };
-const version = { server: 'tightbeam', version: '0.1.9', build: 2334, sha: PUBLIC_019_SOURCE.slice(0, 8), protocolVersion: 1 };
+const version = { server: 'tightbeam', version: '0.1.9', build: PUBLIC_019_BUILD, sha: PUBLIC_019_GATEWAY_SHA, protocolVersion: 1 };
 const item = {
   id: 'm_1', seq: 9, sessionKey, role: 'user', content: 'hello', at: Date.parse('2026-10-12T00:00:00Z'),
   sender: 'person-1', deviceId: 'device-1', clientMessageId: 'c_1', attachments: [],
@@ -32,7 +32,7 @@ class Channel implements Public019Channel {
   disconnect() { this.disconnected?.(); }
 }
 
-function setup(heartbeatTimeoutMs?: number) {
+function setup(heartbeatTimeoutMs?: number, observedVersion = version) {
   const changes = new Channel();
   const human = new Channel();
   const paths: string[] = [];
@@ -40,7 +40,7 @@ function setup(heartbeatTimeoutMs?: number) {
     currentIdentity: () => identity,
     fetch: async (path) => {
       paths.push(path);
-      const body = path.endsWith('/version') ? version : path.includes('/messages?')
+      const body = path.endsWith('/version') ? observedVersion : path.includes('/messages?')
         ? { schemaVersion: 1, resource: 'transcript messages', items: [item],
           page: { oldestCursor: 'older-cursor', hasMoreBefore: true } }
         : { schemaVersion: 1, resource: 'sessions', item: session };
@@ -50,13 +50,109 @@ function setup(heartbeatTimeoutMs?: number) {
     openAuthenticatedHuman: async () => human,
   };
   const { transport, profile } = createPublic019Transport({
-    baseUrl: 'https://host.example', build: 2334, sha: version.sha, host,
+    baseUrl: 'https://host.example', build: observedVersion.build, sha: observedVersion.sha, host,
     responseTimeoutMs: 1000, heartbeatTimeoutMs,
   });
   return { transport, profile, paths, changes, human };
 }
 
 describe('public 0.1.9 released wire mapping and capability gates', () => {
+  it('keeps an unexamined 0.1.9 build unsupported while the released build can open a session', async () => {
+    const other = setup(undefined, { ...version, build: version.build + 1 });
+    const runtime = createTightbeamAdapter(other.transport, other.profile).open(sessionKey);
+    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('unsupported'));
+    expect(runtime.getSnapshot().statusDetail).toContain('capability');
+    expect(other.changes.sent).toHaveLength(0);
+    expect(runtime.send('must not post')).toBeNull();
+    expect(other.human.sent).toHaveLength(0);
+    runtime.dispose();
+
+    const supported = setup();
+    const ready = createTightbeamAdapter(supported.transport, supported.profile).open(sessionKey);
+    await vi.waitFor(() => expect(supported.changes.sent).toHaveLength(1));
+    supported.changes.emit({ type: 'subscription_ready', subscriptionId: 'chat:s-public' });
+    await vi.waitFor(() => expect(ready.getSnapshot().status).toBe('ready'));
+    ready.dispose();
+  });
+
+  it('refreshes activity after a committed turn arrives during the history read', async () => {
+    let releaseTail!: () => void;
+    const tailGate = new Promise<void>((resolve) => { releaseTail = resolve; });
+    const changes = new Channel();
+    const human = new Channel();
+    let sessionReads = 0;
+    let tailStarted = false;
+    const host: Public019Host = {
+      currentIdentity: () => identity,
+      fetch: async (path) => {
+        let body: unknown;
+        if (path.endsWith('/version')) body = version;
+        else if (path.includes('/messages?')) {
+          tailStarted = true;
+          await tailGate;
+          body = { schemaVersion: 1, resource: 'transcript messages', items: [item],
+            page: { oldestCursor: null, hasMoreBefore: false } };
+        } else {
+          sessionReads++;
+          body = { schemaVersion: 1, resource: 'sessions', item: {
+            ...session, rowVersion: sessionReads === 1 ? 4 : 5,
+            mechanicalStatus: sessionReads === 1 ? 'idle' : 'running',
+          } };
+        }
+        return new Response(JSON.stringify(body), { status: 200 });
+      },
+      openAuthenticatedChanges: async () => changes,
+      openAuthenticatedHuman: async () => human,
+    };
+    const { transport, profile } = createPublic019Transport({ baseUrl: 'https://host.example',
+      build: version.build, sha: version.sha, host });
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await vi.waitFor(() => expect(changes.sent).toHaveLength(1));
+    changes.emit({ type: 'subscription_ready', subscriptionId: 'chat:s-public' });
+    await vi.waitFor(() => expect(tailStarted).toBe(true));
+    changes.emit({ type: 'change', schemaVersion: 2, subscriptionId: 'chat:s-public', seq: 1,
+      class: 'turn.started', resource: 'turns', op: 'upsert', refs: { sessionKey, turnSeq: 10 },
+      payload: { turnSeq: 10, sessionKey, status: 'running' } });
+    changes.emit({ type: 'change', schemaVersion: 2, subscriptionId: 'chat:s-public', seq: 2,
+      class: 'session.updated', resource: 'sessions', op: 'upsert', refs: { sessionKey },
+      payload: { ...session, rowVersion: 5, mechanicalStatus: 'running' } });
+    releaseTail();
+    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+    expect(sessionReads).toBe(2);
+    expect(runtime.getSnapshot().session?.activity).toBe('running');
+    expect(runtime.getSnapshot().records.map((record) => record.id)).toEqual(['m_1']);
+    expect(runtime.send('one human message')).toBeTruthy();
+    await vi.waitFor(() => expect(human.sent).toHaveLength(1));
+    human.emit({ type: 'ack', id: human.sent[0].id });
+    await vi.waitFor(() => expect(runtime.getSnapshot().sends[0].status).toBe('accepted'));
+    expect(human.sent).toHaveLength(1);
+    runtime.dispose();
+  });
+
+  it('refuses an unknown selected-session state notice during a history read', async () => {
+    const base = setup();
+    let releaseTail!: () => void;
+    const tailGate = new Promise<void>((resolve) => { releaseTail = resolve; });
+    let readingTail = false;
+    const transport = { ...base.transport, readTail: async (...args: Parameters<typeof base.transport.readTail>) => {
+      readingTail = true;
+      await tailGate;
+      return base.transport.readTail(...args);
+    } };
+    const runtime = createTightbeamAdapter(transport, base.profile).open(sessionKey);
+    await vi.waitFor(() => expect(base.changes.sent).toHaveLength(1));
+    base.changes.emit({ type: 'subscription_ready', subscriptionId: 'chat:s-public' });
+    await vi.waitFor(() => expect(readingTail).toBe(true));
+    base.changes.emit({ type: 'change', schemaVersion: 2, subscriptionId: 'chat:s-public', seq: 1,
+      class: 'unrecognized.state', resource: 'turns', op: 'upsert', refs: { sessionKey }, payload: {} });
+    releaseTail();
+    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('unsupported'));
+    expect(runtime.getSnapshot().records).toHaveLength(0);
+    expect(runtime.send('must not post')).toBeNull();
+    expect(base.changes.closed).toBe(true);
+    runtime.dispose();
+  });
+
   it('pins the exact observed build, retains raw metadata, and reads session detail', async () => {
     const { transport, profile, paths } = setup();
     const signal = new AbortController().signal;
@@ -106,7 +202,11 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
     expect(() => decodePublic019Notice({ ...notice, payload: { ...item, messageType: 'marker' } }, sessionKey))
       .toThrow(UnsupportedTargetError);
     expect(decodePublic019Notice({ ...notice, class: 'turn.started', resource: 'turns' }, sessionKey))
-      .toEqual({ operation: 'unknown', sessionKey, resource: 'turn.started' });
+      .toEqual({ operation: 'observe', sessionKey, resource: 'turn.started' });
+    expect(decodePublic019Notice({ ...notice, class: 'wake.fired', resource: 'wakes' }, sessionKey))
+      .toEqual({ operation: 'observe', sessionKey, resource: 'wake.fired' });
+    expect(decodePublic019Notice({ ...notice, class: 'unrecognized.state', resource: 'turns' }, sessionKey))
+      .toEqual({ operation: 'unknown', sessionKey, resource: 'unrecognized.state' });
     expect(() => decodePublic019Notice({ ...notice, refs: { sessionKey: 'other' } }, sessionKey))
       .toThrow(UnsupportedTargetError);
   });
@@ -215,7 +315,7 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
       openAuthenticatedHuman: async () => { principal = 'person-2'; return channel; },
     };
     const { transport } = createPublic019Transport({ baseUrl: 'https://host.example',
-      build: 2334, sha: version.sha, host });
+      build: version.build, sha: version.sha, host });
     expect(await transport.sendHuman({ sessionKey, deviceId: 'device-1',
       clientMessageId: 'c_1', content: 'hello' }, new AbortController().signal))
       .toMatchObject({ outcome: 'refused' });
@@ -233,7 +333,7 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
       openAuthenticatedHuman: async () => { throw rejection; },
     };
     const { transport } = createPublic019Transport({ baseUrl: 'https://host.example',
-      build: 2334, sha: version.sha, host });
+      build: version.build, sha: version.sha, host });
     await expect(transport.sendHuman({ sessionKey, deviceId: 'device-1',
       clientMessageId: 'c_1', content: 'hello' }, new AbortController().signal))
       .rejects.toBe(rejection);

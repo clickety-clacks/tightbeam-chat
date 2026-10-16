@@ -49,7 +49,7 @@ function HostPage() {
     {selectionError ? <p role="alert">{selectionError} Use <code>?gateway=https%3A%2F%2Fgateway.example&session=SESSION_KEY</code>.</p>
       : adapter ? <>
         <button onClick={() => { setAdapter(undefined); attempt.current?.abort(); }}>Sign out</button>
-        <div className="chat-slot"><TightbeamChat sessionKey={selected!.sessionKey} adapter={adapter} newestFirst /></div>
+        <div className="chat-slot"><TightbeamChat sessionKey={selected!.sessionKey} adapter={adapter} /></div>
       </> : <form onSubmit={(event) => void signIn(event)}>
         <p>Sign in with an approved device's ID and token. Credentials stay in memory until sign-out or reload.</p>
         <label>Device ID <input name="device" required autoComplete="off" value={device} onChange={(event) => setDevice(event.target.value)} /></label>

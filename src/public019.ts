@@ -16,8 +16,11 @@ import {
   type TargetProfile,
 } from './types';
 
-/** Released 0.1.9 branch source inspected for this mapping. */
-export const PUBLIC_019_SOURCE = '2db1db82b443c85ee44ea7af03c98aaeee3c6bb7';
+/** Released 0.1.9 build inspected for this mapping. */
+export const PUBLIC_019_SOURCE = 'f724fc41089335887e6eb76bfd89d9b6d50db7cd';
+export const PUBLIC_019_BUILD = 2476;
+/** The release's /version.sha is a short build stamp. */
+export const PUBLIC_019_GATEWAY_SHA = 'f724fc41';
 
 const capabilities: TargetCapabilities = Object.freeze({
   newestTail: true,
@@ -27,6 +30,12 @@ const capabilities: TargetCapabilities = Object.freeze({
   snapshotCoverage: true,
   versionedNotices: true,
   humanSendDedupe: true,
+});
+
+const unsupportedCapabilities: TargetCapabilities = Object.freeze({
+  newestTail: false, stableOlderCursor: false, retainedHistoryAcrossResets: false,
+  orderedTransitions: false, snapshotCoverage: false, versionedNotices: false,
+  humanSendDedupe: false,
 });
 
 /** A fresh, host-authenticated socket. The host owns credentials and the auth handshake. */
@@ -49,7 +58,7 @@ export interface Public019Host {
 export interface Public019Config {
   /** Approved host route; no credentials, query, or fragment. */
   baseUrl: string;
-  /** Exact /version.build and /version.sha expected of the elected isolated target. */
+  /** Exact /version.build and /version.sha observed by the host. */
   build: number;
   sha: string;
   host: Public019Host;
@@ -167,6 +176,16 @@ export function decodePublic019Notice(value: unknown, sessionKey: string): Chang
       frame.resource === 'sessions' && frame.op === 'upsert') {
     return { operation: 'session', session: decodePublic019Session(frame.payload, sessionKey) };
   }
+  // Turn and wake events can affect the selected session's activity without
+  // carrying a complete session projection. Refresh that projection instead.
+  if ((frame.class === 'turn.started' || frame.class === 'turn.ended') &&
+      frame.resource === 'turns' && frame.op === 'upsert') {
+    return { operation: 'observe', sessionKey, resource: frame.class };
+  }
+  if (['wake.scheduled', 'wake.fired', 'wake.canceled'].includes(frame.class) &&
+      frame.resource === 'wakes' && frame.op === 'upsert') {
+    return { operation: 'observe', sessionKey, resource: frame.class };
+  }
   return { operation: 'unknown', sessionKey, resource: frame.class };
 }
 
@@ -194,10 +213,11 @@ export function createPublic019Transport(config: Public019Config): { transport: 
     throw new Error('Expected an exact public 0.1.9 build, source SHA, and positive timeouts.');
   }
   const expectedIdentity = identity('0.1.9', config.build, config.sha);
+  const sourceBacked = config.build === PUBLIC_019_BUILD && config.sha === PUBLIC_019_GATEWAY_SHA;
   const profile: TargetProfile = Object.freeze({
     identity: expectedIdentity,
     label: `Tightbeam 0.1.9 build ${config.build}`,
-    capabilities,
+    capabilities: sourceBacked ? capabilities : unsupportedCapabilities,
   });
 
   async function get(path: string, signal: AbortSignal): Promise<Record<string, unknown>> {
@@ -228,10 +248,8 @@ export function createPublic019Transport(config: Public019Config): { transport: 
     async inspectTarget(signal): Promise<TargetObservation> {
       const version = await get('/version', signal);
       const observed = identity(String(version.version), Number(version.build), String(version.sha));
-      return { identity: observed, capabilities: observed === expectedIdentity ? capabilities : {
-        newestTail: false, stableOlderCursor: false, retainedHistoryAcrossResets: false,
-        orderedTransitions: false, snapshotCoverage: false, versionedNotices: false, humanSendDedupe: false,
-      } };
+      return { identity: observed,
+        capabilities: sourceBacked && observed === expectedIdentity ? capabilities : unsupportedCapabilities };
     },
     async readSession(sessionKey, signal) {
       const body = await get(`/api/sessions/${encodeURIComponent(sessionKey)}`, signal);
@@ -246,8 +264,7 @@ export function createPublic019Transport(config: Public019Config): { transport: 
     // then reads retained append-only rows and unions buffered versioned notices.
     // This is overlap coverage, not a server snapshot watermark or replay promise.
     proveCoverage: (session, page, buffered) => activeSessions.has(session.sessionKey) &&
-      page.coverage === session.sessionKey && !buffered.some((notice) =>
-        notice.operation === 'unknown' || notice.operation === 'observe'),
+      page.coverage === session.sessionKey && !buffered.some((notice) => notice.operation === 'unknown'),
     async openChanges(sessionKey, callbacks, signal): Promise<ChangeConnection> {
       const channel = await config.host.openAuthenticatedChanges(signal);
       let closed = false;

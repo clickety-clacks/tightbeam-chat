@@ -324,7 +324,7 @@ class SessionRuntime implements ChatRuntime {
       }
       this.connection = connection;
 
-      const session = await this.transport.readSession(this.sessionKey, controller.signal);
+      let session = await this.transport.readSession(this.sessionKey, controller.signal);
       const tail = await this.transport.readTail(this.sessionKey, controller.signal);
       if (!this.isCurrent(generation) || !this.checkIdentity()) return;
       if (session.sessionKey !== this.sessionKey) throw new UnsupportedTargetError('Session read returned another selection.');
@@ -356,6 +356,16 @@ class SessionRuntime implements ChatRuntime {
 
       // One synchronous publication consumes a finite notice prefix after coverage proof.
       const prefix = this.buffered.splice(0);
+      if (prefix.some((notice) => notice.operation === 'observe')) {
+        // Known activity changes may have arrived after the first session read.
+        // Their frames lack the complete session state, so read it again after
+        // the committed notice before publishing the candidate.
+        session = await this.transport.readSession(this.sessionKey, controller.signal);
+        if (!this.isCurrent(generation) || !this.checkIdentity()) return;
+        if (session.sessionKey !== this.sessionKey) {
+          throw new UnsupportedTargetError('Session refresh returned another selection.');
+        }
+      }
       if (!this.transport.proveCoverage(session, tail, prefix)) {
         throw new UnsupportedTargetError('Snapshot and buffered notices lack verified coverage.');
       }
@@ -364,7 +374,9 @@ class SessionRuntime implements ChatRuntime {
       this.cursor = cursor;
       this.restoreDepth = restored;
       for (const record of candidate.values()) this.put(record);
-      for (const notice of prefix) this.apply(notice);
+      for (const notice of prefix) {
+        if (notice.operation !== 'observe') this.apply(notice);
+      }
       this.reconcilePendingHistory(hasOlder);
       if (!this.isCurrent(generation)) return;
       this.initializing = false;

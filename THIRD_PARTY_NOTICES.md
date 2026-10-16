@@ -18,4 +18,4 @@ The checked-in `package-lock.json` identifies direct packages and the full trans
 | vite | 7.3.7 | example/build development | MIT |
 | vitest | 5.0.3 | test development | MIT |
 
-This is an inventory of lockfile metadata, not a claim that every transitive notice or the product's final MIT copyright line has been cleared. Review the exact dependency tree and distributed output for any further notice obligation before public release. No `LICENSE` file is generated until the authorized copyright-holder text is known.
+This is an inventory of lockfile metadata, not a claim that every transitive notice has been cleared. The repository's MIT LICENSE carries the authorized copyright line. Review the exact dependency tree and distributed output for any further notice obligation before public release.

@@ -6,7 +6,7 @@ An original, embeddable TypeScript/React transcript and plain-text composer for 
 
 The browser example connects the existing component to a selected Tightbeam 0.1.9 gateway and session. It loads the newest 50 retained messages, pages backward, subscribes to live changes, renders stored switch/restart markers, and sends human messages. See the [released wire mapping and coverage limits](docs/public-019-profile.md). Automated validation uses synthetic wire responses; live-gateway acceptance remains to be done.
 
-The intended repository license is MIT, but the copyright holder's exact text has not been provided. No guessed `LICENSE` is included. This source is not ready for a license-complete release until the holder and required notices are confirmed.
+The repository has a standard [MIT LICENSE](LICENSE) with Copyright (c) 2026 Mike Manzano. Dependency and distribution notices are inventoried separately in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## Open a real session
 
@@ -29,7 +29,7 @@ Sign in separately on the page. You need an approved **device ID and device toke
 
 A session credential alone is insufficient: the release accepts it for selected-session reads and changes, but human sending requires a paired device token. The org CLI token is also unsuitable. Do not copy an agent's credential files to use this page. Pairing creates a device on the selected gateway; it may require approval before any chat can be shown.
 
-The example stores credentials only in memory. Sign-out or reload discards them. It shows the newest messages at the top; **Load earlier messages** adds older history below. Sending posts a real human message to the selected session and can wake its agent. The local Vite server supplies a same-origin HTTP/WebSocket bridge, so no gateway CORS changes are required. Keep it on loopback. A static HTML deployment alone does not include this bridge.
+The example stores credentials only in memory. Sign-out or reload discards them. It loads the newest tail in chronological order with the viewport at the newest end; scrolling upward or choosing **Load earlier messages** prepends older history while preserving the reading position. Sending posts a real human message to the selected session and can wake its agent. The local Vite server supplies a same-origin HTTP/WebSocket bridge, so no gateway CORS changes are required. Keep it on loopback. A static HTML deployment alone does not include this bridge.
 
 ```sh
 npm run check
