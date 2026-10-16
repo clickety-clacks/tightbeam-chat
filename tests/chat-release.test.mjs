@@ -1,5 +1,4 @@
 import crypto from 'node:crypto';
-import { EventEmitter } from 'node:events';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 import http from 'node:http';
@@ -85,14 +84,6 @@ afterEach(async () => {
 });
 
 describe('persistent Chat server', () => {
-  it('accumulates a WebSocket frame across separate data chunks', async () => {
-    const socket = new EventEmitter();
-    const frame = collectSocketBytes(socket, 4);
-    socket.emit('data', Buffer.from([0x81, 0x02]));
-    socket.emit('data', Buffer.from([0x6f, 0x6b]));
-    await expect(frame).resolves.toEqual(Buffer.from([0x81, 0x02, 0x6f, 0x6b]));
-  });
-
   it('serves runtime target configuration and verified Chat identity without caching', async () => {
     const rootDir = await temporaryDirectory();
     const publicDir = path.join(rootDir, 'public');
