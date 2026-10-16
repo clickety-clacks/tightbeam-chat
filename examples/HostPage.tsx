@@ -3,7 +3,10 @@ import { TightbeamChat, createPublic019Transport, createTightbeamAdapter, type T
 import { browserHost } from './browserHost';
 import { canUseBrowserCredentials, resolveEntrySelection, type ConfiguredChatTarget } from './entry';
 
-export function HostPage({ defaultTarget }: { readonly defaultTarget: ConfiguredChatTarget }) {
+export function HostPage({ defaultTarget, configurationError }: {
+  readonly defaultTarget: ConfiguredChatTarget;
+  readonly configurationError?: string;
+}) {
   const [adapter, setAdapter] = useState<TightbeamAdapter>();
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -51,9 +54,12 @@ export function HostPage({ defaultTarget }: { readonly defaultTarget: Configured
       <p>Session: <code>{selected.sessionKey}</code></p>
       <p>{selectionSource === 'configured' ? 'Using the configured target.' : 'Selected from this link.'}</p>
     </section>}
-    {resolution.kind === 'configuration-error' && <p role="alert">{resolution.message}</p>}
+    {resolution.kind === 'configuration-error' && <p role="alert">
+      {configurationError ?? resolution.message}
+    </p>}
     {resolution.kind === 'invalid-selection' && <div role="alert">
       <p>{resolution.message}</p>
+      {configurationError && <p>{configurationError}</p>}
       {resolution.canRecoverToConfigured &&
         <a href={window.location.pathname || '/'}>Use configured default target</a>}
     </div>}

@@ -12,20 +12,20 @@ The repository has a standard [MIT LICENSE](LICENSE) with Copyright (c) 2026 Mik
 
 The browser entry accepts a nonsecret `gateway` origin and exact `session` key. It uses URL query APIs so reserved characters in either value round-trip. The gateway must be an HTTP(S) origin without credentials, path, query, or fragment. Only those two parameters are accepted; tokens and other credentials never belong in the link.
 
-For a configured root with no query string, provide both `VITE_CHAT_DEFAULT_GATEWAY` and `VITE_CHAT_DEFAULT_SESSION` when building the example. These values are deployment configuration, not credentials. A complete valid link overrides that default. A malformed, incomplete, duplicate, or extra query parameter is rejected without displaying its raw value or connecting to the requested target; when a valid default exists, Chat offers an explicit link back to the configured entry. Missing or invalid default configuration is shown as an error rather than replaced with a placeholder target.
+For a configured root with no query string, the private server supplies `GET /chat-config.json` at the Chat origin. It returns JSON with a canonical `gateway` origin and the exact nonempty `sessionKey`, for example `{ "gateway": "https://gateway.example", "sessionKey": "agent:example/chat" }`. These values select a target; they are not credentials. The browser fetches this configuration at runtime, so one built asset set can serve different private deployments. A complete valid link overrides the configured default. A malformed, incomplete, duplicate, or extra query parameter is rejected without displaying its raw value or connecting to the requested target; when a valid default exists, Chat offers an explicit link back to the configured entry. Missing or invalid configuration is shown as an error rather than replaced with a placeholder target.
 
 Sign in separately with an existing approved human device ID and token. The example does not pair or create devices, and it does not read credentials from the link. Credentials are submitted only after you choose **Sign in** and remain in memory for that page. The selected gateway and session stay visible before sign-in and after it.
 
 Private-network sign-in requires a secure browser context: use the private HTTPS entry on a device. Localhost remains available for development. The browser sends gateway HTTP and WebSocket traffic through the Chat origin's same-origin bridge; HTTPS pages use HTTPS/WSS on that origin, avoiding browser mixed-content requests to the selected gateway.
 
-For local development, use Node 24 or later:
+For local development, use Node 24 or later and open a named target with a complete nonsecret link such as `/?gateway=https%3A%2F%2Fgateway.example&session=agent%3Aexample%2Fchat`:
 
 ```sh
 npm ci
 npm run example
 ```
 
-The Vite example binds to loopback and its bridge is development-only. Do not expose it to a network or put a proxy/tunnel in front of it. This repository change does not provide or deploy a persistent private server. A private deployment must serve the configured entry over HTTPS and implement the same-origin `/gateway/` HTTP and WebSocket bridge; the actual device route, certificate, and deployed bridge are not verified by these source-level checks.
+The Vite example binds to loopback and its bridge is development-only. Do not expose it to a network or put a proxy/tunnel in front of it. A private production origin must serve the built example, runtime config, and same-origin `/gateway/` HTTP and WebSocket bridge over HTTPS. This candidate does not establish a deployed server, device route, or certificate.
 
 The example loads the newest tail in chronological order with the viewport at the newest end; scrolling upward or choosing **Load earlier messages** prepends older history while preserving the reading position. Sending a real human message is available only after the person separately signs in; automated validation does not submit messages.
 

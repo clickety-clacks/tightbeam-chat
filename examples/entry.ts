@@ -8,6 +8,43 @@ export interface ConfiguredChatTarget {
   readonly sessionKey?: string;
 }
 
+/** Loads the deployment-owned, nonsecret default from the same origin as the page. */
+export async function loadConfiguredChatTarget(
+  fetcher: typeof fetch = fetch,
+  signal?: AbortSignal,
+): Promise<ChatTarget> {
+  let response: Response;
+  try {
+    response = await fetcher('/chat-config.json', {
+      credentials: 'same-origin',
+      cache: 'no-store',
+      redirect: 'error',
+      signal,
+    });
+  } catch {
+    throw new Error('The configured Chat target could not be loaded.');
+  }
+  if (!response.ok) throw new Error('The configured Chat target could not be loaded.');
+
+  let value: unknown;
+  try {
+    value = await response.json();
+  } catch {
+    throw new Error('The Chat server returned invalid target configuration.');
+  }
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error('The Chat server returned invalid target configuration.');
+  }
+
+  const config = value as Record<string, unknown>;
+  const target = targetFrom(
+    typeof config.gateway === 'string' ? config.gateway : undefined,
+    typeof config.sessionKey === 'string' ? config.sessionKey : undefined,
+  );
+  if (!target) throw new Error('The Chat server returned an invalid default target.');
+  return target;
+}
+
 export type EntryResolution =
   | { readonly kind: 'selected'; readonly target: ChatTarget; readonly source: 'link' | 'configured' }
   | { readonly kind: 'invalid-selection'; readonly message: string; readonly canRecoverToConfigured: boolean }
