@@ -4,7 +4,7 @@ An original, embeddable TypeScript/React transcript and plain-text composer for 
 
 ## Current status
 
-The browser example connects the existing component to a selected Tightbeam 0.1.9 build `2476` gateway and session. It loads the newest 50 retained messages, pages backward, subscribes to live changes, renders stored switch/restart markers, and sends human messages. Other builds are shown as unsupported. See the [released wire mapping and coverage limits](docs/public-019-profile.md). Automated validation uses synthetic wire responses; live-gateway acceptance remains to be done.
+The browser example connects the existing component to a selected Tightbeam 0.1.9 build `2476` or source-assessed build `2844` gateway and session. It loads the newest 50 retained messages, pages backward, subscribes to live changes, renders stored switch/restart markers, and sends human messages. Other builds are shown as unsupported. See the [wire mapping and coverage limits](docs/public-019-profile.md). Automated validation uses synthetic wire responses; live-gateway acceptance remains to be done.
 
 The repository has a standard [MIT LICENSE](LICENSE) with Copyright (c) 2026 Mike Manzano. Dependency and distribution notices are inventoried separately in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
