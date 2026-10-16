@@ -57,15 +57,18 @@ function setup(heartbeatTimeoutMs?: number, observedVersion = version) {
 }
 
 describe('public 0.1.9 released wire mapping and capability gates', () => {
-  it('keeps an unexamined 0.1.9 build unsupported while the released build can open a session', async () => {
-    const other = setup(undefined, { ...version, build: version.build + 1 });
-    const runtime = createTightbeamAdapter(other.transport, other.profile).open(sessionKey);
-    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('unsupported'));
-    expect(runtime.getSnapshot().statusDetail).toContain('capability');
-    expect(other.changes.sent).toHaveLength(0);
-    expect(runtime.send('must not post')).toBeNull();
-    expect(other.human.sent).toHaveLength(0);
-    runtime.dispose();
+  it('keeps unexamined 0.1.9 build and source identities unsupported while the released build opens', async () => {
+    for (const observed of [{ ...version, build: version.build + 1 },
+      { ...version, sha: '00000000' }]) {
+      const other = setup(undefined, observed);
+      const runtime = createTightbeamAdapter(other.transport, other.profile).open(sessionKey);
+      await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('unsupported'));
+      expect(runtime.getSnapshot().statusDetail).toContain('capability');
+      expect(other.changes.sent).toHaveLength(0);
+      expect(runtime.send('must not post')).toBeNull();
+      expect(other.human.sent).toHaveLength(0);
+      runtime.dispose();
+    }
 
     const supported = setup();
     const ready = createTightbeamAdapter(supported.transport, supported.profile).open(sessionKey);
