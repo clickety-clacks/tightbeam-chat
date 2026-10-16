@@ -3,6 +3,8 @@ import react from '@vitejs/plugin-react';
 import { resolve } from 'node:path';
 import http from 'node:http';
 import https from 'node:https';
+import type { TLSSocket } from 'node:tls';
+import { parseGatewayBridgeTarget, sameOriginBridgeOrigin } from './entry';
 
 // Development-only same-origin bridge. Never expose this server to a network.
 function gatewayBridge(): Plugin {
@@ -10,18 +12,15 @@ function gatewayBridge(): Plugin {
     name: 'chat-gateway-bridge',
     configureServer(server) {
       function target(raw = '') {
-        const match = /^\/gateway\/([^/]+)(\/.*)$/.exec(raw);
-        if (!match) return null;
-        const base = new URL(decodeURIComponent(match[1]));
-        if (!['http:', 'https:'].includes(base.protocol) || base.username || base.password ||
-            base.search || base.hash || base.pathname !== '/') throw new Error('Invalid gateway origin');
-        const path = match[2];
-        if (!/^\/(version|api\/sessions(?:\/|$)|ws(?:\?|$|\/changes))/.test(path)) throw new Error('Unsupported route');
-        return { base, path };
+        const route = parseGatewayBridgeTarget(raw);
+        if (!route) return null;
+        return { base: new URL(route.gateway), path: route.path };
       }
       const allowed = (req: http.IncomingMessage) => {
         const origin = req.headers.origin;
-        return !origin || origin === `http://${req.headers.host}`;
+        const protocol = (req.socket as TLSSocket).encrypted ? 'https' : 'http';
+        const requestOrigin = req.headers.host ? `${protocol}://${req.headers.host}` : '';
+        return !origin || sameOriginBridgeOrigin(origin, requestOrigin);
       };
       server.middlewares.use((req, res, next) => {
         if (!req.url?.startsWith('/gateway/')) return next();
