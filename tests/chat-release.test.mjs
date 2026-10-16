@@ -446,11 +446,11 @@ describe('Chat release packaging and updater', () => {
     expect(execFileSync('tar', ['-xOzf', result.assetPath, './THIRD_PARTY_NOTICES.md']))
       .toEqual(notices);
     expect(execFileSync('tar', ['-xOzf', result.assetPath, './bin/chat-release-watch.mjs']))
-      .toEqual(await fs.readFile(path.resolve('scripts/chat-release-watch.mjs')));
+      .toEqual(await fs.readFile(path.join(rootDir, 'scripts/chat-release-watch.mjs')));
     expect(execFileSync('tar', ['-xOzf', result.assetPath, './packaging/tightbeam-chat-release-watch.service']))
-      .toEqual(await fs.readFile(path.resolve('packaging/tightbeam-chat-release-watch.service')));
+      .toEqual(await fs.readFile(path.join(rootDir, 'packaging/tightbeam-chat-release-watch.service')));
     expect(execFileSync('tar', ['-xOzf', result.assetPath, './packaging/tightbeam-chat-release-watch.timer']))
-      .toEqual(await fs.readFile(path.resolve('packaging/tightbeam-chat-release-watch.timer')));
+      .toEqual(await fs.readFile(path.join(rootDir, 'packaging/tightbeam-chat-release-watch.timer')));
   });
 
   it('publishes the checksum-bound tag only after every release asset upload is confirmed', async () => {
