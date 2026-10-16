@@ -376,6 +376,10 @@ async function setupExistingChat(homeDir) {
 describe('Chat release packaging and updater', () => {
   it('packages a tagged server with a checksum and exact source provenance', async () => {
     const rootDir = await temporaryDirectory('chat-package-source-');
+    const notices = await fs.readFile(path.resolve('THIRD_PARTY_NOTICES.md'));
+    const noticeText = notices.toString('utf8');
+    expect(noticeText).toContain('React 19.3.0, React DOM 19.3.0, and Scheduler 0.28.0');
+    expect(noticeText).toContain('Copyright (c) Meta Platforms, Inc. and affiliates.');
     const files = [
       'dist/chat-server/public/index.html', 'server/chat-server.mjs', 'scripts/update-chat-release.mjs',
       'scripts/chat-release-updater.mjs', 'packaging/tightbeam-chat.service', 'LICENSE', 'THIRD_PARTY_NOTICES.md',
@@ -383,7 +387,10 @@ describe('Chat release packaging and updater', () => {
     for (const relative of files) {
       const filename = path.join(rootDir, relative);
       await fs.mkdir(path.dirname(filename), { recursive: true });
-      await fs.writeFile(filename, relative === 'dist/chat-server/public/index.html' ? '<main>Chat</main>' : `source ${relative}`);
+      const content = relative === 'dist/chat-server/public/index.html'
+        ? '<main>Chat</main>'
+        : relative === 'THIRD_PARTY_NOTICES.md' ? notices : Buffer.from(`source ${relative}`);
+      await fs.writeFile(filename, content);
     }
     const outputDir = path.join(rootDir, 'release-output');
     const builtAt = '2026-10-16T00:00:00.000Z';
@@ -402,7 +409,10 @@ describe('Chat release packaging and updater', () => {
     const members = execFileSync('tar', ['-tzf', result.assetPath], { encoding: 'utf8' });
     expect(members).toContain('./public/index.html');
     expect(members).toContain('./server/chat-server.mjs');
+    expect(members).toContain('./THIRD_PARTY_NOTICES.md');
     expect(members).toContain('./release.json');
+    expect(execFileSync('tar', ['-xOzf', result.assetPath, './THIRD_PARTY_NOTICES.md']))
+      .toEqual(notices);
   });
 
   it('publishes the checksum-bound tag only after every release asset upload is confirmed', async () => {
