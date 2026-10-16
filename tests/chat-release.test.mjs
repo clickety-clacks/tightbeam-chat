@@ -252,9 +252,10 @@ describe('persistent Chat server', () => {
   });
 });
 
-async function createBundleFixture(tag, sourceCommit) {
+async function createBundleFixture(tag, sourceCommit, { noticeContent } = {}) {
   const root = await temporaryDirectory('chat-release-bundle-');
   const packageRoot = path.join(root, 'package');
+  const noticeBytes = noticeContent ?? await fs.readFile(path.resolve('THIRD_PARTY_NOTICES.md'));
   const files = [
     'public/index.html', 'server/chat-server.mjs', 'bin/update-chat-release.mjs',
     'bin/chat-release-updater.mjs', 'packaging/tightbeam-chat.service', 'LICENSE', 'THIRD_PARTY_NOTICES.md',
@@ -264,7 +265,7 @@ async function createBundleFixture(tag, sourceCommit) {
     await fs.mkdir(path.dirname(filename), { recursive: true });
     const content = relative === 'packaging/tightbeam-chat.service'
       ? await fs.readFile(path.resolve('packaging/tightbeam-chat.service'))
-      : Buffer.from(`fixture ${relative}\n`);
+      : relative === 'THIRD_PARTY_NOTICES.md' ? noticeBytes : Buffer.from(`fixture ${relative}\n`);
     await fs.writeFile(filename, content);
   }
   await fs.writeFile(path.join(packageRoot, 'release.json'), `${JSON.stringify({
@@ -523,6 +524,27 @@ describe('Chat release packaging and updater', () => {
     expect(rolledBack).toEqual({ tag: 'v0.1.0', sourceCommit: SOURCE_COMMIT });
     expect(await fs.readlink(path.join(root, 'current'))).toBe(path.relative(root, oldVersion));
     expect(await fs.readlink(path.join(root, 'previous'))).toBe(path.relative(root, path.join(root, 'releases', tag)));
+  });
+
+  it('refuses an incomplete React runtime notice before changing the active release or service', async () => {
+    const homeDir = await temporaryDirectory('chat-updater-incomplete-notice-');
+    const { root, oldVersion } = await setupExistingChat(homeDir);
+    const tag = 'v1.2.3';
+    const fixture = await createBundleFixture(tag, SOURCE_COMMIT, {
+      noticeContent: Buffer.from('React runtime license notice omitted.\n'),
+    });
+    const serviceManager = mockServiceManager();
+
+    await expect(installChatRelease(tag, {
+      homeDir,
+      fetchImpl: fixtureFetch(tag, SOURCE_COMMIT, fixture),
+      serviceManager,
+      healthCheck: async () => { throw new Error('must not be reached'); },
+    })).rejects.toThrow(/React runtime notice/);
+
+    expect(await fs.readlink(path.join(root, 'current'))).toBe(path.relative(root, oldVersion));
+    await expect(fs.lstat(path.join(root, 'releases', tag))).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(serviceManager.calls).toEqual(['is-enabled']);
   });
 
   it('preserves the serving version when the published asset is missing, corrupt, or transferred incompletely', async () => {
