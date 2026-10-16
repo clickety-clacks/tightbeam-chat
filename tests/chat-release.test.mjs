@@ -178,9 +178,15 @@ describe('persistent Chat server', () => {
           'sec-websocket-key': key, 'sec-websocket-version': '13',
         },
       });
-      const timer = setTimeout(() => reject(new Error('WebSocket bridge timed out.')), 3000);
+      let clientSocket;
+      const timer = setTimeout(() => {
+        request.destroy();
+        clientSocket?.destroy();
+        reject(new Error('WebSocket bridge timed out.'));
+      }, 3000);
       request.once('error', (error) => { clearTimeout(timer); reject(error); });
       request.once('upgrade', (response, socket) => {
+        clientSocket = socket;
         if (response.statusCode !== 101) {
           clearTimeout(timer);
           reject(new Error(`Unexpected WebSocket status ${response.statusCode}.`));

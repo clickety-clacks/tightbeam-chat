@@ -103,10 +103,15 @@ export async function fetchVerifiedChatRelease(tag, { fetchImpl = globalThis.fet
   }
   const archiveName = assetNameFor(tag);
   const actualHash = crypto.createHash('sha256').update(archiveBytes).digest('hex');
-  if (provenance.product !== 'tightbeam-chat' || provenance.schemaVersion !== 1 ||
-      provenance.tag !== tag || provenance.asset !== archiveName || provenance.sha256 !== actualHash ||
-      !SHA_PATTERN.test(provenance.sha256 ?? '') || !SHA_PATTERN.test(provenance.sourceCommit ?? '')) {
-    throw new Error(`Published provenance for ${tag} does not match the downloaded asset.`);
+  const mismatches = [];
+  if (provenance.product !== 'tightbeam-chat') mismatches.push('product');
+  if (provenance.schemaVersion !== 1) mismatches.push('schemaVersion');
+  if (provenance.tag !== tag) mismatches.push('tag');
+  if (provenance.asset !== archiveName) mismatches.push('asset');
+  if (provenance.sha256 !== actualHash || !SHA_PATTERN.test(provenance.sha256 ?? '')) mismatches.push('sha256');
+  if (!SHA_PATTERN.test(provenance.sourceCommit ?? '')) mismatches.push('sourceCommit');
+  if (mismatches.length) {
+    throw new Error(`Published provenance for ${tag} does not match the downloaded asset (${mismatches.join(', ')}).`);
   }
   parseChecksum(checksumBytes, tag, archiveName, actualHash);
 
