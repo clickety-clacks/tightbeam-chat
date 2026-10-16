@@ -38,14 +38,11 @@ class FakeRuntime implements ChatRuntime {
 describe('embedded surface', () => {
   it('renders unknown metadata as text, exposes history/copy, and keeps submitted whitespace intact', async () => {
     const runtime = new FakeRuntime('A');
-    runtime.state = { ...runtime.state, records: [row('A', 'first'), row('A', 'A', 'future-kind')] };
     const adapter: TightbeamAdapter = { open: () => runtime };
     Object.defineProperty(navigator, 'clipboard', { configurable: true,
       value: { writeText: vi.fn().mockResolvedValue(undefined) } });
     render(<TightbeamChat sessionKey="A" adapter={adapter} />);
     expect(await screen.findByText('<script>plain A</script>')).toBeTruthy();
-    expect([...document.querySelectorAll('[data-record-key]')].map((element) =>
-      element.getAttribute('data-record-key'))).toEqual(['first', 'A']);
     expect(document.querySelector('script')).toBeNull();
     expect(screen.getByText('future-kind')).toBeTruthy();
     expect(screen.getByText('1 attachment metadata item(s)')).toBeTruthy();
@@ -53,14 +50,25 @@ describe('embedded surface', () => {
     await waitFor(() => expect(navigator.clipboard.writeText).toHaveBeenCalledWith('<script>plain A</script>'));
     fireEvent.click(screen.getByRole('button', { name: 'Load earlier messages' }));
     expect(await screen.findByText('<script>plain old-A</script>')).toBeTruthy();
-    expect([...document.querySelectorAll('[data-record-key]')].map((element) =>
-      element.getAttribute('data-record-key'))).toEqual(['old-A', 'first', 'A']);
     const composer = screen.getByRole('textbox', { name: 'Message' });
     fireEvent.change(composer, { target: { value: '   ' } });
     expect(screen.getByRole('button', { name: 'Send message' }).hasAttribute('disabled')).toBe(true);
     fireEvent.change(composer, { target: { value: '  exact  ' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
     expect(runtime.sent).toEqual(['  exact  ']);
+  });
+
+  it('keeps chronological row order when loading older history', async () => {
+    const runtime = new FakeRuntime('order');
+    runtime.state = { ...runtime.state,
+      records: [row('order', 'earlier'), row('order', 'newest')] };
+    render(<TightbeamChat sessionKey="order" adapter={{ open: () => runtime }} />);
+    const recordKeys = () => [...document.querySelectorAll('[data-record-key]')].map((element) =>
+      element.getAttribute('data-record-key'));
+    expect(recordKeys()).toEqual(['earlier', 'newest']);
+    fireEvent.click(screen.getByRole('button', { name: 'Load earlier messages' }));
+    await screen.findByText('<script>plain old-order</script>');
+    expect(recordKeys()).toEqual(['old-order', 'earlier', 'newest']);
   });
 
   it('disposes the previous selection, drops its draft, and passes intact metadata to host rendering', async () => {
