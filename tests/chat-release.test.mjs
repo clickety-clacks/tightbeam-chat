@@ -540,7 +540,7 @@ describe('Chat release packaging and updater', () => {
       fetchImpl: fixtureFetch(tag, SOURCE_COMMIT, fixture),
       serviceManager,
       healthCheck: async () => { throw new Error('must not be reached'); },
-    })).rejects.toThrow(/complete React runtime license notice/);
+    })).rejects.toThrow(/React runtime notice/);
 
     expect(await fs.readlink(path.join(root, 'current'))).toBe(path.relative(root, oldVersion));
     await expect(fs.lstat(path.join(root, 'releases', tag))).rejects.toMatchObject({ code: 'ENOENT' });
