@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
+import { realpathSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -195,7 +196,16 @@ async function main() {
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+function isInvokedAsMainModule() {
+  if (!process.argv[1]) return false;
+  try {
+    return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+if (isInvokedAsMainModule()) {
   main().catch((error) => {
     process.stderr.write(`${error instanceof Error ? error.message : 'Chat automatic update failed.'}\n`);
     process.exitCode = 1;
