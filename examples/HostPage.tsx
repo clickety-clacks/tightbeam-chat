@@ -42,6 +42,7 @@ export function HostPage({ defaultTarget, configurationError }: {
         }
         const { transport, profile } = createPublic019Transport({
           baseUrl: `${origin}/__chat`,
+          gatewayVersionPath: '/gateway/version',
           build: version.build,
           sha: version.sha,
           host,

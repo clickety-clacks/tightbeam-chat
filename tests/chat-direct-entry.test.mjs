@@ -364,7 +364,7 @@ describe('private direct-entry Chat service bridge', () => {
       openAuthenticatedHuman: async () => { throw new Error('No socket needed for this history composition test.'); },
     };
     const { transport, profile } = createPublic019Transport({
-      baseUrl: `${chatOrigin}/__chat`, build: 2847, sha: 'b75b9bf5', host,
+      baseUrl: `${chatOrigin}/__chat`, gatewayVersionPath: '/gateway/version', build: 2847, sha: 'b75b9bf5', host,
     });
 
     const observed = await transport.inspectTarget(new AbortController().signal);

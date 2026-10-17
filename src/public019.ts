@@ -74,6 +74,8 @@ export interface Public019Host {
 export interface Public019Config {
   /** Approved host route; no credentials, query, or fragment. */
   baseUrl: string;
+  /** Selected Gateway identity route. Native callers default to /version; private Chat bridges use /gateway/version. */
+  gatewayVersionPath?: '/version' | '/gateway/version';
   /** Exact /version.build and /version.sha observed by the host. */
   build: number;
   sha: string;
@@ -233,6 +235,7 @@ export function createPublic019Transport(config: Public019Config): { transport: 
     throw new Error('Expected an exact public 0.1.9 build, source SHA, and positive timeouts.');
   }
   const expectedIdentity = identity('0.1.9', config.build, config.sha);
+  const gatewayVersionPath = config.gatewayVersionPath ?? '/version';
   const sourceBacked = (config.build === PUBLIC_019_BUILD && config.sha === PUBLIC_019_GATEWAY_SHA) ||
     (config.build === PUBLIC_019_BUILD_2844 && config.sha === PUBLIC_019_GATEWAY_SHA_2844);
   const profile: TargetProfile = Object.freeze({
@@ -267,10 +270,10 @@ export function createPublic019Transport(config: Public019Config): { transport: 
   const transport: ChatTransport = {
     currentIdentity: () => config.host.currentIdentity(),
     async inspectTarget(signal): Promise<TargetObservation> {
-      // The selected Gateway's identity is exposed by the Chat bridge. The
-      // Chat bundle manifest lives at /__chat/version and must not determine
-      // which Gateway profile is allowed to speak for this target.
-      const version = await get('/gateway/version', signal);
+      // The host selects the Gateway route: native embeddings use /version,
+      // while the private Chat server exposes it through /gateway/version.
+      // The Chat bundle manifest is separate and never determines the target profile.
+      const version = await get(gatewayVersionPath, signal);
       const observed = identity(String(version.version), Number(version.build), String(version.sha));
       return { identity: observed,
         capabilities: sourceBacked && observed === expectedIdentity ? capabilities : unsupportedCapabilities };
