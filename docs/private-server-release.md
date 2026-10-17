@@ -28,20 +28,29 @@ The unit file is `packaging/tightbeam-chat.service`. It supervises only `tightbe
 
 ## Updating and rollback
 
-After the service configuration exists, use the updater included in a published Chat release:
+For an initial installation, download a published bundle and its `SHA256SUMS`, verify the bundle with `sha256sum -c SHA256SUMS`, and extract it into a temporary directory. Run that verified bundle's updater with Node; the updater fetches the release again and verifies its publication, checksum, provenance, and tag source before staging anything.
+
+The first watcher release needs a specific bootstrap when upgrading from v0.1.1. The installed v0.1.1 updater predates the watcher service and timer paths, so it rejects that archive before activation. Use the updater from the checksum-verified v0.1.2 bundle for this one transition:
+
+```sh
+mkdir -p "$HOME/tmp/tightbeam-chat-v0.1.2"
+cd "$HOME/tmp/tightbeam-chat-v0.1.2"
+curl -fsSLO https://github.com/clickety-clacks/tightbeam-chat/releases/download/v0.1.2/tightbeam-chat-v0.1.2.tar.gz
+curl -fsSLO https://github.com/clickety-clacks/tightbeam-chat/releases/download/v0.1.2/SHA256SUMS
+sha256sum -c SHA256SUMS
+mkdir verified
+tar -xzf tightbeam-chat-v0.1.2.tar.gz -C verified
+node verified/bin/update-chat-release.mjs install v0.1.2
+```
+
+This single install invocation uses the newer updater to verify and stage the published release, activate Chat, and install the watcher units after the served version passes its health check. Do not invoke the v0.1.1 updater for this transition. Once a watcher-capable release is active, use its updater for later updates and rollback:
 
 ```sh
 node ~/.local/share/tightbeam-chat/current/bin/update-chat-release.mjs install v1.2.3
 node ~/.local/share/tightbeam-chat/current/bin/update-chat-release.mjs rollback
 ```
 
-For an initial installation, first download a published bundle and its `SHA256SUMS`, verify the bundle with `sha256sum -c SHA256SUMS`, and extract it into a temporary directory. Run that verified bundle's `bin/update-chat-release.mjs install <tag>` to fetch and verify the release again before it stages anything.
-
-The updater accepts only a published Chat release with the exact requested version tag, one matching server archive, a matching checksum, and provenance whose source commit resolves from that GitHub tag. It stages a verified version under `~/.local/share/tightbeam-chat/releases`, atomically switches the `current` pointer, restarts only the Chat user service and checks the served tag and source commit. If staging, restart or the served-version check fails, it restores the prior Chat pointer and restarts that version. The first release containing the watcher installs a user-level hourly timer after Chat health passes; later releases keep its existing enabled or disabled state. An older installed updater cannot install the new timer during the first upgrade, so after that release is active, run its updater once for the same tag to install the timer:
-
-```sh
-~/.local/share/tightbeam-chat/current/bin/update-chat-release.mjs install v0.1.2
-```
+The updater accepts only a published Chat release with the exact requested version tag, one matching server archive, a matching checksum, and provenance whose source commit resolves from that GitHub tag. It stages a verified version under `~/.local/share/tightbeam-chat/releases`, atomically switches the `current` pointer, restarts only the Chat user service and checks the served tag and source commit. If staging, restart or the served-version check fails, it restores the prior Chat pointer and restarts that version. The first release containing the watcher installs a user-level hourly timer after Chat health passes; later releases keep its existing enabled or disabled state.
 
 The watcher looks up the latest published stable Chat tag and delegates installation to the same checksum- and provenance-verifying updater. A failed activation that restores the prior release is held so the timer does not repeatedly activate the same failed tag; a newer release or an explicit operator retry remains available. Rolling back to a release without the watcher disables and removes its timer and service units. The explicit rollback command switches to the last verified Chat version and checks its served identity.
 
