@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createChatServer } from '../server/chat-server.mjs';
+import { createPublic019Transport } from '../src/public019';
 
 const TOKEN = 'fixture-operator-credential';
 const SESSION = 'agent:example:chat?tab=1';
@@ -12,6 +13,23 @@ const LINKED_SESSION = 'agent:example:linked-chat';
 const PRINCIPAL = 'example-user';
 const createdServers = [];
 const temporaryRoots = [];
+
+function canonicalMessage(sessionKey, seq, overrides = {}) {
+  const id = `m_${seq}`;
+  const row = {
+    id, seq, sessionKey, role: 'user', messageType: 'chat', content: `message ${seq}`,
+    at: Date.parse('2026-10-17T00:00:00Z') + seq * 1000,
+    sender: 'user:owner', deviceId: 'owner-device', clientMessageId: `c_${seq}`,
+    replyToMessageId: null, replyToClientMessageId: null, llmVisibleMessageId: id,
+    attachments: [], attentionTier: 0, turnSeq: null, assignmentId: null, jobRef: null,
+    harness: null, provider: null, model: null, effort: null, context: null, rowVersion: seq,
+    ...overrides,
+  };
+  if (overrides.messageType === 'marker') {
+    row.marker = overrides.marker;
+  }
+  return row;
+}
 
 async function listen(server, port = 0) {
   const sockets = new Set();
@@ -161,20 +179,22 @@ describe('private direct-entry Chat service bridge', () => {
         cliVersion: request.headers['x-tightbeam-cli-version'], body });
       if (request.url === '/version') {
         response.writeHead(200, { 'content-type': 'application/json' });
-        response.end(JSON.stringify({ version: '0.1.9', build: 2845, sha: 'b469cd27' }));
+        response.end(JSON.stringify({ version: '0.1.9', build: 2847, sha: 'b75b9bf5' }));
       } else if ([SESSION, LINKED_SESSION].some((sessionKey) =>
         request.url === `/api/sessions/${encodeURIComponent(sessionKey)}?asUser=${encodeURIComponent(PRINCIPAL)}`)) {
         response.writeHead(200, { 'content-type': 'application/json' });
         const sessionKey = request.url.includes(encodeURIComponent(LINKED_SESSION)) ? LINKED_SESSION : SESSION;
         response.end(JSON.stringify({ schemaVersion: 1, resource: 'sessions', item: { sessionKey } }));
-      } else if (request.url === '/agent/dispatch') {
-        response.writeHead(200, { 'content-type': 'application/json' });
-        const sessionKey = JSON.parse(body).params.session_key;
-        response.end(JSON.stringify({ result: { sessionKey, displayName: 'Example', messages: [
-          { id: 'm_1', sessionKey, seq: 1, rowVersion: 1, role: 'assistant', messageType: 'chat', content: 'hello' },
-        ], oldestId: 'm_1', hasMoreBefore: true, hasMoreAfter: false } }));
       } else {
-        response.writeHead(404).end();
+        const parsed = new URL(request.url, 'http://gateway.invalid');
+        const messagePath = /^\/api\/sessions\/([^/]+)\/messages$/.exec(parsed.pathname);
+        if (messagePath && request.method === 'GET' && parsed.searchParams.get('asUser') === PRINCIPAL) {
+          response.writeHead(200, { 'content-type': 'application/json' });
+          const sessionKey = decodeURIComponent(messagePath[1]);
+          const item = canonicalMessage(sessionKey, 1, { content: 'hello' });
+          response.end(JSON.stringify({ schemaVersion: 1, resource: 'transcript messages', items: [item],
+            page: { oldestCursor: 'cursor:m_1', newestCursor: 'cursor:m_1', hasMoreBefore: true, hasMoreAfter: false } }));
+        } else response.writeHead(404).end();
       }
     });
     const gatewayPort = await listen(gateway);
@@ -225,30 +245,173 @@ describe('private direct-entry Chat service bridge', () => {
     expect(await transcriptResponse.json()).toEqual({
       schemaVersion: 1,
       resource: 'transcript messages',
-      items: [{ id: 'm_1', sessionKey: LINKED_SESSION, seq: 1, rowVersion: 1, role: 'assistant', messageType: 'chat', content: 'hello' }],
-      page: { oldestCursor: 'm_1', hasMoreBefore: true },
+      items: [canonicalMessage(LINKED_SESSION, 1, { content: 'hello' })],
+      page: { oldestCursor: 'cursor:m_1', newestCursor: 'cursor:m_1', hasMoreBefore: true, hasMoreAfter: false },
     });
 
-    expect(seen).toHaveLength(4);
+    expect(seen).toHaveLength(3);
     expect(seen.map((row) => row.url)).toEqual([
       '/version',
       `/api/sessions/${encodeURIComponent(LINKED_SESSION)}?asUser=${encodeURIComponent(PRINCIPAL)}`,
-      '/version',
-      '/agent/dispatch',
+      `/api/sessions/${encodeURIComponent(LINKED_SESSION)}/messages?asUser=${encodeURIComponent(PRINCIPAL)}&limit=50&tail=true`,
     ]);
     expect(seen.map((row) => row.authorization)).toEqual([
-      undefined, `Bearer ${TOKEN}`, undefined, `Bearer ${TOKEN}`,
+      undefined, `Bearer ${TOKEN}`, `Bearer ${TOKEN}`,
     ]);
-    expect(seen[3].cliVersion).toBe('0.1.9');
-    expect(JSON.parse(seen[3].body)).toEqual({
-      verb: 'transcript', asUser: PRINCIPAL, params: { session_key: LINKED_SESSION, limit: 50 },
-    });
+    expect(seen.every((row) => !row.cliVersion && row.body === '')).toBe(true);
 
     const wrongSession = await fetch(`${chatOrigin}/__chat/api/sessions/agent%3Aother${selectedGateway}`, { headers: { origin: chatOrigin } });
     expect(wrongSession.status).toBe(404);
     const wrongOrigin = await fetch(`${chatOrigin}/__chat/gateway/version`, { headers: { origin: 'https://elsewhere.example' } });
     expect(wrongOrigin.status).toBe(403);
     expect(seen).toHaveLength(5);
+  });
+
+  it('composes the canonical selected-history route with the real decoder across an agent reset', async () => {
+    const resetSeq = 51;
+    const history = Array.from({ length: 102 }, (_, index) => {
+      const seq = index + 1;
+      if (seq === resetSeq) {
+        return canonicalMessage(LINKED_SESSION, seq, {
+          id: 'm_restart', role: 'assistant', messageType: 'marker', content: '',
+          sender: null, deviceId: null, clientMessageId: null, llmVisibleMessageId: 'm_restart',
+          marker: { kind: 'session-restart', from: 'before-reset', to: 'after-reset' },
+        });
+      }
+      return canonicalMessage(LINKED_SESSION, seq, {
+        content: seq === 1 ? 'human message before reset' : `message ${seq}`,
+        replyToMessageId: seq === 102 ? 'm_1' : null,
+      });
+    });
+    const beforeCursor = 'opaque / cursor:53';
+    const requests = [];
+    const gateway = http.createServer(async (request, response) => {
+      const parsed = new URL(request.url, 'http://gateway.invalid');
+      requests.push({ method: request.method, path: parsed.pathname, query: [...parsed.searchParams.entries()],
+        authorization: request.headers.authorization });
+      response.setHeader('content-type', 'application/json');
+      if (parsed.pathname === '/version') {
+        response.end(JSON.stringify({ version: '0.1.9', build: 2847, sha: 'b75b9bf5', protocolVersion: 2 }));
+        return;
+      }
+      const messagePath = /^\/api\/sessions\/([^/]+)\/messages$/.exec(parsed.pathname);
+      if (messagePath) {
+        const exactSession = decodeURIComponent(messagePath[1]) === LINKED_SESSION;
+        if (!exactSession || parsed.searchParams.get('asUser') !== PRINCIPAL) {
+          response.writeHead(404).end(JSON.stringify({ schemaVersion: 1, resource: 'transcript messages', error: { code: 'not_found' } }));
+          return;
+        }
+        let items;
+        let page;
+        if (parsed.searchParams.get('tail') === 'true' && parsed.searchParams.get('limit') === '50') {
+          items = history.slice(-50);
+          page = { oldestCursor: beforeCursor, newestCursor: 'opaque newest:102', hasMoreBefore: true, hasMoreAfter: false };
+        } else if (parsed.searchParams.get('before') === beforeCursor && parsed.searchParams.get('limit') === '50') {
+          items = history.slice(0, 52);
+          page = { oldestCursor: 'opaque oldest:1', newestCursor: 'opaque newest:52', hasMoreBefore: false, hasMoreAfter: true };
+        } else {
+          response.writeHead(400).end(JSON.stringify({ schemaVersion: 1, resource: 'transcript messages', error: { code: 'invalid_filter' } }));
+          return;
+        }
+        response.end(JSON.stringify({ schemaVersion: 1, resource: 'transcript messages', items, page }));
+        return;
+      }
+      const detailPath = `/api/sessions/${encodeURIComponent(LINKED_SESSION)}?asUser=${encodeURIComponent(PRINCIPAL)}`;
+      if (parsed.pathname + parsed.search === detailPath) {
+        response.end(JSON.stringify({ schemaVersion: 1, resource: 'sessions', item: {
+          sessionKey: LINKED_SESSION, rowVersion: 103, state: 'active', clearedThroughSeq: resetSeq,
+        } }));
+        return;
+      }
+      response.writeHead(404).end();
+    });
+    const gatewayPort = await listen(gateway);
+    const gatewayOrigin = `http://127.0.0.1:${gatewayPort}`;
+    const chatPort = await unusedPort();
+    const chatOrigin = `http://127.0.0.1:${chatPort}`;
+    const { root, publicDir } = await temporaryDirectory();
+    const gatewayBaseDir = await writeGatewayDescriptor(path.join(root, 'gateway-base'), gatewayOrigin, TOKEN);
+    const chat = createChatServer({
+      rootDir: root,
+      publicDir,
+      releaseInfo: { tag: 'v0.1.2', sourceCommit: '1234567890abcdef1234567890abcdef12345678' },
+      environment: {
+        CHAT_PUBLIC_ORIGIN: chatOrigin,
+        CHAT_DEFAULT_GATEWAY_ORIGIN: gatewayOrigin,
+        CHAT_DEFAULT_SESSION_KEY: LINKED_SESSION,
+        CHAT_DEFAULT_PRINCIPAL_KEY: PRINCIPAL,
+        TIGHTBEAM_BASE_DIR: gatewayBaseDir,
+      },
+    });
+    await listen(chat, chatPort);
+
+    const chatResponses = [];
+    const chatRequests = [];
+    const host = {
+      currentIdentity: () => ({ principalKey: PRINCIPAL, deviceId: 'chat_test_device' }),
+      fetch: async (input, init = {}) => {
+        const url = new URL(input);
+        url.searchParams.set('gateway', gatewayOrigin);
+        chatRequests.push({ pathname: url.pathname, search: url.search });
+        const headers = new Headers(init.headers);
+        headers.set('origin', chatOrigin);
+        headers.delete('authorization');
+        const reply = await fetch(url, { ...init, headers });
+        if (url.pathname.endsWith('/messages')) chatResponses.push(await reply.clone().json());
+        return reply;
+      },
+      openAuthenticatedChanges: async () => { throw new Error('No socket needed for this history composition test.'); },
+      openAuthenticatedHuman: async () => { throw new Error('No socket needed for this history composition test.'); },
+    };
+    const { transport, profile } = createPublic019Transport({
+      baseUrl: `${chatOrigin}/__chat`, build: 2847, sha: 'b75b9bf5', host,
+    });
+
+    const observed = await transport.inspectTarget(new AbortController().signal);
+    expect(observed.identity).toBe('0.1.9+2847/b75b9bf5');
+    expect(observed.identity).not.toBe('v0.1.2');
+    expect(observed.capabilities.newestTail).toBe(false);
+    expect(profile.capabilities.newestTail).toBe(false);
+
+    const session = await transport.readSession(LINKED_SESSION, new AbortController().signal);
+    expect(session.raw.clearedThroughSeq).toBe(resetSeq);
+    const tail = await transport.readTail(LINKED_SESSION, new AbortController().signal);
+    expect(tail.records.map((row) => row.seq)).toEqual(Array.from({ length: 50 }, (_, index) => index + 53));
+    expect(tail.hasOlder).toBe(true);
+    expect(tail.oldestCursor).toBe(beforeCursor);
+    expect(tail.records.at(-1)).toMatchObject({
+      id: 'm_102', seq: 102, clientMessageId: 'c_102', deviceId: 'owner-device',
+      raw: history[101],
+    });
+    const older = await transport.readOlder(LINKED_SESSION, tail.oldestCursor, new AbortController().signal);
+    expect(older.records.map((row) => row.seq)).toEqual(Array.from({ length: 52 }, (_, index) => index + 1));
+    expect(older.records[0].content).toBe('human message before reset');
+    expect(older.records[0].raw).toEqual(history[0]);
+    expect(older.records[50]).toMatchObject({ kind: 'transition', id: 'm_restart', seq: resetSeq,
+      transition: 'restart', raw: history[resetSeq - 1] });
+    expect(older.hasOlder).toBe(false);
+    expect(older.oldestCursor).toBe('opaque oldest:1');
+
+    expect(chatResponses[0].page).toEqual({
+      oldestCursor: beforeCursor, newestCursor: 'opaque newest:102', hasMoreBefore: true, hasMoreAfter: false,
+    });
+    expect(chatResponses[1].page).toEqual({
+      oldestCursor: 'opaque oldest:1', newestCursor: 'opaque newest:52', hasMoreBefore: false, hasMoreAfter: true,
+    });
+    expect(chatResponses[0].items).toEqual(history.slice(-50));
+    expect(chatResponses[1].items).toEqual(history.slice(0, 52));
+    const historyRequests = requests.filter((request) => request.path.endsWith('/messages'));
+    expect(historyRequests).toHaveLength(2);
+    expect(historyRequests.every((request) => request.method === 'GET' && request.authorization === `Bearer ${TOKEN}`)).toBe(true);
+    expect(historyRequests[0].query).toEqual([['asUser', PRINCIPAL], ['limit', '50'], ['tail', 'true']]);
+    expect(historyRequests[1].query).toEqual([['asUser', PRINCIPAL], ['limit', '50'], ['before', beforeCursor]]);
+    expect(chatRequests.map((request) => request.pathname)).toEqual([
+      '/__chat/gateway/version',
+      `/__chat/api/sessions/${encodeURIComponent(LINKED_SESSION)}`,
+      `/__chat/api/sessions/${encodeURIComponent(LINKED_SESSION)}/messages`,
+      `/__chat/api/sessions/${encodeURIComponent(LINKED_SESSION)}/messages`,
+    ]);
+    expect(chatRequests.every((request) => !request.pathname.endsWith('/__chat/version'))).toBe(true);
   });
 
   it('routes mapped aliases only to their explicitly provisioned Gateway and keeps unavailable selections exact', async () => {
@@ -262,13 +425,13 @@ describe('private direct-entry Chat service bridge', () => {
         if (request.url === '/version') {
           response.writeHead(200, { 'content-type': 'application/json' });
           response.end(JSON.stringify({ version: '0.1.9', build: 2845, sha: name }));
+        } else if (request.url.startsWith(`/api/sessions/${encodeURIComponent(LINKED_SESSION)}/messages?`)) {
+          response.writeHead(200, { 'content-type': 'application/json' });
+          response.end(JSON.stringify({ schemaVersion: 1, resource: 'transcript messages', items: [],
+            page: { oldestCursor: null, newestCursor: null, hasMoreBefore: false, hasMoreAfter: false } }));
         } else if (request.url.startsWith('/api/sessions/')) {
           response.writeHead(200, { 'content-type': 'application/json' });
           response.end(JSON.stringify({ schemaVersion: 1, resource: 'sessions', item: { sessionKey: LINKED_SESSION } }));
-        } else if (request.url === '/agent/dispatch') {
-          response.writeHead(200, { 'content-type': 'application/json' });
-          response.end(JSON.stringify({ result: { sessionKey: LINKED_SESSION, messages: [], oldestId: null,
-            hasMoreBefore: false, hasMoreAfter: false } }));
         } else response.writeHead(404).end();
       });
       return { gateway, seen };
@@ -339,14 +502,16 @@ describe('private direct-entry Chat service bridge', () => {
     expect(selectedFixture.seen.map((row) => row.url)).toEqual([
       '/version',
       `/api/sessions/${encodeURIComponent(LINKED_SESSION)}?asUser=${encodeURIComponent(PRINCIPAL)}`,
-      '/version',
-      '/agent/dispatch',
+      `/api/sessions/${encodeURIComponent(LINKED_SESSION)}/messages?asUser=${encodeURIComponent(PRINCIPAL)}&limit=50&tail=true`,
     ]);
     expect(selectedFixture.seen.map((row) => row.authorization)).toEqual([
-      undefined, `Bearer selected-token`, undefined, `Bearer selected-token`,
+      undefined, `Bearer selected-token`, `Bearer selected-token`,
     ]);
-    expect(JSON.parse(selectedFixture.seen[3].body)).toMatchObject({
-      verb: 'transcript', asUser: PRINCIPAL, params: { session_key: LINKED_SESSION, limit: 50 },
+    expect(selectedFixture.seen[2]).toMatchObject({
+      method: 'GET',
+      url: `/api/sessions/${encodeURIComponent(LINKED_SESSION)}/messages?asUser=${encodeURIComponent(PRINCIPAL)}&limit=50&tail=true`,
+      authorization: 'Bearer selected-token',
+      body: '',
     });
     expect(defaultFixture.seen).toEqual([]);
 
@@ -357,7 +522,7 @@ describe('private direct-entry Chat service bridge', () => {
       const invalid = await fetch(`${chatOrigin}/__chat/gateway/version?${query}`, { headers: { origin: chatOrigin } });
       expect(invalid.status).toBe(404);
     }
-    expect(selectedFixture.seen).toHaveLength(4);
+    expect(selectedFixture.seen).toHaveLength(3);
 
     for (const gateway of [unavailableOrigin, 'https://unmapped.example']) {
       const unavailable = await fetch(

@@ -205,12 +205,24 @@ function parseServiceHttpTarget(rawUrl, runtime) {
     if (params.length !== 2 || new Set(names).size !== names.length || request.searchParams.get('limit') !== '50') {
       return undefined;
     }
+    const upstreamQuery = new URLSearchParams([
+      ['asUser', runtime.principalKey],
+      ['limit', '50'],
+    ]);
     if (request.searchParams.get('tail') === 'true' && !names.includes('before')) {
-      return { kind: 'transcript', gatewayOrigin, sessionKey: messageSession, before: undefined };
+      upstreamQuery.set('tail', 'true');
+      return {
+        kind: 'transcript', gatewayOrigin,
+        path: `/api/sessions/${encodeURIComponent(messageSession)}/messages?${upstreamQuery}`,
+      };
     }
     const before = request.searchParams.get('before');
     if (before && names.includes('before') && !names.includes('tail')) {
-      return { kind: 'transcript', gatewayOrigin, sessionKey: messageSession, before };
+      upstreamQuery.set('before', before);
+      return {
+        kind: 'transcript', gatewayOrigin,
+        path: `/api/sessions/${encodeURIComponent(messageSession)}/messages?${upstreamQuery}`,
+      };
     }
     return undefined;
   } catch {
@@ -287,15 +299,6 @@ function writeGatewayReply(response, reply) {
   response.end(reply.body);
 }
 
-function cliVersionFrom(reply) {
-  try {
-    const value = JSON.parse(reply.body.toString('utf8'));
-    return typeof value.version === 'string' && value.version ? value.version : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 async function serviceHttp(request, response, runtime) {
   if (request.method !== 'GET') {
     response.writeHead(405, { allow: 'GET', 'cache-control': 'no-store' }).end();
@@ -317,59 +320,12 @@ async function serviceHttp(request, response, runtime) {
   }
 
   try {
-    if (target.kind === 'version' || target.kind === 'detail') {
+    if (target.kind === 'version' || target.kind === 'detail' || target.kind === 'transcript') {
       writeGatewayReply(response, await gatewayRequest(gateway, target.path, {
         authorize: target.kind !== 'version',
       }));
       return;
     }
-
-    const versionReply = await gatewayRequest(gateway, '/version', { authorize: false });
-    if (versionReply.status < 200 || versionReply.status >= 300) {
-      writeGatewayReply(response, versionReply);
-      return;
-    }
-    const cliVersion = cliVersionFrom(versionReply);
-    if (!cliVersion) {
-      jsonResponse(response, 502, { error: { code: 'gateway_version_unavailable' } });
-      return;
-    }
-    const params = { session_key: target.sessionKey, limit: 50 };
-    if (target.before) params.before = target.before;
-    const body = Buffer.from(JSON.stringify({
-      verb: 'transcript',
-      asUser: runtime.principalKey,
-      params,
-    }));
-    const reply = await gatewayRequest(gateway, '/agent/dispatch', {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'content-length': body.length,
-        'x-tightbeam-cli-version': cliVersion,
-      },
-      body,
-    });
-    if (reply.status < 200 || reply.status >= 300) {
-      writeGatewayReply(response, reply);
-      return;
-    }
-    let envelope;
-    try {
-      const payload = JSON.parse(reply.body.toString('utf8'));
-      const result = payload?.result;
-      if (!Array.isArray(result?.messages) || typeof result.hasMoreBefore !== 'boolean') throw new Error();
-      envelope = {
-        schemaVersion: 1,
-        resource: 'transcript messages',
-        items: result.messages,
-        page: { oldestCursor: result.oldestId ?? null, hasMoreBefore: result.hasMoreBefore },
-      };
-    } catch {
-      jsonResponse(response, 502, { error: { code: 'transcript_response_unavailable' } });
-      return;
-    }
-    jsonResponse(response, 200, envelope);
   } catch {
     jsonResponse(response, 502, { error: { code: 'gateway_unavailable' } });
   }
