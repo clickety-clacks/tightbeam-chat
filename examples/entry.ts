@@ -71,7 +71,8 @@ function canonicalGateway(value: string | undefined): string | undefined {
   if (!value) return undefined;
   try {
     const url = new URL(value);
-    if (!['http:', 'https:'].includes(url.protocol) || !url.hostname || url.username || url.password ||
+    if (!['http:', 'https:'].includes(url.protocol) || !url.hostname || value.includes('?') || value.includes('#') ||
+        url.username || url.password ||
         url.search || url.hash || url.pathname !== '/') return undefined;
     return url.origin;
   } catch {
@@ -132,17 +133,17 @@ export function resolveEntrySelection(
   const gateway = canonicalGateway(params.get('gateway') ?? undefined);
   const sessionKey = params.get('session') ?? undefined;
   if (!gateway || !sessionKey?.trim()) return invalid();
-  if (!fallback || gateway !== fallback.gateway) {
+  if (!fallback) {
     return {
       kind: 'unavailable-selection',
       target: { gateway, sessionKey },
-      message: 'This Chat service has no provisioned Gateway access for the selected target.',
-      canRecoverToConfigured: Boolean(fallback),
+      message: 'This Chat service has no configured identity for the selected target.',
+      canRecoverToConfigured: false,
     };
   }
   return {
     kind: 'selected',
-    target: { ...fallback, sessionKey },
+    target: { ...fallback, gateway, sessionKey },
     source: 'link',
   };
 }

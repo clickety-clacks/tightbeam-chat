@@ -5,6 +5,7 @@ import type { ChatTarget } from './entry';
 function chatSocketUrl(path: '/ws' | '/ws/changes', target: ChatTarget): URL {
   const url = new URL(`/__chat${path}`, window.location.origin);
   if (path === '/ws/changes') url.searchParams.set('protocolVersion', '2');
+  url.searchParams.set('gateway', target.gateway);
   url.searchParams.set('sessionKey', target.sessionKey);
   url.protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   return url;
@@ -92,6 +93,11 @@ export function browserHost(target: ChatTarget): Public019Host {
       if (url.origin !== window.location.origin || !url.pathname.startsWith('/__chat/')) {
         return Promise.reject(new Error('Chat requests must remain on the configured service origin.'));
       }
+      const gateways = url.searchParams.getAll('gateway');
+      if (gateways.length > 1 || (gateways.length === 1 && gateways[0] !== target.gateway)) {
+        return Promise.reject(new Error('Chat requests must use the selected Gateway.'));
+      }
+      url.searchParams.set('gateway', target.gateway);
       const headers = new Headers(init?.headers);
       headers.delete('authorization');
       return fetch(url, {

@@ -27,15 +27,14 @@ describe('Chat entry selection', () => {
     });
   });
 
-  it('retains a complete link to another Gateway as selected but unavailable to this service', () => {
+  it('selects a complete link to another Gateway without substituting the configured default', () => {
     const gateway = 'https://other.example:9443';
     const sessionKey = 'agent:other/chat';
     const search = `?gateway=${encodeURIComponent(gateway)}&session=${encodeURIComponent(sessionKey)}`;
     expect(resolveEntrySelection(search, configured)).toEqual({
-      kind: 'unavailable-selection',
-      target: { gateway, sessionKey },
-      message: 'This Chat service has no provisioned Gateway access for the selected target.',
-      canRecoverToConfigured: true,
+      kind: 'selected',
+      source: 'link',
+      target: { ...configured, gateway, sessionKey },
     });
   });
 
@@ -44,6 +43,8 @@ describe('Chat entry selection', () => {
       '?gateway=ftp%3A%2F%2Fbad.example&session=private-session',
       '?gateway=https%3A%2F%2Fuser%3Asecret%40chat.example&session=private-session',
       '?gateway=https%3A%2F%2Fchat.example%2Fpath&session=private-session',
+      '?gateway=https%3A%2F%2Fchat.example%2F%3F&session=private-session',
+      '?gateway=https%3A%2F%2Fchat.example%2F%23&session=private-session',
       '?gateway=https%3A%2F%2Fchat.example',
       '?gateway=https%3A%2F%2Fchat.example&gateway=https%3A%2F%2Fother.example&session=private-session',
       '?gateway=https%3A%2F%2Fchat.example&session=private-session&token=private-token',

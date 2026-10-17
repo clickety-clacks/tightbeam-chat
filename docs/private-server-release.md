@@ -25,9 +25,26 @@ CHAT_DEFAULT_SESSION_KEY=agent:example:main
 
 The default gateway must be an HTTP(S) origin, and the principal and session identify an existing owner and opaque session key. These values are not credentials. `/chat-config.json` returns the configured target without caching so the page can resolve its root at runtime; it also returns a stable nonsecret device identifier used by the server bridge. A missing or invalid target is reported by the page. Tokens and other credentials never belong in this file or a link.
 
-For Gateway requests, the Chat server reads the provisioned `gateway.json` descriptor inside the server process. It resolves the Gateway base directory using the same precedence as the Gateway and CLI: `TIGHTBEAM_BASE_DIR`, then `TIGHTBEAM_HOME`, then `$HOME/.tightbeam`. The descriptor supplies the internal `cliToken` and its provisioned Gateway endpoint; the server uses the token only for its own Gateway requests and requires that endpoint to match `CHAT_DEFAULT_GATEWAY_ORIGIN`. A missing descriptor, missing token, invalid endpoint, or mismatch leaves the authenticated service routes unavailable. The server does not search `.tightbeam-session`, use `TIGHTBEAM_URL`/`TIGHTBEAM_TOKEN`, or read a token from `server.env`. If the Gateway uses a nondefault base directory, set `TIGHTBEAM_BASE_DIR` to that same directory in the Chat service environment. The service must already run with access to the owner-private descriptor; do not copy its token or weaken the descriptor's file permissions.
+For Gateway requests, the Chat server reads each provisioned `gateway.json` descriptor inside the server process. To provision more than one Gateway, set `CHAT_GATEWAY_MAP_FILE` to a deployment-owned JSON file with this shape:
 
-The configured default and link-selected sessions use the same provisioned Gateway origin and owner identity. A complete valid link to another session on that Gateway selects the linked session; the Gateway still decides whether the configured owner may read or post to it. A link to a different Gateway is shown as selected but unavailable in this service because this release has no provisioned origin-to-credential mapping for it. The page offers an explicit route back to the configured conversation and never silently substitutes it.
+```json
+{
+  "version": 1,
+  "gateways": [
+    {
+      "origin": "https://gateway.example",
+      "baseDir": "/srv/tightbeam/gateway-a",
+      "aliases": ["https://gateway-alias.example"]
+    }
+  ]
+}
+```
+
+Each `baseDir` points to a separately provisioned Gateway base containing its owner-private `gateway.json`. Origins and aliases must be HTTP(S) origins with no credentials, path beyond `/`, query or fragment. The server canonicalizes each origin, rejects invalid or duplicate canonical keys, and requires `CHAT_DEFAULT_GATEWAY_ORIGIN` to resolve to an origin or explicit alias in the map. The descriptor endpoint must match the entry's origin or one of its explicit aliases; host-name similarity is never used to select a Gateway. A missing or unreadable descriptor, missing token, invalid endpoint or endpoint mismatch leaves only that mapped Gateway unavailable. An invalid supplied map fails closed and does not fall back to the single-descriptor configuration.
+
+When `CHAT_GATEWAY_MAP_FILE` is absent, the server preserves the single-Gateway configuration: it reads the descriptor under the base directory selected by `TIGHTBEAM_BASE_DIR`, then `TIGHTBEAM_HOME`, then `$HOME/.tightbeam`, and requires its provisioned endpoint to exactly match `CHAT_DEFAULT_GATEWAY_ORIGIN`. The server does not search `.tightbeam-session`, use `TIGHTBEAM_URL`/`TIGHTBEAM_TOKEN`, or read a token from `server.env`. The service must already run with access to the owner-private descriptors; do not copy their tokens or weaken their file permissions.
+
+The configured default and a complete valid link both preserve the link's exact Gateway origin and session. The server selects only the descriptor mapped to that canonical origin, uses the configured owner identity, and leaves authorization to the Gateway. A link to an unmapped or unavailable Gateway remains visibly selected but unavailable; the page offers an explicit route back to the configured conversation and never silently substitutes it. The map path, base directories and descriptor contents are server-only: they are not returned by `/chat-config.json` or exposed to the browser. The browser receives only the nonsecret default target and sends the selected Gateway origin to the same-origin Chat bridge.
 
 The unit file is `packaging/tightbeam-chat.service`. It supervises only `tightbeam-chat.service` in the user service manager and reads the environment file above. The service account's user manager must be configured to stay active without an interactive login for the server to remain available. The updater does not alter account, manager, gateway or ingress configuration.
 

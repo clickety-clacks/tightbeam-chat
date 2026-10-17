@@ -33,7 +33,9 @@ describe('direct browser entry', () => {
     expect(screen.queryByLabelText(/device id|device token/i)).toBeNull();
     expect(screen.queryByRole('button', { name: /sign in|pair/i })).toBeNull();
     expect(fetchSpy).toHaveBeenCalledTimes(1);
-    expect(String(fetchSpy.mock.calls[0][0])).toBe('http://localhost:3000/__chat/gateway/version');
+    const request = new URL(String(fetchSpy.mock.calls[0][0]));
+    expect(request.pathname).toBe('/__chat/gateway/version');
+    expect(request.searchParams.get('gateway')).toBe(defaultTarget.gateway);
     expect(socketSpy).not.toHaveBeenCalled();
   });
 
@@ -50,19 +52,27 @@ describe('direct browser entry', () => {
     expect(screen.queryByText(defaultTarget.sessionKey)).toBeNull();
   });
 
-  it('identifies a different-Gateway selection and requires an explicit configured-target recovery', () => {
+  it('keeps a different-Gateway link selected and reports unavailable mapping without default substitution', async () => {
     window.history.replaceState({}, '', '/?gateway=https%3A%2F%2Fother.example&session=agent%3Aother%2Fchat');
-    const fetchSpy = vi.fn<typeof fetch>();
+    const fetchSpy = vi.fn<typeof fetch>().mockResolvedValue({
+      ok: false,
+      status: 503,
+      json: async () => ({ error: { code: 'chat_gateway_unavailable' } }),
+    } as Response);
     vi.stubGlobal('fetch', fetchSpy);
 
     render(<HostPage defaultTarget={defaultTarget} />);
 
     expect(screen.getByText('https://other.example')).toBeTruthy();
     expect(screen.getByText('agent:other/chat')).toBeTruthy();
-    const alert = screen.getByRole('alert');
-    expect(alert.textContent).toContain('no provisioned Gateway access');
+    expect(screen.getByText('Opened from its private link.')).toBeTruthy();
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('No Gateway access is provisioned for the selected conversation.');
+    expect(alert.textContent).toContain('selected target was not changed');
     expect(screen.getByRole('link', { name: 'Open the configured conversation' }).getAttribute('href')).toBe('/');
-    expect(fetchSpy).not.toHaveBeenCalled();
+    const request = new URL(String(fetchSpy.mock.calls[0][0]));
+    expect(request.searchParams.get('gateway')).toBe('https://other.example');
+    expect(screen.queryByText(defaultTarget.sessionKey)).toBeNull();
   });
 
   it('reports missing service configuration without placeholder setup instructions', () => {

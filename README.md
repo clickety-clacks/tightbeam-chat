@@ -10,15 +10,15 @@ The repository has a standard [MIT LICENSE](LICENSE) with Copyright (c) 2026 Mik
 
 ## Open Chat with a selected target
 
-To ask an agent for a complete link by target name, install the [named-target Chat skill](skills/README.md). It resolves the target and keeps human sign-in separate.
+To ask an agent for a complete link by target name, install the [named-target Chat skill](skills/README.md). It resolves the exact Gateway and session for the link.
 
 The browser entry accepts a nonsecret `gateway` origin and exact `session` key. It uses URL query APIs so reserved characters in either value round-trip. The gateway must be an HTTP(S) origin without credentials, path, query, or fragment. Only those two parameters are accepted; tokens and other credentials never belong in the link.
 
 For a configured root with no query string, the private server supplies `GET /chat-config.json` at the Chat origin. It returns JSON with a canonical `gateway` origin and the exact nonempty `sessionKey`, for example `{ "gateway": "https://gateway.example", "sessionKey": "agent:example/chat" }`. These values select a target; they are not credentials. The browser fetches this configuration at runtime, so one built asset set can serve different private deployments. A complete valid link overrides the configured default. A malformed, incomplete, duplicate, or extra query parameter is rejected without displaying its raw value or connecting to the requested target; when a valid default exists, Chat offers an explicit link back to the configured entry. Missing or invalid configuration is shown as an error rather than replaced with a placeholder target.
 
-Sign in separately with an existing approved human device ID and token. The example does not pair or create devices, and it does not read credentials from the link. Credentials are submitted only after you choose **Sign in** and remain in memory for that page. The selected gateway and session stay visible before sign-in and after it.
+On the authorized private network, opening a complete link loads the selected conversation through the Chat service's deployment-owned Gateway provisioning. The browser does not sign in, pair a device, or accept a token; Gateway credentials remain inside the server. A target without a matching provisioned Gateway stays selected and is reported unavailable, with no substitution to the configured default.
 
-Private-network sign-in requires a secure browser context: use the private HTTPS entry on a device. Localhost remains available for development. The browser sends gateway HTTP and WebSocket traffic through the Chat origin's same-origin bridge; HTTPS pages use HTTPS/WSS on that origin, avoiding browser mixed-content requests to the selected gateway.
+Use the private HTTPS entry on the authorized network. Localhost remains available for development. The browser sends gateway HTTP and WebSocket traffic through the Chat origin's same-origin bridge; HTTPS pages use HTTPS/WSS on that origin, avoiding browser mixed-content requests to the selected gateway.
 
 For local development, use Node 24 or later and open a named target with a complete nonsecret link such as `/?gateway=https%3A%2F%2Fgateway.example&session=agent%3Aexample%2Fchat`:
 

@@ -23,6 +23,7 @@ function canonicalOrigin(value) {
   try {
     const parsed = new URL(value);
     if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname ||
+        value.includes('?') || value.includes('#') ||
         parsed.username || parsed.password || parsed.pathname !== '/' || parsed.search || parsed.hash) {
       return undefined;
     }
@@ -43,9 +44,9 @@ function gatewayBaseDirectory(environment) {
   return path.join(environment.HOME || os.homedir(), '.tightbeam');
 }
 
-function provisionedGateway(environment) {
+function readGatewayDescriptor(baseDirectory) {
   try {
-    const filename = path.join(gatewayBaseDirectory(environment), 'gateway.json');
+    const filename = path.join(baseDirectory, 'gateway.json');
     const descriptor = JSON.parse(fs.readFileSync(filename, 'utf8'));
     const token = typeof descriptor.cliToken === 'string' && descriptor.cliToken.length > 0
       ? descriptor.cliToken
@@ -59,15 +60,69 @@ function provisionedGateway(environment) {
     }
     return { base, token };
   } catch {
-    return { base: undefined, token: '' };
+    return undefined;
+  }
+}
+
+function loadGatewayMap(environment, configuredGateway) {
+  const gateways = new Map();
+  if (environment.CHAT_GATEWAY_MAP_FILE === undefined) {
+    const provisioned = readGatewayDescriptor(gatewayBaseDirectory(environment));
+    if (configuredGateway && provisioned?.base === configuredGateway) {
+      gateways.set(configuredGateway, { ...provisioned, available: Boolean(provisioned.token) });
+    }
+    return { valid: true, gateways };
+  }
+
+  try {
+    const value = JSON.parse(fs.readFileSync(environment.CHAT_GATEWAY_MAP_FILE, 'utf8'));
+    if (!value || value.version !== 1 || !Array.isArray(value.gateways)) throw new Error();
+
+    const configuredKeys = new Set();
+    const entries = [];
+    for (const item of value.gateways) {
+      if (!item || typeof item !== 'object' || Array.isArray(item) ||
+          typeof item.baseDir !== 'string' || !path.isAbsolute(item.baseDir)) throw new Error();
+      const origin = canonicalOrigin(item.origin);
+      if (!origin) throw new Error();
+      const aliases = item.aliases === undefined ? [] : item.aliases;
+      if (!Array.isArray(aliases)) throw new Error();
+
+      const keys = [origin];
+      for (const alias of aliases) {
+        const canonicalAlias = canonicalOrigin(alias);
+        if (!canonicalAlias) throw new Error();
+        keys.push(canonicalAlias);
+      }
+      for (const key of keys) {
+        if (configuredKeys.has(key)) throw new Error();
+        configuredKeys.add(key);
+      }
+
+      const descriptor = readGatewayDescriptor(item.baseDir);
+      const descriptorMatches = descriptor && keys.includes(descriptor.base);
+      entries.push({ keys, descriptor, available: Boolean(descriptorMatches && descriptor.token) });
+    }
+
+    for (const item of entries) {
+      const entry = {
+        base: item.available ? item.descriptor.base : undefined,
+        token: item.available ? item.descriptor.token : '',
+        available: item.available,
+      };
+      for (const key of item.keys) gateways.set(key, entry);
+    }
+    return { valid: true, gateways };
+  } catch {
+    return { valid: false, gateways: new Map() };
   }
 }
 
 function loadRuntimeConfig(environment) {
   const publicOrigin = canonicalOrigin(environment.CHAT_PUBLIC_ORIGIN);
-  const provisioned = provisionedGateway(environment);
   const configuredGateway = canonicalOrigin(environment.CHAT_DEFAULT_GATEWAY_ORIGIN);
-  const gateway = configuredGateway && configuredGateway === provisioned.base
+  const gatewayMap = loadGatewayMap(environment, configuredGateway);
+  const gatewayOrigin = gatewayMap.valid && configuredGateway && gatewayMap.gateways.has(configuredGateway)
     ? configuredGateway
     : undefined;
   const sessionKey = typeof environment.CHAT_DEFAULT_SESSION_KEY === 'string'
@@ -76,12 +131,12 @@ function loadRuntimeConfig(environment) {
   const principalKey = typeof environment.CHAT_DEFAULT_PRINCIPAL_KEY === 'string'
     ? environment.CHAT_DEFAULT_PRINCIPAL_KEY.trim()
     : '';
-  const deviceId = gateway && principalKey && sessionKey.trim()
-    ? `chat_${crypto.createHash('sha256').update(`${gateway}\0${principalKey}\0${sessionKey}`).digest('hex').slice(0, 24)}`
+  const deviceId = gatewayOrigin && principalKey && sessionKey.trim()
+    ? `chat_${crypto.createHash('sha256').update(`${gatewayOrigin}\0${principalKey}\0${sessionKey}`).digest('hex').slice(0, 24)}`
     : '';
-  const configuredTarget = gateway && sessionKey.trim()
+  const configuredTarget = gatewayOrigin && sessionKey.trim()
     ? {
-      gateway,
+      gateway: gatewayOrigin,
       sessionKey,
       ...(principalKey ? { principalKey, deviceId } : {}),
     }
@@ -90,17 +145,18 @@ function loadRuntimeConfig(environment) {
   return {
     publicOrigin,
     configuredTarget,
-    gateway,
+    gatewayOrigin,
+    gatewayMapValid: gatewayMap.valid,
+    gateways: gatewayMap.gateways,
     sessionKey,
     principalKey,
     deviceId,
-    operatorToken: gateway ? provisioned.token : '',
   };
 }
 
 function serviceReady(runtime) {
-  return Boolean(runtime.gateway && runtime.sessionKey.trim() && runtime.principalKey &&
-    runtime.deviceId && runtime.operatorToken);
+  return Boolean(runtime.gatewayMapValid && runtime.gatewayOrigin && runtime.gateways.has(runtime.gatewayOrigin) &&
+    runtime.sessionKey.trim() && runtime.principalKey && runtime.deviceId);
 }
 
 function decodeSessionPath(value) {
@@ -112,19 +168,29 @@ function decodeSessionPath(value) {
   }
 }
 
+function selectedGatewayOrigin(searchParams, defaultGatewayOrigin) {
+  const values = searchParams.getAll('gateway');
+  if (values.length > 1) return undefined;
+  return values.length === 0 ? defaultGatewayOrigin : canonicalOrigin(values[0]);
+}
+
 function parseServiceHttpTarget(rawUrl, runtime) {
   try {
     const request = new URL(rawUrl, 'http://chat-service.invalid');
     if (request.origin !== 'http://chat-service.invalid') return undefined;
-    if (request.pathname === '/__chat/gateway/version' && request.search === '') {
-      return { kind: 'version', path: '/version' };
+    const gatewayOrigin = selectedGatewayOrigin(request.searchParams, runtime.gatewayOrigin);
+    if (!gatewayOrigin) return undefined;
+    const routeParams = [...request.searchParams.entries()].filter(([name]) => name !== 'gateway');
+    if (request.pathname === '/__chat/gateway/version' && routeParams.length === 0) {
+      return { kind: 'version', gatewayOrigin, path: '/version' };
     }
 
     const detail = /^\/__chat\/api\/sessions\/([^/]+)$/.exec(request.pathname);
     const detailSession = detail && decodeSessionPath(detail[1]);
-    if (detailSession && request.search === '') {
+    if (detailSession && routeParams.length === 0) {
       return {
         kind: 'detail',
+        gatewayOrigin,
         sessionKey: detailSession,
         path: `/api/sessions/${encodeURIComponent(detailSession)}?asUser=${encodeURIComponent(runtime.principalKey)}`,
       };
@@ -134,17 +200,17 @@ function parseServiceHttpTarget(rawUrl, runtime) {
     const messageSession = messages && decodeSessionPath(messages[1]);
     if (!messageSession) return undefined;
 
-    const params = [...request.searchParams.entries()];
+    const params = routeParams;
     const names = params.map(([name]) => name);
     if (params.length !== 2 || new Set(names).size !== names.length || request.searchParams.get('limit') !== '50') {
       return undefined;
     }
     if (request.searchParams.get('tail') === 'true' && !names.includes('before')) {
-      return { kind: 'transcript', sessionKey: messageSession, before: undefined };
+      return { kind: 'transcript', gatewayOrigin, sessionKey: messageSession, before: undefined };
     }
     const before = request.searchParams.get('before');
     if (before && names.includes('before') && !names.includes('tail')) {
-      return { kind: 'transcript', sessionKey: messageSession, before };
+      return { kind: 'transcript', gatewayOrigin, sessionKey: messageSession, before };
     }
     return undefined;
   } catch {
@@ -152,24 +218,28 @@ function parseServiceHttpTarget(rawUrl, runtime) {
   }
 }
 
-function parseServiceWebSocketTarget(rawUrl) {
+function parseServiceWebSocketTarget(rawUrl, runtime) {
   try {
     const request = new URL(rawUrl, 'http://chat-service.invalid');
     if (request.origin !== 'http://chat-service.invalid') return undefined;
+    const gatewayOrigin = selectedGatewayOrigin(request.searchParams, runtime.gatewayOrigin);
+    if (!gatewayOrigin) return undefined;
     const sessionKeys = request.searchParams.getAll('sessionKey');
     if (sessionKeys.length !== 1 || !sessionKeys[0]?.trim()) return undefined;
+    if ([...request.searchParams.keys()].some((key) => !['gateway', 'sessionKey', 'protocolVersion'].includes(key))) {
+      return undefined;
+    }
 
     if (request.pathname === '/__chat/ws/changes') {
       if (request.searchParams.getAll('protocolVersion').length !== 1 ||
-          request.searchParams.get('protocolVersion') !== '2' ||
-          [...request.searchParams.keys()].some((key) => !['sessionKey', 'protocolVersion'].includes(key))) {
+          request.searchParams.get('protocolVersion') !== '2') {
         return undefined;
       }
-      return { path: '/ws/changes?protocolVersion=2', kind: 'changes', sessionKey: sessionKeys[0] };
+      return { path: '/ws/changes?protocolVersion=2', kind: 'changes', gatewayOrigin, sessionKey: sessionKeys[0] };
     }
     if (request.pathname === '/__chat/ws' &&
-        [...request.searchParams.keys()].every((key) => key === 'sessionKey')) {
-      return { path: '/ws', kind: 'human', sessionKey: sessionKeys[0] };
+        request.searchParams.getAll('protocolVersion').length === 0) {
+      return { path: '/ws', kind: 'human', gatewayOrigin, sessionKey: sessionKeys[0] };
     }
     return undefined;
   } catch {
@@ -181,14 +251,14 @@ function jsonResponse(response, status, value) {
   writeJson(response, status, value);
 }
 
-function gatewayRequest(runtime, path, { method = 'GET', headers = {}, body, authorize = true } = {}) {
+function gatewayRequest(gateway, path, { method = 'GET', headers = {}, body, authorize = true } = {}) {
   return new Promise((resolve, reject) => {
-    const protocol = runtime.gateway.startsWith('https:') ? https : http;
-    const request = protocol.request(runtime.gateway, {
+    const protocol = gateway.base.startsWith('https:') ? https : http;
+    const request = protocol.request(gateway.base, {
       method,
       path,
       headers: {
-        ...(authorize ? { authorization: `Bearer ${runtime.operatorToken}` } : {}),
+        ...(authorize ? { authorization: `Bearer ${gateway.token}` } : {}),
         accept: 'application/json',
         ...headers,
       },
@@ -240,16 +310,21 @@ async function serviceHttp(request, response, runtime) {
     jsonResponse(response, 404, { error: { code: 'not_found' } });
     return;
   }
+  const gateway = runtime.gateways.get(target.gatewayOrigin);
+  if (!gateway?.available) {
+    jsonResponse(response, 503, { error: { code: 'chat_gateway_unavailable' } });
+    return;
+  }
 
   try {
     if (target.kind === 'version' || target.kind === 'detail') {
-      writeGatewayReply(response, await gatewayRequest(runtime, target.path, {
+      writeGatewayReply(response, await gatewayRequest(gateway, target.path, {
         authorize: target.kind !== 'version',
       }));
       return;
     }
 
-    const versionReply = await gatewayRequest(runtime, '/version', { authorize: false });
+    const versionReply = await gatewayRequest(gateway, '/version', { authorize: false });
     if (versionReply.status < 200 || versionReply.status >= 300) {
       writeGatewayReply(response, versionReply);
       return;
@@ -266,7 +341,7 @@ async function serviceHttp(request, response, runtime) {
       asUser: runtime.principalKey,
       params,
     }));
-    const reply = await gatewayRequest(runtime, '/agent/dispatch', {
+    const reply = await gatewayRequest(gateway, '/agent/dispatch', {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -322,10 +397,10 @@ function websocketClientTextFrame(value) {
   return Buffer.concat([header, mask, masked]);
 }
 
-function proxyServiceWebSocket(request, socket, head, target, runtime) {
-  const protocol = runtime.gateway.startsWith('https:') ? https : http;
+function proxyServiceWebSocket(request, socket, head, target, runtime, gateway) {
+  const protocol = gateway.base.startsWith('https:') ? https : http;
   const headers = {
-    host: new URL(runtime.gateway).host,
+    host: new URL(gateway.base).host,
     connection: 'Upgrade',
     upgrade: 'websocket',
     'sec-websocket-key': String(request.headers['sec-websocket-key'] ?? ''),
@@ -336,7 +411,7 @@ function proxyServiceWebSocket(request, socket, head, target, runtime) {
     headers['sec-websocket-protocol'] = request.headers['sec-websocket-protocol'];
   }
 
-  const upstream = protocol.request(runtime.gateway, { method: 'GET', path: target.path, headers });
+  const upstream = protocol.request(gateway.base, { method: 'GET', path: target.path, headers });
   upstream.on('upgrade', (reply, remote, remoteHead) => {
     const statusText = reply.statusMessage || 'Switching Protocols';
     const headerLines = [];
@@ -349,7 +424,7 @@ function proxyServiceWebSocket(request, socket, head, target, runtime) {
     if (remoteHead.length) socket.write(remoteHead);
     const auth = {
       type: 'auth',
-      token: runtime.operatorToken,
+      token: gateway.token,
       asUser: runtime.principalKey,
       sessionKey: target.sessionKey,
     };
@@ -617,12 +692,17 @@ export function createChatServer({
         socket.end('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n');
         return;
       }
-      const target = parseServiceWebSocketTarget(request.url ?? '');
+      const target = parseServiceWebSocketTarget(request.url ?? '', runtime);
       if (!target) {
         socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n');
         return;
       }
-      proxyServiceWebSocket(request, socket, head, target, runtime);
+      const gateway = runtime.gateways.get(target.gatewayOrigin);
+      if (!gateway?.available) {
+        socket.end('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n');
+        return;
+      }
+      proxyServiceWebSocket(request, socket, head, target, runtime, gateway);
       return;
     }
     if (!parsedRequest.pathname.startsWith('/gateway/')) {

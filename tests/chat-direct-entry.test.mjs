@@ -61,6 +61,12 @@ async function writeGatewayDescriptor(baseDir, gatewayOrigin, token, { advertise
   return baseDir;
 }
 
+async function writeGatewayMap(root, gateways) {
+  const filename = path.join(root, 'gateway-map.json');
+  await fs.writeFile(filename, JSON.stringify({ version: 1, gateways }), { mode: 0o600 });
+  return filename;
+}
+
 function serverTextFrame(value) {
   const payload = Buffer.from(JSON.stringify(value));
   if (payload.length < 126) return Buffer.concat([Buffer.from([0x81, payload.length]), payload]);
@@ -199,16 +205,17 @@ describe('private direct-entry Chat service bridge', () => {
     expect(config.deviceId).toMatch(/^chat_[a-f0-9]{24}$/);
     expect(JSON.stringify(config)).not.toContain(TOKEN);
 
+    const selectedGateway = `?gateway=${encodeURIComponent(gatewayOrigin)}`;
     const versionResponse = await fetch(`${chatOrigin}/__chat/gateway/version`, { headers: { origin: chatOrigin } });
     expect((await versionResponse.json()).sha).toBe('b469cd27');
-    const detailResponse = await fetch(`${chatOrigin}/__chat/api/sessions/${encodeURIComponent(LINKED_SESSION)}`, {
+    const detailResponse = await fetch(`${chatOrigin}/__chat/api/sessions/${encodeURIComponent(LINKED_SESSION)}${selectedGateway}`, {
       headers: { origin: chatOrigin, authorization: 'Bearer browser-supplied-value' },
     });
     const detailText = await detailResponse.text();
     expect(detailResponse.status, detailText).toBe(200);
     expect(JSON.parse(detailText).item.sessionKey).toBe(LINKED_SESSION);
     const transcriptResponse = await fetch(
-      `${chatOrigin}/__chat/api/sessions/${encodeURIComponent(LINKED_SESSION)}/messages?limit=50&tail=true`,
+      `${chatOrigin}/__chat/api/sessions/${encodeURIComponent(LINKED_SESSION)}/messages?gateway=${encodeURIComponent(gatewayOrigin)}&limit=50&tail=true`,
       { headers: { origin: chatOrigin } },
     );
     expect(await transcriptResponse.json()).toEqual({
@@ -233,11 +240,186 @@ describe('private direct-entry Chat service bridge', () => {
       verb: 'transcript', asUser: PRINCIPAL, params: { session_key: LINKED_SESSION, limit: 50 },
     });
 
-    const wrongSession = await fetch(`${chatOrigin}/__chat/api/sessions/agent%3Aother`, { headers: { origin: chatOrigin } });
+    const wrongSession = await fetch(`${chatOrigin}/__chat/api/sessions/agent%3Aother${selectedGateway}`, { headers: { origin: chatOrigin } });
     expect(wrongSession.status).toBe(404);
     const wrongOrigin = await fetch(`${chatOrigin}/__chat/gateway/version`, { headers: { origin: 'https://elsewhere.example' } });
     expect(wrongOrigin.status).toBe(403);
     expect(seen).toHaveLength(5);
+  });
+
+  it('routes mapped aliases only to their explicitly provisioned Gateway and keeps unavailable selections exact', async () => {
+    function fixtureGateway(name) {
+      const seen = [];
+      const gateway = http.createServer(async (request, response) => {
+        const chunks = [];
+        for await (const chunk of request) chunks.push(chunk);
+        const body = Buffer.concat(chunks).toString('utf8');
+        seen.push({ method: request.method, url: request.url, authorization: request.headers.authorization, body });
+        if (request.url === '/version') {
+          response.writeHead(200, { 'content-type': 'application/json' });
+          response.end(JSON.stringify({ version: '0.1.9', build: 2845, sha: name }));
+        } else if (request.url.startsWith('/api/sessions/')) {
+          response.writeHead(200, { 'content-type': 'application/json' });
+          response.end(JSON.stringify({ schemaVersion: 1, resource: 'sessions', item: { sessionKey: LINKED_SESSION } }));
+        } else if (request.url === '/agent/dispatch') {
+          response.writeHead(200, { 'content-type': 'application/json' });
+          response.end(JSON.stringify({ result: { sessionKey: LINKED_SESSION, messages: [], oldestId: null,
+            hasMoreBefore: false, hasMoreAfter: false } }));
+        } else response.writeHead(404).end();
+      });
+      return { gateway, seen };
+    }
+
+    const defaultFixture = fixtureGateway('default-gateway');
+    const selectedFixture = fixtureGateway('selected-gateway');
+    const unavailableFixture = fixtureGateway('unavailable-gateway');
+    const defaultPort = await listen(defaultFixture.gateway);
+    const selectedPort = await listen(selectedFixture.gateway);
+    const unavailablePort = await listen(unavailableFixture.gateway);
+    const defaultDescriptorOrigin = `http://127.0.0.1:${defaultPort}`;
+    const selectedDescriptorOrigin = `http://127.0.0.1:${selectedPort}`;
+    const unavailableDescriptorOrigin = `http://127.0.0.1:${unavailablePort}`;
+    const defaultOrigin = 'https://default.example';
+    const selectedOrigin = 'https://selected.example';
+    const selectedAlias = 'https://selected-link.example';
+    const unavailableOrigin = 'https://unavailable.example';
+    const chatPort = await unusedPort();
+    const chatOrigin = `http://127.0.0.1:${chatPort}`;
+    const { root, publicDir } = await temporaryDirectory();
+    const defaultBase = await writeGatewayDescriptor(path.join(root, 'default-base'), defaultDescriptorOrigin, 'default-token');
+    const selectedBase = await writeGatewayDescriptor(path.join(root, 'selected-base'), selectedDescriptorOrigin, 'selected-token');
+    const unavailableBase = await writeGatewayDescriptor(path.join(root, 'unavailable-base'), unavailableDescriptorOrigin, 'unavailable-token');
+    const mapFile = await writeGatewayMap(root, [
+      { origin: defaultOrigin, baseDir: defaultBase, aliases: [defaultDescriptorOrigin] },
+      { origin: selectedOrigin, baseDir: selectedBase, aliases: [selectedAlias, selectedDescriptorOrigin] },
+      // Its descriptor endpoint is deliberately not associated with this entry.
+      { origin: unavailableOrigin, baseDir: unavailableBase },
+    ]);
+    const chat = createChatServer({
+      rootDir: root,
+      publicDir,
+      releaseInfo: { tag: 'v0.1.2', sourceCommit: '1234567890abcdef1234567890abcdef12345678' },
+      environment: {
+        CHAT_PUBLIC_ORIGIN: chatOrigin,
+        CHAT_DEFAULT_GATEWAY_ORIGIN: `${defaultOrigin}/`,
+        CHAT_DEFAULT_SESSION_KEY: SESSION,
+        CHAT_DEFAULT_PRINCIPAL_KEY: PRINCIPAL,
+        CHAT_GATEWAY_MAP_FILE: mapFile,
+      },
+    });
+    await listen(chat, chatPort);
+
+    const configResponse = await fetch(`${chatOrigin}/chat-config.json`);
+    const configText = await configResponse.text();
+    expect(JSON.parse(configText)).toMatchObject({ gateway: defaultOrigin, sessionKey: SESSION, principalKey: PRINCIPAL });
+    for (const privateValue of [mapFile, defaultBase, selectedBase, unavailableBase,
+      defaultDescriptorOrigin, selectedDescriptorOrigin, selectedOrigin, selectedAlias, unavailableOrigin,
+      'default-token', 'selected-token', 'unavailable-token']) {
+      expect(configText).not.toContain(privateValue);
+    }
+
+    const selectedQuery = `gateway=${encodeURIComponent(selectedAlias)}`;
+    const version = await fetch(`${chatOrigin}/__chat/gateway/version?${selectedQuery}`, { headers: { origin: chatOrigin } });
+    expect((await version.json()).sha).toBe('selected-gateway');
+    const detail = await fetch(`${chatOrigin}/__chat/api/sessions/${encodeURIComponent(LINKED_SESSION)}?${selectedQuery}`, {
+      headers: { origin: chatOrigin },
+    });
+    expect(detail.status).toBe(200);
+    expect((await detail.json()).item.sessionKey).toBe(LINKED_SESSION);
+    const transcript = await fetch(
+      `${chatOrigin}/__chat/api/sessions/${encodeURIComponent(LINKED_SESSION)}/messages?${selectedQuery}&limit=50&tail=true`,
+      { headers: { origin: chatOrigin } },
+    });
+    expect(transcript.status).toBe(200);
+    expect((await transcript.json()).items).toEqual([]);
+    expect(selectedFixture.seen.map((row) => row.url)).toEqual([
+      '/version',
+      `/api/sessions/${encodeURIComponent(LINKED_SESSION)}?asUser=${encodeURIComponent(PRINCIPAL)}`,
+      '/version',
+      '/agent/dispatch',
+    ]);
+    expect(selectedFixture.seen.map((row) => row.authorization)).toEqual([
+      undefined, `Bearer selected-token`, undefined, `Bearer selected-token`,
+    ]);
+    expect(JSON.parse(selectedFixture.seen[3].body)).toMatchObject({
+      verb: 'transcript', asUser: PRINCIPAL, params: { session_key: LINKED_SESSION, limit: 50 },
+    });
+    expect(defaultFixture.seen).toEqual([]);
+
+    for (const query of [
+      `gateway=${encodeURIComponent(selectedAlias)}&gateway=${encodeURIComponent(defaultOrigin)}`,
+      `gateway=${encodeURIComponent(`${selectedAlias}/?`)}`,
+    ]) {
+      const invalid = await fetch(`${chatOrigin}/__chat/gateway/version?${query}`, { headers: { origin: chatOrigin } });
+      expect(invalid.status).toBe(404);
+    }
+    expect(selectedFixture.seen).toHaveLength(4);
+
+    for (const gateway of [unavailableOrigin, 'https://unmapped.example']) {
+      const unavailable = await fetch(
+        `${chatOrigin}/__chat/gateway/version?gateway=${encodeURIComponent(gateway)}`,
+        { headers: { origin: chatOrigin } },
+      });
+      expect(unavailable.status).toBe(503);
+      expect(await unavailable.json()).toEqual({ error: { code: 'chat_gateway_unavailable' } });
+    }
+    expect(defaultFixture.seen).toEqual([]);
+    expect(unavailableFixture.seen).toEqual([]);
+  });
+
+  it('fails closed on invalid or canonically duplicated maps instead of using the legacy descriptor', async () => {
+    const observed = [];
+    const gateway = http.createServer((request, response) => {
+      observed.push(request.url);
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ version: '0.1.9', build: 2845, sha: 'legacy' }));
+    });
+    const gatewayPort = await listen(gateway);
+    const gatewayOrigin = `http://127.0.0.1:${gatewayPort}`;
+    const chatPort = await unusedPort();
+    const chatOrigin = `http://127.0.0.1:${chatPort}`;
+    const { root, publicDir } = await temporaryDirectory();
+    const legacyBase = await writeGatewayDescriptor(path.join(root, 'legacy-base'), gatewayOrigin, TOKEN);
+    const mapFile = path.join(root, 'gateway-map.json');
+    const invalidMaps = [
+      [{ origin: 'ftp://gateway.example', baseDir: legacyBase }],
+      [{ origin: 'https://user:secret@gateway.example', baseDir: legacyBase }],
+      [{ origin: 'https://gateway.example/path', baseDir: legacyBase }],
+      [{ origin: 'https://gateway.example/?', baseDir: legacyBase }],
+      [{ origin: 'https://gateway.example/#', baseDir: legacyBase }],
+      [{ origin: 'https://gateway.example', baseDir: legacyBase, aliases: ['https://alias.example/?'] }],
+      [{ origin: 'https://gateway.example', baseDir: 'relative/base' }],
+      [{ origin: 'https://duplicate.example', baseDir: legacyBase, aliases: ['https://DUPLICATE.example:443/'] }],
+      [
+        { origin: 'https://first.example', baseDir: legacyBase, aliases: ['https://second.example'] },
+        { origin: 'https://second.example', baseDir: legacyBase },
+      ],
+    ];
+
+    for (const gateways of invalidMaps) {
+      await fs.writeFile(mapFile, JSON.stringify({ version: 1, gateways }), { mode: 0o600 });
+      const chat = createChatServer({
+        rootDir: root,
+        publicDir,
+        releaseInfo: { tag: 'v0.1.2', sourceCommit: '1234567890abcdef1234567890abcdef12345678' },
+        environment: {
+          CHAT_PUBLIC_ORIGIN: chatOrigin,
+          CHAT_DEFAULT_GATEWAY_ORIGIN: gatewayOrigin,
+          CHAT_DEFAULT_SESSION_KEY: SESSION,
+          CHAT_DEFAULT_PRINCIPAL_KEY: PRINCIPAL,
+          CHAT_GATEWAY_MAP_FILE: mapFile,
+          TIGHTBEAM_BASE_DIR: legacyBase,
+        },
+      });
+      await listen(chat, chatPort);
+      const response = await fetch(`${chatOrigin}/__chat/gateway/version?gateway=${encodeURIComponent(gatewayOrigin)}`,
+        { headers: { origin: chatOrigin } },
+      });
+      expect(response.status).toBe(503);
+      expect(await response.json()).toEqual({ error: { code: 'chat_service_unconfigured' } });
+      await closeServer(chat);
+    }
+    expect(observed).toEqual([]);
   });
 
   it('injects masked service auth for the linked session before forwarding Firehose and human sockets', async () => {
@@ -259,11 +441,16 @@ describe('private direct-entry Chat service bridge', () => {
       }).catch(() => socket.destroy());
     });
     const gatewayPort = await listen(gateway);
-    const gatewayOrigin = `http://127.0.0.1:${gatewayPort}`;
+    const descriptorOrigin = `http://127.0.0.1:${gatewayPort}`;
+    const gatewayOrigin = 'https://mapped-gateway.example';
+    const linkedAlias = 'https://mapped-link.example';
     const chatPort = await unusedPort();
     const chatOrigin = `http://127.0.0.1:${chatPort}`;
     const { root, publicDir } = await temporaryDirectory();
-    const gatewayBaseDir = await writeGatewayDescriptor(path.join(root, 'gateway-base'), gatewayOrigin, TOKEN);
+    const gatewayBaseDir = await writeGatewayDescriptor(path.join(root, 'gateway-base'), descriptorOrigin, TOKEN);
+    const mapFile = await writeGatewayMap(root, [
+      { origin: gatewayOrigin, baseDir: gatewayBaseDir, aliases: [linkedAlias, descriptorOrigin] },
+    ]);
     const chat = createChatServer({
       rootDir: root,
       publicDir,
@@ -273,7 +460,7 @@ describe('private direct-entry Chat service bridge', () => {
         CHAT_DEFAULT_GATEWAY_ORIGIN: gatewayOrigin,
         CHAT_DEFAULT_SESSION_KEY: SESSION,
         CHAT_DEFAULT_PRINCIPAL_KEY: PRINCIPAL,
-        TIGHTBEAM_BASE_DIR: gatewayBaseDir,
+        CHAT_GATEWAY_MAP_FILE: mapFile,
       },
     });
     await listen(chat, chatPort);
@@ -295,14 +482,14 @@ describe('private direct-entry Chat service bridge', () => {
       });
     }
 
-    const changes = await connect(`/__chat/ws/changes?protocolVersion=2&sessionKey=${encodeURIComponent(LINKED_SESSION)}`);
+    const changes = await connect(`/__chat/ws/changes?protocolVersion=2&sessionKey=${encodeURIComponent(LINKED_SESSION)}&gateway=${encodeURIComponent(linkedAlias)}`);
     expect(changes.response.statusCode).toBe(101);
     expect((await nextFrame(changes.socket, changes.head)).value).toMatchObject({
       type: 'auth_result', success: true, userId: PRINCIPAL, sessionKey: LINKED_SESSION,
     });
     changes.socket.destroy();
 
-    const human = await connect(`/__chat/ws?sessionKey=${encodeURIComponent(LINKED_SESSION)}`);
+    const human = await connect(`/__chat/ws?sessionKey=${encodeURIComponent(LINKED_SESSION)}&gateway=${encodeURIComponent(linkedAlias)}`);
     expect(human.response.statusCode).toBe(101);
     const humanAuth = (await nextFrame(human.socket, human.head)).value;
     const humanAuthRecord = observed.find((row) => row.kind === 'human' && row.auth);

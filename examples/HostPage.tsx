@@ -26,6 +26,15 @@ export function HostPage({ defaultTarget, configurationError }: {
         const host = browserHost(selected);
         const origin = window.location.origin;
         const response = await host.fetch(`${origin}/__chat/gateway/version`, { method: 'GET', signal: controller.signal });
+        if (response.status === 503) {
+          let failure: unknown;
+          try { failure = await response.json(); } catch { failure = undefined; }
+          if (failure && typeof failure === 'object' && 'error' in failure &&
+              failure.error && typeof failure.error === 'object' && 'code' in failure.error &&
+              failure.error.code === 'chat_gateway_unavailable') {
+            throw new Error('No Gateway access is provisioned for the selected conversation. The selected target was not changed.');
+          }
+        }
         if (!response.ok) throw new Error('The configured Chat service is unavailable.');
         const version = await response.json() as { version?: unknown; build?: unknown; sha?: unknown };
         if (version.version !== '0.1.9' || typeof version.build !== 'number' || typeof version.sha !== 'string') {
@@ -71,7 +80,11 @@ export function HostPage({ defaultTarget, configurationError }: {
         <a href={window.location.pathname || '/'}>Open the configured conversation</a>}
     </div>}
     {selected && !adapter && !error && <p role="status">Opening the configured conversation…</p>}
-    {error && <p role="alert">{error}</p>}
+    {error && <div role="alert">
+      <p>{error}</p>
+      {selectionSource === 'link' &&
+        <a href={window.location.pathname || '/'}>Open the configured conversation</a>}
+    </div>}
     {adapter && selected && <div className="chat-slot">
       <TightbeamChat sessionKey={selected.sessionKey} adapter={adapter} />
     </div>}
