@@ -267,7 +267,10 @@ export function createPublic019Transport(config: Public019Config): { transport: 
   const transport: ChatTransport = {
     currentIdentity: () => config.host.currentIdentity(),
     async inspectTarget(signal): Promise<TargetObservation> {
-      const version = await get('/version', signal);
+      // The selected Gateway's identity is exposed by the Chat bridge. The
+      // Chat bundle manifest lives at /__chat/version and must not determine
+      // which Gateway profile is allowed to speak for this target.
+      const version = await get('/gateway/version', signal);
       const observed = identity(String(version.version), Number(version.build), String(version.sha));
       return { identity: observed,
         capabilities: sourceBacked && observed === expectedIdentity ? capabilities : unsupportedCapabilities };

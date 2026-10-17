@@ -205,6 +205,10 @@ describe('private direct-entry Chat service bridge', () => {
     expect(config.deviceId).toMatch(/^chat_[a-f0-9]{24}$/);
     expect(JSON.stringify(config)).not.toContain(TOKEN);
 
+    const chatReleaseResponse = await fetch(`${chatOrigin}/__chat/version`);
+    expect(await chatReleaseResponse.json()).toEqual({
+      product: 'tightbeam-chat', tag: 'v0.1.2', sourceCommit: '1234567890abcdef1234567890abcdef12345678',
+    });
     const selectedGateway = `?gateway=${encodeURIComponent(gatewayOrigin)}`;
     const versionResponse = await fetch(`${chatOrigin}/__chat/gateway/version`, { headers: { origin: chatOrigin } });
     expect((await versionResponse.json()).sha).toBe('b469cd27');

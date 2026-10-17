@@ -42,7 +42,7 @@ function setup(heartbeatTimeoutMs?: number, observedVersion = version, configure
     currentIdentity: () => identity,
     fetch: async (path) => {
       paths.push(path);
-      const body = path.endsWith('/version') ? observedVersion : path.includes('/messages?')
+      const body = path.endsWith('/__chat/gateway/version') ? observedVersion : path.includes('/messages?')
         ? { schemaVersion: 1, resource: 'transcript messages', items: [item],
           page: { oldestCursor: 'older-cursor', hasMoreBefore: true } }
         : { schemaVersion: 1, resource: 'sessions', item: session };
@@ -52,7 +52,7 @@ function setup(heartbeatTimeoutMs?: number, observedVersion = version, configure
     openAuthenticatedHuman: async () => human,
   };
   const { transport, profile } = createPublic019Transport({
-    baseUrl: 'https://host.example', build: configuredVersion.build, sha: configuredVersion.sha, host,
+    baseUrl: 'https://host.example/__chat', build: configuredVersion.build, sha: configuredVersion.sha, host,
     responseTimeoutMs: 1000, heartbeatTimeoutMs,
   });
   return { transport, profile, paths, changes, human };
@@ -108,7 +108,7 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
       currentIdentity: () => identity,
       fetch: async (path) => {
         let body: unknown;
-        if (path.endsWith('/version')) body = version;
+        if (path.endsWith('/__chat/gateway/version')) body = version;
         else if (path.includes('/messages?')) {
           tailStarted = true;
           await tailGate;
@@ -126,7 +126,7 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
       openAuthenticatedChanges: async () => changes,
       openAuthenticatedHuman: async () => human,
     };
-    const { transport, profile } = createPublic019Transport({ baseUrl: 'https://host.example',
+    const { transport, profile } = createPublic019Transport({ baseUrl: 'https://host.example/__chat',
       build: version.build, sha: version.sha, host });
     const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
     await vi.waitFor(() => expect(changes.sent).toHaveLength(1));
@@ -218,7 +218,7 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
     const signal = new AbortController().signal;
     expect(await transport.inspectTarget(signal)).toEqual({ identity: profile.identity, capabilities: profile.capabilities });
     expect(await transport.readSession(sessionKey, signal)).toMatchObject({ sessionKey, rowVersion: 4, raw: { clearedThroughSeq: 7 } });
-    expect(paths).toEqual(['https://host.example/version', 'https://host.example/api/sessions/s-public']);
+    expect(paths).toEqual(['https://host.example/__chat/gateway/version', 'https://host.example/__chat/api/sessions/s-public']);
     expect(decodePublic019Message(item, sessionKey)).toMatchObject({
       id: 'm_1', seq: 9, createdAt: '2026-10-12T00:00:00.000Z',
       clientMessageId: 'c_1', raw: { at: item.at, unknownMetadata: { preserved: true } },
