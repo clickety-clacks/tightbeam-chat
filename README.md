@@ -29,7 +29,7 @@ npm run example
 
 The Vite example binds to loopback and its bridge is development-only. Do not expose it to a network or put a proxy/tunnel in front of it. A private production origin must serve the built example, runtime config, and same-origin `/gateway/` HTTP and WebSocket bridge over HTTPS. This candidate does not establish a deployed server, device route, or certificate.
 
-The example loads the newest tail in chronological order with the viewport at the newest end; scrolling upward or choosing **Load earlier messages** prepends older history while preserving the reading position. Sending a real human message is available only after the person separately signs in; automated validation does not submit messages.
+The example loads the newest tail in chronological order with the viewport at the newest end; scrolling upward or choosing **Load earlier messages** prepends older history while preserving the reading position. The private entry provides the composer through the provisioned Chat service without a separate browser sign-in. Sending still depends on the selected Gateway connection and its ordinary operation rules; opening a link does not authorize an automated test message.
 
 ```sh
 npm run check
@@ -76,7 +76,7 @@ If a history response makes the target unsupported, the component blocks new sen
 
 ## Evidence and limits
 
-The automated tests use controlled synthetic transports, source-shaped wire frames, and DOM fixtures. They cover readiness ordering, snapshot overlap, paging across resets and switches, reconnect, retries, target/principal changes, wire decoding, rendering, copy, composer, and disposal. Browser checks against a simulated gateway exercise the local bridge and sign-in flow. Live-gateway use still needs owner validation with an approved credential and reachable gateway.
+The automated tests use controlled synthetic transports, source-shaped wire frames, and DOM fixtures. They cover readiness ordering, snapshot overlap, paging across resets and switches, reconnect, retries, target/principal changes, wire decoding, rendering, copy, composer, and disposal. Earlier browser checks against a simulated gateway exercised the local bridge and former sign-in flow; they do not establish acceptance of the current private direct-entry journey. That requires separate evidence from the deployed private origin with the selected compatible Gateway and provisioned server-side connection: retained history, live changes and any authorized human post are distinct observations. Browser credential setup is not part of that journey.
 
 The example does not provide session discovery, token persistence, attachment upload/download, Markdown rendering, or token streaming. Attachment metadata and plain text remain readable. An ack confirms gateway acceptance, not completion of the agent's turn.
 
