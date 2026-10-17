@@ -12,17 +12,22 @@ The release job creates a draft first, uploads the complete asset set, then publ
 
 ## Server configuration
 
-The server binds only to `127.0.0.1:4178`. To make it reachable from a browser, a deployment must provide private HTTPS ingress to that listener and forward the Chat browser assets plus same-origin HTTP and WebSocket requests to `/gateway/`. The development Vite server remains loopback-only and is not a production serving option. This source package does not configure an ingress proxy, certificate, DNS name or firewall, or establish a usable private server address.
+The server binds only to `127.0.0.1:4178`. To make it reachable from a browser, a deployment must provide private HTTPS ingress to that listener and forward the Chat browser assets plus same-origin authenticated HTTP and WebSocket requests under `/__chat/`. The existing `/gateway/` bridge remains available for its supported public-client flow. The development Vite server remains loopback-only and is not a production serving option. This source package does not configure an ingress proxy, certificate, DNS name or firewall, or establish a usable private server address.
 
 Create `~/.config/tightbeam-chat/server.env` for the Chat service with nonsecret deployment values:
 
 ```sh
 CHAT_PUBLIC_ORIGIN=https://chat.example
 CHAT_DEFAULT_GATEWAY_ORIGIN=https://gateway.example
+CHAT_DEFAULT_PRINCIPAL_KEY=example-user
 CHAT_DEFAULT_SESSION_KEY=agent:example:main
 ```
 
-The default gateway must be an HTTP(S) origin, and the session is an existing opaque key. The values are not credentials. `/chat-config.json` returns these fields without caching so the page can resolve its configured root at runtime; a missing or invalid target is reported by the page. Tokens and other credentials never belong in this file or a link.
+The default gateway must be an HTTP(S) origin, and the principal and session identify an existing owner and opaque session key. These values are not credentials. `/chat-config.json` returns the configured target without caching so the page can resolve its root at runtime; it also returns a stable nonsecret device identifier used by the server bridge. A missing or invalid target is reported by the page. Tokens and other credentials never belong in this file or a link.
+
+For Gateway requests, the Chat server reads the provisioned `gateway.json` descriptor inside the server process. It resolves the Gateway base directory using the same precedence as the Gateway and CLI: `TIGHTBEAM_BASE_DIR`, then `TIGHTBEAM_HOME`, then `$HOME/.tightbeam`. The descriptor supplies the internal `cliToken` and its provisioned Gateway endpoint; the server uses the token only for its own Gateway requests and requires that endpoint to match `CHAT_DEFAULT_GATEWAY_ORIGIN`. A missing descriptor, missing token, invalid endpoint, or mismatch leaves the authenticated service routes unavailable. The server does not search `.tightbeam-session`, use `TIGHTBEAM_URL`/`TIGHTBEAM_TOKEN`, or read a token from `server.env`. If the Gateway uses a nondefault base directory, set `TIGHTBEAM_BASE_DIR` to that same directory in the Chat service environment. The service must already run with access to the owner-private descriptor; do not copy its token or weaken the descriptor's file permissions.
+
+The configured default and link-selected sessions use the same provisioned Gateway origin and owner identity. A complete valid link to another session on that Gateway selects the linked session; the Gateway still decides whether the configured owner may read or post to it. A link to a different Gateway is shown as selected but unavailable in this service because this release has no provisioned origin-to-credential mapping for it. The page offers an explicit route back to the configured conversation and never silently substitutes it.
 
 The unit file is `packaging/tightbeam-chat.service`. It supervises only `tightbeam-chat.service` in the user service manager and reads the environment file above. The service account's user manager must be configured to stay active without an interactive login for the server to remain available. The updater does not alter account, manager, gateway or ingress configuration.
 

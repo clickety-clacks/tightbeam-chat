@@ -1,11 +1,20 @@
 export interface ChatTarget {
   readonly gateway: string;
   readonly sessionKey: string;
+  readonly principalKey: string;
+  readonly deviceId: string;
+}
+
+export interface RequestedChatTarget {
+  readonly gateway: string;
+  readonly sessionKey: string;
 }
 
 export interface ConfiguredChatTarget {
   readonly gateway?: string;
   readonly sessionKey?: string;
+  readonly principalKey?: string;
+  readonly deviceId?: string;
 }
 
 /** Loads the deployment-owned, nonsecret default from the same origin as the page. */
@@ -40,6 +49,8 @@ export async function loadConfiguredChatTarget(
   const target = targetFrom(
     typeof config.gateway === 'string' ? config.gateway : undefined,
     typeof config.sessionKey === 'string' ? config.sessionKey : undefined,
+    typeof config.principalKey === 'string' ? config.principalKey : undefined,
+    typeof config.deviceId === 'string' ? config.deviceId : undefined,
   );
   if (!target) throw new Error('The Chat server returned an invalid default target.');
   return target;
@@ -47,6 +58,12 @@ export async function loadConfiguredChatTarget(
 
 export type EntryResolution =
   | { readonly kind: 'selected'; readonly target: ChatTarget; readonly source: 'link' | 'configured' }
+  | {
+    readonly kind: 'unavailable-selection';
+    readonly target: RequestedChatTarget;
+    readonly message: string;
+    readonly canRecoverToConfigured: boolean;
+  }
   | { readonly kind: 'invalid-selection'; readonly message: string; readonly canRecoverToConfigured: boolean }
   | { readonly kind: 'configuration-error'; readonly message: string };
 
@@ -62,14 +79,19 @@ function canonicalGateway(value: string | undefined): string | undefined {
   }
 }
 
-function targetFrom(gateway: string | undefined, sessionKey: string | undefined): ChatTarget | undefined {
+function targetFrom(
+  gateway: string | undefined,
+  sessionKey: string | undefined,
+  principalKey: string | undefined,
+  deviceId: string | undefined,
+): ChatTarget | undefined {
   const normalizedGateway = canonicalGateway(gateway);
-  if (!normalizedGateway || !sessionKey?.trim()) return undefined;
-  return { gateway: normalizedGateway, sessionKey };
+  if (!normalizedGateway || !sessionKey?.trim() || !principalKey?.trim() || !deviceId?.trim()) return undefined;
+  return { gateway: normalizedGateway, sessionKey, principalKey, deviceId };
 }
 
 function configuredTarget(value: ConfiguredChatTarget | undefined): ChatTarget | undefined {
-  return targetFrom(value?.gateway, value?.sessionKey);
+  return targetFrom(value?.gateway, value?.sessionKey, value?.principalKey, value?.deviceId);
 }
 
 function wellFormedQuery(search: string): boolean {
@@ -81,7 +103,7 @@ function wellFormedQuery(search: string): boolean {
   }
 }
 
-/** Selects only a complete link target or an explicitly configured root target. */
+/** Selects a complete link target or an explicitly configured root target. */
 export function resolveEntrySelection(
   search: string,
   configured: ConfiguredChatTarget | undefined,
@@ -107,24 +129,22 @@ export function resolveEntrySelection(
   if (!wellFormedQuery(search) || keys.some((key) => key !== 'gateway' && key !== 'session') ||
       params.getAll('gateway').length !== 1 || params.getAll('session').length !== 1) return invalid();
 
-  const target = targetFrom(params.get('gateway') ?? undefined, params.get('session') ?? undefined);
-  return target ? { kind: 'selected', target, source: 'link' } : invalid();
-}
-
-function loopback(hostname: string): boolean {
-  const unwrapped = hostname.replace(/^\[|\]$/g, '');
-  return unwrapped === 'localhost' || unwrapped === '::1' || /^127(?:\.\d{1,3}){3}$/.test(unwrapped);
-}
-
-/** Private network sign-in requires HTTPS; secure localhost remains usable for development. */
-export function canUseBrowserCredentials(pageHref: string, isSecureContext: boolean): boolean {
-  if (!isSecureContext) return false;
-  try {
-    const page = new URL(pageHref);
-    return page.protocol === 'https:' || (page.protocol === 'http:' && loopback(page.hostname));
-  } catch {
-    return false;
+  const gateway = canonicalGateway(params.get('gateway') ?? undefined);
+  const sessionKey = params.get('session') ?? undefined;
+  if (!gateway || !sessionKey?.trim()) return invalid();
+  if (!fallback || gateway !== fallback.gateway) {
+    return {
+      kind: 'unavailable-selection',
+      target: { gateway, sessionKey },
+      message: 'This Chat service has no provisioned Gateway access for the selected target.',
+      canRecoverToConfigured: Boolean(fallback),
+    };
   }
+  return {
+    kind: 'selected',
+    target: { ...fallback, sessionKey },
+    source: 'link',
+  };
 }
 
 /** Builds the same-origin bridge URL used for gateway HTTP and WebSocket traffic. */
