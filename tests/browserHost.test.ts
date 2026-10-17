@@ -1,24 +1,40 @@
 import { describe, expect, it } from 'vitest';
 import {
-  canUseBrowserCredentials, gatewayBridgeUrl, parseGatewayBridgeTarget, resolveEntrySelection,
+  gatewayBridgeUrl, parseGatewayBridgeTarget, resolveEntrySelection,
   sameOriginBridgeOrigin,
 } from '../examples/entry';
 
-const configured = { gateway: 'https://default.example:8443', sessionKey: 'agent:default/chat' };
+const configured = {
+  gateway: 'https://default.example:8443',
+  sessionKey: 'agent:default/chat',
+  principalKey: 'example-user',
+  deviceId: 'chat_abc123',
+};
 
 describe('Chat entry selection', () => {
   it('uses the configured target at the root and shows valid linked selections without normalization loss', () => {
     expect(resolveEntrySelection('', configured)).toEqual({
       kind: 'selected',
       source: 'configured',
-      target: { gateway: 'https://default.example:8443', sessionKey: 'agent:default/chat' },
+      target: configured,
     });
 
-    const gateway = 'https://chat.example:8443';
+    const gateway = configured.gateway;
     const sessionKey = 'agent:example/chat?slot=one&kind=human';
     const search = `?gateway=${encodeURIComponent(gateway)}&session=${encodeURIComponent(sessionKey)}`;
     expect(resolveEntrySelection(search, configured)).toEqual({
-      kind: 'selected', source: 'link', target: { gateway, sessionKey },
+      kind: 'selected', source: 'link', target: { ...configured, sessionKey },
+    });
+  });
+
+  it('selects a complete link to another Gateway without substituting the configured default', () => {
+    const gateway = 'https://other.example:9443';
+    const sessionKey = 'agent:other/chat';
+    const search = `?gateway=${encodeURIComponent(gateway)}&session=${encodeURIComponent(sessionKey)}`;
+    expect(resolveEntrySelection(search, configured)).toEqual({
+      kind: 'selected',
+      source: 'link',
+      target: { ...configured, gateway, sessionKey },
     });
   });
 
@@ -27,6 +43,8 @@ describe('Chat entry selection', () => {
       '?gateway=ftp%3A%2F%2Fbad.example&session=private-session',
       '?gateway=https%3A%2F%2Fuser%3Asecret%40chat.example&session=private-session',
       '?gateway=https%3A%2F%2Fchat.example%2Fpath&session=private-session',
+      '?gateway=https%3A%2F%2Fchat.example%2F%3F&session=private-session',
+      '?gateway=https%3A%2F%2Fchat.example%2F%23&session=private-session',
       '?gateway=https%3A%2F%2Fchat.example',
       '?gateway=https%3A%2F%2Fchat.example&gateway=https%3A%2F%2Fother.example&session=private-session',
       '?gateway=https%3A%2F%2Fchat.example&session=private-session&token=private-token',
@@ -54,14 +72,6 @@ describe('Chat entry selection', () => {
 });
 
 describe('private browser entry and same-origin gateway bridge', () => {
-  it('requires HTTPS for private-network credentials but permits a secure localhost development origin', () => {
-    expect(canUseBrowserCredentials('https://chat.private.example/', true)).toBe(true);
-    expect(canUseBrowserCredentials('https://chat.private.example/', false)).toBe(false);
-    expect(canUseBrowserCredentials('http://10.0.0.7:5173/', true)).toBe(false);
-    expect(canUseBrowserCredentials('http://127.0.0.1:5173/', true)).toBe(true);
-    expect(canUseBrowserCredentials('file:///tmp/chat/index.html', true)).toBe(false);
-  });
-
   it('keeps HTTPS fetch and WebSocket traffic on the selected Chat origin', () => {
     const page = 'https://chat.private.example/';
     const gateway = 'https://gateway.example:8443';

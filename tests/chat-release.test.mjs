@@ -91,14 +91,25 @@ describe('persistent Chat server', () => {
     await fs.writeFile(path.join(publicDir, 'index.html'), '<main>Chat</main>');
     const port = await unusedPort();
     const origin = `http://127.0.0.1:${port}`;
+    const gatewayOrigin = 'https://gateway.example:8443';
+    const principalKey = 'example-user';
+    const sessionKey = 'agent:example/session';
+    const operatorToken = 'fixture-only-operator-token';
+    const baseDir = path.join(rootDir, 'gateway-base');
+    await fs.mkdir(baseDir);
+    await fs.writeFile(path.join(baseDir, 'gateway.json'), JSON.stringify({
+      url: 'wss://gateway.example:8443', cliToken: operatorToken,
+    }), { mode: 0o600 });
     const server = createChatServer({
       rootDir,
       publicDir,
       releaseInfo: { tag: 'v0.1.0', sourceCommit: SOURCE_COMMIT },
       environment: {
         CHAT_PUBLIC_ORIGIN: origin,
-        CHAT_DEFAULT_GATEWAY_ORIGIN: 'https://gateway.example:8443',
-        CHAT_DEFAULT_SESSION_KEY: 'agent:example/session',
+        CHAT_DEFAULT_GATEWAY_ORIGIN: gatewayOrigin,
+        CHAT_DEFAULT_PRINCIPAL_KEY: principalKey,
+        CHAT_DEFAULT_SESSION_KEY: sessionKey,
+        TIGHTBEAM_BASE_DIR: baseDir,
       },
     });
     await listen(server, port);
@@ -106,10 +117,10 @@ describe('persistent Chat server', () => {
     const config = await fetch(`${origin}/chat-config.json`);
     expect(config.status).toBe(200);
     expect(config.headers.get('cache-control')).toBe('no-store');
-    expect(await config.json()).toEqual({
-      gateway: 'https://gateway.example:8443',
-      sessionKey: 'agent:example/session',
-    });
+    const configured = await config.json();
+    expect(configured).toMatchObject({ gateway: gatewayOrigin, principalKey, sessionKey });
+    expect(configured.deviceId).toMatch(/^chat_[a-f0-9]{24}$/);
+    expect(JSON.stringify(configured)).not.toContain(operatorToken);
 
     const identity = await fetch(`${origin}/__chat/version`);
     expect(await identity.json()).toEqual({

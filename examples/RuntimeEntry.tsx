@@ -1,19 +1,17 @@
 import { useEffect, useState } from 'react';
 import { HostPage } from './HostPage';
-import { loadConfiguredChatTarget, resolveEntrySelection, type ConfiguredChatTarget } from './entry';
+import { loadConfiguredChatTarget, type ChatTarget } from './entry';
 
 type ConfigState =
   | { readonly status: 'loading' }
-  | { readonly status: 'ready'; readonly target: ConfiguredChatTarget }
+  | { readonly status: 'ready'; readonly target: ChatTarget }
   | { readonly status: 'error'; readonly message: string };
 
-/** Resolves a link directly, or loads the private server's configured root target. */
+/** Loads service configuration before binding a link to the provisioned Gateway identity. */
 export function RuntimeEntry() {
-  const hasValidLinkTarget = resolveEntrySelection(window.location.search, undefined).kind === 'selected';
   const [config, setConfig] = useState<ConfigState>({ status: 'loading' });
 
   useEffect(() => {
-    if (hasValidLinkTarget) return;
     const controller = new AbortController();
     let current = true;
     void loadConfiguredChatTarget(fetch, controller.signal).then(
@@ -24,9 +22,8 @@ export function RuntimeEntry() {
       },
     );
     return () => { current = false; controller.abort(); };
-  }, [hasValidLinkTarget]);
+  }, []);
 
-  if (hasValidLinkTarget) return <HostPage defaultTarget={{}} />;
   if (config.status === 'loading') return <main aria-busy="true">
     <header><h1>Tightbeam Chat</h1></header>
     <p role="status">Loading the configured Chat target…</p>

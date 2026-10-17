@@ -1,6 +1,8 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import https from 'node:https';
+import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -21,6 +23,7 @@ function canonicalOrigin(value) {
   try {
     const parsed = new URL(value);
     if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname ||
+        value.includes('?') || value.includes('#') ||
         parsed.username || parsed.password || parsed.pathname !== '/' || parsed.search || parsed.hash) {
       return undefined;
     }
@@ -35,17 +38,371 @@ function isLoopback(hostname) {
   return host === 'localhost' || host === '::1' || /^127(?:\.\d{1,3}){3}$/.test(host);
 }
 
+function gatewayBaseDirectory(environment) {
+  if (environment.TIGHTBEAM_BASE_DIR !== undefined) return environment.TIGHTBEAM_BASE_DIR;
+  if (environment.TIGHTBEAM_HOME !== undefined) return environment.TIGHTBEAM_HOME;
+  return path.join(environment.HOME || os.homedir(), '.tightbeam');
+}
+
+function readGatewayDescriptor(baseDirectory) {
+  try {
+    const filename = path.join(baseDirectory, 'gateway.json');
+    const descriptor = JSON.parse(fs.readFileSync(filename, 'utf8'));
+    const token = typeof descriptor.cliToken === 'string' && descriptor.cliToken.length > 0
+      ? descriptor.cliToken
+      : '';
+    let base;
+    if (typeof descriptor.url === 'string' && descriptor.url.length > 0) {
+      const normalized = descriptor.url.replace(/^ws:/, 'http:').replace(/^wss:/, 'https:');
+      base = canonicalOrigin(normalized);
+    } else if (Number.isInteger(descriptor.port) && descriptor.port > 0 && descriptor.port <= 65535) {
+      base = `http://127.0.0.1:${descriptor.port}`;
+    }
+    return { base, token };
+  } catch {
+    return undefined;
+  }
+}
+
+function loadGatewayMap(environment, configuredGateway) {
+  const gateways = new Map();
+  if (environment.CHAT_GATEWAY_MAP_FILE === undefined) {
+    const provisioned = readGatewayDescriptor(gatewayBaseDirectory(environment));
+    if (configuredGateway && provisioned?.base === configuredGateway) {
+      gateways.set(configuredGateway, { ...provisioned, available: Boolean(provisioned.token) });
+    }
+    return { valid: true, gateways };
+  }
+
+  try {
+    const value = JSON.parse(fs.readFileSync(environment.CHAT_GATEWAY_MAP_FILE, 'utf8'));
+    if (!value || value.version !== 1 || !Array.isArray(value.gateways)) throw new Error();
+
+    const configuredKeys = new Set();
+    const entries = [];
+    for (const item of value.gateways) {
+      if (!item || typeof item !== 'object' || Array.isArray(item) ||
+          typeof item.baseDir !== 'string' || !path.isAbsolute(item.baseDir)) throw new Error();
+      const origin = canonicalOrigin(item.origin);
+      if (!origin) throw new Error();
+      const aliases = item.aliases === undefined ? [] : item.aliases;
+      if (!Array.isArray(aliases)) throw new Error();
+
+      const keys = [origin];
+      for (const alias of aliases) {
+        const canonicalAlias = canonicalOrigin(alias);
+        if (!canonicalAlias) throw new Error();
+        keys.push(canonicalAlias);
+      }
+      for (const key of keys) {
+        if (configuredKeys.has(key)) throw new Error();
+        configuredKeys.add(key);
+      }
+
+      const descriptor = readGatewayDescriptor(item.baseDir);
+      const descriptorMatches = descriptor && keys.includes(descriptor.base);
+      entries.push({ keys, descriptor, available: Boolean(descriptorMatches && descriptor.token) });
+    }
+
+    for (const item of entries) {
+      const entry = {
+        base: item.available ? item.descriptor.base : undefined,
+        token: item.available ? item.descriptor.token : '',
+        available: item.available,
+      };
+      for (const key of item.keys) gateways.set(key, entry);
+    }
+    return { valid: true, gateways };
+  } catch {
+    return { valid: false, gateways: new Map() };
+  }
+}
+
 function loadRuntimeConfig(environment) {
   const publicOrigin = canonicalOrigin(environment.CHAT_PUBLIC_ORIGIN);
-  const gateway = canonicalOrigin(environment.CHAT_DEFAULT_GATEWAY_ORIGIN);
+  const configuredGateway = canonicalOrigin(environment.CHAT_DEFAULT_GATEWAY_ORIGIN);
+  const gatewayMap = loadGatewayMap(environment, configuredGateway);
+  const gatewayOrigin = gatewayMap.valid && configuredGateway && gatewayMap.gateways.has(configuredGateway)
+    ? configuredGateway
+    : undefined;
   const sessionKey = typeof environment.CHAT_DEFAULT_SESSION_KEY === 'string'
     ? environment.CHAT_DEFAULT_SESSION_KEY
     : '';
-  const configuredTarget = gateway && sessionKey.trim()
-    ? { gateway, sessionKey }
+  const principalKey = typeof environment.CHAT_DEFAULT_PRINCIPAL_KEY === 'string'
+    ? environment.CHAT_DEFAULT_PRINCIPAL_KEY.trim()
+    : '';
+  const deviceId = gatewayOrigin && principalKey && sessionKey.trim()
+    ? `chat_${crypto.createHash('sha256').update(`${gatewayOrigin}\0${principalKey}\0${sessionKey}`).digest('hex').slice(0, 24)}`
+    : '';
+  const configuredTarget = gatewayOrigin && sessionKey.trim()
+    ? {
+      gateway: gatewayOrigin,
+      sessionKey,
+      ...(principalKey ? { principalKey, deviceId } : {}),
+    }
     : {};
 
-  return { publicOrigin, configuredTarget };
+  return {
+    publicOrigin,
+    configuredTarget,
+    gatewayOrigin,
+    gatewayMapValid: gatewayMap.valid,
+    gateways: gatewayMap.gateways,
+    sessionKey,
+    principalKey,
+    deviceId,
+  };
+}
+
+function serviceReady(runtime) {
+  return Boolean(runtime.gatewayMapValid && runtime.gatewayOrigin && runtime.gateways.has(runtime.gatewayOrigin) &&
+    runtime.sessionKey.trim() && runtime.principalKey && runtime.deviceId);
+}
+
+function decodeSessionPath(value) {
+  try {
+    const sessionKey = decodeURIComponent(value);
+    return sessionKey.trim() ? sessionKey : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function selectedGatewayOrigin(searchParams, defaultGatewayOrigin) {
+  const values = searchParams.getAll('gateway');
+  if (values.length > 1) return undefined;
+  return values.length === 0 ? defaultGatewayOrigin : canonicalOrigin(values[0]);
+}
+
+function parseServiceHttpTarget(rawUrl, runtime) {
+  try {
+    const request = new URL(rawUrl, 'http://chat-service.invalid');
+    if (request.origin !== 'http://chat-service.invalid') return undefined;
+    const gatewayOrigin = selectedGatewayOrigin(request.searchParams, runtime.gatewayOrigin);
+    if (!gatewayOrigin) return undefined;
+    const routeParams = [...request.searchParams.entries()].filter(([name]) => name !== 'gateway');
+    if (request.pathname === '/__chat/gateway/version' && routeParams.length === 0) {
+      return { kind: 'version', gatewayOrigin, path: '/version' };
+    }
+
+    const detail = /^\/__chat\/api\/sessions\/([^/]+)$/.exec(request.pathname);
+    const detailSession = detail && decodeSessionPath(detail[1]);
+    if (detailSession && routeParams.length === 0) {
+      return {
+        kind: 'detail',
+        gatewayOrigin,
+        sessionKey: detailSession,
+        path: `/api/sessions/${encodeURIComponent(detailSession)}?asUser=${encodeURIComponent(runtime.principalKey)}`,
+      };
+    }
+
+    const messages = /^\/__chat\/api\/sessions\/([^/]+)\/messages$/.exec(request.pathname);
+    const messageSession = messages && decodeSessionPath(messages[1]);
+    if (!messageSession) return undefined;
+
+    const params = routeParams;
+    const names = params.map(([name]) => name);
+    if (params.length !== 2 || new Set(names).size !== names.length || request.searchParams.get('limit') !== '50') {
+      return undefined;
+    }
+    const upstreamQuery = new URLSearchParams([
+      ['asUser', runtime.principalKey],
+      ['limit', '50'],
+    ]);
+    if (request.searchParams.get('tail') === 'true' && !names.includes('before')) {
+      upstreamQuery.set('tail', 'true');
+      return {
+        kind: 'transcript', gatewayOrigin,
+        path: `/api/sessions/${encodeURIComponent(messageSession)}/messages?${upstreamQuery}`,
+      };
+    }
+    const before = request.searchParams.get('before');
+    if (before && names.includes('before') && !names.includes('tail')) {
+      upstreamQuery.set('before', before);
+      return {
+        kind: 'transcript', gatewayOrigin,
+        path: `/api/sessions/${encodeURIComponent(messageSession)}/messages?${upstreamQuery}`,
+      };
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function parseServiceWebSocketTarget(rawUrl, runtime) {
+  try {
+    const request = new URL(rawUrl, 'http://chat-service.invalid');
+    if (request.origin !== 'http://chat-service.invalid') return undefined;
+    const gatewayOrigin = selectedGatewayOrigin(request.searchParams, runtime.gatewayOrigin);
+    if (!gatewayOrigin) return undefined;
+    const sessionKeys = request.searchParams.getAll('sessionKey');
+    if (sessionKeys.length !== 1 || !sessionKeys[0]?.trim()) return undefined;
+    if ([...request.searchParams.keys()].some((key) => !['gateway', 'sessionKey', 'protocolVersion'].includes(key))) {
+      return undefined;
+    }
+
+    if (request.pathname === '/__chat/ws/changes') {
+      if (request.searchParams.getAll('protocolVersion').length !== 1 ||
+          request.searchParams.get('protocolVersion') !== '2') {
+        return undefined;
+      }
+      return { path: '/ws/changes?protocolVersion=2', kind: 'changes', gatewayOrigin, sessionKey: sessionKeys[0] };
+    }
+    if (request.pathname === '/__chat/ws' &&
+        request.searchParams.getAll('protocolVersion').length === 0) {
+      return { path: '/ws', kind: 'human', gatewayOrigin, sessionKey: sessionKeys[0] };
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function jsonResponse(response, status, value) {
+  writeJson(response, status, value);
+}
+
+function gatewayRequest(gateway, path, { method = 'GET', headers = {}, body, authorize = true } = {}) {
+  return new Promise((resolve, reject) => {
+    const protocol = gateway.base.startsWith('https:') ? https : http;
+    const request = protocol.request(gateway.base, {
+      method,
+      path,
+      headers: {
+        ...(authorize ? { authorization: `Bearer ${gateway.token}` } : {}),
+        accept: 'application/json',
+        ...headers,
+      },
+    }, (reply) => {
+      const chunks = [];
+      reply.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+      reply.on('end', () => resolve({
+        status: reply.statusCode ?? 502,
+        contentType: reply.headers['content-type'] ?? 'application/json; charset=utf-8',
+        body: Buffer.concat(chunks),
+      }));
+    });
+    request.setTimeout(15000, () => request.destroy(new Error('Gateway request timed out')));
+    request.on('error', reject);
+    request.end(body);
+  });
+}
+
+function writeGatewayReply(response, reply) {
+  response.writeHead(reply.status, {
+    'content-type': reply.contentType,
+    'cache-control': 'no-store',
+    'x-content-type-options': 'nosniff',
+    'content-length': reply.body.length,
+  });
+  response.end(reply.body);
+}
+
+async function serviceHttp(request, response, runtime) {
+  if (request.method !== 'GET') {
+    response.writeHead(405, { allow: 'GET', 'cache-control': 'no-store' }).end();
+    return;
+  }
+  if (!serviceReady(runtime)) {
+    jsonResponse(response, 503, { error: { code: 'chat_service_unconfigured' } });
+    return;
+  }
+  const target = parseServiceHttpTarget(request.url ?? '', runtime);
+  if (!target) {
+    jsonResponse(response, 404, { error: { code: 'not_found' } });
+    return;
+  }
+  const gateway = runtime.gateways.get(target.gatewayOrigin);
+  if (!gateway?.available) {
+    jsonResponse(response, 503, { error: { code: 'chat_gateway_unavailable' } });
+    return;
+  }
+
+  try {
+    if (target.kind === 'version' || target.kind === 'detail' || target.kind === 'transcript') {
+      writeGatewayReply(response, await gatewayRequest(gateway, target.path, {
+        authorize: target.kind !== 'version',
+      }));
+      return;
+    }
+  } catch {
+    jsonResponse(response, 502, { error: { code: 'gateway_unavailable' } });
+  }
+}
+
+function websocketClientTextFrame(value) {
+  const payload = Buffer.from(JSON.stringify(value));
+  const mask = crypto.randomBytes(4);
+  let header;
+  if (payload.length < 126) {
+    header = Buffer.from([0x81, 0x80 | payload.length]);
+  } else if (payload.length <= 0xffff) {
+    header = Buffer.alloc(4);
+    header[0] = 0x81;
+    header[1] = 0x80 | 126;
+    header.writeUInt16BE(payload.length, 2);
+  } else {
+    header = Buffer.alloc(10);
+    header[0] = 0x81;
+    header[1] = 0x80 | 127;
+    header.writeBigUInt64BE(BigInt(payload.length), 2);
+  }
+  const masked = Buffer.alloc(payload.length);
+  for (let index = 0; index < payload.length; index += 1) masked[index] = payload[index] ^ mask[index % 4];
+  return Buffer.concat([header, mask, masked]);
+}
+
+function proxyServiceWebSocket(request, socket, head, target, runtime, gateway) {
+  const protocol = gateway.base.startsWith('https:') ? https : http;
+  const headers = {
+    host: new URL(gateway.base).host,
+    connection: 'Upgrade',
+    upgrade: 'websocket',
+    'sec-websocket-key': String(request.headers['sec-websocket-key'] ?? ''),
+    'sec-websocket-version': String(request.headers['sec-websocket-version'] ?? ''),
+  };
+  if (typeof request.headers.origin === 'string') headers.origin = request.headers.origin;
+  if (request.headers['sec-websocket-protocol']) {
+    headers['sec-websocket-protocol'] = request.headers['sec-websocket-protocol'];
+  }
+
+  const upstream = protocol.request(gateway.base, { method: 'GET', path: target.path, headers });
+  upstream.on('upgrade', (reply, remote, remoteHead) => {
+    const statusText = reply.statusMessage || 'Switching Protocols';
+    const headerLines = [];
+    for (const [name, value] of Object.entries(reply.headers)) {
+      for (const item of Array.isArray(value) ? value : [value]) {
+        if (item !== undefined) headerLines.push(`${name}: ${item}`);
+      }
+    }
+    socket.write(`HTTP/1.1 ${reply.statusCode} ${statusText}\r\n${headerLines.join('\r\n')}\r\n\r\n`);
+    if (remoteHead.length) socket.write(remoteHead);
+    const auth = {
+      type: 'auth',
+      token: gateway.token,
+      asUser: runtime.principalKey,
+      sessionKey: target.sessionKey,
+    };
+    if (target.kind === 'human') {
+      auth.deviceId = runtime.deviceId;
+      auth.subscriptions = ['chat'];
+    }
+    remote.write(websocketClientTextFrame(auth));
+    if (head.length) remote.write(head);
+    socket.pipe(remote).pipe(socket);
+    socket.on('error', () => remote.destroy());
+    remote.on('error', () => socket.destroy());
+    socket.on('close', () => remote.destroy());
+    remote.on('close', () => socket.destroy());
+  });
+  upstream.on('response', (reply) => {
+    socket.end(`HTTP/1.1 ${reply.statusCode ?? 502} Gateway Refused\r\nConnection: close\r\n\r\n`);
+    upstream.destroy();
+  });
+  upstream.on('error', () => socket.destroy());
+  socket.on('close', () => upstream.destroy());
+  upstream.end();
 }
 
 function parseBridgeTarget(rawUrl) {
@@ -251,6 +608,14 @@ export function createChatServer({
       });
       return;
     }
+    if (parsedRequest.pathname.startsWith('/__chat/')) {
+      if (!allowedPublicOrigin(runtime, request)) {
+        response.writeHead(403, { 'cache-control': 'no-store' }).end();
+        return;
+      }
+      void serviceHttp(request, response, runtime);
+      return;
+    }
     if (parsedRequest.pathname.startsWith('/gateway/')) {
       if (request.method !== 'GET') {
         response.writeHead(405, { allow: 'GET', 'cache-control': 'no-store' }).end();
@@ -271,6 +636,31 @@ export function createChatServer({
     serveAsset(request, response, publicDir);
   }).on('upgrade', (request, socket, head) => {
     const parsedRequest = new URL(request.url ?? '/', 'http://chat.invalid');
+    if (parsedRequest.pathname.startsWith('/__chat/')) {
+      if (!allowedPublicOrigin(runtime, request) || request.method !== 'GET' ||
+          request.headers.upgrade?.toLowerCase() !== 'websocket' ||
+          request.headers['sec-websocket-version'] !== '13' ||
+          typeof request.headers['sec-websocket-key'] !== 'string') {
+        socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+        return;
+      }
+      if (!serviceReady(runtime)) {
+        socket.end('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n');
+        return;
+      }
+      const target = parseServiceWebSocketTarget(request.url ?? '', runtime);
+      if (!target) {
+        socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n');
+        return;
+      }
+      const gateway = runtime.gateways.get(target.gatewayOrigin);
+      if (!gateway?.available) {
+        socket.end('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n');
+        return;
+      }
+      proxyServiceWebSocket(request, socket, head, target, runtime, gateway);
+      return;
+    }
     if (!parsedRequest.pathname.startsWith('/gateway/')) {
       socket.end('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n');
       return;
