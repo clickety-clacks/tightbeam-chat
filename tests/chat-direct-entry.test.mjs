@@ -231,7 +231,7 @@ describe('private direct-entry Chat service bridge', () => {
     });
     const selectedGateway = `?gateway=${encodeURIComponent(gatewayOrigin)}`;
     const versionResponse = await fetch(`${chatOrigin}/__chat/gateway/version`, { headers: { origin: chatOrigin } });
-    expect((await versionResponse.json()).sha).toBe('b469cd27');
+    expect((await versionResponse.json()).sha).toBe('b75b9bf5');
     const detailResponse = await fetch(`${chatOrigin}/__chat/api/sessions/${encodeURIComponent(LINKED_SESSION)}${selectedGateway}`, {
       headers: { origin: chatOrigin, authorization: 'Bearer browser-supplied-value' },
     });
