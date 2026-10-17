@@ -35,7 +35,10 @@ export async function packageChatRelease({
     path.resolve(rootDir, 'server/chat-server.mjs'),
     path.resolve(rootDir, 'scripts/update-chat-release.mjs'),
     path.resolve(rootDir, 'scripts/chat-release-updater.mjs'),
+    path.resolve(rootDir, 'scripts/chat-release-watch.mjs'),
     path.resolve(rootDir, 'packaging/tightbeam-chat.service'),
+    path.resolve(rootDir, 'packaging/tightbeam-chat-release-watch.service'),
+    path.resolve(rootDir, 'packaging/tightbeam-chat-release-watch.timer'),
     path.resolve(rootDir, 'LICENSE'),
     path.resolve(rootDir, 'THIRD_PARTY_NOTICES.md'),
   ];
@@ -60,7 +63,10 @@ export async function packageChatRelease({
     await fs.copyFile(path.resolve(rootDir, 'server/chat-server.mjs'), path.join(packageDir, 'server/chat-server.mjs'));
     await fs.copyFile(path.resolve(rootDir, 'scripts/update-chat-release.mjs'), path.join(packageDir, 'bin/update-chat-release.mjs'));
     await fs.copyFile(path.resolve(rootDir, 'scripts/chat-release-updater.mjs'), path.join(packageDir, 'bin/chat-release-updater.mjs'));
+    await fs.copyFile(path.resolve(rootDir, 'scripts/chat-release-watch.mjs'), path.join(packageDir, 'bin/chat-release-watch.mjs'));
     await fs.copyFile(path.resolve(rootDir, 'packaging/tightbeam-chat.service'), path.join(packageDir, 'packaging/tightbeam-chat.service'));
+    await fs.copyFile(path.resolve(rootDir, 'packaging/tightbeam-chat-release-watch.service'), path.join(packageDir, 'packaging/tightbeam-chat-release-watch.service'));
+    await fs.copyFile(path.resolve(rootDir, 'packaging/tightbeam-chat-release-watch.timer'), path.join(packageDir, 'packaging/tightbeam-chat-release-watch.timer'));
     await fs.copyFile(path.resolve(rootDir, 'LICENSE'), path.join(packageDir, 'LICENSE'));
     await fs.copyFile(path.resolve(rootDir, 'THIRD_PARTY_NOTICES.md'), path.join(packageDir, 'THIRD_PARTY_NOTICES.md'));
 
@@ -91,7 +97,7 @@ export async function packageChatRelease({
     await fs.writeFile(path.join(outputDir, 'release-notes.md'), [
       `Tightbeam Chat ${tag}`,
       '',
-      'This release contains the deployable Chat server and browser assets.',
+      'This release contains the deployable Chat server, browser assets, and a user-level timer that checks hourly for a newer published stable release.',
       `Source commit: ${sourceCommit}`,
       '',
       'Use the included updater to verify the published asset checksum before staging it.',

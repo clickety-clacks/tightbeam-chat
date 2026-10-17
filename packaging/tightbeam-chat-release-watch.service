@@ -1,0 +1,6 @@
+[Unit]
+Description=Check for a published Tightbeam Chat release
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/node %h/.local/share/tightbeam-chat/current/bin/chat-release-watch.mjs

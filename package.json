@@ -1,6 +1,6 @@
 {
   "name": "@clickety-clacks/tightbeam-chat",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "description": "Embeddable single-session Tightbeam conversation surface",
@@ -17,6 +17,7 @@
     "build:chat-server": "vite build --config examples/vite.config.ts --outDir ../dist/chat-server/public --emptyOutDir",
     "package:chat-release": "node scripts/package-chat-release.mjs",
     "update:chat-release": "node scripts/update-chat-release.mjs",
+    "test:release-watch": "node --test tests/chat-release-watch.node.mjs",
     "release:assert-tag": "node scripts/assert-chat-release-ref.mjs",
     "release:publish": "node scripts/publish-chat-release.mjs",
     "check": "tsc --noEmit",

@@ -252,20 +252,30 @@ describe('persistent Chat server', () => {
   });
 });
 
-async function createBundleFixture(tag, sourceCommit, { noticeContent } = {}) {
+async function createBundleFixture(tag, sourceCommit, { noticeContent, includeExecutableUpdater = false } = {}) {
   const root = await temporaryDirectory('chat-release-bundle-');
   const packageRoot = path.join(root, 'package');
   const noticeBytes = noticeContent ?? await fs.readFile(path.resolve('THIRD_PARTY_NOTICES.md'));
   const files = [
     'public/index.html', 'server/chat-server.mjs', 'bin/update-chat-release.mjs',
-    'bin/chat-release-updater.mjs', 'packaging/tightbeam-chat.service', 'LICENSE', 'THIRD_PARTY_NOTICES.md',
+    'bin/chat-release-updater.mjs', 'bin/chat-release-watch.mjs', 'packaging/tightbeam-chat.service',
+    'packaging/tightbeam-chat-release-watch.service', 'packaging/tightbeam-chat-release-watch.timer',
+    'LICENSE', 'THIRD_PARTY_NOTICES.md',
   ];
+  const executableSources = new Map([
+    ['bin/update-chat-release.mjs', 'scripts/update-chat-release.mjs'],
+    ['bin/chat-release-updater.mjs', 'scripts/chat-release-updater.mjs'],
+    ['bin/chat-release-watch.mjs', 'scripts/chat-release-watch.mjs'],
+  ]);
   for (const relative of files) {
     const filename = path.join(packageRoot, relative);
     await fs.mkdir(path.dirname(filename), { recursive: true });
-    const content = relative === 'packaging/tightbeam-chat.service'
-      ? await fs.readFile(path.resolve('packaging/tightbeam-chat.service'))
-      : relative === 'THIRD_PARTY_NOTICES.md' ? noticeBytes : Buffer.from(`fixture ${relative}\n`);
+    const content = relative.startsWith('packaging/')
+      ? await fs.readFile(path.resolve(relative))
+      : relative === 'THIRD_PARTY_NOTICES.md' ? noticeBytes
+        : includeExecutableUpdater && executableSources.has(relative)
+          ? await fs.readFile(path.resolve(executableSources.get(relative)))
+          : Buffer.from(`fixture ${relative}\n`);
     await fs.writeFile(filename, content);
   }
   await fs.writeFile(path.join(packageRoot, 'release.json'), `${JSON.stringify({
@@ -296,7 +306,7 @@ async function createBundleFixture(tag, sourceCommit, { noticeContent } = {}) {
       browser_download_url: `https://github.com/${CHAT_RELEASE_REPOSITORY}/releases/download/${tag}/${name}`,
     })),
   };
-  return { root, assets, archiveBytes, provenance, release };
+  return { root, archivePath, assets, archiveBytes, provenance, release };
 }
 
 function fixtureFetch(tag, sourceCommit, fixture, { corruptAsset, failAsset, absentRelease = false } = {}) {
@@ -322,14 +332,38 @@ function fixtureFetch(tag, sourceCommit, fixture, { corruptAsset, failAsset, abs
   };
 }
 
-function mockServiceManager({ enabled = true, restartError, stopAndDisableError } = {}) {
+function mockServiceManager({
+  enabled = true,
+  watchTimerEnabled = false,
+  restartError,
+  stopAndDisableError,
+  watchTimerEnableError,
+  watchTimerDisableError,
+  watchServiceStopError,
+} = {}) {
   const calls = [];
   let currentEnabled = enabled;
+  let currentWatchTimerEnabled = watchTimerEnabled;
   return {
     calls,
     async reload() { calls.push('reload'); },
     async isEnabled() { calls.push('is-enabled'); return currentEnabled; },
     async enable() { calls.push('enable'); currentEnabled = true; },
+    async isWatchTimerEnabled() { calls.push('watch-timer-is-enabled'); return currentWatchTimerEnabled; },
+    async enableWatchTimer() {
+      calls.push('watch-timer-enable');
+      if (watchTimerEnableError) throw watchTimerEnableError;
+      currentWatchTimerEnabled = true;
+    },
+    async disableWatchTimer() {
+      calls.push('watch-timer-disable');
+      if (watchTimerDisableError) throw watchTimerDisableError;
+      currentWatchTimerEnabled = false;
+    },
+    async stopWatchService() {
+      calls.push('watch-service-stop');
+      if (watchServiceStopError) throw watchServiceStopError;
+    },
     async restart() {
       calls.push(`restart:${CHAT_SERVICE_NAME}`);
       if (restartError) throw restartError;
@@ -355,13 +389,13 @@ async function setupFirstChatInstall(homeDir) {
   };
 }
 
-async function setupExistingChat(homeDir) {
+async function setupExistingChat(homeDir, { tag = 'v0.1.0' } = {}) {
   const root = path.join(homeDir, '.local/share/tightbeam-chat');
   const releases = path.join(root, 'releases');
-  const oldVersion = path.join(releases, 'v0.1.0');
+  const oldVersion = path.join(releases, tag);
   await fs.mkdir(oldVersion, { recursive: true });
   await fs.writeFile(path.join(oldVersion, 'installed.json'), JSON.stringify({
-    tag: 'v0.1.0', sourceCommit: SOURCE_COMMIT, assetSha256: 'a'.repeat(64),
+    tag, sourceCommit: SOURCE_COMMIT, assetSha256: 'a'.repeat(64),
   }));
   await fs.symlink(path.relative(root, oldVersion), path.join(root, 'current'));
   await fs.writeFile(path.join(oldVersion, 'public-index.fixture'), 'old release');
@@ -383,7 +417,9 @@ describe('Chat release packaging and updater', () => {
     expect(noticeText).toContain('Copyright (c) Meta Platforms, Inc. and affiliates.');
     const files = [
       'dist/chat-server/public/index.html', 'server/chat-server.mjs', 'scripts/update-chat-release.mjs',
-      'scripts/chat-release-updater.mjs', 'packaging/tightbeam-chat.service', 'LICENSE', 'THIRD_PARTY_NOTICES.md',
+      'scripts/chat-release-updater.mjs', 'scripts/chat-release-watch.mjs', 'packaging/tightbeam-chat.service',
+      'packaging/tightbeam-chat-release-watch.service', 'packaging/tightbeam-chat-release-watch.timer',
+      'LICENSE', 'THIRD_PARTY_NOTICES.md',
     ];
     for (const relative of files) {
       const filename = path.join(rootDir, relative);
@@ -410,10 +446,19 @@ describe('Chat release packaging and updater', () => {
     const members = execFileSync('tar', ['-tzf', result.assetPath], { encoding: 'utf8' });
     expect(members).toContain('./public/index.html');
     expect(members).toContain('./server/chat-server.mjs');
+    expect(members).toContain('./bin/chat-release-watch.mjs');
+    expect(members).toContain('./packaging/tightbeam-chat-release-watch.service');
+    expect(members).toContain('./packaging/tightbeam-chat-release-watch.timer');
     expect(members).toContain('./THIRD_PARTY_NOTICES.md');
     expect(members).toContain('./release.json');
     expect(execFileSync('tar', ['-xOzf', result.assetPath, './THIRD_PARTY_NOTICES.md']))
       .toEqual(notices);
+    expect(execFileSync('tar', ['-xOzf', result.assetPath, './bin/chat-release-watch.mjs']))
+      .toEqual(await fs.readFile(path.join(rootDir, 'scripts/chat-release-watch.mjs')));
+    expect(execFileSync('tar', ['-xOzf', result.assetPath, './packaging/tightbeam-chat-release-watch.service']))
+      .toEqual(await fs.readFile(path.join(rootDir, 'packaging/tightbeam-chat-release-watch.service')));
+    expect(execFileSync('tar', ['-xOzf', result.assetPath, './packaging/tightbeam-chat-release-watch.timer']))
+      .toEqual(await fs.readFile(path.join(rootDir, 'packaging/tightbeam-chat-release-watch.timer')));
   });
 
   it('publishes the checksum-bound tag only after every release asset upload is confirmed', async () => {
@@ -513,17 +558,186 @@ describe('Chat release packaging and updater', () => {
       serviceManager,
       healthCheck,
     });
-    expect(installed).toMatchObject({ tag, sourceCommit: SOURCE_COMMIT, staged: true, unchanged: false });
+    expect(installed).toMatchObject({
+      tag, sourceCommit: SOURCE_COMMIT, staged: true, unchanged: false, automaticUpdates: 'enabled',
+    });
     expect(await fs.readlink(path.join(root, 'current'))).toBe(path.relative(root, path.join(root, 'releases', tag)));
     expect(await fs.readlink(path.join(root, 'previous'))).toBe(path.relative(root, oldVersion));
     expect(serviceManager.calls).toContain('restart:tightbeam-chat.service');
     expect(serviceManager.calls).not.toContain('restart:tightbeam-gateway.service');
+    expect(serviceManager.calls).toContain('watch-timer-enable');
+    expect(await fs.readFile(path.join(homeDir, '.config/systemd/user/tightbeam-chat-release-watch.service'), 'utf8'))
+      .toBe(await fs.readFile(path.resolve('packaging/tightbeam-chat-release-watch.service'), 'utf8'));
+    expect(await fs.readFile(path.join(homeDir, '.config/systemd/user/tightbeam-chat-release-watch.timer'), 'utf8'))
+      .toBe(await fs.readFile(path.resolve('packaging/tightbeam-chat-release-watch.timer'), 'utf8'));
     expect(health).toEqual([{ tag, sourceCommit: SOURCE_COMMIT }]);
 
     const rolledBack = await rollbackChatRelease({ homeDir, serviceManager, healthCheck });
-    expect(rolledBack).toEqual({ tag: 'v0.1.0', sourceCommit: SOURCE_COMMIT });
+    expect(rolledBack).toEqual({ tag: 'v0.1.0', sourceCommit: SOURCE_COMMIT, automaticUpdates: 'disabled' });
     expect(await fs.readlink(path.join(root, 'current'))).toBe(path.relative(root, oldVersion));
     expect(await fs.readlink(path.join(root, 'previous'))).toBe(path.relative(root, path.join(root, 'releases', tag)));
+    await expect(fs.lstat(path.join(homeDir, '.config/systemd/user/tightbeam-chat-release-watch.service')))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.lstat(path.join(homeDir, '.config/systemd/user/tightbeam-chat-release-watch.timer')))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+    expect(serviceManager.calls).toContain('watch-timer-disable');
+    expect(serviceManager.calls).toContain('watch-service-stop');
+
+    const rolledForward = await rollbackChatRelease({ homeDir, serviceManager, healthCheck });
+    expect(rolledForward).toEqual({ tag, sourceCommit: SOURCE_COMMIT, automaticUpdates: 'enabled' });
+    expect(await fs.readlink(path.join(root, 'current'))).toBe(path.relative(root, path.join(root, 'releases', tag)));
+    expect(await fs.readFile(path.join(homeDir, '.config/systemd/user/tightbeam-chat-release-watch.timer'), 'utf8'))
+      .toBe(await fs.readFile(path.resolve('packaging/tightbeam-chat-release-watch.timer'), 'utf8'));
+    expect(serviceManager.calls.at(-1)).toBe('watch-timer-enable');
+  });
+
+  it('upgrades an active v0.1.1 install using the updater from the verified v0.1.2 bundle', async () => {
+    const homeDir = await temporaryDirectory('chat-updater-first-watcher-release-');
+    const { root, oldVersion } = await setupExistingChat(homeDir, { tag: 'v0.1.1' });
+    const tag = 'v0.1.2';
+    const fixture = await createBundleFixture(tag, SOURCE_COMMIT, { includeExecutableUpdater: true });
+    const assetName = `tightbeam-chat-${tag}.tar.gz`;
+    const archiveHash = crypto.createHash('sha256').update(fixture.archiveBytes).digest('hex');
+    expect(fixture.assets.get('SHA256SUMS').toString()).toBe(`${archiveHash}  ${assetName}\n`);
+    expect(JSON.parse(fixture.assets.get('release-provenance.json').toString('utf8')))
+      .toMatchObject({ tag, sourceCommit: SOURCE_COMMIT, asset: assetName, sha256: archiveHash });
+
+    const extractedDir = path.join(fixture.root, 'verified');
+    await fs.mkdir(extractedDir);
+    execFileSync('tar', ['-xzf', fixture.archivePath, '-C', extractedDir]);
+    const fixturePath = path.join(fixture.root, 'published-release.json');
+    await fs.writeFile(fixturePath, JSON.stringify({
+      release: fixture.release,
+      sourceCommit: SOURCE_COMMIT,
+      assets: Object.fromEntries([...fixture.assets].map(([name, bytes]) => [name, bytes.toString('base64')])),
+    }));
+    const bootstrapScript = path.join(extractedDir, 'verify-first-upgrade.mjs');
+    await fs.writeFile(bootstrapScript, `
+      import fs from 'node:fs/promises';
+      import { installChatRelease } from './bin/chat-release-updater.mjs';
+
+      const fixture = JSON.parse(await fs.readFile(process.argv[2], 'utf8'));
+      const homeDir = process.argv[3];
+      const tag = process.argv[4];
+      const repository = 'clickety-clacks/tightbeam-chat';
+      const releaseUrl = 'https://api.github.com/repos/' + repository + '/releases/tags/' + encodeURIComponent(tag);
+      const commitUrl = 'https://api.github.com/repos/' + repository + '/commits/' + encodeURIComponent(tag);
+      const calls = [];
+      let watchTimerEnabled = false;
+      const serviceManager = {
+        async reload() { calls.push('reload'); },
+        async isEnabled() { calls.push('is-enabled'); return true; },
+        async enable() { calls.push('enable'); },
+        async isWatchTimerEnabled() { calls.push('watch-timer-is-enabled'); return watchTimerEnabled; },
+        async enableWatchTimer() { calls.push('watch-timer-enable'); watchTimerEnabled = true; },
+        async disableWatchTimer() { calls.push('watch-timer-disable'); watchTimerEnabled = false; },
+        async stopWatchService() { calls.push('watch-service-stop'); },
+        async restart() { calls.push('restart'); },
+        async stopAndDisable() { calls.push('stop-and-disable'); },
+      };
+      const fetchImpl = async (request) => {
+        const url = new URL(request);
+        if (url.href === releaseUrl) {
+          return new Response(JSON.stringify(fixture.release), { headers: { 'content-type': 'application/json' } });
+        }
+        if (url.href === commitUrl) {
+          return new Response(JSON.stringify({ sha: fixture.sourceCommit }), { headers: { 'content-type': 'application/json' } });
+        }
+        const name = decodeURIComponent(url.pathname.split('/').at(-1));
+        const encoded = fixture.assets[name];
+        return encoded ? new Response(Buffer.from(encoded, 'base64')) : new Response('', { status: 404 });
+      };
+      const health = [];
+      const result = await installChatRelease(tag, {
+        homeDir,
+        fetchImpl,
+        serviceManager,
+        healthCheck: async (expected) => { health.push(expected); return expected; },
+      });
+      process.stdout.write(JSON.stringify({ result, calls, health }));
+    `);
+    const bootstrap = JSON.parse(execFileSync(process.execPath, [bootstrapScript, fixturePath, homeDir, tag], {
+      encoding: 'utf8',
+    }));
+
+    expect(bootstrap.result).toMatchObject({
+      tag, sourceCommit: SOURCE_COMMIT, staged: true, automaticUpdates: 'enabled',
+    });
+    expect(await fs.readlink(path.join(root, 'current')))
+      .toBe(path.relative(root, path.join(root, 'releases', tag)));
+    expect(await fs.readlink(path.join(root, 'previous'))).toBe(path.relative(root, oldVersion));
+    expect(await fs.readFile(path.join(homeDir, '.config/systemd/user/tightbeam-chat-release-watch.service'), 'utf8'))
+      .toBe(await fs.readFile(path.resolve('packaging/tightbeam-chat-release-watch.service'), 'utf8'));
+    expect(await fs.readFile(path.join(homeDir, '.config/systemd/user/tightbeam-chat-release-watch.timer'), 'utf8'))
+      .toBe(await fs.readFile(path.resolve('packaging/tightbeam-chat-release-watch.timer'), 'utf8'));
+    expect(bootstrap.calls).toContain('restart');
+    expect(bootstrap.calls).toContain('watch-timer-enable');
+    expect(bootstrap.calls).not.toContain('restart:tightbeam-gateway.service');
+    expect(bootstrap.health).toEqual([{ tag, sourceCommit: SOURCE_COMMIT }]);
+  });
+
+  it('keeps an intentionally disabled watcher disabled across later releases', async () => {
+    const homeDir = await temporaryDirectory('chat-updater-watch-disabled-');
+    const { root } = await setupExistingChat(homeDir);
+    const serviceManager = mockServiceManager();
+    const healthCheck = async (expected) => expected;
+    const firstTag = 'v1.2.2';
+    const firstFixture = await createBundleFixture(firstTag, SOURCE_COMMIT);
+    await installChatRelease(firstTag, {
+      homeDir,
+      fetchImpl: fixtureFetch(firstTag, SOURCE_COMMIT, firstFixture),
+      serviceManager,
+      healthCheck,
+    });
+    await serviceManager.disableWatchTimer();
+    const enableCallsBeforeUpdate = serviceManager.calls.filter((call) => call === 'watch-timer-enable').length;
+
+    const nextTag = 'v1.2.3';
+    const nextFixture = await createBundleFixture(nextTag, SOURCE_COMMIT);
+    const updated = await installChatRelease(nextTag, {
+      homeDir,
+      fetchImpl: fixtureFetch(nextTag, SOURCE_COMMIT, nextFixture),
+      serviceManager,
+      healthCheck,
+    });
+
+    expect(updated).toMatchObject({ tag: nextTag, automaticUpdates: 'disabled' });
+    expect(serviceManager.calls.filter((call) => call === 'watch-timer-enable')).toHaveLength(enableCallsBeforeUpdate);
+    expect(await fs.readFile(path.join(homeDir, '.config/systemd/user/tightbeam-chat-release-watch.timer'), 'utf8'))
+      .toBe(await fs.readFile(path.resolve('packaging/tightbeam-chat-release-watch.timer'), 'utf8'));
+    expect(await fs.readlink(path.join(root, 'current'))).toBe(path.relative(root, path.join(root, 'releases', nextTag)));
+  });
+
+  it('installs missing watcher units when the current release is already active', async () => {
+    const homeDir = await temporaryDirectory('chat-updater-watch-bootstrap-');
+    const { root } = await setupExistingChat(homeDir);
+    const tag = 'v1.2.3';
+    const fixture = await createBundleFixture(tag, SOURCE_COMMIT);
+    const releaseDir = path.join(root, 'releases', tag);
+    await fs.mkdir(releaseDir, { recursive: true });
+    execFileSync('tar', ['-xzf', fixture.archivePath, '-C', releaseDir]);
+    await fs.writeFile(path.join(releaseDir, 'installed.json'), JSON.stringify({
+      tag,
+      sourceCommit: SOURCE_COMMIT,
+      assetSha256: crypto.createHash('sha256').update(fixture.archiveBytes).digest('hex'),
+    }));
+    await fs.rm(path.join(root, 'current'));
+    await fs.symlink(path.relative(root, releaseDir), path.join(root, 'current'));
+    const serviceManager = mockServiceManager();
+
+    const bootstrapped = await installChatRelease(tag, {
+      homeDir,
+      fetchImpl: fixtureFetch(tag, SOURCE_COMMIT, fixture),
+      serviceManager,
+      healthCheck: async (expected) => expected,
+    });
+
+    expect(bootstrapped).toMatchObject({ tag, unchanged: true, automaticUpdates: 'enabled' });
+    expect(serviceManager.calls).toEqual([
+      'is-enabled', 'watch-timer-is-enabled', 'reload', 'watch-timer-enable',
+    ]);
+    expect(await fs.readFile(path.join(homeDir, '.config/systemd/user/tightbeam-chat-release-watch.timer'), 'utf8'))
+      .toBe(await fs.readFile(path.resolve('packaging/tightbeam-chat-release-watch.timer'), 'utf8'));
   });
 
   it('refuses an incomplete React runtime notice before changing the active release or service', async () => {
@@ -590,7 +804,8 @@ describe('Chat release packaging and updater', () => {
     await expect(fs.lstat(path.join(root, 'current'))).rejects.toMatchObject({ code: 'ENOENT' });
     await expect(fs.lstat(unitPath)).rejects.toMatchObject({ code: 'ENOENT' });
     expect(serviceManager.calls).toEqual([
-      'reload', 'enable', 'restart:tightbeam-chat.service', 'stop-and-disable', 'reload',
+      'watch-timer-is-enabled', 'reload', 'enable', 'restart:tightbeam-chat.service',
+      'watch-timer-is-enabled', 'watch-service-stop', 'reload', 'stop-and-disable', 'reload',
     ]);
   });
 
@@ -615,8 +830,34 @@ describe('Chat release packaging and updater', () => {
     expect(await fs.readlink(path.join(root, 'current'))).toBe(path.relative(root, path.join(root, 'releases', tag)));
     await expect(fs.readFile(unitPath, 'utf8')).resolves.toBe(await fs.readFile(path.resolve('packaging/tightbeam-chat.service'), 'utf8'));
     expect(serviceManager.calls).toEqual([
-      'reload', 'enable', 'restart:tightbeam-chat.service', 'stop-and-disable',
+      'watch-timer-is-enabled', 'reload', 'enable', 'restart:tightbeam-chat.service',
+      'watch-timer-is-enabled', 'watch-service-stop', 'reload', 'stop-and-disable',
     ]);
+  });
+
+  it('restores the prior Chat release if the new automatic-update timer cannot be enabled', async () => {
+    const homeDir = await temporaryDirectory('chat-updater-watch-enable-failed-');
+    const { root, oldVersion } = await setupExistingChat(homeDir);
+    const tag = 'v1.2.3';
+    const fixture = await createBundleFixture(tag, SOURCE_COMMIT);
+    const serviceManager = mockServiceManager({
+      watchTimerEnableError: new Error('watch timer could not be enabled'),
+    });
+    const health = [];
+
+    await expect(installChatRelease(tag, {
+      homeDir,
+      fetchImpl: fixtureFetch(tag, SOURCE_COMMIT, fixture),
+      serviceManager,
+      healthCheck: async (expected) => { health.push(expected.tag); return expected; },
+    })).rejects.toThrow(/watch timer could not be enabled.*prior Chat version was restored/);
+
+    expect(health).toEqual([tag, 'v0.1.0']);
+    expect(await fs.readlink(path.join(root, 'current'))).toBe(path.relative(root, oldVersion));
+    await expect(fs.lstat(path.join(homeDir, '.config/systemd/user/tightbeam-chat-release-watch.service')))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.lstat(path.join(homeDir, '.config/systemd/user/tightbeam-chat-release-watch.timer')))
+      .rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('restores the previous Chat pointer and service when the new version fails its served-version check', async () => {
@@ -640,7 +881,9 @@ describe('Chat release packaging and updater', () => {
     expect(await fs.readlink(path.join(root, 'current'))).toBe(path.relative(root, oldVersion));
     expect(await fs.lstat(path.join(root, 'previous')).then(() => true, () => false)).toBe(false);
     expect(serviceManager.calls).toEqual([
-      'is-enabled', 'reload', 'restart:tightbeam-chat.service', 'reload', 'restart:tightbeam-chat.service',
+      'is-enabled', 'watch-timer-is-enabled', 'reload', 'restart:tightbeam-chat.service',
+      'watch-timer-is-enabled', 'watch-service-stop', 'reload', 'reload',
+      'restart:tightbeam-chat.service',
     ]);
   });
 });

@@ -1,0 +1,11 @@
+[Unit]
+Description=Check periodically for a published Tightbeam Chat release
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+RandomizedDelaySec=5m
+Unit=tightbeam-chat-release-watch.service
+
+[Install]
+WantedBy=timers.target
