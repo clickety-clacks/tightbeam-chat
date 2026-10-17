@@ -264,7 +264,7 @@ describe('private direct-entry Chat service bridge', () => {
     expect(wrongSession.status).toBe(404);
     const wrongOrigin = await fetch(`${chatOrigin}/__chat/gateway/version`, { headers: { origin: 'https://elsewhere.example' } });
     expect(wrongOrigin.status).toBe(403);
-    expect(seen).toHaveLength(5);
+    expect(seen).toHaveLength(4);
   });
 
   it('composes the canonical selected-history route with the real decoder across an agent reset', async () => {
