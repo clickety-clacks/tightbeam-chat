@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { updateToLatestChatRelease } from '../scripts/chat-release-watch.mjs';
 
 const LATEST_URL = 'https://api.github.com/repos/clickety-clacks/tightbeam-chat/releases/latest';
@@ -217,4 +219,47 @@ test('does not hold a tag when the updater failure did not restore the prior rel
   await assert.rejects(fs.readFile(failedTagPath, 'utf8'), { code: 'ENOENT' });
   await assert.rejects(update(), /Temporary download failure/);
   assert.equal(updaterInvocations, 2);
+});
+
+test('runs the watcher when the service starts it through the current-release symlink', async () => {
+  const homeDir = await fs.mkdtemp(path.join(os.tmpdir(), 'chat-release-watch-symlink-'));
+  try {
+    const installRoot = path.join(homeDir, '.local/share/tightbeam-chat');
+    const releaseRoot = path.join(installRoot, 'releases/v0.1.2');
+    const releaseBin = path.join(releaseRoot, 'bin');
+    await fs.mkdir(releaseBin, { recursive: true });
+    await fs.writeFile(path.join(releaseRoot, 'installed.json'), JSON.stringify({ tag: 'v0.1.2' }));
+    await fs.copyFile(
+      fileURLToPath(new URL('../scripts/chat-release-watch.mjs', import.meta.url)),
+      path.join(releaseBin, 'chat-release-watch.mjs'),
+    );
+    await fs.symlink(path.relative(installRoot, releaseRoot), path.join(installRoot, 'current'), 'dir');
+
+    const fetchMarker = path.join(homeDir, 'latest-release-requested.txt');
+    const preloadPath = path.join(homeDir, 'mock-latest-release.mjs');
+    await fs.writeFile(preloadPath, [
+      "import { writeFileSync } from 'node:fs';",
+      `globalThis.fetch = async (url) => {`,
+      `  if (url !== ${JSON.stringify(LATEST_URL)}) throw new Error('Unexpected release URL.');`,
+      `  writeFileSync(${JSON.stringify(fetchMarker)}, String(url));`,
+      "  return { ok: true, json: async () => ({ tag_name: 'v0.1.2', draft: false, prerelease: false, published_at: '2026-10-16T00:00:00Z' }) };",
+      '};',
+    ].join('\n'));
+
+    const invokedPath = path.join(installRoot, 'current/bin/chat-release-watch.mjs');
+    const child = spawnSync(process.execPath, ['--import', preloadPath, invokedPath], {
+      cwd: homeDir,
+      env: { HOME: homeDir, USERPROFILE: homeDir, PATH: process.env.PATH },
+      encoding: 'utf8',
+      timeout: 10_000,
+    });
+
+    assert.equal(child.error, undefined);
+    assert.equal(child.status, 0, child.stderr);
+    assert.equal(child.stdout, '{"action":"already-current","installedTag":"v0.1.2","latestTag":"v0.1.2"}\n');
+    assert.equal(child.stderr, '');
+    assert.equal(await fs.readFile(fetchMarker, 'utf8'), LATEST_URL);
+  } finally {
+    await fs.rm(homeDir, { recursive: true, force: true });
+  }
 });
