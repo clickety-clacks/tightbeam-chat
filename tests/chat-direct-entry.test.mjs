@@ -414,7 +414,7 @@ describe('private direct-entry Chat service bridge', () => {
       await listen(chat, chatPort);
       const response = await fetch(`${chatOrigin}/__chat/gateway/version?gateway=${encodeURIComponent(gatewayOrigin)}`,
         { headers: { origin: chatOrigin } },
-      });
+      );
       expect(response.status).toBe(503);
       expect(await response.json()).toEqual({ error: { code: 'chat_service_unconfigured' } });
       await closeServer(chat);
