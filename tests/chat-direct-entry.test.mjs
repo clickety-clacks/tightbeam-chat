@@ -329,7 +329,7 @@ describe('private direct-entry Chat service bridge', () => {
     const transcript = await fetch(
       `${chatOrigin}/__chat/api/sessions/${encodeURIComponent(LINKED_SESSION)}/messages?${selectedQuery}&limit=50&tail=true`,
       { headers: { origin: chatOrigin } },
-    });
+    );
     expect(transcript.status).toBe(200);
     expect((await transcript.json()).items).toEqual([]);
     expect(selectedFixture.seen.map((row) => row.url)).toEqual([
@@ -359,7 +359,7 @@ describe('private direct-entry Chat service bridge', () => {
       const unavailable = await fetch(
         `${chatOrigin}/__chat/gateway/version?gateway=${encodeURIComponent(gateway)}`,
         { headers: { origin: chatOrigin } },
-      });
+      );
       expect(unavailable.status).toBe(503);
       expect(await unavailable.json()).toEqual({ error: { code: 'chat_gateway_unavailable' } });
     }
