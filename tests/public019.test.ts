@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { createTightbeamAdapter } from '../src/runtime';
 import {
   PUBLIC_019_BUILD, PUBLIC_019_GATEWAY_SHA, PUBLIC_019_BUILD_2844, PUBLIC_019_GATEWAY_SHA_2844,
+  PUBLIC_019_SOURCE_2857, PUBLIC_019_BUILD_2857, PUBLIC_019_GATEWAY_SHA_2857,
+  PUBLIC_019_SOURCE_2887, PUBLIC_019_BUILD_2887, PUBLIC_019_GATEWAY_SHA_2887,
   createPublic019Transport, decodePublic019Message,
   decodePublic019Notice, type Public019Channel, type Public019Host,
 } from '../src/public019';
@@ -11,6 +13,8 @@ const sessionKey = 's-public';
 const identity = { principalKey: 'person-1', deviceId: 'device-1' };
 const version = { server: 'tightbeam', version: '0.1.9', build: PUBLIC_019_BUILD, sha: PUBLIC_019_GATEWAY_SHA, protocolVersion: 1 };
 const assessed2844 = { ...version, build: PUBLIC_019_BUILD_2844, sha: PUBLIC_019_GATEWAY_SHA_2844 };
+const identified2857 = { ...version, build: PUBLIC_019_BUILD_2857, sha: PUBLIC_019_GATEWAY_SHA_2857 };
+const identified2887 = { ...version, build: PUBLIC_019_BUILD_2887, sha: PUBLIC_019_GATEWAY_SHA_2887 };
 const item = {
   id: 'm_1', seq: 9, sessionKey, role: 'user', content: 'hello', at: Date.parse('2026-10-12T00:00:00Z'),
   sender: 'person-1', deviceId: 'device-1', clientMessageId: 'c_1', attachments: [],
@@ -34,7 +38,7 @@ class Channel implements Public019Channel {
   disconnect() { this.disconnected?.(); }
 }
 
-function setup(heartbeatTimeoutMs?: number, observedVersion = version, configuredVersion = observedVersion) {
+function setup(heartbeatTimeoutMs?: number, observedVersion = version, configuredVersion = observedVersion, historyItems: unknown[] = [item]) {
   const changes = new Channel();
   const human = new Channel();
   const paths: string[] = [];
@@ -43,7 +47,7 @@ function setup(heartbeatTimeoutMs?: number, observedVersion = version, configure
     fetch: async (path) => {
       paths.push(path);
       const body = path.endsWith('/version') ? observedVersion : path.includes('/messages?')
-        ? { schemaVersion: 1, resource: 'transcript messages', items: [item],
+        ? { schemaVersion: 1, resource: 'transcript messages', items: historyItems,
           page: { oldestCursor: 'older-cursor', hasMoreBefore: true } }
         : { schemaVersion: 1, resource: 'sessions', item: session };
       return new Response(JSON.stringify(body), { status: 200 });
@@ -59,6 +63,93 @@ function setup(heartbeatTimeoutMs?: number, observedVersion = version, configure
 }
 
 describe('public 0.1.9 released wire mapping and capability gates', () => {
+  it('identifies Gateway 0.1.9+2857 exactly while keeping unqualified capabilities disabled', async () => {
+    expect(PUBLIC_019_SOURCE_2857).toBe('45580d9ebac42218bbf35e1ce9694d536b378d76');
+    const candidate = setup(undefined, identified2857);
+    expect(candidate.profile.identity).toBe('0.1.9+2857/45580d9e');
+    expect(candidate.profile.capabilities).toEqual({
+      newestTail: false, stableOlderCursor: false, retainedHistoryAcrossResets: false,
+      orderedTransitions: false, snapshotCoverage: false, versionedNotices: false,
+      humanSendDedupe: false,
+    });
+    expect(await candidate.transport.inspectTarget(new AbortController().signal)).toEqual({
+      identity: candidate.profile.identity, capabilities: candidate.profile.capabilities,
+    });
+
+    const runtime = createTightbeamAdapter(candidate.transport, candidate.profile).open(sessionKey);
+    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('unsupported'));
+    expect(candidate.changes.sent).toHaveLength(0);
+    expect(candidate.human.sent).toHaveLength(0);
+    expect(runtime.send('must not post')).toBeNull();
+    runtime.dispose();
+  });
+
+  it('qualifies ordered 2887 transitions and opens only after its exact profile passes the capability gate', async () => {
+    expect(PUBLIC_019_SOURCE_2887).toBe('0198c918dbd86861297aca19e7c3dc583943bbac');
+    const earlierTransition = { ...item, id: 'marker_before', seq: 8, rowVersion: 8,
+      messageType: 'marker', marker: { kind: 'session-restart', from: 'old', to: 'new' } };
+    const laterTransition = { ...item, id: 'marker_after', seq: 10, rowVersion: 10,
+      messageType: 'marker', marker: { kind: 'harness-switch', from: 'old-harness', to: 'new-harness' } };
+    const candidate = setup(undefined, identified2887, identified2887,
+      [laterTransition, item, earlierTransition]);
+    expect(candidate.profile.identity).toBe('0.1.9+2887/0198c918');
+    expect(candidate.profile.capabilities).toEqual({
+      newestTail: true, stableOlderCursor: true, retainedHistoryAcrossResets: true,
+      orderedTransitions: true, snapshotCoverage: true, versionedNotices: true,
+      humanSendDedupe: true,
+    });
+    expect(await candidate.transport.inspectTarget(new AbortController().signal)).toEqual({
+      identity: candidate.profile.identity, capabilities: candidate.profile.capabilities,
+    });
+
+    candidate.paths.length = 0;
+    const runtime = createTightbeamAdapter(candidate.transport, candidate.profile).open(sessionKey);
+    await vi.waitFor(() => expect(candidate.changes.sent).toEqual([{
+      type: 'subscribe', protocolVersion: 2, subscriptionId: `chat:${sessionKey}`,
+      filters: { sessionKey },
+    }]));
+    expect(candidate.paths).toEqual(['https://host.example/version']);
+    candidate.changes.emit({ type: 'subscription_ready', subscriptionId: `chat:${sessionKey}` });
+    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+    expect(candidate.paths).toEqual([
+      'https://host.example/version',
+      'https://host.example/api/sessions/s-public',
+      'https://host.example/api/sessions/s-public/messages?limit=50&tail=true',
+    ]);
+    expect(runtime.getSnapshot().records.map((record) => record.id))
+      .toEqual(['marker_before', 'm_1', 'marker_after']);
+    expect(runtime.getSnapshot().records.map((record) => record.kind))
+      .toEqual(['transition', 'message', 'transition']);
+    expect(candidate.changes.sent).toHaveLength(1);
+    expect(candidate.human.sent).toHaveLength(0);
+    runtime.dispose();
+  });
+
+  it('uses 2887 subscribe-before-REST overlap for snapshot coverage, without a watermark claim', async () => {
+    const candidate = setup(undefined, identified2887);
+    const signal = new AbortController().signal;
+    expect(candidate.profile.capabilities.snapshotCoverage).toBe(true);
+
+    const pending = candidate.transport.openChanges(sessionKey, {
+      onNotice: () => {}, onDoubt: () => {},
+    }, signal);
+    await vi.waitFor(() => expect(candidate.changes.sent).toEqual([{
+      type: 'subscribe', protocolVersion: 2, subscriptionId: `chat:${sessionKey}`,
+      filters: { sessionKey },
+    }]));
+    candidate.changes.emit({ type: 'subscription_ready', subscriptionId: `chat:${sessionKey}` });
+    const connection = await pending;
+
+    const page = await candidate.transport.readTail(sessionKey, signal);
+    expect(candidate.paths).toEqual([
+      'https://host.example/api/sessions/s-public/messages?limit=50&tail=true',
+    ]);
+    expect(candidate.transport.proveCoverage({ sessionKey, rowVersion: 4, raw: {} }, page, [])).toBe(true);
+
+    connection.close();
+    expect(candidate.transport.proveCoverage({ sessionKey, rowVersion: 4, raw: {} }, page, [])).toBe(false);
+  });
+
   it('opens only either assessed build/SHA pair and refuses unexamined or mixed pairs', async () => {
     for (const observed of [{ ...version, build: version.build + 1 },
       { ...version, sha: '00000000' },
@@ -95,6 +186,16 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
       expect(runtime.send('must not post')).toBeNull();
       runtime.dispose();
     }
+
+    const mismatched2887 = setup(undefined, { ...identified2887, sha: '00000000' }, identified2887);
+    expect(await mismatched2887.transport.inspectTarget(new AbortController().signal)).toEqual({
+      identity: '0.1.9+2887/00000000',
+      capabilities: {
+        newestTail: false, stableOlderCursor: false, retainedHistoryAcrossResets: false,
+        orderedTransitions: false, snapshotCoverage: false, versionedNotices: false,
+        humanSendDedupe: false,
+      },
+    });
   });
 
   it('refreshes activity after a committed turn arrives during the history read', async () => {
@@ -243,12 +344,15 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
     expect(transport.proveCoverage({ sessionKey, rowVersion: 4, raw: {} }, page, [])).toBe(false);
   });
 
-  it('decodes all released stored marker kinds without guessing from message text', () => {
+  it('keeps failed-park recovery lifecycle-only and decodes the projected transcript markers', () => {
     for (const [kind, transition] of [['harness-switch', 'harness'], ['model-retune', 'model'], ['session-restart', 'restart']]) {
       expect(decodePublic019Message({ ...item, messageType: 'marker',
         marker: { kind, from: 'old', to: 'new' } }, sessionKey)).toMatchObject({ kind: 'transition', transition, from: 'old', to: 'new' });
     }
     expect(() => decodePublic019Message({ ...item, messageType: 'marker' }, sessionKey)).toThrow(UnsupportedTargetError);
+    expect(() => decodePublic019Message({ ...item, messageType: 'marker',
+      marker: { kind: 'harness_failed_park_reconciled', from: 'parked', to: 'reconciled' } }, sessionKey))
+      .toThrow('Unknown stored marker kind.');
   });
 
   it('decodes protocol-2 selected-session notices and refuses fabricated marker data', () => {
@@ -265,6 +369,9 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
       .toEqual({ operation: 'observe', sessionKey, resource: 'turn.started' });
     expect(decodePublic019Notice({ ...notice, class: 'wake.fired', resource: 'wakes' }, sessionKey))
       .toEqual({ operation: 'observe', sessionKey, resource: 'wake.fired' });
+    expect(decodePublic019Notice({ ...notice,
+      class: 'lifecycle.harness_failed_park_reconciled', op: 'observe', resource: undefined }, sessionKey))
+      .toEqual({ operation: 'ignore', sessionKey, resource: 'lifecycle.harness_failed_park_reconciled' });
     for (const observationalClass of ['verb.accepted', 'verb.denied', 'rail.denied',
       'lifecycle.boot', 'prod.fired']) {
       expect(decodePublic019Notice({ ...notice, class: observationalClass,

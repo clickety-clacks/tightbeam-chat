@@ -25,8 +25,31 @@ export const PUBLIC_019_GATEWAY_SHA = 'f724fc41';
 export const PUBLIC_019_SOURCE_2844 = 'ad3e0f802d5706f6ab77bae8f84c87492ba2cf56';
 export const PUBLIC_019_BUILD_2844 = 2844;
 export const PUBLIC_019_GATEWAY_SHA_2844 = 'ad3e0f80';
+/** Exact Gateway release identity; its behavior remains unqualified here. */
+export const PUBLIC_019_SOURCE_2857 = '45580d9ebac42218bbf35e1ce9694d536b378d76';
+export const PUBLIC_019_BUILD_2857 = 2857;
+export const PUBLIC_019_GATEWAY_SHA_2857 = '45580d9e';
+/** Current exact Gateway source identity compared for selected Chat paths. */
+export const PUBLIC_019_SOURCE_2887 = '0198c918dbd86861297aca19e7c3dc583943bbac';
+export const PUBLIC_019_BUILD_2887 = 2887;
+export const PUBLIC_019_GATEWAY_SHA_2887 = '0198c918';
 
 const capabilities: TargetCapabilities = Object.freeze({
+  newestTail: true,
+  stableOlderCursor: true,
+  retainedHistoryAcrossResets: true,
+  orderedTransitions: true,
+  snapshotCoverage: true,
+  versionedNotices: true,
+  humanSendDedupe: true,
+});
+
+// The source comparison supports these individual 2887 paths. Its additional
+// failed-park reconciliation is lifecycle-only, not a transcript marker;
+// visible transitions remain the canonical markers projected by the Gateway.
+// Snapshot coverage is the Chat client's subscribe-before-REST overlap, not a
+// Gateway snapshot watermark.
+const capabilities2887: TargetCapabilities = Object.freeze({
   newestTail: true,
   stableOlderCursor: true,
   retainedHistoryAcrossResets: true,
@@ -42,6 +65,13 @@ const unsupportedCapabilities: TargetCapabilities = Object.freeze({
   humanSendDedupe: false,
 });
 
+function sourceBackedCapabilities(build: number, sha: string): TargetCapabilities | undefined {
+  if ((build === PUBLIC_019_BUILD && sha === PUBLIC_019_GATEWAY_SHA) ||
+      (build === PUBLIC_019_BUILD_2844 && sha === PUBLIC_019_GATEWAY_SHA_2844)) return capabilities;
+  if (build === PUBLIC_019_BUILD_2887 && sha === PUBLIC_019_GATEWAY_SHA_2887) return capabilities2887;
+  return undefined;
+}
+
 // These released Firehose classes report actions, not canonical row changes.
 const observationalClasses = new Set([
   'verb.accepted', 'verb.denied', 'rail.denied', 'lifecycle.boot',
@@ -52,6 +82,8 @@ const observationalClasses = new Set([
   'lifecycle.terminal_credential_recovery_claimed',
   'lifecycle.terminal_credential_recovery_outcome',
   'lifecycle.terminal_credential_resolved',
+  // Lifecycle bookkeeping, not a user-visible transcript transition.
+  'lifecycle.harness_failed_park_reconciled',
 ]);
 
 /** A fresh, host-authenticated socket. The host owns credentials and the auth handshake. */
@@ -236,12 +268,11 @@ export function createPublic019Transport(config: Public019Config): { transport: 
   }
   const expectedIdentity = identity('0.1.9', config.build, config.sha);
   const gatewayVersionPath = config.gatewayVersionPath ?? '/version';
-  const sourceBacked = (config.build === PUBLIC_019_BUILD && config.sha === PUBLIC_019_GATEWAY_SHA) ||
-    (config.build === PUBLIC_019_BUILD_2844 && config.sha === PUBLIC_019_GATEWAY_SHA_2844);
+  const supportedCapabilities = sourceBackedCapabilities(config.build, config.sha);
   const profile: TargetProfile = Object.freeze({
     identity: expectedIdentity,
     label: `Tightbeam 0.1.9 build ${config.build}`,
-    capabilities: sourceBacked ? capabilities : unsupportedCapabilities,
+    capabilities: supportedCapabilities ?? unsupportedCapabilities,
   });
 
   async function get(path: string, signal: AbortSignal): Promise<Record<string, unknown>> {
@@ -276,7 +307,8 @@ export function createPublic019Transport(config: Public019Config): { transport: 
       const version = await get(gatewayVersionPath, signal);
       const observed = identity(String(version.version), Number(version.build), String(version.sha));
       return { identity: observed,
-        capabilities: sourceBacked && observed === expectedIdentity ? capabilities : unsupportedCapabilities };
+        capabilities: supportedCapabilities && observed === expectedIdentity
+          ? supportedCapabilities : unsupportedCapabilities };
     },
     async readSession(sessionKey, signal) {
       const body = await get(`/api/sessions/${encodeURIComponent(sessionKey)}`, signal);
