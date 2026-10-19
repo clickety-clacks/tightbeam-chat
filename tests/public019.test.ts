@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createTightbeamAdapter } from '../src/runtime';
 import {
   PUBLIC_019_BUILD, PUBLIC_019_GATEWAY_SHA, PUBLIC_019_BUILD_2844, PUBLIC_019_GATEWAY_SHA_2844,
+  PUBLIC_019_SOURCE_2857, PUBLIC_019_BUILD_2857, PUBLIC_019_GATEWAY_SHA_2857,
   createPublic019Transport, decodePublic019Message,
   decodePublic019Notice, type Public019Channel, type Public019Host,
 } from '../src/public019';
@@ -11,6 +12,7 @@ const sessionKey = 's-public';
 const identity = { principalKey: 'person-1', deviceId: 'device-1' };
 const version = { server: 'tightbeam', version: '0.1.9', build: PUBLIC_019_BUILD, sha: PUBLIC_019_GATEWAY_SHA, protocolVersion: 1 };
 const assessed2844 = { ...version, build: PUBLIC_019_BUILD_2844, sha: PUBLIC_019_GATEWAY_SHA_2844 };
+const identified2857 = { ...version, build: PUBLIC_019_BUILD_2857, sha: PUBLIC_019_GATEWAY_SHA_2857 };
 const item = {
   id: 'm_1', seq: 9, sessionKey, role: 'user', content: 'hello', at: Date.parse('2026-10-12T00:00:00Z'),
   sender: 'person-1', deviceId: 'device-1', clientMessageId: 'c_1', attachments: [],
@@ -59,6 +61,27 @@ function setup(heartbeatTimeoutMs?: number, observedVersion = version, configure
 }
 
 describe('public 0.1.9 released wire mapping and capability gates', () => {
+  it('identifies Gateway 0.1.9+2857 exactly while keeping unqualified capabilities disabled', async () => {
+    expect(PUBLIC_019_SOURCE_2857).toBe('45580d9ebac42218bbf35e1ce9694d536b378d76');
+    const candidate = setup(undefined, identified2857);
+    expect(candidate.profile.identity).toBe('0.1.9+2857/45580d9e');
+    expect(candidate.profile.capabilities).toEqual({
+      newestTail: false, stableOlderCursor: false, retainedHistoryAcrossResets: false,
+      orderedTransitions: false, snapshotCoverage: false, versionedNotices: false,
+      humanSendDedupe: false,
+    });
+    expect(await candidate.transport.inspectTarget(new AbortController().signal)).toEqual({
+      identity: candidate.profile.identity, capabilities: candidate.profile.capabilities,
+    });
+
+    const runtime = createTightbeamAdapter(candidate.transport, candidate.profile).open(sessionKey);
+    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('unsupported'));
+    expect(candidate.changes.sent).toHaveLength(0);
+    expect(candidate.human.sent).toHaveLength(0);
+    expect(runtime.send('must not post')).toBeNull();
+    runtime.dispose();
+  });
+
   it('opens only either assessed build/SHA pair and refuses unexamined or mixed pairs', async () => {
     for (const observed of [{ ...version, build: version.build + 1 },
       { ...version, sha: '00000000' },

@@ -25,6 +25,10 @@ export const PUBLIC_019_GATEWAY_SHA = 'f724fc41';
 export const PUBLIC_019_SOURCE_2844 = 'ad3e0f802d5706f6ab77bae8f84c87492ba2cf56';
 export const PUBLIC_019_BUILD_2844 = 2844;
 export const PUBLIC_019_GATEWAY_SHA_2844 = 'ad3e0f80';
+/** Exact Gateway release identity; its behavior remains unqualified here. */
+export const PUBLIC_019_SOURCE_2857 = '45580d9ebac42218bbf35e1ce9694d536b378d76';
+export const PUBLIC_019_BUILD_2857 = 2857;
+export const PUBLIC_019_GATEWAY_SHA_2857 = '45580d9e';
 
 const capabilities: TargetCapabilities = Object.freeze({
   newestTail: true,
