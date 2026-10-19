@@ -150,7 +150,7 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
 
     const mismatched2887 = setup(undefined, { ...identified2887, sha: '00000000' }, identified2887);
     expect(await mismatched2887.transport.inspectTarget(new AbortController().signal)).toEqual({
-      identity: mismatched2887.profile.identity,
+      identity: '0.1.9+2887/00000000',
       capabilities: {
         newestTail: false, stableOlderCursor: false, retainedHistoryAcrossResets: false,
         orderedTransitions: false, snapshotCoverage: false, versionedNotices: false,
