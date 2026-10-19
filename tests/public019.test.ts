@@ -84,13 +84,13 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
     runtime.dispose();
   });
 
-  it('maps only source-backed 2887 paths and keeps aggregate transition and snapshot coverage disabled', async () => {
+  it('maps source-backed 2887 paths and keeps only the unmapped aggregate transition disabled', async () => {
     expect(PUBLIC_019_SOURCE_2887).toBe('0198c918dbd86861297aca19e7c3dc583943bbac');
     const candidate = setup(undefined, identified2887);
     expect(candidate.profile.identity).toBe('0.1.9+2887/0198c918');
     expect(candidate.profile.capabilities).toEqual({
       newestTail: true, stableOlderCursor: true, retainedHistoryAcrossResets: true,
-      orderedTransitions: false, snapshotCoverage: false, versionedNotices: true,
+      orderedTransitions: false, snapshotCoverage: true, versionedNotices: true,
       humanSendDedupe: true,
     });
     expect(await candidate.transport.inspectTarget(new AbortController().signal)).toEqual({
@@ -98,8 +98,8 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
     });
 
     // The runtime still requires the full capability set, so the partial 2887
-    // profile is identified but cannot open a session until its remaining
-    // guarantees are qualified.
+    // profile is identified but cannot open a session until its aggregate
+    // transition guarantee is qualified.
     candidate.paths.length = 0;
     const runtime = createTightbeamAdapter(candidate.transport, candidate.profile).open(sessionKey);
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('unsupported'));
@@ -109,6 +109,31 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
     expect(candidate.human.sent).toHaveLength(0);
     expect(runtime.send('must not post')).toBeNull();
     runtime.dispose();
+  });
+
+  it('uses 2887 subscribe-before-REST overlap for snapshot coverage, without a watermark claim', async () => {
+    const candidate = setup(undefined, identified2887);
+    const signal = new AbortController().signal;
+    expect(candidate.profile.capabilities.snapshotCoverage).toBe(true);
+
+    const pending = candidate.transport.openChanges(sessionKey, {
+      onNotice: () => {}, onDoubt: () => {},
+    }, signal);
+    await vi.waitFor(() => expect(candidate.changes.sent).toEqual([{
+      type: 'subscribe', protocolVersion: 2, subscriptionId: `chat:${sessionKey}`,
+      filters: { sessionKey },
+    }]));
+    candidate.changes.emit({ type: 'subscription_ready', subscriptionId: `chat:${sessionKey}` });
+    const connection = await pending;
+
+    const page = await candidate.transport.readTail(sessionKey, signal);
+    expect(candidate.paths).toEqual([
+      'https://host.example/api/sessions/s-public/messages?limit=50&tail=true',
+    ]);
+    expect(candidate.transport.proveCoverage({ sessionKey, rowVersion: 4, raw: {} }, page, [])).toBe(true);
+
+    connection.close();
+    expect(candidate.transport.proveCoverage({ sessionKey, rowVersion: 4, raw: {} }, page, [])).toBe(false);
   });
 
   it('opens only either assessed build/SHA pair and refuses unexamined or mixed pairs', async () => {

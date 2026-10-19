@@ -46,13 +46,14 @@ const capabilities: TargetCapabilities = Object.freeze({
 
 // The source comparison supports these individual 2887 paths. The aggregate
 // transition capability stays disabled because harness_failed_park_reconciled
-// has no Chat marker mapping, and snapshot coverage has no closed watermark.
+// has no Chat marker mapping. Snapshot coverage is the Chat client's
+// subscribe-before-REST overlap, not a Gateway snapshot watermark.
 const capabilities2887: TargetCapabilities = Object.freeze({
   newestTail: true,
   stableOlderCursor: true,
   retainedHistoryAcrossResets: true,
   orderedTransitions: false,
-  snapshotCoverage: false,
+  snapshotCoverage: true,
   versionedNotices: true,
   humanSendDedupe: true,
 });
