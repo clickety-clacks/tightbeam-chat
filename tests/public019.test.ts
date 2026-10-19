@@ -3,6 +3,7 @@ import { createTightbeamAdapter } from '../src/runtime';
 import {
   PUBLIC_019_BUILD, PUBLIC_019_GATEWAY_SHA, PUBLIC_019_BUILD_2844, PUBLIC_019_GATEWAY_SHA_2844,
   PUBLIC_019_SOURCE_2857, PUBLIC_019_BUILD_2857, PUBLIC_019_GATEWAY_SHA_2857,
+  PUBLIC_019_SOURCE_2887, PUBLIC_019_BUILD_2887, PUBLIC_019_GATEWAY_SHA_2887,
   createPublic019Transport, decodePublic019Message,
   decodePublic019Notice, type Public019Channel, type Public019Host,
 } from '../src/public019';
@@ -13,6 +14,7 @@ const identity = { principalKey: 'person-1', deviceId: 'device-1' };
 const version = { server: 'tightbeam', version: '0.1.9', build: PUBLIC_019_BUILD, sha: PUBLIC_019_GATEWAY_SHA, protocolVersion: 1 };
 const assessed2844 = { ...version, build: PUBLIC_019_BUILD_2844, sha: PUBLIC_019_GATEWAY_SHA_2844 };
 const identified2857 = { ...version, build: PUBLIC_019_BUILD_2857, sha: PUBLIC_019_GATEWAY_SHA_2857 };
+const identified2887 = { ...version, build: PUBLIC_019_BUILD_2887, sha: PUBLIC_019_GATEWAY_SHA_2887 };
 const item = {
   id: 'm_1', seq: 9, sessionKey, role: 'user', content: 'hello', at: Date.parse('2026-10-12T00:00:00Z'),
   sender: 'person-1', deviceId: 'device-1', clientMessageId: 'c_1', attachments: [],
@@ -82,6 +84,33 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
     runtime.dispose();
   });
 
+  it('maps only source-backed 2887 paths and keeps aggregate transition and snapshot coverage disabled', async () => {
+    expect(PUBLIC_019_SOURCE_2887).toBe('0198c918dbd86861297aca19e7c3dc583943bbac');
+    const candidate = setup(undefined, identified2887);
+    expect(candidate.profile.identity).toBe('0.1.9+2887/0198c918');
+    expect(candidate.profile.capabilities).toEqual({
+      newestTail: true, stableOlderCursor: true, retainedHistoryAcrossResets: true,
+      orderedTransitions: false, snapshotCoverage: false, versionedNotices: true,
+      humanSendDedupe: true,
+    });
+    expect(await candidate.transport.inspectTarget(new AbortController().signal)).toEqual({
+      identity: candidate.profile.identity, capabilities: candidate.profile.capabilities,
+    });
+
+    // The runtime still requires the full capability set, so the partial 2887
+    // profile is identified but cannot open a session until its remaining
+    // guarantees are qualified.
+    candidate.paths.length = 0;
+    const runtime = createTightbeamAdapter(candidate.transport, candidate.profile).open(sessionKey);
+    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('unsupported'));
+    expect(runtime.getSnapshot().statusDetail).toContain('orderedTransitions');
+    expect(candidate.paths).toEqual(['https://host.example/version']);
+    expect(candidate.changes.sent).toHaveLength(0);
+    expect(candidate.human.sent).toHaveLength(0);
+    expect(runtime.send('must not post')).toBeNull();
+    runtime.dispose();
+  });
+
   it('opens only either assessed build/SHA pair and refuses unexamined or mixed pairs', async () => {
     for (const observed of [{ ...version, build: version.build + 1 },
       { ...version, sha: '00000000' },
@@ -118,6 +147,16 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
       expect(runtime.send('must not post')).toBeNull();
       runtime.dispose();
     }
+
+    const mismatched2887 = setup(undefined, { ...identified2887, sha: '00000000' }, identified2887);
+    expect(await mismatched2887.transport.inspectTarget(new AbortController().signal)).toEqual({
+      identity: mismatched2887.profile.identity,
+      capabilities: {
+        newestTail: false, stableOlderCursor: false, retainedHistoryAcrossResets: false,
+        orderedTransitions: false, snapshotCoverage: false, versionedNotices: false,
+        humanSendDedupe: false,
+      },
+    });
   });
 
   it('refreshes activity after a committed turn arrives during the history read', async () => {
@@ -272,6 +311,9 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
         marker: { kind, from: 'old', to: 'new' } }, sessionKey)).toMatchObject({ kind: 'transition', transition, from: 'old', to: 'new' });
     }
     expect(() => decodePublic019Message({ ...item, messageType: 'marker' }, sessionKey)).toThrow(UnsupportedTargetError);
+    expect(() => decodePublic019Message({ ...item, messageType: 'marker',
+      marker: { kind: 'harness_failed_park_reconciled', from: 'parked', to: 'reconciled' } }, sessionKey))
+      .toThrow('Unknown stored marker kind.');
   });
 
   it('decodes protocol-2 selected-session notices and refuses fabricated marker data', () => {
