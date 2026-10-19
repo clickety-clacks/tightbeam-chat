@@ -38,7 +38,7 @@ class Channel implements Public019Channel {
   disconnect() { this.disconnected?.(); }
 }
 
-function setup(heartbeatTimeoutMs?: number, observedVersion = version, configuredVersion = observedVersion) {
+function setup(heartbeatTimeoutMs?: number, observedVersion = version, configuredVersion = observedVersion, historyItems: unknown[] = [item]) {
   const changes = new Channel();
   const human = new Channel();
   const paths: string[] = [];
@@ -47,7 +47,7 @@ function setup(heartbeatTimeoutMs?: number, observedVersion = version, configure
     fetch: async (path) => {
       paths.push(path);
       const body = path.endsWith('/version') ? observedVersion : path.includes('/messages?')
-        ? { schemaVersion: 1, resource: 'transcript messages', items: [item],
+        ? { schemaVersion: 1, resource: 'transcript messages', items: historyItems,
           page: { oldestCursor: 'older-cursor', hasMoreBefore: true } }
         : { schemaVersion: 1, resource: 'sessions', item: session };
       return new Response(JSON.stringify(body), { status: 200 });
@@ -84,30 +84,44 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
     runtime.dispose();
   });
 
-  it('maps source-backed 2887 paths and keeps only the unmapped aggregate transition disabled', async () => {
+  it('qualifies ordered 2887 transitions and opens only after its exact profile passes the capability gate', async () => {
     expect(PUBLIC_019_SOURCE_2887).toBe('0198c918dbd86861297aca19e7c3dc583943bbac');
-    const candidate = setup(undefined, identified2887);
+    const earlierTransition = { ...item, id: 'marker_before', seq: 8, rowVersion: 8,
+      messageType: 'marker', marker: { kind: 'session-restart', from: 'old', to: 'new' } };
+    const laterTransition = { ...item, id: 'marker_after', seq: 10, rowVersion: 10,
+      messageType: 'marker', marker: { kind: 'harness-switch', from: 'old-harness', to: 'new-harness' } };
+    const candidate = setup(undefined, identified2887, identified2887,
+      [laterTransition, item, earlierTransition]);
     expect(candidate.profile.identity).toBe('0.1.9+2887/0198c918');
     expect(candidate.profile.capabilities).toEqual({
       newestTail: true, stableOlderCursor: true, retainedHistoryAcrossResets: true,
-      orderedTransitions: false, snapshotCoverage: true, versionedNotices: true,
+      orderedTransitions: true, snapshotCoverage: true, versionedNotices: true,
       humanSendDedupe: true,
     });
     expect(await candidate.transport.inspectTarget(new AbortController().signal)).toEqual({
       identity: candidate.profile.identity, capabilities: candidate.profile.capabilities,
     });
 
-    // The runtime still requires the full capability set, so the partial 2887
-    // profile is identified but cannot open a session until its aggregate
-    // transition guarantee is qualified.
     candidate.paths.length = 0;
     const runtime = createTightbeamAdapter(candidate.transport, candidate.profile).open(sessionKey);
-    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('unsupported'));
-    expect(runtime.getSnapshot().statusDetail).toContain('orderedTransitions');
+    await vi.waitFor(() => expect(candidate.changes.sent).toEqual([{
+      type: 'subscribe', protocolVersion: 2, subscriptionId: `chat:${sessionKey}`,
+      filters: { sessionKey },
+    }]));
     expect(candidate.paths).toEqual(['https://host.example/version']);
-    expect(candidate.changes.sent).toHaveLength(0);
+    candidate.changes.emit({ type: 'subscription_ready', subscriptionId: `chat:${sessionKey}` });
+    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+    expect(candidate.paths).toEqual([
+      'https://host.example/version',
+      'https://host.example/api/sessions/s-public',
+      'https://host.example/api/sessions/s-public/messages?limit=50&tail=true',
+    ]);
+    expect(runtime.getSnapshot().records.map((record) => record.id))
+      .toEqual(['marker_before', 'm_1', 'marker_after']);
+    expect(runtime.getSnapshot().records.map((record) => record.kind))
+      .toEqual(['transition', 'message', 'transition']);
+    expect(candidate.changes.sent).toHaveLength(1);
     expect(candidate.human.sent).toHaveLength(0);
-    expect(runtime.send('must not post')).toBeNull();
     runtime.dispose();
   });
 
@@ -330,7 +344,7 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
     expect(transport.proveCoverage({ sessionKey, rowVersion: 4, raw: {} }, page, [])).toBe(false);
   });
 
-  it('decodes all released stored marker kinds without guessing from message text', () => {
+  it('keeps failed-park recovery lifecycle-only and decodes the projected transcript markers', () => {
     for (const [kind, transition] of [['harness-switch', 'harness'], ['model-retune', 'model'], ['session-restart', 'restart']]) {
       expect(decodePublic019Message({ ...item, messageType: 'marker',
         marker: { kind, from: 'old', to: 'new' } }, sessionKey)).toMatchObject({ kind: 'transition', transition, from: 'old', to: 'new' });
@@ -355,6 +369,9 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
       .toEqual({ operation: 'observe', sessionKey, resource: 'turn.started' });
     expect(decodePublic019Notice({ ...notice, class: 'wake.fired', resource: 'wakes' }, sessionKey))
       .toEqual({ operation: 'observe', sessionKey, resource: 'wake.fired' });
+    expect(decodePublic019Notice({ ...notice,
+      class: 'lifecycle.harness_failed_park_reconciled', op: 'observe', resource: undefined }, sessionKey))
+      .toEqual({ operation: 'ignore', sessionKey, resource: 'lifecycle.harness_failed_park_reconciled' });
     for (const observationalClass of ['verb.accepted', 'verb.denied', 'rail.denied',
       'lifecycle.boot', 'prod.fired']) {
       expect(decodePublic019Notice({ ...notice, class: observationalClass,

@@ -44,15 +44,16 @@ const capabilities: TargetCapabilities = Object.freeze({
   humanSendDedupe: true,
 });
 
-// The source comparison supports these individual 2887 paths. The aggregate
-// transition capability stays disabled because harness_failed_park_reconciled
-// has no Chat marker mapping. Snapshot coverage is the Chat client's
-// subscribe-before-REST overlap, not a Gateway snapshot watermark.
+// The source comparison supports these individual 2887 paths. Its additional
+// failed-park reconciliation is lifecycle-only, not a transcript marker;
+// visible transitions remain the canonical markers projected by the Gateway.
+// Snapshot coverage is the Chat client's subscribe-before-REST overlap, not a
+// Gateway snapshot watermark.
 const capabilities2887: TargetCapabilities = Object.freeze({
   newestTail: true,
   stableOlderCursor: true,
   retainedHistoryAcrossResets: true,
-  orderedTransitions: false,
+  orderedTransitions: true,
   snapshotCoverage: true,
   versionedNotices: true,
   humanSendDedupe: true,
@@ -81,6 +82,8 @@ const observationalClasses = new Set([
   'lifecycle.terminal_credential_recovery_claimed',
   'lifecycle.terminal_credential_recovery_outcome',
   'lifecycle.terminal_credential_resolved',
+  // Lifecycle bookkeeping, not a user-visible transcript transition.
+  'lifecycle.harness_failed_park_reconciled',
 ]);
 
 /** A fresh, host-authenticated socket. The host owns credentials and the auth handshake. */
