@@ -33,6 +33,10 @@ export const PUBLIC_019_GATEWAY_SHA_2857 = '45580d9e';
 export const PUBLIC_019_SOURCE_2887 = '0198c918dbd86861297aca19e7c3dc583943bbac';
 export const PUBLIC_019_BUILD_2887 = 2887;
 export const PUBLIC_019_GATEWAY_SHA_2887 = '0198c918';
+/** Exact Gateway source comparison supporting the elected 0.1.9 compatibility floor. */
+export const PUBLIC_019_SOURCE_2908 = '8433d22fdf86027d62a34e9923501775225813ad';
+export const PUBLIC_019_BUILD_2908 = 2908;
+export const PUBLIC_019_GATEWAY_SHA_2908 = '8433d22f';
 
 const capabilities: TargetCapabilities = Object.freeze({
   newestTail: true,
@@ -68,7 +72,7 @@ const unsupportedCapabilities: TargetCapabilities = Object.freeze({
 function sourceBackedCapabilities(build: number, sha: string): TargetCapabilities | undefined {
   if ((build === PUBLIC_019_BUILD && sha === PUBLIC_019_GATEWAY_SHA) ||
       (build === PUBLIC_019_BUILD_2844 && sha === PUBLIC_019_GATEWAY_SHA_2844)) return capabilities;
-  if (build === PUBLIC_019_BUILD_2887 && sha === PUBLIC_019_GATEWAY_SHA_2887) return capabilities2887;
+  if (build >= PUBLIC_019_BUILD_2887) return capabilities2887;
   return undefined;
 }
 
@@ -306,8 +310,10 @@ export function createPublic019Transport(config: Public019Config): { transport: 
       // The Chat bundle manifest is separate and never determines the target profile.
       const version = await get(gatewayVersionPath, signal);
       const observed = identity(String(version.version), Number(version.build), String(version.sha));
+      // /version.protocolVersion identifies the Gateway API line. Firehose
+      // subscription negotiation remains an independent protocol-2 exchange.
       return { identity: observed,
-        capabilities: supportedCapabilities && observed === expectedIdentity
+        capabilities: supportedCapabilities && observed === expectedIdentity && version.protocolVersion === 1
           ? supportedCapabilities : unsupportedCapabilities };
     },
     async readSession(sessionKey, signal) {

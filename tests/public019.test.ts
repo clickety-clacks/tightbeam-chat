@@ -4,6 +4,7 @@ import {
   PUBLIC_019_BUILD, PUBLIC_019_GATEWAY_SHA, PUBLIC_019_BUILD_2844, PUBLIC_019_GATEWAY_SHA_2844,
   PUBLIC_019_SOURCE_2857, PUBLIC_019_BUILD_2857, PUBLIC_019_GATEWAY_SHA_2857,
   PUBLIC_019_SOURCE_2887, PUBLIC_019_BUILD_2887, PUBLIC_019_GATEWAY_SHA_2887,
+  PUBLIC_019_SOURCE_2908, PUBLIC_019_BUILD_2908, PUBLIC_019_GATEWAY_SHA_2908,
   createPublic019Transport, decodePublic019Message,
   decodePublic019Notice, type Public019Channel, type Public019Host,
 } from '../src/public019';
@@ -15,6 +16,7 @@ const version = { server: 'tightbeam', version: '0.1.9', build: PUBLIC_019_BUILD
 const assessed2844 = { ...version, build: PUBLIC_019_BUILD_2844, sha: PUBLIC_019_GATEWAY_SHA_2844 };
 const identified2857 = { ...version, build: PUBLIC_019_BUILD_2857, sha: PUBLIC_019_GATEWAY_SHA_2857 };
 const identified2887 = { ...version, build: PUBLIC_019_BUILD_2887, sha: PUBLIC_019_GATEWAY_SHA_2887 };
+const identified2908 = { ...version, build: PUBLIC_019_BUILD_2908, sha: PUBLIC_019_GATEWAY_SHA_2908 };
 const item = {
   id: 'm_1', seq: 9, sessionKey, role: 'user', content: 'hello', at: Date.parse('2026-10-12T00:00:00Z'),
   sender: 'person-1', deviceId: 'device-1', clientMessageId: 'c_1', attachments: [],
@@ -125,6 +127,56 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
     runtime.dispose();
   });
 
+  it('carries the reviewed 2887 profile floor through 2908 while negotiating Firehose protocol 2 separately', async () => {
+    expect(PUBLIC_019_SOURCE_2908).toBe('8433d22fdf86027d62a34e9923501775225813ad');
+    const candidate = setup(undefined, identified2908, identified2908);
+    expect(candidate.profile.identity).toBe('0.1.9+2908/8433d22f');
+    expect(candidate.profile.capabilities).toEqual({
+      newestTail: true, stableOlderCursor: true, retainedHistoryAcrossResets: true,
+      orderedTransitions: true, snapshotCoverage: true, versionedNotices: true,
+      humanSendDedupe: true,
+    });
+    expect(await candidate.transport.inspectTarget(new AbortController().signal)).toEqual({
+      identity: candidate.profile.identity, capabilities: candidate.profile.capabilities,
+    });
+
+    candidate.paths.length = 0;
+    const runtime = createTightbeamAdapter(candidate.transport, candidate.profile).open(sessionKey);
+    await vi.waitFor(() => expect(candidate.changes.sent).toEqual([{
+      type: 'subscribe', protocolVersion: 2, subscriptionId: `chat:${sessionKey}`,
+      filters: { sessionKey },
+    }]));
+    candidate.changes.emit({ type: 'subscription_ready', subscriptionId: `chat:${sessionKey}` });
+    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+    expect(candidate.paths).toEqual([
+      'https://host.example/version',
+      'https://host.example/api/sessions/s-public',
+      'https://host.example/api/sessions/s-public/messages?limit=50&tail=true',
+    ]);
+    expect(runtime.getSnapshot().records.map((record) => record.id)).toEqual(['m_1']);
+    expect(candidate.human.sent).toHaveLength(0);
+    runtime.dispose();
+  });
+
+  it('fails closed when the Gateway API protocol version differs from the elected line', async () => {
+    const incompatibleProtocol = { ...identified2908, protocolVersion: 2 };
+    const candidate = setup(undefined, incompatibleProtocol, identified2908);
+    expect(await candidate.transport.inspectTarget(new AbortController().signal)).toEqual({
+      identity: candidate.profile.identity,
+      capabilities: {
+        newestTail: false, stableOlderCursor: false, retainedHistoryAcrossResets: false,
+        orderedTransitions: false, snapshotCoverage: false, versionedNotices: false,
+        humanSendDedupe: false,
+      },
+    });
+
+    const runtime = createTightbeamAdapter(candidate.transport, candidate.profile).open(sessionKey);
+    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('unsupported'));
+    expect(candidate.changes.sent).toHaveLength(0);
+    expect(candidate.human.sent).toHaveLength(0);
+    runtime.dispose();
+  });
+
   it('uses 2887 subscribe-before-REST overlap for snapshot coverage, without a watermark claim', async () => {
     const candidate = setup(undefined, identified2887);
     const signal = new AbortController().signal;
@@ -150,7 +202,7 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
     expect(candidate.transport.proveCoverage({ sessionKey, rowVersion: 4, raw: {} }, page, [])).toBe(false);
   });
 
-  it('opens only either assessed build/SHA pair and refuses unexamined or mixed pairs', async () => {
+  it('refuses pre-floor and mixed legacy build/SHA pairs', async () => {
     for (const observed of [{ ...version, build: version.build + 1 },
       { ...version, sha: '00000000' },
       { ...version, sha: assessed2844.sha },
