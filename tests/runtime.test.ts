@@ -37,10 +37,12 @@ class ControlledTransport implements ChatTransport {
   callbacks?: ChangeCallbacks;
   readTailCalls = 0;
   readOlderCalls = 0;
+  readSessionCalls = 0;
   closed = 0;
   coverage = true;
   readyGate?: ReturnType<typeof deferred<void>>;
   tailHook?: () => void;
+  readSessionHook?: (call: number) => Promise<void> | void;
   nextSend?: (submission: HumanSubmission) => Promise<HumanSendResult>;
   submissions: HumanSubmission[] = [];
 
@@ -51,9 +53,10 @@ class ControlledTransport implements ChatTransport {
     if (this.readyGate) await this.readyGate.promise;
     return { close: () => { this.closed++; if (this.callbacks === callbacks) this.callbacks = undefined; } };
   };
-  readSession = async (): Promise<SessionRecord> => ({
-    sessionKey, rowVersion: 1, raw: { clearedThroughSeq: 7 }, activity: 'idle',
-  });
+  readSession = async (): Promise<SessionRecord> => {
+    await this.readSessionHook?.(++this.readSessionCalls);
+    return { sessionKey, rowVersion: 1, raw: { clearedThroughSeq: 7 }, activity: 'idle' };
+  };
   private page(rows: ConversationRecord[]): ConversationPage {
     return { records: rows, oldestCursor: rows.length ? rows[0].id : null,
       hasOlder: rows.length ? this.rows.findIndex((row) => row.id === rows[0].id) > 0 : false,
@@ -111,6 +114,55 @@ describe('framework-independent runtime', () => {
     runtime.dispose();
   });
 
+  it('publishes a committed startup-overlap row exactly once with the initial tail', async () => {
+    const transport = new ControlledTransport();
+    const appended = message(9, { content: 'assistant startup response' });
+    transport.tailHook = () => {
+      // The tail page was already captured when the row is committed and noticed.
+      transport.rows.push(appended);
+      transport.emit(appended);
+    };
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    const readyRecords: ConversationRecord[][] = [];
+    runtime.subscribe(() => {
+      const snapshot = runtime.getSnapshot();
+      if (snapshot.status === 'ready') readyRecords.push([...snapshot.records]);
+    });
+    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+    expect(readyRecords[0].filter((row) => row.id === appended.id)).toHaveLength(1);
+    expect(runtime.getSnapshot().records.map((row) => row.id)).toEqual(['t6', 'm7', 'm8', 'm9']);
+    runtime.dispose();
+  });
+
+  it('includes a marker row emitted during the startup session refetch before first ready publication', async () => {
+    const transport = new ControlledTransport();
+    const refresh = deferred<void>();
+    const marker = switchAt(9, 'harness');
+    transport.readSessionHook = async (call) => {
+      if (call === 2) await refresh.promise;
+    };
+    transport.tailHook = () => {
+      transport.callbacks?.onNotice({ operation: 'observe', sessionKey, resource: 'turn.started' });
+    };
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    const readyRecords: ConversationRecord[][] = [];
+    runtime.subscribe(() => {
+      const snapshot = runtime.getSnapshot();
+      if (snapshot.status === 'ready') readyRecords.push([...snapshot.records]);
+    });
+
+    await vi.waitFor(() => expect(transport.readSessionCalls).toBe(2));
+    transport.rows.push(marker);
+    transport.emit(marker);
+    refresh.resolve();
+
+    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+    expect(readyRecords[0].filter((row) => row.id === marker.id)).toHaveLength(1);
+    expect(readyRecords[0].at(-1)).toMatchObject({ id: marker.id, kind: 'transition', transition: 'harness' });
+    expect(runtime.getSnapshot().records.filter((row) => row.id === marker.id)).toHaveLength(1);
+    runtime.dispose();
+  });
+
   it('refuses unsupported identity or unproved snapshot coverage', async () => {
     const wrong = new ControlledTransport();
     wrong.observation = { ...profile, identity: 'unreviewed-build' };
@@ -146,12 +198,17 @@ describe('framework-independent runtime', () => {
     const transport = new ControlledTransport();
     let first = true;
     transport.tailHook = () => {
-      if (first) { first = false; transport.doubt(); }
+      if (first) {
+        first = false;
+        transport.rows.push(switchAt(9, 'model'));
+        transport.doubt();
+      }
     };
     const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('stale'));
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'), { timeout: 1000 });
     expect(transport.readTailCalls).toBe(2);
+    expect(runtime.getSnapshot().records.at(-1)).toMatchObject({ id: 't9', kind: 'transition', transition: 'model' });
     runtime.dispose();
   });
 

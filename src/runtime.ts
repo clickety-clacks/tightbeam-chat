@@ -356,12 +356,14 @@ class SessionRuntime implements ChatRuntime {
         restored++;
       }
 
-      // One synchronous publication consumes a finite notice prefix after coverage proof.
-      const prefix = this.buffered.splice(0);
-      if (prefix.some((notice) => notice.operation === 'observe')) {
-        // Known activity changes may have arrived after the first session read.
-        // Their frames lack the complete session state, so read it again after
-        // the committed notice before publishing the candidate.
+      // Refetch complete session state for observations before choosing the finite
+      // publication cut. Rows emitted while a refresh is in flight belong to the
+      // same candidate, rather than appearing only after the first ready snapshot.
+      const prefix: ChangeNotice[] = [];
+      while (true) {
+        const next = this.buffered.splice(0);
+        prefix.push(...next);
+        if (!next.some((notice) => notice.operation === 'observe')) break;
         session = await this.transport.readSession(this.sessionKey, controller.signal);
         if (!this.isCurrent(generation) || !this.checkIdentity()) return;
         if (session.sessionKey !== this.sessionKey) {
