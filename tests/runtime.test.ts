@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createTightbeamAdapter } from '../src/runtime';
 import { AuthorizationError, UnsupportedTargetError } from '../src/types';
 import type {
-  CanonicalMessage, CanonicalTransition, ChangeCallbacks, ChatTransport,
+  CanonicalMessage, CanonicalTransition, CanonicalTurn, ChangeCallbacks, ChatTransport,
   ConversationPage, ConversationRecord, HostIdentity, HumanSendResult,
   HumanSubmission, SessionRecord, TargetObservation, TargetProfile,
 } from '../src/types';
@@ -11,7 +11,7 @@ const sessionKey = 's1';
 const capabilities = {
   newestTail: true, stableOlderCursor: true, retainedHistoryAcrossResets: true,
   orderedTransitions: true, snapshotCoverage: true, versionedNotices: true,
-  humanSendDedupe: true,
+  humanSendDedupe: true, authoritativeTurnProvenance: true,
 } as const;
 const profile: TargetProfile = { identity: 'fixture:controlled', label: 'TEST FIXTURE', capabilities };
 
@@ -40,6 +40,7 @@ class ControlledTransport implements ChatTransport {
   readSessionCalls = 0;
   closed = 0;
   coverage = true;
+  recentTurns: CanonicalTurn[] = [];
   readyGate?: ReturnType<typeof deferred<void>>;
   tailHook?: () => void;
   readSessionHook?: (call: number) => Promise<void> | void;
@@ -55,8 +56,13 @@ class ControlledTransport implements ChatTransport {
   };
   readSession = async (): Promise<SessionRecord> => {
     await this.readSessionHook?.(++this.readSessionCalls);
-    return { sessionKey, rowVersion: 1, raw: { clearedThroughSeq: 7 }, activity: 'idle' };
+    return { sessionKey, rowVersion: 1, displayName: 'Fixture agent', raw: { clearedThroughSeq: 7 }, activity: 'idle' };
   };
+  readTurn = async (_key: string, _seq: number): Promise<CanonicalTurn | null> => null;
+  readMessage = async (_key: string, id: string): Promise<CanonicalMessage | null> =>
+    this.rows.find((row): row is CanonicalMessage => row.kind === 'message' && row.id === id) ?? null;
+  readRecentTurns = async (): Promise<readonly CanonicalTurn[]> => this.recentTurns;
+  resolveOriginDisplayName = async () => undefined;
   private page(rows: ConversationRecord[]): ConversationPage {
     return { records: rows, oldestCursor: rows.length ? rows[0].id : null,
       hasOlder: rows.length ? this.rows.findIndex((row) => row.id === rows[0].id) > 0 : false,
@@ -82,7 +88,7 @@ class ControlledTransport implements ChatTransport {
   emit(record: ConversationRecord) { this.callbacks?.onNotice({ operation: 'upsert', record }); }
   reset() {
     this.callbacks?.onNotice({ operation: 'session', session: {
-      sessionKey, rowVersion: 2, raw: { clearedThroughSeq: 100 }, activity: 'reset',
+      sessionKey, rowVersion: 2, displayName: 'Fixture agent', raw: { clearedThroughSeq: 100 }, activity: 'reset',
     } });
   }
   doubt() { this.callbacks?.onDoubt('connection lost'); }
@@ -91,6 +97,26 @@ class ControlledTransport implements ChatTransport {
 async function settle() { await vi.waitFor(() => {}, { timeout: 50 }); }
 
 describe('framework-independent runtime', () => {
+  it('hydrates a human trigger outside the loaded page from authoritative turn provenance', async () => {
+    const transport = new ControlledTransport();
+    const trigger = message(1, { role: 'user', sender: 'user:person', content: 'Earlier source prompt' });
+    const reply = message(4, { turnSeq: 44, content: 'Selected agent reply' });
+    const active: CanonicalTurn = { seq: 44, sessionKey, status: 'running', messageId: trigger.id,
+      origin: 'user:person', raw: { seq: 44 } };
+    transport.rows = [trigger, message(2), message(3), reply];
+    transport.recentTurns = [active];
+
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+    expect(runtime.getSnapshot().records.map((record) => record.id)).toEqual(['m2', 'm3', 'm4']);
+    expect(runtime.getSnapshot().provenance).toMatchObject([{
+      turn: { seq: 44, messageId: 'm1', origin: 'user:person' },
+      sourceKind: 'human', trigger: { id: 'm1', content: 'Earlier source prompt' },
+    }]);
+    expect(runtime.getSnapshot().activeTurn?.turn.seq).toBe(44);
+    runtime.dispose();
+  });
+
   it('waits for readiness, closes snapshot overlap, and pages retained pre-reset history with recorded switches', async () => {
     const transport = new ControlledTransport();
     transport.readyGate = deferred<void>();

@@ -1,14 +1,9 @@
-body { margin: 0; color: #203144; background: #eef2f7; font: 16px/1.5 system-ui, sans-serif; }
-main { max-width: 1100px; margin: 0 auto; padding: 2rem; }
-header { margin-bottom: 1.5rem; }
-.eyebrow { color: #7d2e12; font-weight: 800; letter-spacing: .08em; }
-.layout { display: grid; grid-template-columns: minmax(12rem, 17rem) minmax(0, 1fr); gap: 1rem; }
-aside { padding: 1rem; background: #fff; border-radius: .6rem; }
-aside button { display: block; margin: .6rem 0; padding: .45rem; }
-.chat-slot { height: min(75vh, 700px); min-height: 380px; }
-.chat-slot .tb-chat { height: 100%; }
-@media (max-width: 700px) { .layout { grid-template-columns: 1fr; } .chat-slot { height: 70vh; } }
-form label { display: block; margin: .75rem 0; }
-input { display: block; width: min(95%, 32rem); padding: .5rem; }
-button { cursor: pointer; padding: .5rem .8rem; }
-.chat-slot { margin-top: 1rem; }
+:root { color-scheme: light dark; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+html, body, #root { width: 100%; height: 100%; min-height: 0; margin: 0; }
+body { background: #f6f6f6; color: #1e1e1e; }
+#root { height: 100dvh; min-height: 0; }
+.chat-entry-state { display: grid; place-content: center; min-height: 100%; padding: 1.5rem; text-align: center; color: #666; }
+@media (prefers-color-scheme: dark) {
+  body { background: #171717; color: #ededed; }
+  .chat-entry-state { color: #aaa; }
+}

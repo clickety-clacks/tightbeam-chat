@@ -11,9 +11,8 @@ export function HostPage({ defaultTarget, configurationError }: {
   const [error, setError] = useState('');
   const resolution = resolveEntrySelection(window.location.search, defaultTarget);
   const selected = resolution.kind === 'selected' ? resolution.target : undefined;
-  const unavailable = resolution.kind === 'unavailable-selection' ? resolution : undefined;
-  const displayedTarget = selected ?? unavailable?.target;
   const selectionSource = resolution.kind === 'selected' ? resolution.source : undefined;
+  const unavailable = resolution.kind === 'unavailable-selection' ? resolution : undefined;
 
   useEffect(() => {
     if (!selected) return;
@@ -43,6 +42,7 @@ export function HostPage({ defaultTarget, configurationError }: {
         const { transport, profile } = createPublic019Transport({
           baseUrl: `${origin}/__chat`,
           gatewayVersionPath: '/gateway/version',
+          targetGateway: selected.gateway,
           build: version.build,
           sha: version.sha,
           host,
@@ -57,14 +57,9 @@ export function HostPage({ defaultTarget, configurationError }: {
     return () => { current = false; controller.abort(); };
   }, [selected?.gateway, selected?.sessionKey, selected?.principalKey, selected?.deviceId]);
 
-  return <main>
-    <header><h1>Tightbeam Chat</h1></header>
-    {displayedTarget && <section aria-labelledby="selected-target-heading">
-      <h2 id="selected-target-heading">Selected conversation</h2>
-      <p>Gateway: <code>{displayedTarget.gateway}</code></p>
-      <p>Session: <code>{displayedTarget.sessionKey}</code></p>
-      <p>{selectionSource === 'configured' ? 'Using the configured conversation.' : 'Opened from its private link.'}</p>
-    </section>}
+  if (selected && adapter) return <TightbeamChat sessionKey={selected.sessionKey} adapter={adapter} />;
+
+  return <main className="chat-entry-state">
     {resolution.kind === 'configuration-error' && <p role="alert">
       {configurationError ?? resolution.message}
     </p>}
@@ -80,14 +75,11 @@ export function HostPage({ defaultTarget, configurationError }: {
       {unavailable.canRecoverToConfigured &&
         <a href={window.location.pathname || '/'}>Open the configured conversation</a>}
     </div>}
-    {selected && !adapter && !error && <p role="status">Opening the configured conversation…</p>}
+    {selected && !adapter && !error && <p role="status">Connecting…</p>}
     {error && <div role="alert">
       <p>{error}</p>
       {selectionSource === 'link' &&
         <a href={window.location.pathname || '/'}>Open the configured conversation</a>}
-    </div>}
-    {adapter && selected && <div className="chat-slot">
-      <TightbeamChat sessionKey={selected.sessionKey} adapter={adapter} />
     </div>}
   </main>;
 }

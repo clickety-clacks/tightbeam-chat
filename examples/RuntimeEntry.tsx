@@ -24,9 +24,8 @@ export function RuntimeEntry() {
     return () => { current = false; controller.abort(); };
   }, []);
 
-  if (config.status === 'loading') return <main aria-busy="true">
-    <header><h1>Tightbeam Chat</h1></header>
-    <p role="status">Loading the configured Chat target…</p>
+  if (config.status === 'loading') return <main className="chat-entry-state" aria-busy="true">
+    <p role="status">Connecting…</p>
   </main>;
   if (config.status === 'error') return <HostPage defaultTarget={{}} configurationError={config.message} />;
   return <HostPage defaultTarget={config.target} />;

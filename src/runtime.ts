@@ -6,6 +6,7 @@ import {
   type ChangeNotice,
   type ChatRuntime,
   type ChatTransport,
+  type CanonicalTurn,
   type ConversationPage,
   type ConversationRecord,
   type HostIdentity,
@@ -16,11 +17,14 @@ import {
   type TargetCapabilities,
   type TargetProfile,
   type TightbeamAdapter,
+  type TurnProvenance,
 } from './types';
+import { createTurnProvenance, turnSourceKind } from './provenance';
 
 const requiredCapabilities: readonly (keyof TargetCapabilities)[] = [
   'newestTail', 'stableOlderCursor', 'retainedHistoryAcrossResets',
   'orderedTransitions', 'snapshotCoverage', 'versionedNotices', 'humanSendDedupe',
+  'authoritativeTurnProvenance',
 ];
 
 function identityEquals(a: HostIdentity, b: HostIdentity): boolean {
@@ -66,6 +70,7 @@ class SessionRuntime implements ChatRuntime {
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   private retryDelayMs = 250;
   private rebuildPromise: Promise<void> | undefined;
+  private provenanceRefreshToken = 0;
 
   constructor(
     private readonly sessionKey: string,
@@ -76,6 +81,7 @@ class SessionRuntime implements ChatRuntime {
     this.state = Object.freeze({
       sessionKey, generation: 0, status: 'loading', records: Object.freeze([]),
       hasOlder: false, loadingOlder: false, sends: Object.freeze([]), targetLabel: profile.label,
+      targetGateway: transport.targetGateway, provenance: Object.freeze([]),
     });
     void this.rebuild();
   }
@@ -112,7 +118,8 @@ class SessionRuntime implements ChatRuntime {
       generation: this.generation, status: 'unauthorized',
       statusDetail: 'Host principal or device changed. Open a new component lifetime.',
       records: Object.freeze([]), sends: Object.freeze([]), hasOlder: false,
-      session: undefined, historyError: undefined,
+      session: undefined, agentDisplayName: undefined, provenance: Object.freeze([]),
+      activeTurn: undefined, historyError: undefined,
     });
     return false;
   }
@@ -199,7 +206,7 @@ class SessionRuntime implements ChatRuntime {
           return false;
         }
         if (!this.state.session || notice.session.rowVersion > this.state.session.rowVersion) {
-          this.publish({ session: notice.session });
+          this.publish({ session: notice.session, agentDisplayName: notice.session.displayName });
         }
         return false;
       case 'ignore':
@@ -217,7 +224,12 @@ class SessionRuntime implements ChatRuntime {
       this.buffered.push(notice);
       return;
     }
-    if (this.apply(notice)) this.publish({ records: recordsFrom(this.rows) });
+    if (this.apply(notice)) {
+      this.publish({ records: recordsFrom(this.rows) });
+      if (notice.operation === 'upsert' && notice.record.kind === 'message') {
+        void this.refreshLiveProvenance(generation);
+      }
+    }
   }
 
   private markPendingUncertain(reason: string): void {
@@ -238,7 +250,7 @@ class SessionRuntime implements ChatRuntime {
     this.connection = undefined;
     this.rebuildPromise = undefined;
     this.initializing = false;
-    this.publish({ generation: this.generation, status: 'stale', statusDetail: reason });
+    this.publish({ generation: this.generation, status: 'stale', statusDetail: reason, activeTurn: undefined });
     this.scheduleRebuild();
   }
 
@@ -275,8 +287,84 @@ class SessionRuntime implements ChatRuntime {
     this.publish({
       generation: this.generation, status, statusDetail: reason,
       records: Object.freeze([]), sends, session: undefined,
+      agentDisplayName: undefined, provenance: Object.freeze([]), activeTurn: undefined,
       hasOlder: false, loadingOlder: false, historyError: undefined,
     });
+  }
+
+  private async readProvenance(
+    records: readonly ConversationRecord[],
+    recentTurns: readonly CanonicalTurn[],
+    signal: AbortSignal,
+    previous: readonly TurnProvenance[],
+    refreshAll: boolean,
+  ): Promise<{ provenance: readonly TurnProvenance[]; activeTurn?: TurnProvenance }> {
+    const bySequence = new Map(previous.map((item) => [item.turn.seq, item]));
+    const recentBySequence = new Map(recentTurns.map((turn) => [turn.seq, turn]));
+    const active = recentTurns.filter((turn) => turn.status === 'running')
+      .sort((a, b) => b.seq - a.seq)[0];
+    const recordById = new Map(records.filter((record): record is Extract<ConversationRecord, { kind: 'message' }> =>
+      record.kind === 'message').map((record) => [record.id, record]));
+    const sequences = new Set<number>();
+    for (const record of records) if (record.kind === 'message' && record.turnSeq) sequences.add(record.turnSeq);
+    for (const turn of recentTurns) if (recordById.has(turn.messageId)) sequences.add(turn.seq);
+    if (active) sequences.add(active.seq);
+
+    const resolved: TurnProvenance[] = [];
+    for (const seq of [...sequences].sort((a, b) => a - b)) {
+      const prior = bySequence.get(seq);
+      const listed = recentBySequence.get(seq);
+      if (!refreshAll && prior && !listed) {
+        resolved.push(prior);
+        continue;
+      }
+      const turn = listed ?? (prior && !refreshAll
+        ? prior.turn
+        : await this.transport.readTurn(this.sessionKey, seq, signal));
+      if (!turn) continue;
+      if (turn.sessionKey !== this.sessionKey || !Number.isSafeInteger(turn.seq) || turn.seq !== seq) {
+        throw new UnsupportedTargetError('Turn provenance crossed the selected session or sequence boundary.');
+      }
+
+      const loadedTrigger = recordById.get(turn.messageId);
+      let trigger = loadedTrigger;
+      if (!trigger && !refreshAll && prior?.trigger?.id === turn.messageId) trigger = prior.trigger;
+      if (!trigger) trigger = (await this.transport.readMessage(this.sessionKey, turn.messageId, signal)) ?? undefined;
+      if (trigger && (trigger.sessionKey !== this.sessionKey || trigger.id !== turn.messageId)) {
+        throw new UnsupportedTargetError('Trigger message crossed the selected session or message boundary.');
+      }
+
+      const provisional = createTurnProvenance(turn, trigger);
+      let sourceDisplayName: string | undefined;
+      if (turn.seq === active?.seq && turnSourceKind(provisional.captionOrigin) === 'agent') {
+        sourceDisplayName = await this.transport.resolveOriginDisplayName(provisional.captionOrigin, signal);
+      }
+      resolved.push(createTurnProvenance(turn, trigger, sourceDisplayName));
+    }
+    const frozen = Object.freeze(resolved);
+    return { provenance: frozen, activeTurn: active ? resolved.find((item) => item.turn.seq === active.seq) : undefined };
+  }
+
+  private async refreshLiveProvenance(generation: number): Promise<void> {
+    const controller = this.controller;
+    if (!controller || !this.isCurrent(generation) || controller.signal.aborted) return;
+    const refreshToken = ++this.provenanceRefreshToken;
+    try {
+      const currentTurn = this.state.activeTurn?.turn;
+      const result = await this.readProvenance(recordsFrom(this.rows), currentTurn ? [currentTurn] : [],
+        controller.signal, this.state.provenance ?? [], false);
+      if (!this.isCurrent(generation) || controller.signal.aborted || refreshToken !== this.provenanceRefreshToken) return;
+      this.publish(result);
+    } catch (error) {
+      if (!this.isCurrent(generation) || controller.signal.aborted) return;
+      if (error instanceof AuthorizationError) {
+        this.failClosed('unauthorized', errorText(error));
+      } else if (error instanceof UnsupportedTargetError) {
+        this.failClosed('unsupported', errorText(error));
+      } else {
+        this.doubt(`Message provenance could not be refreshed: ${errorText(error)}`, generation);
+      }
+    }
   }
 
   rebuild = (): Promise<void> => {
@@ -308,7 +396,7 @@ class SessionRuntime implements ChatRuntime {
     this.initializing = true;
     this.publish({
       generation, status: this.state.records.length ? 'stale' : 'loading',
-      statusDetail: undefined, loadingOlder: false, historyError: undefined,
+      statusDetail: undefined, loadingOlder: false, historyError: undefined, activeTurn: undefined,
     });
 
     try {
@@ -326,8 +414,11 @@ class SessionRuntime implements ChatRuntime {
       }
       this.connection = connection;
 
-      let session = await this.transport.readSession(this.sessionKey, controller.signal);
-      const tail = await this.transport.readTail(this.sessionKey, controller.signal);
+      let [session, tail, recentTurns] = await Promise.all([
+        this.transport.readSession(this.sessionKey, controller.signal),
+        this.transport.readTail(this.sessionKey, controller.signal),
+        this.transport.readRecentTurns(this.sessionKey, controller.signal),
+      ]);
       if (!this.isCurrent(generation) || !this.checkIdentity()) return;
       if (session.sessionKey !== this.sessionKey) throw new UnsupportedTargetError('Session read returned another selection.');
       this.validatePage(tail);
@@ -359,29 +450,44 @@ class SessionRuntime implements ChatRuntime {
       // Refetch complete session state for observations before choosing the finite
       // publication cut. Rows emitted while a refresh is in flight belong to the
       // same candidate, rather than appearing only after the first ready snapshot.
-      const prefix: ChangeNotice[] = [];
-      while (true) {
-        const next = this.buffered.splice(0);
-        prefix.push(...next);
-        if (!next.some((notice) => notice.operation === 'observe')) break;
-        session = await this.transport.readSession(this.sessionKey, controller.signal);
-        if (!this.isCurrent(generation) || !this.checkIdentity()) return;
-        if (session.sessionKey !== this.sessionKey) {
-          throw new UnsupportedTargetError('Session refresh returned another selection.');
-        }
-      }
-      if (!this.transport.proveCoverage(session, tail, prefix)) {
-        throw new UnsupportedTargetError('Snapshot and buffered notices lack verified coverage.');
-      }
       this.rows.clear();
       this.tombstones.clear();
       this.cursor = cursor;
       this.restoreDepth = restored;
       for (const record of candidate.values()) this.put(record);
-      for (const notice of prefix) {
-        if (notice.operation !== 'observe') this.apply(notice);
-      }
       this.reconcilePendingHistory(hasOlder);
+
+      const prefix: ChangeNotice[] = [];
+      let provenance: readonly TurnProvenance[] = Object.freeze([]);
+      let activeTurn: TurnProvenance | undefined;
+      let refreshAll = true;
+      while (true) {
+        const next = this.buffered.splice(0);
+        prefix.push(...next);
+        let refreshTurnState = next.some((notice) => notice.operation === 'observe');
+        if (next.some((notice) => notice.operation === 'upsert' || notice.operation === 'delete')) refreshAll = true;
+        for (const notice of next) if (notice.operation !== 'observe') this.apply(notice);
+        if (refreshTurnState) {
+          [session, recentTurns] = await Promise.all([
+            this.transport.readSession(this.sessionKey, controller.signal),
+            this.transport.readRecentTurns(this.sessionKey, controller.signal),
+          ]);
+          if (!this.isCurrent(generation) || !this.checkIdentity()) return;
+          if (session.sessionKey !== this.sessionKey) {
+            throw new UnsupportedTargetError('Session refresh returned another selection.');
+          }
+        }
+        if (!this.transport.proveCoverage(session, tail, prefix)) {
+          throw new UnsupportedTargetError('Snapshot and buffered notices lack verified coverage.');
+        }
+        const hydrated = await this.readProvenance(recordsFrom(this.rows), recentTurns, controller.signal,
+          provenance, refreshAll);
+        if (!this.isCurrent(generation) || !this.checkIdentity()) return;
+        provenance = hydrated.provenance;
+        activeTurn = hydrated.activeTurn;
+        refreshAll = false;
+        if (this.buffered.length === 0) break;
+      }
       if (!this.isCurrent(generation)) return;
       this.initializing = false;
       this.retryDelayMs = 250;
@@ -390,9 +496,11 @@ class SessionRuntime implements ChatRuntime {
         : send);
       this.pendingReconciledIds.clear();
       const bufferedSession = this.bufferedSession as SessionRecord | undefined;
+      const currentSession = bufferedSession && bufferedSession.rowVersion > session.rowVersion ? bufferedSession : session;
       this.publish({
         status: 'ready', statusDetail: undefined, records: recordsFrom(this.rows), sends: Object.freeze(sends),
-        session: bufferedSession && bufferedSession.rowVersion > session.rowVersion ? bufferedSession : session,
+        session: currentSession, agentDisplayName: currentSession.displayName,
+        provenance, activeTurn,
         hasOlder, historyError: undefined,
       });
       // A synchronous callback may have buffered a notice during publication.
@@ -438,11 +546,22 @@ class SessionRuntime implements ChatRuntime {
       if (!this.isCurrent(generation) || !this.checkIdentity()) return;
       this.validatePage(page);
       if (page.hasOlder && page.oldestCursor === cursor) throw new InvalidCursorError('Older cursor did not advance.');
+      const candidate = new Map(this.rows);
+      for (const record of [...page.records, ...this.pendingHistoryUpserts.values()]) {
+        if ((this.tombstones.get(record.id) ?? -1) >= record.rowVersion) continue;
+        const previous = candidate.get(record.id);
+        if (!previous || record.rowVersion > previous.rowVersion) candidate.set(record.id, record);
+      }
+      const active = this.state.activeTurn?.turn;
+      const hydrated = await this.readProvenance(recordsFrom(candidate), active ? [active] : [], signal,
+        this.state.provenance ?? [], false);
+      if (!this.isCurrent(generation) || !this.checkIdentity()) return;
       for (const record of page.records) this.put(record);
       this.reconcilePendingHistory(page.hasOlder);
       this.cursor = page.oldestCursor;
       this.restoreDepth++;
-      this.publish({ records: recordsFrom(this.rows), hasOlder: page.hasOlder, loadingOlder: false });
+      this.publish({ records: recordsFrom(this.rows), provenance: hydrated.provenance, activeTurn: hydrated.activeTurn,
+        hasOlder: page.hasOlder, loadingOlder: false });
     } catch (error) {
       if (!this.isCurrent(generation) || signal.aborted) return;
       if (error instanceof AuthorizationError) {
@@ -467,7 +586,8 @@ class SessionRuntime implements ChatRuntime {
       sessionKey: this.sessionKey, deviceId: this.identity.deviceId,
       clientMessageId: `c_${crypto.randomUUID()}`, content,
     });
-    const send: LocalSend = Object.freeze({ ...submission, status: 'pending', reconciled: false });
+    const send: LocalSend = Object.freeze({ ...submission, submittedAt: new Date().toISOString(),
+      status: 'pending', reconciled: false });
     this.publish({ sends: Object.freeze([...this.state.sends, send]) });
     void this.post(submission);
     return submission.clientMessageId;
@@ -514,12 +634,13 @@ class SessionRuntime implements ChatRuntime {
     if (this.disposed || !this.checkIdentity()) return;
     if (this.state.status === 'unsupported') return;
     const send = this.state.sends.find((item) => item.clientMessageId === clientMessageId);
-    if (!send || send.status !== 'uncertain' || send.reconciled || !this.profile.capabilities.humanSendDedupe) return;
+    if (!send || !['failed', 'uncertain'].includes(send.status) || send.reconciled ||
+        !this.profile.capabilities.humanSendDedupe) return;
     // Rebuild/query first. Absence from a bounded tail does not mean rejection.
     await this.rebuild();
     if (this.disposed || !this.checkIdentity() || this.state.status !== 'ready') return;
     const current = this.state.sends.find((item) => item.clientMessageId === clientMessageId);
-    if (!current || current.reconciled || current.status !== 'uncertain') return;
+    if (!current || current.reconciled || !['failed', 'uncertain'].includes(current.status)) return;
     this.updateSend(clientMessageId, (item) => ({ ...item, status: 'pending', reason: undefined }));
     await this.post({
       sessionKey: send.sessionKey, deviceId: send.deviceId,

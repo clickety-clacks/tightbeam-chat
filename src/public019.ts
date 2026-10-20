@@ -5,6 +5,8 @@ import {
   type ConversationRecord,
   type ChangeConnection,
   type ChangeNotice,
+  type CanonicalMessage,
+  type CanonicalTurn,
   type ChatTransport,
   type ConversationPage,
   type HostIdentity,
@@ -16,7 +18,7 @@ import {
   type TargetProfile,
 } from './types';
 
-/** Released 0.1.9 build inspected for this mapping. */
+/** Historical release identity retained for callers that report old observations. */
 export const PUBLIC_019_SOURCE = 'f724fc41089335887e6eb76bfd89d9b6d50db7cd';
 export const PUBLIC_019_BUILD = 2476;
 /** The release's /version.sha is a short build stamp. */
@@ -38,17 +40,7 @@ export const PUBLIC_019_SOURCE_2908 = '8433d22fdf86027d62a34e9923501775225813ad'
 export const PUBLIC_019_BUILD_2908 = 2908;
 export const PUBLIC_019_GATEWAY_SHA_2908 = '8433d22f';
 
-const capabilities: TargetCapabilities = Object.freeze({
-  newestTail: true,
-  stableOlderCursor: true,
-  retainedHistoryAcrossResets: true,
-  orderedTransitions: true,
-  snapshotCoverage: true,
-  versionedNotices: true,
-  humanSendDedupe: true,
-});
-
-// The source comparison supports these individual 2887 paths. Its additional
+// The source comparison supports this reviewed floor. Its additional
 // failed-park reconciliation is lifecycle-only, not a transcript marker;
 // visible transitions remain the canonical markers projected by the Gateway.
 // Snapshot coverage is the Chat client's subscribe-before-REST overlap, not a
@@ -61,17 +53,16 @@ const capabilities2887: TargetCapabilities = Object.freeze({
   snapshotCoverage: true,
   versionedNotices: true,
   humanSendDedupe: true,
+  authoritativeTurnProvenance: true,
 });
 
 const unsupportedCapabilities: TargetCapabilities = Object.freeze({
   newestTail: false, stableOlderCursor: false, retainedHistoryAcrossResets: false,
   orderedTransitions: false, snapshotCoverage: false, versionedNotices: false,
-  humanSendDedupe: false,
+  humanSendDedupe: false, authoritativeTurnProvenance: false,
 });
 
-function sourceBackedCapabilities(build: number, sha: string): TargetCapabilities | undefined {
-  if ((build === PUBLIC_019_BUILD && sha === PUBLIC_019_GATEWAY_SHA) ||
-      (build === PUBLIC_019_BUILD_2844 && sha === PUBLIC_019_GATEWAY_SHA_2844)) return capabilities;
+function sourceBackedCapabilities(build: number): TargetCapabilities | undefined {
   if (build >= PUBLIC_019_BUILD_2887) return capabilities2887;
   return undefined;
 }
@@ -112,6 +103,8 @@ export interface Public019Config {
   baseUrl: string;
   /** Selected Gateway identity route. Native callers default to /version; private Chat bridges use /gateway/version. */
   gatewayVersionPath?: '/version' | '/gateway/version';
+  /** Non-secret exact Gateway origin selected by the host for status presentation. */
+  targetGateway?: string;
   /** Exact /version.build and /version.sha observed by the host. */
   build: number;
   sha: string;
@@ -148,6 +141,15 @@ const positiveInteger = (row: Record<string, unknown>, key: string): number => {
   }
   return value as number;
 };
+
+function optionalPositiveInteger(row: Record<string, unknown>, key: string): number | undefined {
+  const value = row[key];
+  if (value === null || value === undefined) return undefined;
+  if (!Number.isSafeInteger(value) || (value as number) < 1) {
+    throw new UnsupportedTargetError(`Invalid ${key} in public 0.1.9 wire response.`);
+  }
+  return value as number;
+}
 
 function messageTime(row: Record<string, unknown>): string {
   const at = row.at;
@@ -198,6 +200,19 @@ export function decodePublic019Message(value: unknown, sessionKey: string): Conv
     attachments: Object.freeze([...attachments]),
     clientMessageId: optionalString(row, 'clientMessageId'),
     deviceId: optionalString(row, 'deviceId'),
+    turnSeq: optionalPositiveInteger(row, 'turnSeq'),
+    raw: Object.freeze({ ...row }),
+  });
+}
+
+export function decodePublic019Turn(value: unknown, sessionKey: string): CanonicalTurn {
+  const row = record(value);
+  if (requiredString(row, 'sessionKey') !== sessionKey) {
+    throw new UnsupportedTargetError('Turn belongs to a different session.');
+  }
+  return Object.freeze({
+    seq: positiveInteger(row, 'seq'), sessionKey, status: requiredString(row, 'status'),
+    messageId: requiredString(row, 'messageId'), origin: requiredString(row, 'origin'),
     raw: Object.freeze({ ...row }),
   });
 }
@@ -210,6 +225,9 @@ export function decodePublic019Session(value: unknown, sessionKey: string): Sess
   return Object.freeze({
     sessionKey,
     rowVersion: positiveInteger(row, 'rowVersion'),
+    displayName: requiredString(row, 'displayName'),
+    model: optionalString(row, 'model'),
+    harness: optionalString(row, 'harness'),
     activity: optionalString(row, 'mechanicalStatus') ?? optionalString(row, 'state'),
     raw: Object.freeze({ ...row }),
   });
@@ -272,7 +290,7 @@ export function createPublic019Transport(config: Public019Config): { transport: 
   }
   const expectedIdentity = identity('0.1.9', config.build, config.sha);
   const gatewayVersionPath = config.gatewayVersionPath ?? '/version';
-  const supportedCapabilities = sourceBackedCapabilities(config.build, config.sha);
+  const supportedCapabilities = sourceBackedCapabilities(config.build);
   const profile: TargetProfile = Object.freeze({
     identity: expectedIdentity,
     label: `Tightbeam 0.1.9 build ${config.build}`,
@@ -283,6 +301,14 @@ export function createPublic019Transport(config: Public019Config): { transport: 
     const response = await config.host.fetch(`${baseUrl}${path}`, { method: 'GET', signal, cache: 'no-store' });
     if (response.status === 401 || response.status === 403) throw new AuthorizationError('Human REST principal is not authorized.');
     if (response.status === 400 && path.includes('/messages?')) throw new InvalidCursorError('History cursor was rejected.');
+    if (!response.ok) throw new Error(`Tightbeam REST request failed with HTTP ${response.status}.`);
+    return record(await response.json());
+  }
+
+  async function getOptional(path: string, signal: AbortSignal): Promise<Record<string, unknown> | null> {
+    const response = await config.host.fetch(`${baseUrl}${path}`, { method: 'GET', signal, cache: 'no-store' });
+    if (response.status === 401 || response.status === 403) throw new AuthorizationError('Human REST principal is not authorized.');
+    if (response.status === 404) return null;
     if (!response.ok) throw new Error(`Tightbeam REST request failed with HTTP ${response.status}.`);
     return record(await response.json());
   }
@@ -304,6 +330,7 @@ export function createPublic019Transport(config: Public019Config): { transport: 
 
   const transport: ChatTransport = {
     currentIdentity: () => config.host.currentIdentity(),
+    targetGateway: config.targetGateway,
     async inspectTarget(signal): Promise<TargetObservation> {
       // The host selects the Gateway route: native embeddings use /version,
       // while the private Chat server exposes it through /gateway/version.
@@ -322,6 +349,61 @@ export function createPublic019Transport(config: Public019Config): { transport: 
         throw new UnsupportedTargetError('Unexpected sessions detail envelope.');
       }
       return decodePublic019Session(body.item, sessionKey);
+    },
+    async readTurn(sessionKey, seq, signal) {
+      const body = await getOptional(`/api/turns/${seq}`, signal);
+      if (!body) return null;
+      if (body.schemaVersion !== 1 || body.resource !== 'turns') {
+        throw new UnsupportedTargetError('Unexpected turn detail envelope.');
+      }
+      return decodePublic019Turn(body.item, sessionKey);
+    },
+    async readMessage(sessionKey, messageId, signal): Promise<CanonicalMessage | null> {
+      const body = await getOptional(
+        `/api/sessions/${encodeURIComponent(sessionKey)}/messages/${encodeURIComponent(messageId)}`,
+        signal,
+      );
+      if (!body) return null;
+      if (body.schemaVersion !== 1 || body.resource !== 'transcript messages') {
+        throw new UnsupportedTargetError('Unexpected trigger-message detail envelope.');
+      }
+      const trigger = decodePublic019Message(body.item, sessionKey);
+      return trigger.kind === 'message' ? trigger : null;
+    },
+    async readRecentTurns(sessionKey, signal) {
+      const body = await get(`/api/sessions/${encodeURIComponent(sessionKey)}/turns?limit=50&tail=true`, signal);
+      if (body.schemaVersion !== 1 || body.resource !== 'turns' || !Array.isArray(body.items)) {
+        throw new UnsupportedTargetError('Unexpected turn collection envelope.');
+      }
+      return Object.freeze(body.items.map((item) => decodePublic019Turn(item, sessionKey)));
+    },
+    async resolveOriginDisplayName(origin, signal) {
+      if (origin.startsWith('session:')) {
+        const sessionKey = origin.slice('session:'.length);
+        if (!sessionKey) return undefined;
+        const body = await getOptional(`/api/sessions/${encodeURIComponent(sessionKey)}`, signal);
+        if (!body) return undefined;
+        if (body.schemaVersion !== 1 || body.resource !== 'sessions') {
+          throw new UnsupportedTargetError('Unexpected origin-session detail envelope.');
+        }
+        return decodePublic019Session(body.item, sessionKey).displayName;
+      }
+      if (!origin.startsWith('agent:')) return undefined;
+      const roleName = origin.slice('agent:'.length);
+      if (!roleName) return undefined;
+      const role = await getOptional(`/api/roles/${encodeURIComponent(roleName)}`, signal);
+      if (!role) return undefined;
+      if (role.schemaVersion !== 1 || role.resource !== 'roles') {
+        throw new UnsupportedTargetError('Unexpected origin-role detail envelope.');
+      }
+      const boundSessionKey = optionalString(record(role.item), 'boundSessionKey');
+      if (!boundSessionKey) return undefined;
+      const session = await getOptional(`/api/sessions/${encodeURIComponent(boundSessionKey)}`, signal);
+      if (!session) return undefined;
+      if (session.schemaVersion !== 1 || session.resource !== 'sessions') {
+        throw new UnsupportedTargetError('Unexpected origin-session detail envelope.');
+      }
+      return decodePublic019Session(session.item, boundSessionKey).displayName;
     },
     readTail: (sessionKey, signal) => readPage(sessionKey, 'tail=true', signal),
     readOlder: (sessionKey, before, signal) => readPage(sessionKey, `before=${encodeURIComponent(before)}`, signal),

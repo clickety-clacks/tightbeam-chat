@@ -197,7 +197,8 @@ export function parseGatewayBridgeTarget(requestUrl: string): GatewayBridgeTarge
     const path = `${match[2]}${request.search}`;
     const pathname = new URL(path, gateway).pathname;
     if (pathname !== '/version' && pathname !== '/ws' && pathname !== '/ws/changes' &&
-        pathname !== '/api/sessions' && !pathname.startsWith('/api/sessions/')) return undefined;
+        pathname !== '/api/sessions' && !pathname.startsWith('/api/sessions/') &&
+        !/^\/api\/turns\/[1-9][0-9]*$/.test(pathname) && !/^\/api\/roles\/[^/]+$/.test(pathname)) return undefined;
     return { gateway, path };
   } catch {
     return undefined;

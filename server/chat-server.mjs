@@ -196,6 +196,44 @@ function parseServiceHttpTarget(rawUrl, runtime) {
       };
     }
 
+    const trigger = /^\/__chat\/api\/sessions\/([^/]+)\/messages\/([^/]+)$/.exec(request.pathname);
+    const triggerSession = trigger && decodeSessionPath(trigger[1]);
+    const triggerMessage = trigger && decodeSessionPath(trigger[2]);
+    if (triggerSession && triggerMessage && routeParams.length === 0) {
+      return {
+        kind: 'detail', gatewayOrigin, sessionKey: triggerSession,
+        path: `/api/sessions/${encodeURIComponent(triggerSession)}/messages/${encodeURIComponent(triggerMessage)}?asUser=${encodeURIComponent(runtime.principalKey)}`,
+      };
+    }
+
+    const sessionTurns = /^\/__chat\/api\/sessions\/([^/]+)\/turns$/.exec(request.pathname);
+    const turnsSession = sessionTurns && decodeSessionPath(sessionTurns[1]);
+    if (turnsSession && routeParams.length === 2 &&
+        request.searchParams.get('limit') === '50' && request.searchParams.get('tail') === 'true' &&
+        routeParams.some(([name]) => name === 'limit') && routeParams.some(([name]) => name === 'tail')) {
+      return {
+        kind: 'transcript', gatewayOrigin, sessionKey: turnsSession,
+        path: `/api/sessions/${encodeURIComponent(turnsSession)}/turns?asUser=${encodeURIComponent(runtime.principalKey)}&limit=50&tail=true`,
+      };
+    }
+
+    const turn = /^\/__chat\/api\/turns\/([1-9][0-9]*)$/.exec(request.pathname);
+    if (turn && routeParams.length === 0 && Number.isSafeInteger(Number(turn[1]))) {
+      return {
+        kind: 'detail', gatewayOrigin,
+        path: `/api/turns/${turn[1]}?asUser=${encodeURIComponent(runtime.principalKey)}`,
+      };
+    }
+
+    const role = /^\/__chat\/api\/roles\/([^/]+)$/.exec(request.pathname);
+    const roleName = role && decodeSessionPath(role[1]);
+    if (roleName && routeParams.length === 0) {
+      return {
+        kind: 'detail', gatewayOrigin,
+        path: `/api/roles/${encodeURIComponent(roleName)}?asUser=${encodeURIComponent(runtime.principalKey)}`,
+      };
+    }
+
     const messages = /^\/__chat\/api\/sessions\/([^/]+)\/messages$/.exec(request.pathname);
     const messageSession = messages && decodeSessionPath(messages[1]);
     if (!messageSession) return undefined;

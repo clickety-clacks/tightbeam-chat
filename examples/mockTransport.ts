@@ -1,5 +1,5 @@
 import type {
-  CanonicalMessage, CanonicalTransition, ChangeCallbacks, ChangeConnection,
+  CanonicalMessage, CanonicalTransition, CanonicalTurn, ChangeCallbacks, ChangeConnection,
   ChatTransport, ConversationPage, ConversationRecord, HostIdentity,
   HumanSendResult, HumanSubmission, SessionRecord, TargetObservation,
 } from '../src/types';
@@ -12,7 +12,7 @@ export const fixtureTarget: TargetObservation = {
   capabilities: {
     newestTail: true, stableOlderCursor: true, retainedHistoryAcrossResets: true,
     orderedTransitions: true, snapshotCoverage: true, versionedNotices: true,
-    humanSendDedupe: true,
+    humanSendDedupe: true, authoritativeTurnProvenance: true,
   },
 };
 
@@ -39,8 +39,27 @@ export class LocalFixtureTransport implements ChatTransport {
   private version = 1;
   private nextSeq = 125;
   private postOutcomes = new Map<string, HumanSendResult>();
+  private turns = new Map<number, CanonicalTurn>();
 
   constructor() {
+    let latestHuman: CanonicalMessage | undefined;
+    this.rows = this.rows.map((record) => {
+      if (record.kind !== 'message') return record;
+      if (record.role === 'user') {
+        latestHuman = { ...record, turnSeq: record.seq };
+        this.turns.set(record.seq, { seq: record.seq, sessionKey, status: 'completed',
+          messageId: record.id, origin: 'user:fixture-person', raw: { fixture: true } });
+        return latestHuman;
+      }
+      if (latestHuman) {
+        const turnSeq = latestHuman.seq;
+        latestHuman = undefined;
+        return { ...record, turnSeq };
+      }
+      this.turns.set(record.seq, { seq: record.seq, sessionKey, status: 'completed',
+        messageId: record.id, origin: 'process:fixture', raw: { fixture: true } });
+      return { ...record, turnSeq: record.seq };
+    });
     this.rows.push(transition(31, 'harness', 'Claude', 'Codex'));
     this.rows.push(transition(72, 'model', 'model-A', 'model-B'));
     this.rows.push(transition(103, 'harness', 'Codex', 'Claude'));
@@ -58,9 +77,20 @@ export class LocalFixtureTransport implements ChatTransport {
     return { close };
   };
   readSession = async (selected: string): Promise<SessionRecord> => ({
-    sessionKey: selected, rowVersion: this.version, activity: 'Fixture idle',
+    sessionKey: selected, rowVersion: this.version, displayName: 'Example agent',
+    model: 'example model', harness: 'example harness', activity: 'Fixture idle',
     raw: { fixture: true, clearedThroughSeq: 90 },
   });
+  readTurn = async (selected: string, seq: number): Promise<CanonicalTurn | null> =>
+    selected === sessionKey ? this.turns.get(seq) ?? null : null;
+  readMessage = async (selected: string, messageId: string): Promise<CanonicalMessage | null> => {
+    if (selected !== sessionKey) return null;
+    return this.rows.find((row): row is CanonicalMessage => row.kind === 'message' && row.id === messageId) ?? null;
+  };
+  readRecentTurns = async (selected: string): Promise<readonly CanonicalTurn[]> => selected === sessionKey
+    ? [...this.turns.values()].sort((a, b) => a.seq - b.seq).slice(-50) : [];
+  resolveOriginDisplayName = async (origin: string) => origin.startsWith('agent:') || origin.startsWith('session:')
+    ? 'Example agent' : undefined;
   private page(records: ConversationRecord[]): ConversationPage {
     return {
       records, oldestCursor: records.length ? `before:${records[0].id}` : null,
@@ -84,8 +114,10 @@ export class LocalFixtureTransport implements ChatTransport {
     const result: HumanSendResult = { outcome: 'accepted' };
     this.postOutcomes.set(submission.clientMessageId, result);
     const row = message(this.nextSeq++, submission.content, 'user', {
-      clientMessageId: submission.clientMessageId, deviceId: submission.deviceId,
+      clientMessageId: submission.clientMessageId, deviceId: submission.deviceId, turnSeq: this.nextSeq - 1,
     });
+    this.turns.set(row.turnSeq!, { seq: row.turnSeq!, sessionKey, status: 'completed',
+      messageId: row.id, origin: 'user:fixture-person', raw: { fixture: true } });
     this.rows.push(row);
     this.emit({ operation: 'upsert', record: row });
     return result;
@@ -95,14 +127,18 @@ export class LocalFixtureTransport implements ChatTransport {
     for (const callback of this.callbacks) callback.onNotice(notice);
   }
   appendAssistant() {
-    const row = message(this.nextSeq++, 'A new fixture response arrived.');
+    const seq = this.nextSeq++;
+    const row = message(seq, 'A new fixture response arrived.', 'assistant', { turnSeq: seq });
+    this.turns.set(seq, { seq, sessionKey, status: 'completed', messageId: row.id,
+      origin: 'process:fixture', raw: { fixture: true } });
     this.rows.push(row);
     this.emit({ operation: 'upsert', record: row });
   }
   resetAgentContext() {
     this.version++;
     this.emit({ operation: 'session', session: {
-      sessionKey, rowVersion: this.version, activity: 'Fixture context reset',
+      sessionKey, rowVersion: this.version, displayName: 'Example agent', model: 'example model',
+      harness: 'example harness', activity: 'Fixture context reset',
       raw: { fixture: true, clearedThroughSeq: this.nextSeq - 1 },
     } });
   }
