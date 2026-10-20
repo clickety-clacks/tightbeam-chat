@@ -41,7 +41,8 @@ class Channel implements Public019Channel {
   disconnect() { this.disconnected?.(); }
 }
 
-function setup(heartbeatTimeoutMs?: number, observedVersion = version, configuredVersion = observedVersion, historyItems: unknown[] = [item]) {
+function setup(heartbeatTimeoutMs?: number, observedVersion = version, configuredVersion = observedVersion,
+  historyItems: unknown[] = [item], recentTurnsForbidden = false) {
   const changes = new Channel();
   const human = new Channel();
   const paths: string[] = [];
@@ -49,6 +50,7 @@ function setup(heartbeatTimeoutMs?: number, observedVersion = version, configure
     currentIdentity: () => identity,
     fetch: async (path) => {
       paths.push(path);
+      if (recentTurnsForbidden && path.includes('/turns?')) return new Response('', { status: 403 });
       const body = path.endsWith('/version') ? observedVersion : path.includes('/messages?')
         ? { schemaVersion: 1, resource: 'transcript messages', items: historyItems,
           page: { oldestCursor: 'older-cursor', hasMoreBefore: true } }
@@ -160,6 +162,36 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
     ]);
     expect(runtime.getSnapshot().records.map((record) => record.id)).toEqual(['m_1']);
     expect(candidate.human.sent).toHaveLength(0);
+    runtime.dispose();
+  });
+
+  it('keeps history, the live subscription, and human sends when recent-turn provenance is forbidden', async () => {
+    const messages = [
+      { ...item, id: 'human-message', seq: 9, role: 'user', content: 'Can you help?' },
+      { ...item, id: 'agent-message', seq: 10, role: 'assistant', turnSeq: 12, content: 'Here is the answer.' },
+    ];
+    const candidate = setup(undefined, identified2887, identified2887, messages, true);
+    const runtime = createTightbeamAdapter(candidate.transport, candidate.profile).open(sessionKey);
+
+    await vi.waitFor(() => expect(candidate.changes.sent).toEqual([{
+      type: 'subscribe', protocolVersion: 2, subscriptionId: `chat:${sessionKey}`,
+      filters: { sessionKey },
+    }]));
+    candidate.changes.emit({ type: 'subscription_ready', subscriptionId: `chat:${sessionKey}` });
+    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+
+    expect(runtime.getSnapshot().records.map((record) => record.id)).toEqual(['human-message', 'agent-message']);
+    expect(runtime.getSnapshot().provenanceAvailable).toBe(false);
+    expect(runtime.getSnapshot().activeTurn).toBeUndefined();
+    expect(candidate.paths).toContain(`https://host.example/api/sessions/${sessionKey}/turns?limit=50&tail=true`);
+    expect(candidate.changes.closed).toBe(false);
+
+    const clientMessageId = runtime.send('Still available');
+    expect(clientMessageId).toBeTruthy();
+    await vi.waitFor(() => expect(candidate.human.sent).toHaveLength(1));
+    candidate.human.emit({ type: 'ack', id: clientMessageId });
+    await vi.waitFor(() => expect(runtime.getSnapshot().sends[0]?.status).toBe('accepted'));
+    expect(runtime.getSnapshot().status).toBe('ready');
     runtime.dispose();
   });
 

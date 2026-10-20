@@ -43,6 +43,9 @@ function recordsFrom(map: Map<string, ConversationRecord>): readonly Conversatio
   return Object.freeze([...map.values()].sort(compareRecords));
 }
 
+const noRecentTurns: readonly CanonicalTurn[] = Object.freeze([]);
+const noProvenance: readonly TurnProvenance[] = Object.freeze([]);
+
 /** A target-independent runtime. Its transport is the only backend-specific code. */
 export function createTightbeamAdapter(transport: ChatTransport, profile: TargetProfile): TightbeamAdapter {
   return { open: (sessionKey) => new SessionRuntime(sessionKey, transport, profile) };
@@ -71,6 +74,7 @@ class SessionRuntime implements ChatRuntime {
   private retryDelayMs = 250;
   private rebuildPromise: Promise<void> | undefined;
   private provenanceRefreshToken = 0;
+  private provenanceUnavailableGeneration = -1;
 
   constructor(
     private readonly sessionKey: string,
@@ -81,7 +85,7 @@ class SessionRuntime implements ChatRuntime {
     this.state = Object.freeze({
       sessionKey, generation: 0, status: 'loading', records: Object.freeze([]),
       hasOlder: false, loadingOlder: false, sends: Object.freeze([]), targetLabel: profile.label,
-      targetGateway: transport.targetGateway, provenance: Object.freeze([]),
+      targetGateway: transport.targetGateway, provenance: noProvenance, provenanceAvailable: true,
     });
     void this.rebuild();
   }
@@ -291,7 +295,7 @@ class SessionRuntime implements ChatRuntime {
     this.publish({
       generation: this.generation, status, statusDetail: reason,
       records: Object.freeze([]), sends, session: undefined,
-      agentDisplayName: undefined, provenance: Object.freeze([]), activeTurn: undefined,
+      agentDisplayName: undefined, provenance: noProvenance, provenanceAvailable: false, activeTurn: undefined,
       hasOlder: false, loadingOlder: false, historyError: undefined,
     });
   }
@@ -349,24 +353,52 @@ class SessionRuntime implements ChatRuntime {
     return { provenance: frozen, activeTurn: active ? resolved.find((item) => item.turn.seq === active.seq) : undefined };
   }
 
+  private async readRecentTurnsOrUnavailable(generation: number, signal: AbortSignal): Promise<readonly CanonicalTurn[]> {
+    if (this.provenanceUnavailableGeneration === generation) return noRecentTurns;
+    try {
+      return await this.transport.readRecentTurns(this.sessionKey, signal);
+    } catch (error) {
+      if (signal.aborted) throw error;
+      this.provenanceUnavailableGeneration = generation;
+      return noRecentTurns;
+    }
+  }
+
+  private async readProvenanceOrUnavailable(
+    records: readonly ConversationRecord[],
+    recentTurns: readonly CanonicalTurn[],
+    signal: AbortSignal,
+    previous: readonly TurnProvenance[],
+    refreshAll: boolean,
+    generation: number,
+  ): Promise<{ provenance: readonly TurnProvenance[]; activeTurn?: TurnProvenance; provenanceAvailable: boolean }> {
+    if (this.provenanceUnavailableGeneration === generation) {
+      return { provenance: noProvenance, activeTurn: undefined, provenanceAvailable: false };
+    }
+    try {
+      return { ...(await this.readProvenance(records, recentTurns, signal, previous, refreshAll)), provenanceAvailable: true };
+    } catch (error) {
+      if (signal.aborted) throw error;
+      this.provenanceUnavailableGeneration = generation;
+      return { provenance: noProvenance, activeTurn: undefined, provenanceAvailable: false };
+    }
+  }
+
   private async refreshLiveProvenance(generation: number): Promise<void> {
     const controller = this.controller;
     if (!controller || !this.isCurrent(generation) || controller.signal.aborted) return;
     const refreshToken = ++this.provenanceRefreshToken;
     try {
       const currentTurn = this.state.activeTurn?.turn;
-      const result = await this.readProvenance(recordsFrom(this.rows), currentTurn ? [currentTurn] : [],
-        controller.signal, this.state.provenance ?? [], false);
+      const result = await this.readProvenanceOrUnavailable(recordsFrom(this.rows), currentTurn ? [currentTurn] : [],
+        controller.signal, this.state.provenance ?? [], false, generation);
       if (!this.isCurrent(generation) || controller.signal.aborted || refreshToken !== this.provenanceRefreshToken) return;
       this.publish(result);
-    } catch (error) {
+    } catch {
       if (!this.isCurrent(generation) || controller.signal.aborted) return;
-      if (error instanceof AuthorizationError) {
-        this.failClosed('unauthorized', errorText(error));
-      } else if (error instanceof UnsupportedTargetError) {
-        this.failClosed('unsupported', errorText(error));
-      } else {
-        this.doubt(`Message provenance could not be refreshed: ${errorText(error)}`, generation);
+      this.provenanceUnavailableGeneration = generation;
+      if (refreshToken === this.provenanceRefreshToken) {
+        this.publish({ provenance: noProvenance, activeTurn: undefined, provenanceAvailable: false });
       }
     }
   }
@@ -421,7 +453,7 @@ class SessionRuntime implements ChatRuntime {
       let [session, tail, recentTurns] = await Promise.all([
         this.transport.readSession(this.sessionKey, controller.signal),
         this.transport.readTail(this.sessionKey, controller.signal),
-        this.transport.readRecentTurns(this.sessionKey, controller.signal),
+        this.readRecentTurnsOrUnavailable(generation, controller.signal),
       ]);
       if (!this.isCurrent(generation) || !this.checkIdentity()) return;
       if (session.sessionKey !== this.sessionKey) throw new UnsupportedTargetError('Session read returned another selection.');
@@ -464,6 +496,7 @@ class SessionRuntime implements ChatRuntime {
       const prefix: ChangeNotice[] = [];
       let provenance: readonly TurnProvenance[] = Object.freeze([]);
       let activeTurn: TurnProvenance | undefined;
+      let provenanceAvailable = this.provenanceUnavailableGeneration !== generation;
       let refreshAll = true;
       while (true) {
         const next = this.buffered.splice(0);
@@ -477,7 +510,7 @@ class SessionRuntime implements ChatRuntime {
         if (refreshTurnState) {
           [session, recentTurns] = await Promise.all([
             this.transport.readSession(this.sessionKey, controller.signal),
-            this.transport.readRecentTurns(this.sessionKey, controller.signal),
+            this.readRecentTurnsOrUnavailable(generation, controller.signal),
           ]);
           if (!this.isCurrent(generation) || !this.checkIdentity()) return;
           if (session.sessionKey !== this.sessionKey) {
@@ -487,11 +520,12 @@ class SessionRuntime implements ChatRuntime {
         if (!this.transport.proveCoverage(session, tail, prefix)) {
           throw new UnsupportedTargetError('Snapshot and buffered notices lack verified coverage.');
         }
-        const hydrated = await this.readProvenance(recordsFrom(this.rows), recentTurns, controller.signal,
-          provenance, refreshAll);
+        const hydrated = await this.readProvenanceOrUnavailable(recordsFrom(this.rows), recentTurns, controller.signal,
+          provenance, refreshAll, generation);
         if (!this.isCurrent(generation) || !this.checkIdentity()) return;
         provenance = hydrated.provenance;
         activeTurn = hydrated.activeTurn;
+        provenanceAvailable = hydrated.provenanceAvailable;
         refreshAll = false;
         if (this.buffered.length === 0) break;
       }
@@ -507,7 +541,7 @@ class SessionRuntime implements ChatRuntime {
       this.publish({
         status: 'ready', statusDetail: undefined, records: recordsFrom(this.rows), sends: Object.freeze(sends),
         session: currentSession, agentDisplayName: currentSession.displayName,
-        provenance, activeTurn,
+        provenance, provenanceAvailable, activeTurn,
         hasOlder, historyError: undefined,
       });
       // A synchronous callback may have buffered a notice during publication.
@@ -560,15 +594,15 @@ class SessionRuntime implements ChatRuntime {
         if (!previous || record.rowVersion > previous.rowVersion) candidate.set(record.id, record);
       }
       const active = this.state.activeTurn?.turn;
-      const hydrated = await this.readProvenance(recordsFrom(candidate), active ? [active] : [], signal,
-        this.state.provenance ?? [], false);
+      const hydrated = await this.readProvenanceOrUnavailable(recordsFrom(candidate), active ? [active] : [], signal,
+        this.state.provenance ?? [], false, generation);
       if (!this.isCurrent(generation) || !this.checkIdentity()) return;
       for (const record of page.records) this.put(record);
       this.reconcilePendingHistory(page.hasOlder);
       this.cursor = page.oldestCursor;
       this.restoreDepth++;
       this.publish({ records: recordsFrom(this.rows), provenance: hydrated.provenance, activeTurn: hydrated.activeTurn,
-        hasOlder: page.hasOlder, loadingOlder: false });
+        provenanceAvailable: hydrated.provenanceAvailable, hasOlder: page.hasOlder, loadingOlder: false });
     } catch (error) {
       if (!this.isCurrent(generation) || signal.aborted) return;
       if (error instanceof AuthorizationError) {

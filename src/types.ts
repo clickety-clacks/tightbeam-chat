@@ -187,6 +187,8 @@ export interface RuntimeState {
   readonly records: readonly ConversationRecord[];
   readonly session?: SessionRecord;
   readonly provenance?: readonly TurnProvenance[];
+  /** False when optional turn reads are unavailable for this connection generation. */
+  readonly provenanceAvailable?: boolean;
   readonly activeTurn?: TurnProvenance;
   readonly targetGateway?: string;
   readonly agentDisplayName?: string;
