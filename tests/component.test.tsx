@@ -131,6 +131,22 @@ describe('conversation surface', () => {
       .toBe('Research assistant');
   });
 
+  it('shows selected-session messages without filtering or activity captions when turn provenance is unavailable', () => {
+    const sessionKey = 'conversation-without-provenance';
+    const human = row(sessionKey, 'human-message', 'A retained human message', { role: 'user' });
+    const agent = row(sessionKey, 'agent-message', 'An agent reply to another participant', { role: 'assistant' });
+    const active = provenance(10, sessionKey, 'unloaded-trigger', 'user:person', undefined, undefined, 'running');
+    const runtime = new FakeRuntime(sessionKey, {
+      records: [human, agent], provenanceAvailable: false, activeTurn: active,
+    });
+
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+    const log = screen.getByRole('log');
+    expect(within(log).getByText('A retained human message')).toBeTruthy();
+    expect(within(log).getByText('An agent reply to another participant')).toBeTruthy();
+    expect(within(log).queryByText('Replying to you')).toBeNull();
+  });
+
   it('does not revisit loaded message rows while typing with a production-sized history', async () => {
     const sessionKey = 'long-conversation';
     const messages = Array.from({ length: 1200 }, (_, index) => row(

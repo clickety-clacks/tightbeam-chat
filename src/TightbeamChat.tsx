@@ -92,6 +92,18 @@ function sourceLabel(side: Bubble['side'], agentName: string): string {
 }
 
 function visibleBubbles(state: RuntimeState, agentName: string): Bubble[] {
+  if (state.provenanceAvailable === false) {
+    return state.records.flatMap((record): Bubble[] => {
+      if (record.kind !== 'message') return [];
+      if (record.role === 'user') {
+        return [{ key: record.id, record, side: 'human', sender: 'You', derived: false }];
+      }
+      if (record.role === 'assistant') {
+        return [{ key: record.id, record, side: 'agent', sender: sourceLabel('agent', agentName), derived: false }];
+      }
+      return [];
+    });
+  }
   const provenance = state.provenance ?? [];
   const byTurn = new Map(provenance.map((item) => [item.turn.seq, item]));
   const byMessage = new Map<string, TurnProvenance[]>();
@@ -306,8 +318,8 @@ function ChatBody({ runtime, renderMessage, className }: {
   const anchor = useRef<{ id: string; top: number } | null>(null);
   const agentName = state.agentDisplayName ?? '';
   const bubbles = useMemo(() => visibleBubbles(state, agentName),
-    [state.records, state.provenance, state.activeTurn, agentName]);
-  const caption = activeCaption(state.activeTurn);
+    [state.records, state.provenance, state.provenanceAvailable, state.activeTurn, agentName]);
+  const caption = state.provenanceAvailable === false ? undefined : activeCaption(state.activeTurn);
   const visibleCanonicalIds = useMemo(() => new Set(bubbles.map((bubble) => bubble.record.clientMessageId).filter(Boolean)), [bubbles]);
   const localSends = state.sends.filter((send) => !visibleCanonicalIds.has(send.clientMessageId));
   const statusName = statusText(state);

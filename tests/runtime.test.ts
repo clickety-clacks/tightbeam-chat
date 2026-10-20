@@ -117,6 +117,32 @@ describe('framework-independent runtime', () => {
     runtime.dispose();
   });
 
+  it('keeps history and sends available when the optional recent-turns read is forbidden', async () => {
+    const transport = new ControlledTransport();
+    transport.rows = [message(7, { role: 'user', content: 'Can you help?' }),
+      message(8, { content: 'The answer remains visible.', turnSeq: 44 })];
+    transport.readRecentTurns = async () => { throw new AuthorizationError('Recent turns are not authorized.'); };
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+
+    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+    expect(runtime.getSnapshot().records.map((record) => record.id)).toEqual(['m7', 'm8']);
+    expect(runtime.getSnapshot().provenanceAvailable).toBe(false);
+    expect(runtime.getSnapshot().activeTurn).toBeUndefined();
+
+    const live = message(9, { content: 'A live reply also appears.' });
+    transport.rows.push(live);
+    transport.emit(live);
+    await vi.waitFor(() => expect(runtime.getSnapshot().records.at(-1)?.id).toBe('m9'));
+    expect(runtime.getSnapshot().status).toBe('ready');
+
+    const clientMessageId = runtime.send('Still available');
+    expect(clientMessageId).toBeTruthy();
+    await vi.waitFor(() => expect(runtime.getSnapshot().sends[0]?.status).toBe('accepted'));
+    expect(transport.submissions[0].content).toBe('Still available');
+    expect(runtime.getSnapshot().status).toBe('ready');
+    runtime.dispose();
+  });
+
   it('waits for readiness, closes snapshot overlap, and pages retained pre-reset history with recorded switches', async () => {
     const transport = new ControlledTransport();
     transport.readyGate = deferred<void>();
