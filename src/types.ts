@@ -13,8 +13,39 @@ export interface CanonicalMessage {
   readonly attachments?: readonly unknown[];
   readonly clientMessageId?: string;
   readonly deviceId?: string;
+  /** Optional source-backed turn index; never sufficient by itself to classify a row. */
+  readonly turnSeq?: number;
   /** Full decoded row, including unrecognized metadata and provenance. */
   readonly raw: Readonly<Record<string, unknown>>;
+}
+
+export interface CanonicalTurn {
+  readonly seq: number;
+  readonly sessionKey: string;
+  readonly status: string;
+  readonly messageId: string;
+  readonly origin: string;
+  readonly raw: Readonly<Record<string, unknown>>;
+}
+
+export interface BatchMember {
+  readonly index: number;
+  readonly origin: string;
+  readonly content: string;
+}
+
+export type TurnSourceKind = 'human' | 'agent' | 'substrate' | 'unknown';
+
+/** Source-backed trigger detail used for display filtering and active-turn captions. */
+export interface TurnProvenance {
+  readonly turn: CanonicalTurn;
+  readonly trigger?: CanonicalMessage;
+  readonly sourceKind: TurnSourceKind;
+  readonly captionOrigin: string;
+  readonly sourceDisplayName?: string;
+  readonly sourceMessageType?: string;
+  readonly batchCount?: number;
+  readonly humanMembers: readonly BatchMember[];
 }
 
 /** A target-verified projection of an actual stored switch, never inferred from text. */
@@ -45,6 +76,9 @@ export interface ConversationPage {
 export interface SessionRecord {
   readonly sessionKey: string;
   readonly rowVersion: number;
+  readonly displayName: string;
+  readonly model?: string;
+  readonly harness?: string;
   readonly activity?: string;
   readonly raw: Readonly<Record<string, unknown>>;
 }
@@ -71,6 +105,7 @@ export interface TargetCapabilities {
   readonly snapshotCoverage: boolean;
   readonly versionedNotices: boolean;
   readonly humanSendDedupe: boolean;
+  readonly authoritativeTurnProvenance: boolean;
 }
 
 export interface TargetObservation {
@@ -118,6 +153,16 @@ export interface ChatTransport {
   readTail(sessionKey: string, signal: AbortSignal): Promise<ConversationPage>;
   readOlder(sessionKey: string, before: string, signal: AbortSignal): Promise<ConversationPage>;
   readSession(sessionKey: string, signal: AbortSignal): Promise<SessionRecord>;
+  /** Exact turn lookup used only after a message supplies a turn index. */
+  readTurn(sessionKey: string, seq: number, signal: AbortSignal): Promise<CanonicalTurn | null>;
+  /** Source message lookup; the returned row is always checked against sessionKey. */
+  readMessage(sessionKey: string, messageId: string, signal: AbortSignal): Promise<CanonicalMessage | null>;
+  /** Bounded newest turn page used to determine current activity. */
+  readRecentTurns(sessionKey: string, signal: AbortSignal): Promise<readonly CanonicalTurn[]>;
+  /** Resolves an agent/session origin to its display name without reading its transcript. */
+  resolveOriginDisplayName(origin: string, signal: AbortSignal): Promise<string | undefined>;
+  /** Exact non-secret Gateway origin selected by the host, when the transport knows it. */
+  readonly targetGateway?: string;
   /** Establishes the elected target's snapshot/notice coverage rule. */
   proveCoverage(session: SessionRecord, page: ConversationPage, buffered: readonly ChangeNotice[]): boolean;
   /** Separate authenticated human /ws post, resolved by correlated ack/refusal/uncertainty. */
@@ -128,6 +173,7 @@ export type RuntimeStatus = 'loading' | 'ready' | 'stale' | 'unsupported' | 'una
 export type SendStatus = 'pending' | 'accepted' | 'failed' | 'uncertain';
 
 export interface LocalSend extends HumanSubmission {
+  readonly submittedAt: string;
   readonly status: SendStatus;
   readonly reason?: string;
   readonly reconciled: boolean;
@@ -140,6 +186,10 @@ export interface RuntimeState {
   readonly statusDetail?: string;
   readonly records: readonly ConversationRecord[];
   readonly session?: SessionRecord;
+  readonly provenance?: readonly TurnProvenance[];
+  readonly activeTurn?: TurnProvenance;
+  readonly targetGateway?: string;
+  readonly agentDisplayName?: string;
   readonly hasOlder: boolean;
   readonly loadingOlder: boolean;
   readonly historyError?: string;

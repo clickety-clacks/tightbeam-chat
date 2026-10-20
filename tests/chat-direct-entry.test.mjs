@@ -180,11 +180,32 @@ describe('private direct-entry Chat service bridge', () => {
       if (request.url === '/version') {
         response.writeHead(200, { 'content-type': 'application/json' });
         response.end(JSON.stringify({ version: '0.1.9', build: 2847, sha: 'b75b9bf5' }));
+      } else if (request.url === `/api/turns/12?asUser=${encodeURIComponent(PRINCIPAL)}`) {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ schemaVersion: 1, resource: 'turns', item: {
+          seq: 12, sessionKey: LINKED_SESSION, status: 'completed', messageId: 'trigger-12', origin: 'user:owner',
+        } }));
+      } else if (request.url === `/api/sessions/${encodeURIComponent(LINKED_SESSION)}/turns?asUser=${encodeURIComponent(PRINCIPAL)}&limit=50&tail=true`) {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ schemaVersion: 1, resource: 'turns', items: [{
+          seq: 12, sessionKey: LINKED_SESSION, status: 'completed', messageId: 'trigger-12', origin: 'user:owner',
+        }], page: { hasMoreBefore: false } }));
+      } else if (request.url === `/api/roles/example-role?asUser=${encodeURIComponent(PRINCIPAL)}`) {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ schemaVersion: 1, resource: 'roles', item: {
+          roleName: 'example-role', boundSessionKey: LINKED_SESSION,
+        } }));
+      } else if (request.url === `/api/sessions/${encodeURIComponent(LINKED_SESSION)}/messages/trigger-12?asUser=${encodeURIComponent(PRINCIPAL)}`) {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ schemaVersion: 1, resource: 'transcript messages',
+          item: canonicalMessage(LINKED_SESSION, 12, { id: 'trigger-12', turnSeq: 12, content: 'source prompt' }) }));
       } else if ([SESSION, LINKED_SESSION].some((sessionKey) =>
         request.url === `/api/sessions/${encodeURIComponent(sessionKey)}?asUser=${encodeURIComponent(PRINCIPAL)}`)) {
         response.writeHead(200, { 'content-type': 'application/json' });
         const sessionKey = request.url.includes(encodeURIComponent(LINKED_SESSION)) ? LINKED_SESSION : SESSION;
-        response.end(JSON.stringify({ schemaVersion: 1, resource: 'sessions', item: { sessionKey } }));
+        response.end(JSON.stringify({ schemaVersion: 1, resource: 'sessions', item: {
+          sessionKey, rowVersion: 1, displayName: 'Selected agent', model: 'Model A', harness: 'Harness A',
+        } }));
       } else {
         const parsed = new URL(request.url, 'http://gateway.invalid');
         const messagePath = /^\/api\/sessions\/([^/]+)\/messages$/.exec(parsed.pathname);
@@ -248,15 +269,38 @@ describe('private direct-entry Chat service bridge', () => {
       items: [canonicalMessage(LINKED_SESSION, 1, { content: 'hello' })],
       page: { oldestCursor: 'cursor:m_1', newestCursor: 'cursor:m_1', hasMoreBefore: true, hasMoreAfter: false },
     });
+    const turnResponse = await fetch(`${chatOrigin}/__chat/api/turns/12?gateway=${encodeURIComponent(gatewayOrigin)}`, {
+      headers: { origin: chatOrigin },
+    });
+    expect((await turnResponse.json()).item).toMatchObject({ seq: 12, sessionKey: LINKED_SESSION, origin: 'user:owner' });
+    const triggerResponse = await fetch(
+      `${chatOrigin}/__chat/api/sessions/${encodeURIComponent(LINKED_SESSION)}/messages/trigger-12?gateway=${encodeURIComponent(gatewayOrigin)}`,
+      { headers: { origin: chatOrigin } },
+    );
+    expect((await triggerResponse.json()).item).toMatchObject({ id: 'trigger-12', sessionKey: LINKED_SESSION, content: 'source prompt' });
+    const turnsResponse = await fetch(
+      `${chatOrigin}/__chat/api/sessions/${encodeURIComponent(LINKED_SESSION)}/turns?gateway=${encodeURIComponent(gatewayOrigin)}&limit=50&tail=true`,
+      { headers: { origin: chatOrigin } },
+    );
+    expect((await turnsResponse.json()).items).toMatchObject([{ seq: 12, sessionKey: LINKED_SESSION }]);
+    const roleResponse = await fetch(
+      `${chatOrigin}/__chat/api/roles/example-role?gateway=${encodeURIComponent(gatewayOrigin)}`,
+      { headers: { origin: chatOrigin } },
+    );
+    expect((await roleResponse.json()).item.boundSessionKey).toBe(LINKED_SESSION);
 
-    expect(seen).toHaveLength(3);
+    expect(seen).toHaveLength(7);
     expect(seen.map((row) => row.url)).toEqual([
       '/version',
       `/api/sessions/${encodeURIComponent(LINKED_SESSION)}?asUser=${encodeURIComponent(PRINCIPAL)}`,
       `/api/sessions/${encodeURIComponent(LINKED_SESSION)}/messages?asUser=${encodeURIComponent(PRINCIPAL)}&limit=50&tail=true`,
+      `/api/turns/12?asUser=${encodeURIComponent(PRINCIPAL)}`,
+      `/api/sessions/${encodeURIComponent(LINKED_SESSION)}/messages/trigger-12?asUser=${encodeURIComponent(PRINCIPAL)}`,
+      `/api/sessions/${encodeURIComponent(LINKED_SESSION)}/turns?asUser=${encodeURIComponent(PRINCIPAL)}&limit=50&tail=true`,
+      `/api/roles/example-role?asUser=${encodeURIComponent(PRINCIPAL)}`,
     ]);
     expect(seen.map((row) => row.authorization)).toEqual([
-      undefined, `Bearer ${TOKEN}`, `Bearer ${TOKEN}`,
+      undefined, `Bearer ${TOKEN}`, `Bearer ${TOKEN}`, `Bearer ${TOKEN}`, `Bearer ${TOKEN}`, `Bearer ${TOKEN}`, `Bearer ${TOKEN}`,
     ]);
     expect(seen.every((row) => !row.cliVersion && row.body === '')).toBe(true);
 
@@ -264,7 +308,7 @@ describe('private direct-entry Chat service bridge', () => {
     expect(wrongSession.status).toBe(404);
     const wrongOrigin = await fetch(`${chatOrigin}/__chat/gateway/version`, { headers: { origin: 'https://elsewhere.example' } });
     expect(wrongOrigin.status).toBe(403);
-    expect(seen).toHaveLength(4);
+    expect(seen).toHaveLength(8);
   });
 
   it('composes the canonical selected-history route with the real decoder across an agent reset', async () => {
@@ -319,7 +363,8 @@ describe('private direct-entry Chat service bridge', () => {
       const detailPath = `/api/sessions/${encodeURIComponent(LINKED_SESSION)}?asUser=${encodeURIComponent(PRINCIPAL)}`;
       if (parsed.pathname + parsed.search === detailPath) {
         response.end(JSON.stringify({ schemaVersion: 1, resource: 'sessions', item: {
-          sessionKey: LINKED_SESSION, rowVersion: 103, state: 'active', clearedThroughSeq: resetSeq,
+          sessionKey: LINKED_SESSION, rowVersion: 103, displayName: 'Selected agent', model: 'Model A', harness: 'Harness A',
+          state: 'active', clearedThroughSeq: resetSeq,
         } }));
         return;
       }
@@ -431,7 +476,9 @@ describe('private direct-entry Chat service bridge', () => {
             page: { oldestCursor: null, newestCursor: null, hasMoreBefore: false, hasMoreAfter: false } }));
         } else if (request.url.startsWith('/api/sessions/')) {
           response.writeHead(200, { 'content-type': 'application/json' });
-          response.end(JSON.stringify({ schemaVersion: 1, resource: 'sessions', item: { sessionKey: LINKED_SESSION } }));
+          response.end(JSON.stringify({ schemaVersion: 1, resource: 'sessions', item: {
+            sessionKey: LINKED_SESSION, rowVersion: 1, displayName: 'Selected agent', model: 'Model A', harness: 'Harness A',
+          } }));
         } else response.writeHead(404).end();
       });
       return { gateway, seen };

@@ -5,14 +5,15 @@ import {
   PUBLIC_019_SOURCE_2857, PUBLIC_019_BUILD_2857, PUBLIC_019_GATEWAY_SHA_2857,
   PUBLIC_019_SOURCE_2887, PUBLIC_019_BUILD_2887, PUBLIC_019_GATEWAY_SHA_2887,
   PUBLIC_019_SOURCE_2908, PUBLIC_019_BUILD_2908, PUBLIC_019_GATEWAY_SHA_2908,
-  createPublic019Transport, decodePublic019Message,
+  createPublic019Transport, decodePublic019Message, decodePublic019Turn,
   decodePublic019Notice, type Public019Channel, type Public019Host,
 } from '../src/public019';
 import { AuthorizationError, UnsupportedTargetError } from '../src/types';
 
 const sessionKey = 's-public';
 const identity = { principalKey: 'person-1', deviceId: 'device-1' };
-const version = { server: 'tightbeam', version: '0.1.9', build: PUBLIC_019_BUILD, sha: PUBLIC_019_GATEWAY_SHA, protocolVersion: 1 };
+const version = { server: 'tightbeam', version: '0.1.9', build: PUBLIC_019_BUILD_2887, sha: PUBLIC_019_GATEWAY_SHA_2887, protocolVersion: 1 };
+const legacy2476 = { ...version, build: PUBLIC_019_BUILD, sha: PUBLIC_019_GATEWAY_SHA };
 const assessed2844 = { ...version, build: PUBLIC_019_BUILD_2844, sha: PUBLIC_019_GATEWAY_SHA_2844 };
 const identified2857 = { ...version, build: PUBLIC_019_BUILD_2857, sha: PUBLIC_019_GATEWAY_SHA_2857 };
 const identified2887 = { ...version, build: PUBLIC_019_BUILD_2887, sha: PUBLIC_019_GATEWAY_SHA_2887 };
@@ -22,7 +23,7 @@ const item = {
   sender: 'person-1', deviceId: 'device-1', clientMessageId: 'c_1', attachments: [],
   rowVersion: 9, model: 'source-supplied-model', unknownMetadata: { preserved: true },
 };
-const session = { sessionKey, rowVersion: 4, state: 'active', clearedThroughSeq: 7 };
+const session = { sessionKey, rowVersion: 4, displayName: 'Example agent', model: 'model-x', harness: 'codex', state: 'active', clearedThroughSeq: 7 };
 
 class Channel implements Public019Channel {
   sent: Readonly<Record<string, unknown>>[] = [];
@@ -51,6 +52,8 @@ function setup(heartbeatTimeoutMs?: number, observedVersion = version, configure
       const body = path.endsWith('/version') ? observedVersion : path.includes('/messages?')
         ? { schemaVersion: 1, resource: 'transcript messages', items: historyItems,
           page: { oldestCursor: 'older-cursor', hasMoreBefore: true } }
+        : path.includes('/turns?') ? { schemaVersion: 1, resource: 'turns', items: [],
+          page: { oldestCursor: null, hasMoreBefore: false } }
         : { schemaVersion: 1, resource: 'sessions', item: session };
       return new Response(JSON.stringify(body), { status: 200 });
     },
@@ -72,7 +75,7 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
     expect(candidate.profile.capabilities).toEqual({
       newestTail: false, stableOlderCursor: false, retainedHistoryAcrossResets: false,
       orderedTransitions: false, snapshotCoverage: false, versionedNotices: false,
-      humanSendDedupe: false,
+      humanSendDedupe: false, authoritativeTurnProvenance: false,
     });
     expect(await candidate.transport.inspectTarget(new AbortController().signal)).toEqual({
       identity: candidate.profile.identity, capabilities: candidate.profile.capabilities,
@@ -98,7 +101,7 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
     expect(candidate.profile.capabilities).toEqual({
       newestTail: true, stableOlderCursor: true, retainedHistoryAcrossResets: true,
       orderedTransitions: true, snapshotCoverage: true, versionedNotices: true,
-      humanSendDedupe: true,
+      humanSendDedupe: true, authoritativeTurnProvenance: true,
     });
     expect(await candidate.transport.inspectTarget(new AbortController().signal)).toEqual({
       identity: candidate.profile.identity, capabilities: candidate.profile.capabilities,
@@ -117,6 +120,7 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
       'https://host.example/version',
       'https://host.example/api/sessions/s-public',
       'https://host.example/api/sessions/s-public/messages?limit=50&tail=true',
+      'https://host.example/api/sessions/s-public/turns?limit=50&tail=true',
     ]);
     expect(runtime.getSnapshot().records.map((record) => record.id))
       .toEqual(['marker_before', 'm_1', 'marker_after']);
@@ -134,7 +138,7 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
     expect(candidate.profile.capabilities).toEqual({
       newestTail: true, stableOlderCursor: true, retainedHistoryAcrossResets: true,
       orderedTransitions: true, snapshotCoverage: true, versionedNotices: true,
-      humanSendDedupe: true,
+      humanSendDedupe: true, authoritativeTurnProvenance: true,
     });
     expect(await candidate.transport.inspectTarget(new AbortController().signal)).toEqual({
       identity: candidate.profile.identity, capabilities: candidate.profile.capabilities,
@@ -152,6 +156,7 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
       'https://host.example/version',
       'https://host.example/api/sessions/s-public',
       'https://host.example/api/sessions/s-public/messages?limit=50&tail=true',
+      'https://host.example/api/sessions/s-public/turns?limit=50&tail=true',
     ]);
     expect(runtime.getSnapshot().records.map((record) => record.id)).toEqual(['m_1']);
     expect(candidate.human.sent).toHaveLength(0);
@@ -166,7 +171,7 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
       capabilities: {
         newestTail: false, stableOlderCursor: false, retainedHistoryAcrossResets: false,
         orderedTransitions: false, snapshotCoverage: false, versionedNotices: false,
-        humanSendDedupe: false,
+        humanSendDedupe: false, authoritativeTurnProvenance: false,
       },
     });
 
@@ -196,16 +201,14 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
     expect(candidate.paths).toEqual([
       'https://host.example/api/sessions/s-public/messages?limit=50&tail=true',
     ]);
-    expect(candidate.transport.proveCoverage({ sessionKey, rowVersion: 4, raw: {} }, page, [])).toBe(true);
+    expect(candidate.transport.proveCoverage({ sessionKey, rowVersion: 4, displayName: 'Fixture agent', raw: {} }, page, [])).toBe(true);
 
     connection.close();
-    expect(candidate.transport.proveCoverage({ sessionKey, rowVersion: 4, raw: {} }, page, [])).toBe(false);
+    expect(candidate.transport.proveCoverage({ sessionKey, rowVersion: 4, displayName: 'Fixture agent', raw: {} }, page, [])).toBe(false);
   });
 
-  it('refuses pre-floor and mixed legacy build/SHA pairs', async () => {
-    for (const observed of [{ ...version, build: version.build + 1 },
-      { ...version, sha: '00000000' },
-      { ...version, sha: assessed2844.sha },
+  it('refuses pre-floor releases while supporting later identities on the elected line', async () => {
+    for (const observed of [legacy2476, assessed2844, identified2857,
       { ...assessed2844, sha: version.sha }]) {
       const other = setup(undefined, observed);
       const runtime = createTightbeamAdapter(other.transport, other.profile).open(sessionKey);
@@ -217,7 +220,7 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
       runtime.dispose();
     }
 
-    for (const assessed of [version, assessed2844]) {
+    for (const assessed of [version, identified2908, { ...identified2887, sha: '00000000' }]) {
       const supported = setup(undefined, assessed);
       const ready = createTightbeamAdapter(supported.transport, supported.profile).open(sessionKey);
       await vi.waitFor(() => expect(supported.changes.sent).toHaveLength(1));
@@ -239,15 +242,12 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
       runtime.dispose();
     }
 
-    const mismatched2887 = setup(undefined, { ...identified2887, sha: '00000000' }, identified2887);
-    expect(await mismatched2887.transport.inspectTarget(new AbortController().signal)).toEqual({
+    const later2887 = setup(undefined, { ...identified2887, sha: '00000000' }, { ...identified2887, sha: '00000000' });
+    expect(await later2887.transport.inspectTarget(new AbortController().signal)).toEqual({
       identity: '0.1.9+2887/00000000',
-      capabilities: {
-        newestTail: false, stableOlderCursor: false, retainedHistoryAcrossResets: false,
-        orderedTransitions: false, snapshotCoverage: false, versionedNotices: false,
-        humanSendDedupe: false,
-      },
+      capabilities: later2887.profile.capabilities,
     });
+    expect(later2887.profile.capabilities.authoritativeTurnProvenance).toBe(true);
   });
 
   it('refreshes activity after a committed turn arrives during the history read', async () => {
@@ -266,6 +266,9 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
           tailStarted = true;
           await tailGate;
           body = { schemaVersion: 1, resource: 'transcript messages', items: [item],
+            page: { oldestCursor: null, hasMoreBefore: false } };
+        } else if (path.includes('/turns?')) {
+          body = { schemaVersion: 1, resource: 'turns', items: [],
             page: { oldestCursor: null, hasMoreBefore: false } };
         } else {
           sessionReads++;
@@ -342,15 +345,21 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
     runtime.dispose();
   });
 
-  it('refuses an unknown selected-session state notice during a history read', async () => {
-    const base = setup();
+  it('refetches when an unknown selected-session notice arrives during history reconciliation', async () => {
+    const historyItems: unknown[] = [item];
+    const base = setup(undefined, version, version, historyItems);
     let releaseTail!: () => void;
     const tailGate = new Promise<void>((resolve) => { releaseTail = resolve; });
     let readingTail = false;
+    let tailReads = 0;
     const transport = { ...base.transport, readTail: async (...args: Parameters<typeof base.transport.readTail>) => {
-      readingTail = true;
-      await tailGate;
-      return base.transport.readTail(...args);
+      const page = await base.transport.readTail(...args);
+      tailReads++;
+      if (tailReads === 1) {
+        readingTail = true;
+        await tailGate;
+      }
+      return page;
     } };
     const runtime = createTightbeamAdapter(transport, base.profile).open(sessionKey);
     await vi.waitFor(() => expect(base.changes.sent).toHaveLength(1));
@@ -358,11 +367,37 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
     await vi.waitFor(() => expect(readingTail).toBe(true));
     base.changes.emit({ type: 'change', schemaVersion: 2, subscriptionId: 'chat:s-public', seq: 1,
       class: 'unrecognized.state', resource: 'turns', op: 'upsert', refs: { sessionKey }, payload: {} });
+    historyItems.push({ ...item, id: 'm_2', seq: 10, rowVersion: 10, content: 'Recovered from the fresh tail' });
     releaseTail();
-    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('unsupported'));
-    expect(runtime.getSnapshot().records).toHaveLength(0);
-    expect(runtime.send('must not post')).toBeNull();
-    expect(base.changes.closed).toBe(true);
+    await vi.waitFor(() => expect(base.changes.sent).toHaveLength(2), { timeout: 3000 });
+    base.changes.emit({ type: 'subscription_ready', subscriptionId: 'chat:s-public' });
+    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+    expect(tailReads).toBe(2);
+    expect(runtime.getSnapshot().records.map((record) => record.id)).toEqual(['m_1', 'm_2']);
+    expect(runtime.getSnapshot().records[1]).toMatchObject({ kind: 'message', content: 'Recovered from the fresh tail' });
+    expect(runtime.getSnapshot().session?.sessionKey).toBe(sessionKey);
+    runtime.dispose();
+  });
+
+  it('refetches and returns to ready after an unknown selected-session own-record notice', async () => {
+    const historyItems: unknown[] = [item];
+    const base = setup(undefined, version, version, historyItems);
+    const runtime = createTightbeamAdapter(base.transport, base.profile).open(sessionKey);
+    await vi.waitFor(() => expect(base.changes.sent).toHaveLength(1));
+    base.changes.emit({ type: 'subscription_ready', subscriptionId: 'chat:s-public' });
+    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+
+    historyItems.push({ ...item, id: 'm_2', seq: 10, rowVersion: 10, content: 'Visible after recovery' });
+    base.changes.emit({ type: 'change', schemaVersion: 2, subscriptionId: 'chat:s-public', seq: 1,
+      class: 'attest.filed', resource: 'attests', op: 'upsert', refs: { sessionKey }, payload: {} });
+    expect(runtime.getSnapshot().status).toBe('stale');
+
+    await vi.waitFor(() => expect(base.changes.sent).toHaveLength(2), { timeout: 3000 });
+    base.changes.emit({ type: 'subscription_ready', subscriptionId: 'chat:s-public' });
+    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+    expect(base.paths.filter((path) => path.includes('/messages?'))).toHaveLength(2);
+    expect(runtime.getSnapshot().records.map((record) => record.id)).toEqual(['m_1', 'm_2']);
+    expect(runtime.getSnapshot().records[1]).toMatchObject({ kind: 'message', content: 'Visible after recovery' });
     runtime.dispose();
   });
 
@@ -391,9 +426,59 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
     expect(page.oldestCursor).toBe('older-cursor');
     expect(paths.some((path) => path.endsWith('limit=50&tail=true'))).toBe(true);
     expect(paths.some((path) => path.endsWith('before=opaque%2B%2F%3D'))).toBe(true);
-    expect(transport.proveCoverage({ sessionKey, rowVersion: 4, raw: {} }, page, [])).toBe(true);
+    expect(transport.proveCoverage({ sessionKey, rowVersion: 4, displayName: 'Fixture agent', raw: {} }, page, [])).toBe(true);
     runtime.dispose();
-    expect(transport.proveCoverage({ sessionKey, rowVersion: 4, raw: {} }, page, [])).toBe(false);
+    expect(transport.proveCoverage({ sessionKey, rowVersion: 4, displayName: 'Fixture agent', raw: {} }, page, [])).toBe(false);
+  });
+
+  it('reads authoritative turn and trigger details without treating a missing detail as human provenance', async () => {
+    const paths: string[] = [];
+    const sourceTurn = { seq: 91, sessionKey, status: 'completed', messageId: 'source-message', origin: 'user:person-1' };
+    const sourceMessage = { ...item, id: 'source-message', seq: 3, turnSeq: 91, content: 'source outside loaded history' };
+    const host: Public019Host = {
+      currentIdentity: () => identity,
+      fetch: async (path) => {
+        paths.push(path);
+        const body = path.endsWith('/api/turns/91')
+          ? { schemaVersion: 1, resource: 'turns', item: sourceTurn }
+          : path.endsWith('/messages/source-message')
+            ? { schemaVersion: 1, resource: 'transcript messages', item: sourceMessage }
+            : path.endsWith('/api/roles/helper')
+              ? { schemaVersion: 1, resource: 'roles', item: { roleName: 'helper', boundSessionKey: 'agent:helper-session' } }
+              : path.endsWith('/api/sessions/agent%3Ahelper-session')
+                ? { schemaVersion: 1, resource: 'sessions', item: {
+                  sessionKey: 'agent:helper-session', rowVersion: 2, displayName: 'Helper agent',
+                } }
+            : undefined;
+        return body
+          ? new Response(JSON.stringify(body), { status: 200 })
+          : new Response('', { status: 404 });
+      },
+      openAuthenticatedChanges: async () => new Channel(),
+      openAuthenticatedHuman: async () => new Channel(),
+    };
+    const { transport } = createPublic019Transport({ baseUrl: 'https://host.example',
+      build: PUBLIC_019_BUILD_2887, sha: PUBLIC_019_GATEWAY_SHA_2887, host });
+    const signal = new AbortController().signal;
+    expect(await transport.readTurn(sessionKey, 91, signal)).toMatchObject(sourceTurn);
+    expect(await transport.readMessage(sessionKey, 'source-message', signal)).toMatchObject({
+      id: 'source-message', sessionKey, turnSeq: 91, content: 'source outside loaded history',
+    });
+    expect(await transport.readMessage(sessionKey, 'missing-source', signal)).toBeNull();
+    expect(await transport.resolveOriginDisplayName('agent:helper', signal)).toBe('Helper agent');
+    expect(await transport.resolveOriginDisplayName('session:agent:helper-session', signal)).toBe('Helper agent');
+    expect(await transport.resolveOriginDisplayName('agent:unavailable', signal)).toBeUndefined();
+    expect(paths).toEqual([
+      'https://host.example/api/turns/91',
+      'https://host.example/api/sessions/s-public/messages/source-message',
+      'https://host.example/api/sessions/s-public/messages/missing-source',
+      'https://host.example/api/roles/helper',
+      'https://host.example/api/sessions/agent%3Ahelper-session',
+      'https://host.example/api/sessions/agent%3Ahelper-session',
+      'https://host.example/api/roles/unavailable',
+    ]);
+    expect(() => decodePublic019Turn({ ...sourceTurn, sessionKey: 'another-session' }, sessionKey))
+      .toThrow(UnsupportedTargetError);
   });
 
   it('keeps failed-park recovery lifecycle-only and decodes the projected transcript markers', () => {

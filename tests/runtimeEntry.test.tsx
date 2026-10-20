@@ -20,7 +20,7 @@ const target = {
 };
 
 describe('runtime-configured browser entry', () => {
-  it('loads the nonsecret target from same origin and starts without a credential form', async () => {
+  it('loads target configuration without exposing identity while service verification is unavailable', async () => {
     const fetchMock = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(jsonResponse(target))
       .mockResolvedValueOnce(jsonResponse({}, false));
@@ -29,10 +29,10 @@ describe('runtime-configured browser entry', () => {
 
     render(<RuntimeEntry />);
 
-    expect(await screen.findByRole('heading', { name: 'Selected conversation' })).toBeTruthy();
-    expect(screen.getByText(target.gateway)).toBeTruthy();
-    expect(screen.getByText(target.sessionKey)).toBeTruthy();
-    expect(screen.getByText('Using the configured conversation.')).toBeTruthy();
+    expect((await screen.findByRole('alert')).textContent).toContain('The configured Chat service is unavailable.');
+    expect(screen.queryByRole('heading')).toBeNull();
+    expect(screen.queryByText(target.gateway)).toBeNull();
+    expect(screen.queryByText(target.sessionKey)).toBeNull();
     expect(screen.queryByRole('button', { name: /sign in|pair/i })).toBeNull();
     expect(fetchMock.mock.calls[0][0]).toBe('/chat-config.json');
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
@@ -53,9 +53,8 @@ describe('runtime-configured browser entry', () => {
     const link = await screen.findByRole('link', { name: 'Open the configured conversation' });
     expect(link.getAttribute('href')).toBe('/');
     expect(screen.getByRole('alert').textContent).toContain('No Gateway access is provisioned for the selected conversation.');
-    expect(screen.getByText('https://other.example')).toBeTruthy();
-    expect(screen.getByText('agent:other/chat')).toBeTruthy();
-    expect(screen.getByText('Opened from its private link.')).toBeTruthy();
+    expect(screen.queryByText('https://other.example')).toBeNull();
+    expect(screen.queryByText('agent:other/chat')).toBeNull();
     expect(screen.queryByText(target.gateway)).toBeNull();
     expect(screen.queryByRole('button', { name: /sign in|pair/i })).toBeNull();
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -64,7 +63,7 @@ describe('runtime-configured browser entry', () => {
     expect(request.searchParams.get('gateway')).toBe('https://other.example');
   });
 
-  it('selects a linked session on the configured Gateway after loading service configuration', async () => {
+  it('keeps linked selection private while service verification is unavailable', async () => {
     const linkedSession = 'agent:example/linked-chat';
     window.history.replaceState({}, '', `/?gateway=${encodeURIComponent(target.gateway)}&session=${encodeURIComponent(linkedSession)}`);
     const fetchMock = vi.fn<typeof fetch>()
@@ -75,14 +74,15 @@ describe('runtime-configured browser entry', () => {
 
     render(<RuntimeEntry />);
 
-    expect(await screen.findByRole('heading', { name: 'Selected conversation' })).toBeTruthy();
-    expect(screen.getByText('Opened from its private link.')).toBeTruthy();
-    expect(screen.getByText(linkedSession)).toBeTruthy();
+    expect((await screen.findByRole('alert')).textContent).toContain('The configured Chat service is unavailable.');
+    expect(screen.queryByText(linkedSession)).toBeNull();
     expect(screen.queryByText(target.sessionKey)).toBeNull();
     expect(fetchMock.mock.calls[0][0]).toBe('/chat-config.json');
+    const request = new URL(String(fetchMock.mock.calls[1][0]));
+    expect(request.searchParams.get('gateway')).toBe(target.gateway);
   });
 
-  it('identifies a complete link even when the service configuration cannot load', async () => {
+  it('does not expose linked target identity when service configuration cannot load', async () => {
     const linkedGateway = 'https://other.example:9443';
     const linkedSession = 'agent:other/chat';
     window.history.replaceState({}, '', `/?gateway=${encodeURIComponent(linkedGateway)}&session=${encodeURIComponent(linkedSession)}`);
@@ -90,9 +90,11 @@ describe('runtime-configured browser entry', () => {
 
     render(<RuntimeEntry />);
 
-    expect(await screen.findByText(linkedGateway)).toBeTruthy();
-    expect(screen.getByText(linkedSession)).toBeTruthy();
-    expect(screen.getByRole('alert').textContent).toContain('no configured identity');
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('no configured identity');
+    expect(alert.textContent).toContain('could not be loaded');
+    expect(screen.queryByText(linkedGateway)).toBeNull();
+    expect(screen.queryByText(linkedSession)).toBeNull();
   });
 
   it('fails closed with a readable error when runtime configuration is invalid', async () => {
