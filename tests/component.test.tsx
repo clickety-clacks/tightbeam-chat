@@ -131,6 +131,31 @@ describe('conversation surface', () => {
       .toBe('Research assistant');
   });
 
+  it('does not revisit loaded message rows while typing with a production-sized history', async () => {
+    const sessionKey = 'long-conversation';
+    const messages = Array.from({ length: 1200 }, (_, index) => row(
+      sessionKey, `message-${index + 1}`, `Message ${index + 1}`,
+      { seq: index + 1, rowVersion: index + 1, role: 'user', turnSeq: index + 1 },
+    ));
+    const provenanceRows = messages.map((message, index) => provenance(
+      index + 1, sessionKey, message.id, 'user:person', message,
+    ));
+    const runtime = new FakeRuntime(sessionKey, { records: messages, provenance: provenanceRows });
+    const renderMessage = vi.fn(() => undefined);
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} renderMessage={renderMessage} />);
+
+    const composer = await screen.findByRole('textbox', { name: 'Message to Research assistant' });
+    expect(await screen.findByText('Message 1200')).toBeTruthy();
+    expect(renderMessage).toHaveBeenCalledTimes(messages.length);
+
+    fireEvent.change(composer, { target: { value: 'a' } });
+    fireEvent.change(composer, { target: { value: 'a draft' } });
+    fireEvent.change(composer, { target: { value: 'a draft in progress' } });
+
+    expect(renderMessage).toHaveBeenCalledTimes(messages.length);
+    expect(composer).toHaveProperty('value', 'a draft in progress');
+  });
+
   it('keeps focus, selection, and draft across stale refreshes while hiding exact target details in notices', () => {
     const sessionKey = 'selected-session';
     const human = row(sessionKey, 'human', 'Initial question', { role: 'user', turnSeq: 4 });

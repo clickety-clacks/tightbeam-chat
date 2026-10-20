@@ -1,6 +1,6 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore,
+import { forwardRef, memo, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore,
   type AnchorHTMLAttributes, type FormEvent, type HTMLAttributes, type ImgHTMLAttributes,
-  type ReactNode, type TableHTMLAttributes } from 'react';
+  type ReactNode, type RefObject, type TableHTMLAttributes } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { ChatRuntime, CanonicalMessage, ConversationRecord, RuntimeState, TightbeamAdapter, TurnProvenance } from './types';
@@ -94,6 +94,12 @@ function sourceLabel(side: Bubble['side'], agentName: string): string {
 function visibleBubbles(state: RuntimeState, agentName: string): Bubble[] {
   const provenance = state.provenance ?? [];
   const byTurn = new Map(provenance.map((item) => [item.turn.seq, item]));
+  const byMessage = new Map<string, TurnProvenance[]>();
+  for (const item of provenance) {
+    const matching = byMessage.get(item.turn.messageId);
+    if (matching) matching.push(item);
+    else byMessage.set(item.turn.messageId, [item]);
+  }
   const messageIds = new Set(state.records.filter((record): record is CanonicalMessage => record.kind === 'message')
     .map((record) => record.id));
   const bubbles: Bubble[] = [];
@@ -115,7 +121,7 @@ function visibleBubbles(state: RuntimeState, agentName: string): Bubble[] {
   };
   for (const record of state.records) {
     if (record.kind !== 'message') continue;
-    const triggers = provenance.filter((item) => item.turn.messageId === record.id);
+    const triggers = byMessage.get(record.id) ?? [];
     let displayedAsTrigger = false;
     for (const item of triggers) {
       addHumanTrigger(item);
@@ -170,7 +176,7 @@ function StatusIcon({ state }: { state: RuntimeState }) {
   return <span className={`tb-chat-status-dot tb-chat-status-${status}`} aria-hidden="true" />;
 }
 
-function RecordRow({ bubble, renderMessage, agentName }: {
+const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName }: {
   bubble: Bubble;
   renderMessage?: TightbeamChatProps['renderMessage'];
   agentName: string;
@@ -189,7 +195,102 @@ function RecordRow({ bubble, renderMessage, agentName }: {
     <div className="tb-chat-bubble-body">{custom === undefined ? defaultBody(record, bubble.displayContent) : custom}</div>
     <time className="tb-chat-time" dateTime={time.dateTime}>{time.text}</time>
   </article>;
+});
+
+interface ComposerHandle {
+  restore(content: string): void;
 }
+
+const Composer = forwardRef<ComposerHandle, {
+  runtime: ChatRuntime;
+  state: RuntimeState;
+  agentName: string;
+  root: RefObject<HTMLElement | null>;
+}>(function Composer({ runtime, state, agentName, root }, ref) {
+  const [draft, setDraft] = useState('');
+  const [statusOpen, setStatusOpen] = useState(false);
+  const input = useRef<HTMLTextAreaElement>(null);
+  const statusControl = useRef<HTMLButtonElement>(null);
+  const shell = useRef<HTMLFormElement>(null);
+  const titleId = useId();
+  const composerLocked = state.status === 'unsupported' || state.status === 'unauthorized';
+  const statusName = statusText(state);
+  const statusId = `${titleId}-status-details`;
+
+  useImperativeHandle(ref, () => ({ restore: setDraft }), []);
+
+  const closeStatusPopup = () => {
+    setStatusOpen(false);
+    statusControl.current?.focus();
+  };
+
+  useEffect(() => {
+    if (!statusOpen) return;
+    const dismiss = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      closeStatusPopup();
+    };
+    document.addEventListener('keydown', dismiss);
+    return () => document.removeEventListener('keydown', dismiss);
+  }, [statusOpen]);
+
+  useLayoutEffect(() => {
+    const element = input.current;
+    if (!element) return;
+    element.style.height = 'auto';
+    element.style.height = `${Math.min(element.scrollHeight, Number.parseFloat(getComputedStyle(element).maxHeight) || element.scrollHeight)}px`;
+  }, [draft]);
+
+  useLayoutEffect(() => {
+    const element = shell.current;
+    const container = root.current;
+    if (!element || !container) return;
+    const update = () => container.style.setProperty('--tb-chat-composer-height', `${element.getBoundingClientRect().height}px`);
+    const observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(update);
+    observer?.observe(element);
+    update();
+    return () => observer?.disconnect();
+  }, [root]);
+
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!draft.trim()) return;
+    if (runtime.send(draft)) setDraft('');
+  };
+
+  return <form className="tb-chat-composer" onSubmit={submit} ref={shell}>
+    <label className="tb-chat-sr-only" htmlFor={`${titleId}-input`}>Message to {agentName || 'the selected agent'}</label>
+    <div className="tb-chat-input-shell">
+      <textarea ref={input} id={`${titleId}-input`} value={draft}
+        onChange={(event) => setDraft(event.target.value)} rows={1} disabled={composerLocked}
+        aria-label={`Message to ${agentName || 'the selected agent'}`} placeholder={agentName}
+        autoComplete="off" spellCheck />
+      <button ref={statusControl} type="button" className="tb-chat-status-control" aria-label={`Connection status: ${statusName}. Show details`}
+        aria-expanded={statusOpen} aria-controls={statusId} onClick={() => setStatusOpen((open) => !open)}>
+        <StatusIcon state={state} />
+      </button>
+      {statusOpen && <div className="tb-chat-status-popup" id={statusId} role="dialog" aria-label="Connection details">
+        <div className="tb-chat-popup-heading"><StatusIcon state={state} /><strong>{statusName}</strong>
+          <button type="button" aria-label="Close connection details" onClick={closeStatusPopup}>×</button>
+        </div>
+        {state.statusDetail && <p>{state.statusDetail}</p>}
+        <dl>
+          <dt>Gateway</dt><dd>{state.targetGateway || 'Unavailable'}</dd>
+          <dt>Session</dt><dd>{state.sessionKey}</dd>
+          <dt>Agent</dt><dd>{agentName || 'Unavailable'}</dd>
+          <dt>Model</dt><dd>{state.session?.model || 'Unavailable'}</dd>
+          <dt>Harness</dt><dd>{state.session?.harness || 'Unavailable'}</dd>
+        </dl>
+        {state.status === 'error' && <button type="button" onClick={() => void runtime.rebuild()}>Reconnect</button>}
+      </div>}
+      <button type="submit" className="tb-chat-send-button" aria-label="Send message"
+        disabled={state.status !== 'ready' || !draft.trim()}>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5m0 0L6 11m6-6 6 6" /></svg>
+      </button>
+    </div>
+  </form>;
+});
 
 function ChatBody({ runtime, renderMessage, className }: {
   runtime: ChatRuntime;
@@ -197,29 +298,19 @@ function ChatBody({ runtime, renderMessage, className }: {
   className?: string;
 }) {
   const state = useSyncExternalStore(runtime.subscribe, runtime.getSnapshot, runtime.getSnapshot);
-  const [draft, setDraft] = useState('');
-  const [statusOpen, setStatusOpen] = useState(false);
   const viewport = useRef<HTMLDivElement>(null);
   const root = useRef<HTMLElement>(null);
-  const composer = useRef<HTMLTextAreaElement>(null);
-  const statusControl = useRef<HTMLButtonElement>(null);
-  const composerShell = useRef<HTMLFormElement>(null);
+  const composer = useRef<ComposerHandle>(null);
   const initialScrollDone = useRef(false);
   const atBottom = useRef(true);
   const anchor = useRef<{ id: string; top: number } | null>(null);
-  const titleId = useId();
   const agentName = state.agentDisplayName ?? '';
-  const bubbles = visibleBubbles(state, agentName);
+  const bubbles = useMemo(() => visibleBubbles(state, agentName),
+    [state.records, state.provenance, state.activeTurn, agentName]);
   const caption = activeCaption(state.activeTurn);
-  const visibleCanonicalIds = new Set(bubbles.map((bubble) => bubble.record.clientMessageId).filter(Boolean));
+  const visibleCanonicalIds = useMemo(() => new Set(bubbles.map((bubble) => bubble.record.clientMessageId).filter(Boolean)), [bubbles]);
   const localSends = state.sends.filter((send) => !visibleCanonicalIds.has(send.clientMessageId));
-  const composerLocked = state.status === 'unsupported' || state.status === 'unauthorized';
   const statusName = statusText(state);
-
-  const closeStatusPopup = () => {
-    setStatusOpen(false);
-    statusControl.current?.focus();
-  };
 
   useEffect(() => {
     if (!agentName) return;
@@ -273,35 +364,6 @@ function ChatBody({ runtime, renderMessage, className }: {
       window.visualViewport?.removeEventListener('scroll', update);
       resizeObserver?.disconnect();
     };
-  }, []);
-
-  useEffect(() => {
-    if (!statusOpen) return;
-    const dismiss = (event: KeyboardEvent) => {
-      if (event.key !== 'Escape') return;
-      event.preventDefault();
-      closeStatusPopup();
-    };
-    document.addEventListener('keydown', dismiss);
-    return () => document.removeEventListener('keydown', dismiss);
-  }, [statusOpen]);
-
-  useLayoutEffect(() => {
-    const input = composer.current;
-    if (!input) return;
-    input.style.height = 'auto';
-    input.style.height = `${Math.min(input.scrollHeight, Number.parseFloat(getComputedStyle(input).maxHeight) || input.scrollHeight)}px`;
-  }, [draft]);
-
-  useLayoutEffect(() => {
-    const element = composerShell.current;
-    const container = root.current;
-    if (!element || !container) return;
-    const update = () => container.style.setProperty('--tb-chat-composer-height', `${element.getBoundingClientRect().height}px`);
-    const observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(update);
-    observer?.observe(element);
-    update();
-    return () => observer?.disconnect();
   }, []);
 
   const captureAnchor = () => {
@@ -362,13 +424,6 @@ function ChatBody({ runtime, renderMessage, className }: {
     if (box.scrollTop < 80 && state.status === 'ready' && state.hasOlder && !state.loadingOlder) loadOlder();
   };
 
-  const submit = (event: FormEvent) => {
-    event.preventDefault();
-    if (!draft.trim()) return;
-    if (runtime.send(draft)) setDraft('');
-  };
-
-  const statusId = `${titleId}-status-details`;
   const notice = state.status === 'ready' ? undefined
     : state.status === 'loading' ? 'Connecting to the selected conversation…'
       : state.status === 'stale' ? 'Reconnecting; the conversation may be out of date.'
@@ -403,7 +458,7 @@ function ChatBody({ runtime, renderMessage, className }: {
             <button type="button" disabled={state.status !== 'ready'}
               onClick={() => void runtime.retrySend(send.clientMessageId)}>Retry message</button>
             {state.status !== 'ready' && <span>Reconnect before retrying.</span>}
-            <button type="button" onClick={() => setDraft(send.content)}>Restore text to the composer</button>
+            <button type="button" onClick={() => composer.current?.restore(send.content)}>Restore text to the composer</button>
           </div>}
           <time className="tb-chat-time" dateTime={time.dateTime}>{time.text}</time>
         </article>;
@@ -414,37 +469,7 @@ function ChatBody({ runtime, renderMessage, className }: {
       {state.status === 'ready' && state.records.length === 0 && localSends.length === 0 && !state.hasOlder &&
         <p className="tb-chat-empty">No messages yet.</p>}
     </div>
-    <form className="tb-chat-composer" onSubmit={submit} ref={composerShell}>
-      <label className="tb-chat-sr-only" htmlFor={`${titleId}-input`}>Message to {agentName || 'the selected agent'}</label>
-      <div className="tb-chat-input-shell">
-        <textarea ref={composer} id={`${titleId}-input`} value={draft}
-          onChange={(event) => setDraft(event.target.value)} rows={1} disabled={composerLocked}
-          aria-label={`Message to ${agentName || 'the selected agent'}`} placeholder={agentName}
-          autoComplete="off" spellCheck />
-        <button ref={statusControl} type="button" className="tb-chat-status-control" aria-label={`Connection status: ${statusName}. Show details`}
-          aria-expanded={statusOpen} aria-controls={statusId} onClick={() => setStatusOpen((open) => !open)}>
-          <StatusIcon state={state} />
-        </button>
-        {statusOpen && <div className="tb-chat-status-popup" id={statusId} role="dialog" aria-label="Connection details">
-          <div className="tb-chat-popup-heading"><StatusIcon state={state} /><strong>{statusName}</strong>
-            <button type="button" aria-label="Close connection details" onClick={closeStatusPopup}>×</button>
-          </div>
-          {state.statusDetail && <p>{state.statusDetail}</p>}
-          <dl>
-            <dt>Gateway</dt><dd>{state.targetGateway || 'Unavailable'}</dd>
-            <dt>Session</dt><dd>{state.sessionKey}</dd>
-            <dt>Agent</dt><dd>{agentName || 'Unavailable'}</dd>
-            <dt>Model</dt><dd>{state.session?.model || 'Unavailable'}</dd>
-            <dt>Harness</dt><dd>{state.session?.harness || 'Unavailable'}</dd>
-          </dl>
-          {state.status === 'error' && <button type="button" onClick={() => void runtime.rebuild()}>Reconnect</button>}
-        </div>}
-        <button type="submit" className="tb-chat-send-button" aria-label="Send message"
-          disabled={state.status !== 'ready' || !draft.trim()}>
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5m0 0L6 11m6-6 6 6" /></svg>
-        </button>
-      </div>
-    </form>
+    <Composer ref={composer} runtime={runtime} state={state} agentName={agentName} root={root} />
   </section>;
 }
 

@@ -216,7 +216,7 @@ class SessionRuntime implements ChatRuntime {
         return false;
       case 'unknown':
         if (notice.sessionKey === this.sessionKey) {
-          this.failClosed('unsupported', `Unknown selected-session notice ${notice.resource}.`);
+          this.doubt(`Unknown selected-session notice ${notice.resource} requires a fresh snapshot.`, this.generation);
         }
         return false;
     }

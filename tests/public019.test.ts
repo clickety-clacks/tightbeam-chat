@@ -345,15 +345,21 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
     runtime.dispose();
   });
 
-  it('refuses an unknown selected-session state notice during a history read', async () => {
-    const base = setup();
+  it('refetches when an unknown selected-session notice arrives during history reconciliation', async () => {
+    const historyItems: unknown[] = [item];
+    const base = setup(undefined, version, version, historyItems);
     let releaseTail!: () => void;
     const tailGate = new Promise<void>((resolve) => { releaseTail = resolve; });
     let readingTail = false;
+    let tailReads = 0;
     const transport = { ...base.transport, readTail: async (...args: Parameters<typeof base.transport.readTail>) => {
-      readingTail = true;
-      await tailGate;
-      return base.transport.readTail(...args);
+      const page = await base.transport.readTail(...args);
+      tailReads++;
+      if (tailReads === 1) {
+        readingTail = true;
+        await tailGate;
+      }
+      return page;
     } };
     const runtime = createTightbeamAdapter(transport, base.profile).open(sessionKey);
     await vi.waitFor(() => expect(base.changes.sent).toHaveLength(1));
@@ -361,11 +367,37 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
     await vi.waitFor(() => expect(readingTail).toBe(true));
     base.changes.emit({ type: 'change', schemaVersion: 2, subscriptionId: 'chat:s-public', seq: 1,
       class: 'unrecognized.state', resource: 'turns', op: 'upsert', refs: { sessionKey }, payload: {} });
+    historyItems.push({ ...item, id: 'm_2', seq: 10, rowVersion: 10, content: 'Recovered from the fresh tail' });
     releaseTail();
-    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('unsupported'));
-    expect(runtime.getSnapshot().records).toHaveLength(0);
-    expect(runtime.send('must not post')).toBeNull();
-    expect(base.changes.closed).toBe(true);
+    await vi.waitFor(() => expect(base.changes.sent).toHaveLength(2), { timeout: 3000 });
+    base.changes.emit({ type: 'subscription_ready', subscriptionId: 'chat:s-public' });
+    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+    expect(tailReads).toBe(2);
+    expect(runtime.getSnapshot().records.map((record) => record.id)).toEqual(['m_1', 'm_2']);
+    expect(runtime.getSnapshot().records[1]).toMatchObject({ kind: 'message', content: 'Recovered from the fresh tail' });
+    expect(runtime.getSnapshot().session?.sessionKey).toBe(sessionKey);
+    runtime.dispose();
+  });
+
+  it('refetches and returns to ready after an unknown selected-session own-record notice', async () => {
+    const historyItems: unknown[] = [item];
+    const base = setup(undefined, version, version, historyItems);
+    const runtime = createTightbeamAdapter(base.transport, base.profile).open(sessionKey);
+    await vi.waitFor(() => expect(base.changes.sent).toHaveLength(1));
+    base.changes.emit({ type: 'subscription_ready', subscriptionId: 'chat:s-public' });
+    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+
+    historyItems.push({ ...item, id: 'm_2', seq: 10, rowVersion: 10, content: 'Visible after recovery' });
+    base.changes.emit({ type: 'change', schemaVersion: 2, subscriptionId: 'chat:s-public', seq: 1,
+      class: 'attest.filed', resource: 'attests', op: 'upsert', refs: { sessionKey }, payload: {} });
+    expect(runtime.getSnapshot().status).toBe('stale');
+
+    await vi.waitFor(() => expect(base.changes.sent).toHaveLength(2), { timeout: 3000 });
+    base.changes.emit({ type: 'subscription_ready', subscriptionId: 'chat:s-public' });
+    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+    expect(base.paths.filter((path) => path.includes('/messages?'))).toHaveLength(2);
+    expect(runtime.getSnapshot().records.map((record) => record.id)).toEqual(['m_1', 'm_2']);
+    expect(runtime.getSnapshot().records[1]).toMatchObject({ kind: 'message', content: 'Visible after recovery' });
     runtime.dispose();
   });
 
