@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { TightbeamChat } from '../src/TightbeamChat';
 import type { RenderContext } from '../src/TightbeamChat';
 import type { ChatRuntime, RuntimeState, TightbeamAdapter, CanonicalMessage, ConversationRecord } from '../src/types';
@@ -56,6 +56,36 @@ describe('embedded surface', () => {
     fireEvent.change(composer, { target: { value: '  exact  ' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
     expect(runtime.sent).toEqual(['  exact  ']);
+  });
+
+  it('keeps composer focus, caret, and draft while a new message arrives during refresh', () => {
+    const runtime = new FakeRuntime('refresh');
+    render(<TightbeamChat sessionKey="refresh" adapter={{ open: () => runtime }} />);
+    const composer = screen.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement;
+    composer.focus();
+    fireEvent.change(composer, { target: { value: 'keep this draft' } });
+    composer.setSelectionRange(5, 5);
+
+    act(() => {
+      runtime.state = { ...runtime.state, status: 'stale', records: [...runtime.state.records, row('refresh', 'new-message')] };
+      for (const listener of runtime.listeners) listener();
+    });
+
+    expect(screen.getByText('<script>plain new-message</script>')).toBeTruthy();
+    expect(composer.disabled).toBe(false);
+    expect(composer.value).toBe('keep this draft');
+    expect(composer.selectionStart).toBe(5);
+    expect(document.activeElement).toBe(composer);
+    expect(screen.getByRole('button', { name: 'Send message' })).toHaveProperty('disabled', true);
+
+    act(() => {
+      runtime.state = { ...runtime.state, status: 'ready' };
+      for (const listener of runtime.listeners) listener();
+    });
+
+    expect(composer.value).toBe('keep this draft');
+    expect(composer.selectionStart).toBe(5);
+    expect(document.activeElement).toBe(composer);
   });
 
   it('keeps chronological row order when loading older history', async () => {

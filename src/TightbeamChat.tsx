@@ -148,6 +148,7 @@ function ChatBody({ runtime, renderMessage, className }: {
         : state.status === 'unsupported' ? 'Unsupported Tightbeam target'
           : state.status === 'unauthorized' ? 'Access to this conversation is unavailable'
             : 'Conversation unavailable';
+  const composerLocked = state.status === 'unsupported' || state.status === 'unauthorized';
 
   return <section className={`tb-chat ${className || ''}`} aria-label="Tightbeam conversation">
     <div className="tb-chat-status" role="status" aria-live="polite">
@@ -180,7 +181,7 @@ function ChatBody({ runtime, renderMessage, className }: {
     <form className="tb-chat-composer" onSubmit={submit}>
       <label htmlFor="tb-chat-composer-input">Message</label>
       <textarea id="tb-chat-composer-input" value={draft} onChange={(event) => setDraft(event.target.value)} rows={3}
-        disabled={state.status !== 'ready'} />
+        disabled={composerLocked} />
       <button type="submit" disabled={state.status !== 'ready' || !draft.trim()}>Send message</button>
     </form>
   </section>;
