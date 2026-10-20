@@ -280,7 +280,8 @@ describe('conversation surface', () => {
 
     vi.setSystemTime(new Date(2026, 2, 9, 12, 0));
     const boundary = new Date(2026, 2, 8, 9, 5);
-    expect(boundary.getTime() + 24 * 60 * 60 * 1000).not.toBe(new Date(2026, 2, 9, 9, 5).getTime());
+    const dayBeforeBoundary = new Date(2026, 2, 7, 9, 5);
+    expect(dayBeforeBoundary.getTime() + 24 * 60 * 60 * 1000).not.toBe(boundary.getTime());
     act(() => {
       const yesterday = row(sessionKey, 'dst-yesterday', 'DST boundary message', {
         role: 'user', turnSeq: 20, createdAt: boundary.toISOString(),
@@ -364,7 +365,8 @@ describe('conversation surface', () => {
     ] });
     render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
     expect(screen.getByText('Failed text')).toBeTruthy();
-    expect(screen.getByText('Uncertain exact text').textContent).toBe('  Uncertain exact text  ');
+    expect(screen.getByText('Uncertain exact text').textContent).toBe('Uncertain exact text');
+    expect(runtime.getSnapshot().sends[1].content).toBe('  Uncertain exact text  ');
     expect(screen.getAllByRole('alert').every((alert) => !alert.textContent?.includes('private'))).toBe(true);
     expect(screen.queryByText(/private target detail|private session detail/)).toBeNull();
     fireEvent.click(screen.getAllByRole('button', { name: 'Retry message' })[0]);

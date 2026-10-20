@@ -267,6 +267,9 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
           await tailGate;
           body = { schemaVersion: 1, resource: 'transcript messages', items: [item],
             page: { oldestCursor: null, hasMoreBefore: false } };
+        } else if (path.includes('/turns?')) {
+          body = { schemaVersion: 1, resource: 'turns', items: [],
+            page: { oldestCursor: null, hasMoreBefore: false } };
         } else {
           sessionReads++;
           body = { schemaVersion: 1, resource: 'sessions', item: {
