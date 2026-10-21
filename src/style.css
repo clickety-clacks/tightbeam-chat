@@ -155,7 +155,7 @@ body { background: #f6f6f6; color: #1e1e1e; }
   align-items: flex-end;
   width: 100%;
   min-width: 0;
-  padding: .32rem;
+  padding: .35rem .32rem;
   border: var(--tb-chat-input-border-width) solid var(--tb-chat-border);
   border-radius: calc(var(--tb-chat-control-size) / 2 + var(--tb-chat-control-gap) + var(--tb-chat-input-border-width));
   background: var(--tb-chat-background);
@@ -165,9 +165,9 @@ body { background: #f6f6f6; color: #1e1e1e; }
   display: block;
   width: 100%;
   min-width: 0;
-  min-height: 2.85rem;
+  min-height: var(--tb-chat-control-size);
   max-height: calc(var(--tb-chat-full-height, 100vh) / 2);
-  padding: .65rem 3.55rem .65rem 3.1rem;
+  padding: .425rem 3.55rem .425rem 3.1rem;
   resize: none;
   overflow-y: auto;
   border: 0;
