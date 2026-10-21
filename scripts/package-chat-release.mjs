@@ -99,6 +99,8 @@ export async function packageChatRelease({
       '',
       'This release contains the deployable Chat server, browser assets, and a user-level timer that checks hourly for a newer published stable release.',
       `Source commit: ${sourceCommit}`,
+      `Package: ${assetName}`,
+      `SHA-256: ${assetSha256}`,
       '',
       'Use the included updater to verify the published asset checksum before staging it.',
       '',

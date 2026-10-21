@@ -8,7 +8,7 @@ A `vMAJOR.MINOR.PATCH` tag runs the Chat checks, builds the browser application 
 - `SHA256SUMS`, which records the bundle checksum; and
 - `release-provenance.json`, which records the tag, exact source commit, asset name, checksum and build tool versions.
 
-The release job creates a draft first, uploads the complete asset set, then publishes it. An incomplete draft is not accepted by the updater. No npm package is published.
+The tag workflow creates a draft and uploads the complete asset set, then stops. Its summary and the draft notes show the exact source commit, package name and SHA-256. Review the package against that checksum and publish the draft explicitly after approving that exact change. The updater accepts only published releases, so the draft is retained for review without becoming available for automatic installation. No npm package is published.
 
 ## Server configuration
 
