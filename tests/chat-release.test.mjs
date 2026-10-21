@@ -7,7 +7,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createChatServer } from '../server/chat-server.mjs';
 import { packageChatRelease } from '../scripts/package-chat-release.mjs';
-import { publishChatRelease } from '../scripts/publish-chat-release.mjs';
+import { stageChatRelease } from '../scripts/stage-chat-release.mjs';
 import {
   CHAT_RELEASE_REPOSITORY,
   CHAT_SERVICE_NAME,
@@ -452,6 +452,9 @@ describe('Chat release packaging and updater', () => {
     expect(result.assetSha256).toBe(actualHash);
     expect(await fs.readFile(path.join(outputDir, 'SHA256SUMS'), 'utf8'))
       .toBe(`${actualHash}  tightbeam-chat-v1.2.3.tar.gz\n`);
+    const releaseNotes = await fs.readFile(path.join(outputDir, 'release-notes.md'), 'utf8');
+    expect(releaseNotes).toContain(`Package: tightbeam-chat-v1.2.3.tar.gz`);
+    expect(releaseNotes).toContain(`SHA-256: ${actualHash}`);
     expect(JSON.parse(await fs.readFile(path.join(outputDir, 'release-provenance.json'), 'utf8')))
       .toMatchObject({ tag: 'v1.2.3', sourceCommit: SOURCE_COMMIT, sha256: actualHash, nodeVersion: 'v24.7.0' });
     const members = execFileSync('tar', ['-tzf', result.assetPath], { encoding: 'utf8' });
@@ -472,14 +475,14 @@ describe('Chat release packaging and updater', () => {
       .toEqual(await fs.readFile(path.join(rootDir, 'packaging/tightbeam-chat-release-watch.timer')));
   });
 
-  it('publishes the checksum-bound tag only after every release asset upload is confirmed', async () => {
+  it('stages a checksum-bound draft without publishing it', async () => {
     const tag = 'v1.2.3';
-    const rootDir = await temporaryDirectory('chat-publisher-');
+    const rootDir = await temporaryDirectory('chat-stager-');
     const fixture = await createBundleFixture(tag, SOURCE_COMMIT);
     const outputDir = path.join(rootDir, 'dist/chat-release');
     await fs.mkdir(outputDir, { recursive: true });
     for (const [name, bytes] of fixture.assets) await fs.writeFile(path.join(outputDir, name), bytes);
-    await fs.writeFile(path.join(outputDir, 'release-notes.md'), `Tightbeam Chat ${tag}\nSource commit: ${SOURCE_COMMIT}\n`);
+    await fs.writeFile(path.join(outputDir, 'release-notes.md'), `Tightbeam Chat ${tag}\nSource commit: ${SOURCE_COMMIT}\nPackage: tightbeam-chat-${tag}.tar.gz\nSHA-256: ${fixture.provenance.sha256}\n`);
     const environment = {
       GITHUB_REPOSITORY: CHAT_RELEASE_REPOSITORY,
       GITHUB_EVENT_NAME: 'push',
@@ -490,13 +493,14 @@ describe('Chat release packaging and updater', () => {
       GITHUB_TOKEN: 'fixture-token',
     };
     const nonTagRequests = [];
-    await expect(publishChatRelease({
+    await expect(stageChatRelease({
       rootDir,
       environment: { ...environment, GITHUB_REF_TYPE: 'branch', GITHUB_REF: `refs/heads/${tag}` },
       fetchImpl: async (...args) => { nonTagRequests.push(args); return new Response('', { status: 500 }); },
     })).rejects.toThrow(/tag-triggered/);
     expect(nonTagRequests).toHaveLength(0);
     const operations = [];
+    const uploadedAssets = new Map();
     const fetchImpl = async (request, options = {}) => {
       const url = new URL(request);
       operations.push({ method: options.method ?? 'GET', url: url.href, body: options.body, authorization: options.headers?.authorization });
@@ -509,26 +513,46 @@ describe('Chat release packaging and updater', () => {
       if (url.href.startsWith('https://uploads.github.com/repos/clickety-clacks/tightbeam-chat/releases/17/assets?')) {
         const name = url.searchParams.get('name');
         const body = Buffer.from(options.body);
-        return new Response(JSON.stringify({ name, state: 'uploaded', size: body.length }), {
+        uploadedAssets.set(name, body);
+        const digest = crypto.createHash('sha256').update(body).digest('hex');
+        return new Response(JSON.stringify({ name, state: 'uploaded', size: body.length, digest: `sha256:${digest}` }), {
           headers: { 'content-type': 'application/json' },
         });
-      }
-      if (url.href === 'https://api.github.com/repos/clickety-clacks/tightbeam-chat/releases/17' && options.method === 'PATCH') {
-        return new Response(JSON.stringify({
-          id: 17, tag_name: tag, draft: false, published_at: '2026-10-16T00:00:00Z',
-        }), { headers: { 'content-type': 'application/json' } });
       }
       return new Response('', { status: 404 });
     };
 
-    const published = await publishChatRelease({ rootDir, environment, fetchImpl });
-    expect(published).toMatchObject({ tag, sourceCommit: SOURCE_COMMIT, assetName: `tightbeam-chat-${tag}.tar.gz` });
-    expect(operations.map((operation) => operation.method)).toEqual(['POST', 'POST', 'POST', 'POST', 'PATCH']);
+    const staged = await stageChatRelease({ rootDir, environment, fetchImpl });
+    expect(staged).toMatchObject({ tag, sourceCommit: SOURCE_COMMIT, assetName: `tightbeam-chat-${tag}.tar.gz`, hash: fixture.provenance.sha256, draftId: 17 });
+    expect(operations.map((operation) => operation.method)).toEqual(['POST', 'POST', 'POST', 'POST']);
     expect(operations.slice(1, 4).map((operation) => new URL(operation.url).searchParams.get('name')))
       .toEqual([`tightbeam-chat-${tag}.tar.gz`, 'SHA256SUMS', 'release-provenance.json']);
+    for (const [name, bytes] of fixture.assets) expect(uploadedAssets.get(name)).toEqual(bytes);
     expect(operations.every((operation) => operation.authorization === 'Bearer fixture-token')).toBe(true);
     expect(JSON.parse(operations[0].body)).toMatchObject({ tag_name: tag, draft: true, prerelease: false });
-    expect(JSON.parse(operations.at(-1).body)).toEqual({ draft: false });
+    expect(JSON.parse(operations[0].body).body).toContain(`SHA-256: ${fixture.provenance.sha256}`);
+
+    const mismatchedOperations = [];
+    const mismatchedFetch = async (request, options = {}) => {
+      const url = new URL(request);
+      mismatchedOperations.push(options.method ?? 'GET');
+      if (url.href === 'https://api.github.com/repos/clickety-clacks/tightbeam-chat/releases' && options.method === 'POST') {
+        return new Response(JSON.stringify({
+          id: 19, tag_name: tag, draft: true,
+          upload_url: 'https://uploads.github.com/repos/clickety-clacks/tightbeam-chat/releases/19/assets{?name,label}',
+        }), { headers: { 'content-type': 'application/json' } });
+      }
+      if (url.href.startsWith('https://uploads.github.com/repos/clickety-clacks/tightbeam-chat/releases/19/assets?')) {
+        const name = url.searchParams.get('name');
+        const body = Buffer.from(options.body);
+        return new Response(JSON.stringify({ name, state: 'uploaded', size: body.length, digest: `sha256:${'0'.repeat(64)}` }), {
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      return new Response('', { status: 404 });
+    };
+    await expect(stageChatRelease({ rootDir, environment, fetchImpl: mismatchedFetch })).rejects.toThrow(/did not confirm upload/);
+    expect(mismatchedOperations).toEqual(['POST', 'POST']);
 
     const failedOperations = [];
     const failedFetch = async (request, options = {}) => {
@@ -544,13 +568,14 @@ describe('Chat release packaging and updater', () => {
         if (url.searchParams.get('name') === 'SHA256SUMS') return new Response('', { status: 503 });
         const name = url.searchParams.get('name');
         const body = Buffer.from(options.body);
-        return new Response(JSON.stringify({ name, state: 'uploaded', size: body.length }), {
+        const digest = crypto.createHash('sha256').update(body).digest('hex');
+        return new Response(JSON.stringify({ name, state: 'uploaded', size: body.length, digest: `sha256:${digest}` }), {
           headers: { 'content-type': 'application/json' },
         });
       }
       return new Response('', { status: 404 });
     };
-    await expect(publishChatRelease({ rootDir, environment, fetchImpl: failedFetch })).rejects.toThrow(/HTTP 503/);
+    await expect(stageChatRelease({ rootDir, environment, fetchImpl: failedFetch })).rejects.toThrow(/HTTP 503/);
     expect(failedOperations.some((operation) => operation.method === 'PATCH')).toBe(false);
   });
 

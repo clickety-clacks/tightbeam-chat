@@ -1,4 +1,4 @@
-name: Publish Chat release
+name: Stage Chat release for approval
 
 on:
   push:
@@ -9,7 +9,8 @@ permissions:
   contents: read
 
 jobs:
-  publish:
+  stage:
+    name: Build and stage draft release
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -30,6 +31,41 @@ jobs:
       - run: npm run build
       - run: npm run build:chat-server
       - run: npm run package:chat-release
-      - run: npm run release:publish
+      - name: Verify package identity before staging
+        shell: bash
+        run: |
+          set -euo pipefail
+          provenance=dist/chat-release/release-provenance.json
+          tag="$(jq -er '.tag' "$provenance")"
+          source_commit="$(jq -er '.sourceCommit' "$provenance")"
+          asset_name="$(jq -er '.asset' "$provenance")"
+          asset_sha256="$(jq -er '.sha256' "$provenance")"
+          test "$tag" = "$GITHUB_REF_NAME"
+          test "$source_commit" = "$GITHUB_SHA"
+          test "$asset_name" = "tightbeam-chat-${GITHUB_REF_NAME}.tar.gz"
+          [[ "$asset_sha256" =~ ^[a-f0-9]{64}$ ]]
+          test "$(cat dist/chat-release/SHA256SUMS)" = "$asset_sha256  $asset_name"
+          printf '%s  %s\n' "$asset_sha256" "dist/chat-release/$asset_name" | sha256sum --check --strict
+      - run: npm run release:stage
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Summarize the staged package
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          provenance=dist/chat-release/release-provenance.json
+          tag="$(jq -er '.tag' "$provenance")"
+          source_commit="$(jq -er '.sourceCommit' "$provenance")"
+          asset_name="$(jq -er '.asset' "$provenance")"
+          asset_sha256="$(jq -er '.sha256' "$provenance")"
+          {
+            echo "## Chat release package staged for approval"
+            echo
+            echo "- Tag: \`$tag\`"
+            echo "- Source commit: \`$source_commit\`"
+            echo "- Package: \`$asset_name\`"
+            echo "- SHA-256: \`$asset_sha256\`"
+            echo
+            echo "The package, checksum, and provenance are attached to a draft release. Review the exact source and package hash, then publish that draft explicitly to make it available to Chat's update checker."
+          } >> "$GITHUB_STEP_SUMMARY"

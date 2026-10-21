@@ -23,7 +23,7 @@
     "update:chat-release": "node scripts/update-chat-release.mjs",
     "test:release-watch": "node --test tests/chat-release-watch.node.mjs",
     "release:assert-tag": "node scripts/assert-chat-release-ref.mjs",
-    "release:publish": "node scripts/publish-chat-release.mjs",
+    "release:stage": "node scripts/stage-chat-release.mjs",
     "check": "tsc --noEmit",
     "test": "vitest run",
     "example": "vite --config examples/vite.config.ts"

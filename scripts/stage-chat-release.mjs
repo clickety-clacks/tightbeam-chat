@@ -8,7 +8,7 @@ const apiRoot = `https://api.github.com/repos/${repository}`;
 const tagPattern = /^v\d+\.\d+\.\d+$/;
 const sourcePattern = /^[a-f0-9]{40}$/;
 
-export async function publishChatRelease({
+export async function stageChatRelease({
   rootDir = process.cwd(),
   environment = process.env,
   fetchImpl = globalThis.fetch,
@@ -38,6 +38,7 @@ export async function publishChatRelease({
 
   async function uploadAsset(url, filename) {
     const bytes = await fs.readFile(filename);
+    const sha256 = crypto.createHash('sha256').update(bytes).digest('hex');
     const contentType = filename.endsWith('.tar.gz') ? 'application/gzip'
       : filename.endsWith('.json') ? 'application/json'
         : 'text/plain; charset=utf-8';
@@ -51,7 +52,8 @@ export async function publishChatRelease({
     let result;
     try { result = await response.json(); }
     catch { throw new Error(`GitHub did not confirm upload of ${path.basename(filename)}.`); }
-    if (result.name !== path.basename(filename) || result.state !== 'uploaded' || result.size !== bytes.length) {
+    if (result.name !== path.basename(filename) || result.state !== 'uploaded' || result.size !== bytes.length ||
+        result.digest !== `sha256:${sha256}`) {
       throw new Error(`GitHub did not confirm upload of ${path.basename(filename)}.`);
     }
   }
@@ -59,7 +61,7 @@ export async function publishChatRelease({
   if (environment.GITHUB_REPOSITORY !== repository || environment.GITHUB_EVENT_NAME !== 'push' ||
       environment.GITHUB_REF_TYPE !== 'tag' || environment.GITHUB_REF !== `refs/tags/${tag}` ||
       !tagPattern.test(tag) || !sourcePattern.test(sourceCommit) || !token || typeof fetchImpl !== 'function') {
-    throw new Error('This publisher accepts only a tag-triggered Chat release job.');
+    throw new Error('This release stager accepts only a tag-triggered Chat release job.');
   }
 
   const outputDir = path.resolve(rootDir, 'dist/chat-release');
@@ -104,26 +106,15 @@ export async function publishChatRelease({
     throw new Error('GitHub returned an unexpected Chat asset upload endpoint.');
   }
   for (const filename of [assetPath, checksumPath, provenancePath]) await uploadAsset(uploadUrl.href, filename);
-
-  const publishResponse = await githubRequest(`${apiRoot}/releases/${draft.id}`, {
-    method: 'PATCH',
-    body: { draft: false },
-  });
-  let published;
-  try { published = await publishResponse.json(); }
-  catch { throw new Error('GitHub did not confirm publication of the Chat release.'); }
-  if (published.id !== draft.id || published.tag_name !== tag || published.draft !== false || !published.published_at) {
-    throw new Error('GitHub did not confirm publication of the complete Chat release.');
-  }
-  return { tag, sourceCommit, assetName, hash, releaseId: published.id };
+  return { tag, sourceCommit, assetName, hash, draftId: draft.id };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
-    const result = await publishChatRelease();
-    process.stdout.write(`Published ${result.tag} from ${result.sourceCommit} with ${result.assetName} (${result.hash}).\n`);
+    const result = await stageChatRelease();
+    process.stdout.write(`Staged draft ${result.tag} from ${result.sourceCommit} with ${result.assetName} (${result.hash}); publish the reviewed draft to make it available to Chat.\n`);
   } catch (error) {
-    process.stderr.write(`${error instanceof Error ? error.message : 'Chat release publication failed.'}\n`);
+    process.stderr.write(`${error instanceof Error ? error.message : 'Chat release staging failed.'}\n`);
     process.exitCode = 1;
   }
 }
