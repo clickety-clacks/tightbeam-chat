@@ -147,14 +147,17 @@ body { background: #f6f6f6; color: #1e1e1e; }
   background: transparent;
 }
 .tb-chat-input-shell {
+  --tb-chat-control-size: 2.35rem;
+  --tb-chat-control-gap: .35rem;
+  --tb-chat-input-border-width: 1px;
   position: relative;
   display: flex;
   align-items: flex-end;
   width: 100%;
   min-width: 0;
   padding: .32rem;
-  border: 1px solid var(--tb-chat-border);
-  border-radius: 1.7rem;
+  border: var(--tb-chat-input-border-width) solid var(--tb-chat-border);
+  border-radius: calc(var(--tb-chat-control-size) / 2 + var(--tb-chat-control-gap) + var(--tb-chat-input-border-width));
   background: var(--tb-chat-background);
   box-shadow: 0 3px 18px rgb(0 0 0 / .12);
 }
@@ -182,21 +185,22 @@ body { background: #f6f6f6; color: #1e1e1e; }
 .tb-chat-input-shell textarea::placeholder { color: var(--tb-chat-muted); opacity: 1; }
 .tb-chat-status-control, .tb-chat-send-button {
   position: absolute;
-  bottom: .35rem;
+  top: 50%;
+  transform: translateY(-50%);
   display: grid;
   place-items: center;
-  width: 2.35rem;
-  height: 2.35rem;
+  width: var(--tb-chat-control-size);
+  height: var(--tb-chat-control-size);
   border: 0;
   border-radius: 50%;
   background: transparent;
 }
-.tb-chat-status-control { left: .4rem; }
+.tb-chat-status-control { left: var(--tb-chat-control-gap); }
 .tb-chat-status-dot { display: block; width: .72rem; height: .72rem; border-radius: 50%; background: #858585; }
 .tb-chat-status-ready { background: #398b55; }
 .tb-chat-status-loading, .tb-chat-status-stale { background: #c38c21; }
 .tb-chat-status-error, .tb-chat-status-unauthorized, .tb-chat-status-unsupported { background: #b34a4a; }
-.tb-chat-send-button { right: .35rem; width: 2.35rem; height: 2.35rem; color: #fff !important; background: var(--tb-chat-control) !important; }
+.tb-chat-send-button { right: var(--tb-chat-control-gap); color: #fff !important; background: var(--tb-chat-control) !important; }
 .tb-chat-send-button svg { width: 1.2rem; height: 1.2rem; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 2.4; }
 .tb-chat-send-button:disabled { opacity: .48; }
 .tb-chat-status-popup {
