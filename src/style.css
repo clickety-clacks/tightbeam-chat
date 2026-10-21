@@ -185,8 +185,8 @@ body { background: #f6f6f6; color: #1e1e1e; }
 .tb-chat-input-shell textarea::placeholder { color: var(--tb-chat-muted); opacity: 1; }
 .tb-chat-status-control, .tb-chat-send-button {
   position: absolute;
-  top: 50%;
-  transform: translateY(-50%);
+  top: auto;
+  bottom: var(--tb-chat-control-gap);
   display: grid;
   place-items: center;
   width: var(--tb-chat-control-size);
