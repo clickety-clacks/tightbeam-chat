@@ -122,6 +122,7 @@ describe('framework-independent runtime', () => {
     transport.rows = [message(7, { role: 'user', content: 'Can you help?' }),
       message(8, { content: 'The answer remains visible.', turnSeq: 44 })];
     transport.readRecentTurns = async () => { throw new AuthorizationError('Recent turns are not authorized.'); };
+    transport.readTurn = async () => { throw new AuthorizationError('Exact turn detail is not authorized.'); };
     const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
 
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));

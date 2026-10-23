@@ -56,6 +56,9 @@ function setup(heartbeatTimeoutMs?: number, observedVersion = version, configure
           page: { oldestCursor: 'older-cursor', hasMoreBefore: true } }
         : path.includes('/turns?') ? { schemaVersion: 1, resource: 'turns', items: [],
           page: { oldestCursor: null, hasMoreBefore: false } }
+      : path.endsWith('/api/turns/12') ? { schemaVersion: 1, resource: 'turns', item: {
+        seq: 12, sessionKey, status: 'running', messageId: 'human-message', origin: 'user:person-1',
+      } }
         : { schemaVersion: 1, resource: 'sessions', item: session };
       return new Response(JSON.stringify(body), { status: 200 });
     },
@@ -165,10 +168,12 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
     runtime.dispose();
   });
 
-  it('keeps history, the live subscription, and human sends when recent-turn provenance is forbidden', async () => {
+  it('uses exact-turn reads when recent-turn collection is forbidden and keeps history and sends available', async () => {
     const messages = [
-      { ...item, id: 'human-message', seq: 9, role: 'user', messageType: 'chat', content: 'Can you help?' },
-      { ...item, id: 'agent-message', seq: 10, role: 'assistant', turnSeq: 12, content: 'Here is the answer.' },
+      { ...item, id: 'human-message', seq: 9, role: 'user', sender: 'person-1', messageType: 'chat',
+        clientMessageId: 'client-human', deviceId: 'device-1', turnSeq: 12, content: 'Can you help?' },
+      { ...item, id: 'agent-message', seq: 10, role: 'assistant', messageType: 'assistant',
+        turnSeq: 12, content: 'Here is the answer.' },
       { ...item, id: 'system-batch', seq: 11, role: 'user', sender: 'process:notifications',
         messageType: 'substrate', content: '[batched notices: 1]' },
       { ...item, id: 'system-marker', seq: 12, role: 'assistant', sender: 'process:notifications',
@@ -187,9 +192,14 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
     expect(runtime.getSnapshot().records.map((record) => record.id)).toEqual([
       'human-message', 'agent-message', 'system-batch', 'system-marker',
     ]);
-    expect(runtime.getSnapshot().provenanceAvailable).toBe(false);
-    expect(runtime.getSnapshot().activeTurn).toBeUndefined();
+    expect(runtime.getSnapshot().provenanceAvailable).toBe(true);
+    expect(runtime.getSnapshot().provenance).toMatchObject([{
+      turn: { seq: 12, messageId: 'human-message', origin: 'user:person-1' },
+      sourceKind: 'human', trigger: { id: 'human-message', content: 'Can you help?' },
+    }]);
+    expect(runtime.getSnapshot().activeTurn?.turn.seq).toBe(12);
     expect(candidate.paths).toContain(`https://host.example/api/sessions/${sessionKey}/turns?limit=50&tail=true`);
+    expect(candidate.paths).toContain('https://host.example/api/turns/12');
     expect(candidate.changes.closed).toBe(false);
 
     const clientMessageId = runtime.send('Still available');

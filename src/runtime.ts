@@ -309,21 +309,26 @@ class SessionRuntime implements ChatRuntime {
   ): Promise<{ provenance: readonly TurnProvenance[]; activeTurn?: TurnProvenance }> {
     const bySequence = new Map(previous.map((item) => [item.turn.seq, item]));
     const recentBySequence = new Map(recentTurns.map((turn) => [turn.seq, turn]));
-    const active = recentTurns.filter((turn) => turn.status === 'running')
-      .sort((a, b) => b.seq - a.seq)[0];
+    const activeSequence = recentTurns.filter((turn) => turn.status === 'running')
+      .sort((a, b) => b.seq - a.seq)[0]?.seq;
     const recordById = new Map(records.filter((record): record is Extract<ConversationRecord, { kind: 'message' }> =>
       record.kind === 'message').map((record) => [record.id, record]));
     const sequences = new Set<number>();
     for (const record of records) if (record.kind === 'message' && record.turnSeq) sequences.add(record.turnSeq);
     for (const turn of recentTurns) if (recordById.has(turn.messageId)) sequences.add(turn.seq);
-    if (active) sequences.add(active.seq);
+    if (activeSequence !== undefined) sequences.add(activeSequence);
 
     const resolved: TurnProvenance[] = [];
+    let activeTurn: TurnProvenance | undefined;
+    const remember = (item: TurnProvenance) => {
+      resolved.push(item);
+      if (item.turn.status === 'running' && (!activeTurn || item.turn.seq > activeTurn.turn.seq)) activeTurn = item;
+    };
     for (const seq of [...sequences].sort((a, b) => a - b)) {
       const prior = bySequence.get(seq);
       const listed = recentBySequence.get(seq);
       if (!refreshAll && prior && !listed) {
-        resolved.push(prior);
+        remember(prior);
         continue;
       }
       const turn = listed ?? (prior && !refreshAll
@@ -344,13 +349,14 @@ class SessionRuntime implements ChatRuntime {
 
       const provisional = createTurnProvenance(turn, trigger);
       let sourceDisplayName: string | undefined;
-      if (turn.seq === active?.seq && turnSourceKind(provisional.captionOrigin) === 'agent') {
+      if (turn.status === 'running' && turnSourceKind(provisional.captionOrigin) === 'agent') {
         sourceDisplayName = await this.transport.resolveOriginDisplayName(provisional.captionOrigin, signal);
       }
-      resolved.push(createTurnProvenance(turn, trigger, sourceDisplayName));
+      remember(createTurnProvenance(turn, trigger, sourceDisplayName));
     }
     const frozen = Object.freeze(resolved);
-    return { provenance: frozen, activeTurn: active ? resolved.find((item) => item.turn.seq === active.seq) : undefined };
+    if (activeSequence !== undefined) activeTurn = resolved.find((item) => item.turn.seq === activeSequence) ?? activeTurn;
+    return { provenance: frozen, activeTurn };
   }
 
   private async readRecentTurnsOrUnavailable(generation: number, signal: AbortSignal): Promise<readonly CanonicalTurn[]> {
@@ -359,6 +365,7 @@ class SessionRuntime implements ChatRuntime {
       return await this.transport.readRecentTurns(this.sessionKey, signal);
     } catch (error) {
       if (signal.aborted) throw error;
+      if (error instanceof AuthorizationError) return noRecentTurns;
       this.provenanceUnavailableGeneration = generation;
       return noRecentTurns;
     }

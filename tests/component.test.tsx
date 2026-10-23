@@ -87,11 +87,11 @@ describe('conversation surface', () => {
       '```ts', 'const value = 1;', '```', '', '> A quotation', '',
       '| Name | Value |', '| --- | --- |', '| count | 2 |', '',
       '<script>window.compromised = true</script>',
-    ].join('\n'), { turnSeq: 1 });
+    ].join('\n'), { turnSeq: 1, messageType: 'assistant' });
     const otherTrigger = row(sessionKey, 'other-trigger', 'An agent sent a wake', {
       role: 'user', sender: 'agent:external', messageType: 'chat', turnSeq: 2,
     });
-    const otherAnswer = row(sessionKey, 'other-answer', 'Must remain hidden', { turnSeq: 2 });
+    const otherAnswer = row(sessionKey, 'other-answer', 'Must remain hidden', { turnSeq: 2, messageType: 'assistant' });
     const substrateMarker = row(sessionKey, 'substrate-marker', 'A system event marker', {
       role: 'assistant', sender: 'process:notifications', messageType: 'substrate',
     });
@@ -107,7 +107,7 @@ describe('conversation surface', () => {
       'coalesced by notice-batching-v1',
     ].join('\n');
     const batch = row(sessionKey, 'batch-trigger', batchText, { role: 'assistant', turnSeq: 3 });
-    const batchAnswer = row(sessionKey, 'batch-answer', 'Answer to the batch question', { turnSeq: 3 });
+    const batchAnswer = row(sessionKey, 'batch-answer', 'Answer to the batch question', { turnSeq: 3, messageType: 'assistant' });
     const humanTurn = provenance(1, sessionKey, human.id, 'user:person', human);
     const otherTurn = provenance(2, sessionKey, otherTrigger.id, 'agent:another-agent', otherTrigger, 'Another agent');
     const batchTurn = provenance(3, sessionKey, batch.id, 'process:maintenance', batch, undefined, 'running');
@@ -160,6 +160,12 @@ describe('conversation surface', () => {
     const unprovenAgent = row(sessionKey, 'unproven-agent', 'An unproven assistant reply', {
       role: 'assistant', messageType: 'chat', turnSeq: 10,
     });
+    const unprovenSelectedReply = row(sessionKey, 'unproven-selected-reply', 'A selected reply without a provable trigger', {
+      role: 'assistant', messageType: 'assistant', turnSeq: 12,
+    });
+    const identifiedAgentReply = row(sessionKey, 'identified-agent-reply', 'A reply with a known agent sender', {
+      role: 'assistant', sender: 'agent:external', messageType: 'assistant', turnSeq: 13,
+    });
     const agentWake = row(sessionKey, 'agent-wake', 'An unselected agent sent a wake', {
       role: 'user', sender: 'agent:external', messageType: 'chat', turnSeq: 11,
     });
@@ -180,7 +186,8 @@ describe('conversation surface', () => {
       role: 'user', sender: 'process:notifications', messageType: 'substrate', seq: 2,
     });
     const runtime = new FakeRuntime(sessionKey, {
-      records: [human, batch, marker, unprovenAgent, agentWake, agentReply, unprovenHuman], provenanceAvailable: false,
+      records: [human, batch, marker, unprovenAgent, unprovenSelectedReply, identifiedAgentReply,
+        agentWake, agentReply, unprovenHuman], provenanceAvailable: false,
     });
     runtime.olderPages.push({ records: [olderHuman, olderBatch], provenance: [], hasOlder: false });
 
@@ -190,11 +197,14 @@ describe('conversation surface', () => {
     expect(within(log).queryByText('A system update is not a conversation message.')).toBeNull();
     expect(within(log).queryByText('A system event marker')).toBeNull();
     expect(within(log).queryByText('An unproven assistant reply')).toBeNull();
+    expect(within(log).getByText('A selected reply without a provable trigger')).toBeTruthy();
+    expect(within(log).queryByText('A reply with a known agent sender')).toBeNull();
     expect(within(log).queryByText('An unselected agent sent a wake')).toBeNull();
     expect(within(log).queryByText('A reply to the unselected agent')).toBeNull();
     expect(within(log).queryByText('An unproven user row')).toBeNull();
     expect(runtime.getSnapshot().records.map((record) => record.id)).toEqual([
-      'human-message', 'system-batch', 'system-marker', 'unproven-agent', 'agent-wake', 'agent-reply', 'unproven-human',
+      'human-message', 'system-batch', 'system-marker', 'unproven-agent', 'unproven-selected-reply',
+      'identified-agent-reply', 'agent-wake', 'agent-reply', 'unproven-human',
     ]);
 
     act(() => runtime.update({ hasOlder: true }));
@@ -350,6 +360,43 @@ describe('conversation surface', () => {
       if (sample.count > 1) expect(screen.queryByText('Additional activity')).toBeNull();
       view.unmount();
     }
+  });
+
+  it('shows captions for a human reply, a batch, and another agent, then clears them at turn end', () => {
+    const sessionKey = 'caption-lifecycle';
+    const human = row(sessionKey, 'human-trigger', 'A human question', { role: 'user', sender: 'user:person' });
+    const humanTurn = provenance(31, sessionKey, human.id, 'user:person', human, undefined, 'running');
+    const runtime = new FakeRuntime(sessionKey, {
+      records: [human], provenance: [humanTurn], activeTurn: humanTurn,
+    });
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+    expect(screen.getByRole('status', { name: 'Active turn: Replying to you' })).toBeTruthy();
+
+    const batchText = [
+      '[batched notices: 2]', '',
+      '[1] source=event-human sender=user:person cause=reply class=input-needed',
+      'A batched question from the person', '',
+      '[2] source=event-system sender=process:maintenance cause=refresh class=fyi',
+      'A system event', '', 'coalesced by notice-batching-v1',
+    ].join('\n');
+    const batch = row(sessionKey, 'batch-trigger', batchText, { messageType: 'substrate' });
+    const batchTurn = provenance(32, sessionKey, batch.id, 'process:maintenance', batch, undefined, 'running');
+    act(() => runtime.update({ records: [human, batch], provenance: [humanTurn, batchTurn], activeTurn: batchTurn }));
+    expect(screen.getByRole('status', { name: 'Active turn: Processing message batch' })).toBeTruthy();
+
+    const agentTrigger = row(sessionKey, 'agent-trigger', 'A request from another agent', {
+      role: 'user', sender: 'agent:helper', messageType: 'chat',
+    });
+    const agentTurn = provenance(33, sessionKey, agentTrigger.id, 'agent:helper', agentTrigger,
+      'Helper agent', 'running');
+    act(() => runtime.update({ records: [human, batch, agentTrigger],
+      provenance: [humanTurn, batchTurn, agentTurn], activeTurn: agentTurn }));
+    expect(screen.getByRole('status', { name: 'Active turn: Helper agent' })).toBeTruthy();
+
+    const completedAgentTurn = provenance(33, sessionKey, agentTrigger.id, 'agent:helper', agentTrigger,
+      'Helper agent', 'completed');
+    act(() => runtime.update({ provenance: [humanTurn, batchTurn, completedAgentTurn], activeTurn: completedAgentTurn }));
+    expect(screen.queryByRole('status', { name: /Active turn:/ })).toBeNull();
   });
 
   it('shows a friendly timestamp for recent messages and a fallback when time is missing', () => {

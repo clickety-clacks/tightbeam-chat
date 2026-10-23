@@ -98,15 +98,13 @@ function isProvenHumanMessage(record: CanonicalMessage): boolean {
   return Boolean(record.clientMessageId && record.deviceId);
 }
 
+function isUnprovenAssistantReply(record: CanonicalMessage): boolean {
+  if (record.role !== 'assistant' || record.messageType !== 'assistant') return false;
+  const senderKind = record.sender ? turnSourceKind(record.sender) : 'unknown';
+  return senderKind === 'unknown';
+}
+
 function visibleBubbles(state: RuntimeState, agentName: string): Bubble[] {
-  if (state.provenanceAvailable === false) {
-    return state.records.flatMap((record): Bubble[] => {
-      if (record.kind === 'message' && isProvenHumanMessage(record)) {
-        return [{ key: record.id, record, side: 'human', sender: 'You', derived: false }];
-      }
-      return [];
-    });
-  }
   const provenance = state.provenance ?? [];
   const byTurn = new Map(provenance.map((item) => [item.turn.seq, item]));
   const byMessage = new Map<string, TurnProvenance[]>();
@@ -144,10 +142,17 @@ function visibleBubbles(state: RuntimeState, agentName: string): Bubble[] {
     }
     if (record.messageType === 'substrate') continue;
     if (displayedAsTrigger) continue;
+    if (record.messageType === 'marker') continue;
+    if (record.role === 'user' && isProvenHumanMessage(record)) {
+      bubbles.push({ key: record.id, record, side: 'human', sender: 'You', derived: false });
+      continue;
+    }
     const turnSeq = record.turnSeq;
     const item = turnSeq === undefined ? undefined : byTurn.get(turnSeq);
     if (record.role === 'assistant' && item && item.turn.messageId !== record.id && provenanceHasHumanSource(item)) {
       if (!messageIds.has(item.turn.messageId)) addHumanTrigger(item);
+      bubbles.push({ key: record.id, record, side: 'agent', sender: sourceLabel('agent', agentName), derived: false });
+    } else if (!item && isUnprovenAssistantReply(record)) {
       bubbles.push({ key: record.id, record, side: 'agent', sender: sourceLabel('agent', agentName), derived: false });
     }
   }
