@@ -64,6 +64,10 @@ class FakeRuntime implements ChatRuntime {
       hasOlder: page.hasOlder, loadingOlder: false };
     this.publish();
   };
+  update = (patch: Partial<RuntimeState>) => {
+    this.state = { ...this.state, ...patch };
+    this.publish();
+  };
   send = (text: string) => { this.sent.push(text); return 'fixture-send'; };
   retrySend = async (id: string) => { this.retried.push(id); };
   rebuild = async () => {};
@@ -84,8 +88,13 @@ describe('conversation surface', () => {
       '| Name | Value |', '| --- | --- |', '| count | 2 |', '',
       '<script>window.compromised = true</script>',
     ].join('\n'), { turnSeq: 1 });
-    const otherTrigger = row(sessionKey, 'other-trigger', 'Other agent request', { role: 'assistant' });
+    const otherTrigger = row(sessionKey, 'other-trigger', 'An agent sent a wake', {
+      role: 'user', sender: 'agent:external', messageType: 'chat', turnSeq: 2,
+    });
     const otherAnswer = row(sessionKey, 'other-answer', 'Must remain hidden', { turnSeq: 2 });
+    const substrateMarker = row(sessionKey, 'substrate-marker', 'A system event marker', {
+      role: 'assistant', sender: 'process:notifications', messageType: 'substrate',
+    });
     const batchText = [
       '[batched notices: 2]',
       '',
@@ -103,7 +112,7 @@ describe('conversation surface', () => {
     const otherTurn = provenance(2, sessionKey, otherTrigger.id, 'agent:another-agent', otherTrigger, 'Another agent');
     const batchTurn = provenance(3, sessionKey, batch.id, 'process:maintenance', batch, undefined, 'running');
     const runtime = new FakeRuntime(sessionKey, {
-      records: [answer, otherAnswer, batch, batchAnswer, unprovenHuman],
+      records: [answer, otherAnswer, batch, batchAnswer, unprovenHuman, substrateMarker],
       provenance: [humanTurn, otherTurn, batchTurn], activeTurn: batchTurn,
     });
     render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
@@ -120,6 +129,8 @@ describe('conversation surface', () => {
     expect(within(log).getByText('Batch question from the person')).toBeTruthy();
     expect(within(log).getByText('Answer to the batch question')).toBeTruthy();
     expect(within(log).queryByText('Substrate payload must stay hidden')).toBeNull();
+    expect(within(log).queryByText('A system event marker')).toBeNull();
+    expect(within(log).queryByText('An agent sent a wake')).toBeNull();
     expect(within(log).queryByText('Must remain hidden')).toBeNull();
     expect(within(log).queryByText('Role alone must not prove this exchange')).toBeNull();
     expect(within(log).queryByText(/batched notices/)).toBeNull();
@@ -131,20 +142,84 @@ describe('conversation surface', () => {
       .toBe('Research assistant');
   });
 
-  it('shows selected-session messages without filtering or activity captions when turn provenance is unavailable', () => {
+  it('keeps only proven human chat rows when turn provenance is unavailable across pages and reconnects', async () => {
     const sessionKey = 'conversation-without-provenance';
-    const human = row(sessionKey, 'human-message', 'A retained human message', { role: 'user' });
-    const agent = row(sessionKey, 'agent-message', 'An agent reply to another participant', { role: 'assistant' });
-    const active = provenance(10, sessionKey, 'unloaded-trigger', 'user:person', undefined, undefined, 'running');
-    const runtime = new FakeRuntime(sessionKey, {
-      records: [human, agent], provenanceAvailable: false, activeTurn: active,
+    const human = row(sessionKey, 'human-message', 'A retained human message', {
+      role: 'user', sender: 'person-1', messageType: 'chat', clientMessageId: 'client-human', deviceId: 'human-device',
     });
+    const batch = row(sessionKey, 'system-batch', [
+      '[batched notices: 1]', '',
+      '[1] source=event-1 sender=process:notifications cause=refresh class=fyi',
+      'A system update is not a conversation message.', '', 'coalesced by notice-batching-v1',
+    ].join('\n'), {
+      role: 'user', sender: 'process:notifications', messageType: 'substrate', turnSeq: 10,
+    });
+    const marker = row(sessionKey, 'system-marker', 'A system event marker', {
+      role: 'assistant', sender: 'process:notifications', messageType: 'substrate',
+    });
+    const unprovenAgent = row(sessionKey, 'unproven-agent', 'An unproven assistant reply', {
+      role: 'assistant', messageType: 'chat', turnSeq: 10,
+    });
+    const agentWake = row(sessionKey, 'agent-wake', 'An unselected agent sent a wake', {
+      role: 'user', sender: 'agent:external', messageType: 'chat', turnSeq: 11,
+    });
+    const agentReply = row(sessionKey, 'agent-reply', 'A reply to the unselected agent', {
+      role: 'assistant', messageType: 'chat', turnSeq: 11,
+    });
+    const unprovenHuman = row(sessionKey, 'unproven-human', 'An unproven user row', {
+      role: 'user', messageType: 'chat',
+    });
+    const olderHuman = row(sessionKey, 'older-human', 'An earlier human message', {
+      role: 'user', sender: 'user:person-1', messageType: 'chat', seq: 1,
+    });
+    const olderBatch = row(sessionKey, 'older-batch', [
+      '[batched notices: 1]', '',
+      '[1] source=event-2 sender=process:notifications cause=refresh class=fyi',
+      'An earlier system update is not a conversation message.', '', 'coalesced by notice-batching-v1',
+    ].join('\n'), {
+      role: 'user', sender: 'process:notifications', messageType: 'substrate', seq: 2,
+    });
+    const runtime = new FakeRuntime(sessionKey, {
+      records: [human, batch, marker, unprovenAgent, agentWake, agentReply, unprovenHuman], provenanceAvailable: false,
+    });
+    runtime.olderPages.push({ records: [olderHuman, olderBatch], provenance: [], hasOlder: false });
 
     render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
     const log = screen.getByRole('log');
     expect(within(log).getByText('A retained human message')).toBeTruthy();
-    expect(within(log).getByText('An agent reply to another participant')).toBeTruthy();
-    expect(within(log).queryByText('Replying to you')).toBeNull();
+    expect(within(log).queryByText('A system update is not a conversation message.')).toBeNull();
+    expect(within(log).queryByText('A system event marker')).toBeNull();
+    expect(within(log).queryByText('An unproven assistant reply')).toBeNull();
+    expect(within(log).queryByText('An unselected agent sent a wake')).toBeNull();
+    expect(within(log).queryByText('A reply to the unselected agent')).toBeNull();
+    expect(within(log).queryByText('An unproven user row')).toBeNull();
+    expect(runtime.getSnapshot().records.map((record) => record.id)).toEqual([
+      'human-message', 'system-batch', 'system-marker', 'unproven-agent', 'agent-wake', 'agent-reply', 'unproven-human',
+    ]);
+
+    act(() => runtime.update({ hasOlder: true }));
+    await waitFor(() => expect(within(log).getByText('An earlier human message')).toBeTruthy());
+    expect(within(log).queryByText('An earlier system update is not a conversation message.')).toBeNull();
+
+    const liveHuman = row(sessionKey, 'live-human', 'A live human message', {
+      role: 'user', sender: 'person-1', messageType: 'chat', clientMessageId: 'client-live', deviceId: 'human-device',
+    });
+    const liveMarker = row(sessionKey, 'live-marker', 'A live system event marker', {
+      role: 'assistant', sender: 'process:notifications', messageType: 'substrate',
+    });
+    act(() => runtime.update({ records: [...runtime.getSnapshot().records, liveHuman, liveMarker] }));
+    expect(within(log).getByText('A live human message')).toBeTruthy();
+    expect(within(log).queryByText('A live system event marker')).toBeNull();
+
+    act(() => runtime.update({ status: 'stale', generation: 2 }));
+    act(() => runtime.update({ status: 'ready', provenanceAvailable: false,
+      provenance: [], activeTurn: undefined }));
+    expect(within(log).getByText('A retained human message')).toBeTruthy();
+    expect(within(log).getByText('An earlier human message')).toBeTruthy();
+    expect(within(log).queryByText('A system event marker')).toBeNull();
+    expect(within(log).queryByText('An unproven assistant reply')).toBeNull();
+    expect(within(log).queryByText('A reply to the unselected agent')).toBeNull();
+    expect(runtime.getSnapshot().records.map((record) => record.id)).toContain('system-batch');
   });
 
   it('does not revisit loaded message rows while typing with a production-sized history', async () => {

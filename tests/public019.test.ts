@@ -167,8 +167,12 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
 
   it('keeps history, the live subscription, and human sends when recent-turn provenance is forbidden', async () => {
     const messages = [
-      { ...item, id: 'human-message', seq: 9, role: 'user', content: 'Can you help?' },
+      { ...item, id: 'human-message', seq: 9, role: 'user', messageType: 'chat', content: 'Can you help?' },
       { ...item, id: 'agent-message', seq: 10, role: 'assistant', turnSeq: 12, content: 'Here is the answer.' },
+      { ...item, id: 'system-batch', seq: 11, role: 'user', sender: 'process:notifications',
+        messageType: 'substrate', content: '[batched notices: 1]' },
+      { ...item, id: 'system-marker', seq: 12, role: 'assistant', sender: 'process:notifications',
+        messageType: 'substrate', content: 'A system event marker' },
     ];
     const candidate = setup(undefined, identified2887, identified2887, messages, true);
     const runtime = createTightbeamAdapter(candidate.transport, candidate.profile).open(sessionKey);
@@ -180,7 +184,9 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
     candidate.changes.emit({ type: 'subscription_ready', subscriptionId: `chat:${sessionKey}` });
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
 
-    expect(runtime.getSnapshot().records.map((record) => record.id)).toEqual(['human-message', 'agent-message']);
+    expect(runtime.getSnapshot().records.map((record) => record.id)).toEqual([
+      'human-message', 'agent-message', 'system-batch', 'system-marker',
+    ]);
     expect(runtime.getSnapshot().provenanceAvailable).toBe(false);
     expect(runtime.getSnapshot().activeTurn).toBeUndefined();
     expect(candidate.paths).toContain(`https://host.example/api/sessions/${sessionKey}/turns?limit=50&tail=true`);

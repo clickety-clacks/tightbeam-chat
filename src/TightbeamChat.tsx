@@ -91,15 +91,18 @@ function sourceLabel(side: Bubble['side'], agentName: string): string {
   return agentName || 'Assistant';
 }
 
+function isProvenHumanMessage(record: CanonicalMessage): boolean {
+  if (record.role !== 'user' || record.messageType === 'substrate' || record.messageType === 'marker') return false;
+  const senderKind = record.sender ? turnSourceKind(record.sender) : 'unknown';
+  if (senderKind !== 'unknown') return senderKind === 'human';
+  return Boolean(record.clientMessageId && record.deviceId);
+}
+
 function visibleBubbles(state: RuntimeState, agentName: string): Bubble[] {
   if (state.provenanceAvailable === false) {
     return state.records.flatMap((record): Bubble[] => {
-      if (record.kind !== 'message') return [];
-      if (record.role === 'user') {
+      if (record.kind === 'message' && isProvenHumanMessage(record)) {
         return [{ key: record.id, record, side: 'human', sender: 'You', derived: false }];
-      }
-      if (record.role === 'assistant') {
-        return [{ key: record.id, record, side: 'agent', sender: sourceLabel('agent', agentName), derived: false }];
       }
       return [];
     });
@@ -126,7 +129,7 @@ function visibleBubbles(state: RuntimeState, agentName: string): Bubble[] {
           side: 'human', sender: 'You', displayContent: member.content, derived: true,
         });
       }
-    } else if (item.sourceKind === 'human' && item.trigger) {
+    } else if (item.sourceKind === 'human' && item.trigger && item.trigger.messageType !== 'substrate') {
       bubbles.push({ key: `${item.trigger.id}:provenance:${item.turn.seq}`, record: item.trigger,
         side: 'human', sender: 'You', derived: false });
     }
@@ -139,10 +142,11 @@ function visibleBubbles(state: RuntimeState, agentName: string): Bubble[] {
       addHumanTrigger(item);
       displayedAsTrigger ||= provenanceHasHumanSource(item);
     }
+    if (record.messageType === 'substrate') continue;
     if (displayedAsTrigger) continue;
     const turnSeq = record.turnSeq;
     const item = turnSeq === undefined ? undefined : byTurn.get(turnSeq);
-    if (item && item.turn.messageId !== record.id && provenanceHasHumanSource(item)) {
+    if (record.role === 'assistant' && item && item.turn.messageId !== record.id && provenanceHasHumanSource(item)) {
       if (!messageIds.has(item.turn.messageId)) addHumanTrigger(item);
       bubbles.push({ key: record.id, record, side: 'agent', sender: sourceLabel('agent', agentName), derived: false });
     }
