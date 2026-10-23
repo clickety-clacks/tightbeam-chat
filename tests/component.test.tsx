@@ -368,6 +368,7 @@ describe('conversation surface', () => {
         set: (value: number) => { scrollTop = Math.max(0, Math.min(value, height() - 180)); },
       },
     });
+    Object.defineProperty(log, 'scrollTo', { configurable: true, value: (options: ScrollToOptions) => { log.scrollTop = options.top ?? 0; } });
     const originalBounds = HTMLElement.prototype.getBoundingClientRect;
     const bounds = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
       if (this === log) return new DOMRect(0, 100, 320, 180);
@@ -377,6 +378,8 @@ describe('conversation surface', () => {
     });
     const viewportOffset = (element: HTMLElement) => element.getBoundingClientRect().top - log.getBoundingClientRect().top;
     try {
+      fireEvent.wheel(log, { deltaY: -100 });
+      fireEvent.scroll(log);
       const readingBefore = viewportOffset(reading);
       const followingBefore = viewportOffset(following);
       const replyBefore = viewportOffset(firstReply);
@@ -527,7 +530,7 @@ describe('conversation surface', () => {
         'coalesced by notice-batching-v1',
       ].join('\n');
       const trigger = row(sessionKey, `batch-${index}`, batchText, { role: 'user', sender: 'process:notifications', messageType: sample.type });
-      const reply = row(sessionKey, `reply-${index}`, `Reply ${index}`, { turnSeq: 20 + index });
+      const reply = row(sessionKey, `reply-${index}`, `Reply ${index}`, { turnSeq: 20 + index, replyToMessageId: trigger.id });
       const active = provenance(20 + index, sessionKey, trigger.id, 'process:notifications', trigger,
         sample.name, 'running');
       const runtime = new FakeRuntime(sessionKey, { records: [trigger, reply], provenance: [active], activeTurn: active });
