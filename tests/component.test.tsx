@@ -89,7 +89,7 @@ describe('conversation surface', () => {
       '```ts', 'const value = 1;', '```', '', '> A quotation', '',
       '| Name | Value |', '| --- | --- |', '| count | 2 |', '',
       '<script>window.compromised = true</script>',
-    ].join('\n'), { turnSeq: 1, messageType: 'assistant', replyToMessageId: human.id });
+    ].join('\n'), { sender: 'agent:selected', turnSeq: 1, messageType: 'assistant', replyToMessageId: human.id });
     const otherTrigger = row(sessionKey, 'other-trigger', 'An agent sent a wake', {
       role: 'user', sender: 'agent:external', messageType: 'agent', turnSeq: 2,
     });
@@ -114,7 +114,7 @@ describe('conversation surface', () => {
       role: 'user', sender: 'process:maintenance', messageType: 'substrate', turnSeq: 3,
     });
     const batchAnswer = row(sessionKey, 'batch-answer', 'Answer to the batch question', {
-      turnSeq: 3, messageType: 'assistant', replyToMessageId: batch.id,
+      sender: 'agent:selected', turnSeq: 3, messageType: 'assistant', replyToMessageId: batch.id,
     });
     const runtime = new FakeRuntime(sessionKey, {
       records: [human, answer, otherTrigger, otherAnswer, batch, batchAnswer, unprovenHuman, substrateMarker],
@@ -190,7 +190,7 @@ describe('conversation surface', () => {
       role: 'user', sender: 'user:person-1', messageType: 'chat', seq: 1,
     });
     const olderReply = row(sessionKey, 'older-reply', 'A reply linked to earlier human history', {
-      role: 'assistant', messageType: 'assistant', replyToMessageId: olderHuman.id, seq: 2,
+      role: 'assistant', sender: 'agent:selected', messageType: 'assistant', replyToMessageId: olderHuman.id, seq: 2,
     });
     const olderBatch = row(sessionKey, 'older-batch', [
       '[batched notices: 1]', '',
@@ -232,7 +232,7 @@ describe('conversation surface', () => {
       role: 'user', sender: 'person-1', messageType: 'chat', clientMessageId: 'client-live', deviceId: 'human-device',
     });
     const liveReply = row(sessionKey, 'live-reply', 'A reply linked to a live human message', {
-      role: 'assistant', messageType: 'assistant', replyToMessageId: 'live-human',
+      role: 'assistant', sender: 'agent:selected', messageType: 'assistant', replyToMessageId: 'live-human',
     });
     const liveMarker = row(sessionKey, 'live-marker', 'A live system event marker', {
       role: 'assistant', sender: 'process:notifications', messageType: 'substrate',
