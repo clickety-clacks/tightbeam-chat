@@ -3,7 +3,7 @@ import { forwardRef, memo, useCallback, useEffect, useId, useImperativeHandle, u
   type ReactNode, type RefObject, type TableHTMLAttributes } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import type { ChatRuntime, CanonicalMessage, ConversationRecord, RuntimeState, TightbeamAdapter, TurnProvenance } from './types';
+import type { ChatRuntime, CanonicalMessage, ConversationRecord, LocalSend, RuntimeState, TightbeamAdapter, TurnProvenance } from './types';
 import { provenanceHasHumanSource, turnSourceKind } from './provenance';
 import { useReadingPosition } from './useReadingPosition';
 import './style.css';
@@ -31,6 +31,53 @@ interface Bubble {
   readonly sender: string;
   readonly displayContent?: string;
   readonly derived: boolean;
+}
+
+type TimelineItem =
+  | { readonly kind: 'bubble'; readonly bubble: Bubble; readonly scrollKey?: string }
+  | { readonly kind: 'local'; readonly send: LocalSend; readonly canonical?: CanonicalMessage };
+
+function sendIdentity(value: Pick<LocalSend, 'sessionKey' | 'deviceId' | 'clientMessageId'>): string {
+  return JSON.stringify([value.sessionKey, value.deviceId, value.clientMessageId]);
+}
+
+function canonicalSendIdentity(record: CanonicalMessage): string | undefined {
+  return record.deviceId && record.clientMessageId
+    ? sendIdentity({ sessionKey: record.sessionKey, deviceId: record.deviceId,
+      clientMessageId: record.clientMessageId })
+    : undefined;
+}
+
+function itemRecord(item: TimelineItem): CanonicalMessage | undefined {
+  return item.kind === 'bubble' ? item.bubble.record : item.canonical;
+}
+
+function itemTime(item: TimelineItem): number | undefined {
+  const value = item.kind === 'bubble' ? item.bubble.record.createdAt
+    : item.canonical?.createdAt ?? item.send.submittedAt;
+  if (!value) return undefined;
+  const time = Date.parse(value);
+  return Number.isFinite(time) ? time : undefined;
+}
+
+function timelineInsertionIndex(items: readonly TimelineItem[], send: LocalSend,
+  canonical: CanonicalMessage | undefined): number {
+  if (canonical) {
+    const index = items.findIndex((item) => {
+      const record = itemRecord(item);
+      return record !== undefined && (record.seq > canonical.seq ||
+        (record.seq === canonical.seq && record.id.localeCompare(canonical.id) > 0));
+    });
+    return index < 0 ? items.length : index;
+  }
+
+  const submittedAt = Date.parse(send.submittedAt);
+  if (!Number.isFinite(submittedAt)) return items.length;
+  const index = items.findIndex((item) => {
+    const time = itemTime(item);
+    return time !== undefined && (time > submittedAt || (time === submittedAt && item.kind === 'bubble'));
+  });
+  return index < 0 ? items.length : index;
 }
 
 const markdownPlugins = [remarkGfm];
@@ -189,14 +236,15 @@ function StatusIcon({ state }: { state: RuntimeState }) {
   return <span className={`tb-chat-status-dot tb-chat-status-${status}`} aria-hidden="true" />;
 }
 
-const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, registerRow }: {
+const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, registerRow, scrollKey: scrollKeyOverride }: {
   bubble: Bubble;
   renderMessage?: TightbeamChatProps['renderMessage'];
   agentName: string;
   registerRow: (key: string, element: HTMLElement | null) => void;
+  scrollKey?: string;
 }) {
   const { record } = bubble;
-  const scrollKey = bubble.derived ? bubble.key : record.id;
+  const scrollKey = scrollKeyOverride ?? (bubble.derived ? bubble.key : record.id);
   const rowRef = useCallback((element: HTMLElement | null) => registerRow(scrollKey, element), [registerRow, scrollKey]);
   const time = localTimestamp(record.createdAt);
   const context: RenderContext = {
@@ -322,8 +370,38 @@ function ChatBody({ runtime, renderMessage, className }: {
   const bubbles = useMemo(() => visibleBubbles(state, agentName),
     [state.records, state.provenance, state.provenanceAvailable, state.activeTurn, agentName]);
   const caption = state.provenanceAvailable === false ? undefined : activeCaption(state.activeTurn);
-  const visibleCanonicalIds = useMemo(() => new Set(bubbles.map((bubble) => bubble.record.clientMessageId).filter(Boolean)), [bubbles]);
-  const localSends = state.sends.filter((send) => !visibleCanonicalIds.has(send.clientMessageId));
+  const visibleSendIdentities = useMemo(() => new Set(bubbles.flatMap((bubble) => {
+    const identity = canonicalSendIdentity(bubble.record);
+    return identity ? [identity] : [];
+  })), [bubbles]);
+  const sendsByIdentity = useMemo(() => new Map(state.sends.map((send) => [sendIdentity(send), send])), [state.sends]);
+  const canonicalSends = useMemo(() => {
+    const records = new Map<string, CanonicalMessage>();
+    for (const record of state.records) {
+      if (record.kind === 'message') {
+        const identity = canonicalSendIdentity(record);
+        if (identity) records.set(identity, record);
+      }
+    }
+    return records;
+  }, [state.records]);
+  const localSends = useMemo(() => state.sends.filter((send) =>
+    !visibleSendIdentities.has(sendIdentity(send))), [state.sends, visibleSendIdentities]);
+  const timeline = useMemo(() => {
+    const anchoredSendIdentities = new Set<string>();
+    const items: TimelineItem[] = bubbles.map((bubble) => {
+      const identity = canonicalSendIdentity(bubble.record);
+      const send = identity && !anchoredSendIdentities.has(identity) ? sendsByIdentity.get(identity) : undefined;
+      if (identity && send) anchoredSendIdentities.add(identity);
+      return { kind: 'bubble', bubble, scrollKey: send ? `local-${send.clientMessageId}` : undefined };
+    });
+    for (const send of localSends) {
+      const canonical = canonicalSends.get(sendIdentity(send));
+      const item: TimelineItem = { kind: 'local', send, canonical };
+      items.splice(timelineInsertionIndex(items, send, canonical), 0, item);
+    }
+    return items;
+  }, [bubbles, canonicalSends, localSends, sendsByIdentity]);
   const statusName = statusText(state);
 
   useEffect(() => {
@@ -439,8 +517,13 @@ function ChatBody({ runtime, renderMessage, className }: {
         <span>Earlier messages could not be loaded: {state.historyError}</span>
         <button type="button" onClick={loadOlder}>Retry loading messages</button>
       </div>}
-      {bubbles.map((bubble) => <RecordRow key={bubble.key} bubble={bubble} renderMessage={renderMessage} agentName={agentName} registerRow={reading.registerRow} />)}
-      {localSends.map((send) => {
+      {timeline.map((item) => {
+        if (item.kind === 'bubble') {
+          const { bubble } = item;
+          return <RecordRow key={bubble.key} bubble={bubble} scrollKey={item.scrollKey}
+            renderMessage={renderMessage} agentName={agentName} registerRow={reading.registerRow} />;
+        }
+        const { send } = item;
         const time = localTimestamp(send.submittedAt);
         const retryAvailable = ['failed', 'uncertain'].includes(send.status) && !send.reconciled;
         return <article ref={element => reading.registerRow(`local-${send.clientMessageId}`, element)} className="tb-chat-bubble tb-chat-bubble-human tb-chat-local" key={send.clientMessageId}
