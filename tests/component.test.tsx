@@ -494,4 +494,27 @@ describe('conversation surface', () => {
       .toBeLessThan(order.findIndex((text) => text.includes('Later reply')));
     expect(screen.getAllByText('Original prompt')).toHaveLength(1);
   });
+
+  it('keeps many retained sends interleaved throughout a long chronological history', () => {
+    const sessionKey = 'long-chronological-history';
+    const start = Date.parse('2026-10-23T00:00:00.000Z');
+    const history = Array.from({ length: 120 }, (_, index) => row(sessionKey, `history-${index}`,
+      `History ${index}`, { seq: index + 1, createdAt: new Date(start + index * 120_000).toISOString() }));
+    const sends: LocalSend[] = Array.from({ length: history.length - 1 }, (_, index) => ({
+      sessionKey, deviceId: 'device', clientMessageId: `retained-${index}`, content: `Retained ${index}`,
+      submittedAt: new Date(start + (index * 2 + 1) * 60_000).toISOString(),
+      status: 'accepted', reconciled: false,
+    }));
+    const runtime = new FakeRuntime(sessionKey, { records: history, provenanceAvailable: false, sends });
+    const view = render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+    const rows = [...view.container.querySelectorAll<HTMLElement>('.tb-chat-bubble')]
+      .map((element) => element.textContent ?? '');
+    const expected: string[] = [];
+    for (let index = 0; index < history.length; index++) {
+      expected.push(`History ${index}`);
+      if (index < sends.length) expected.push(`Retained ${index}`);
+    }
+    expect(rows).toHaveLength(expected.length);
+    for (let index = 0; index < expected.length; index++) expect(rows[index]).toContain(expected[index]);
+  });
 });

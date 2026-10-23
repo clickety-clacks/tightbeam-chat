@@ -48,10 +48,6 @@ function canonicalSendIdentity(record: CanonicalMessage): string | undefined {
     : undefined;
 }
 
-function itemRecord(item: TimelineItem): CanonicalMessage | undefined {
-  return item.kind === 'bubble' ? item.bubble.record : item.canonical;
-}
-
 function itemTime(item: TimelineItem): number | undefined {
   const value = item.kind === 'bubble' ? item.bubble.record.createdAt
     : item.canonical?.createdAt ?? item.send.submittedAt;
@@ -60,24 +56,109 @@ function itemTime(item: TimelineItem): number | undefined {
   return Number.isFinite(time) ? time : undefined;
 }
 
-function timelineInsertionIndex(items: readonly TimelineItem[], send: LocalSend,
-  canonical: CanonicalMessage | undefined): number {
-  if (canonical) {
-    const index = items.findIndex((item) => {
-      const record = itemRecord(item);
-      return record !== undefined && (record.seq > canonical.seq ||
-        (record.seq === canonical.seq && record.id.localeCompare(canonical.id) > 0));
-    });
-    return index < 0 ? items.length : index;
+interface TimelineAnchor {
+  readonly item: TimelineItem;
+  readonly record: CanonicalMessage;
+  readonly order: number;
+}
+
+interface TimedTimelineAnchor {
+  readonly time: number;
+  readonly position: number;
+}
+
+interface UnmatchedTimelineItem {
+  readonly item: TimelineItem;
+  readonly time: number;
+  readonly order: number;
+}
+
+function upperBoundByTime(items: readonly TimedTimelineAnchor[], time: number): number {
+  let low = 0;
+  let high = items.length;
+  while (low < high) {
+    const middle = low + Math.floor((high - low) / 2);
+    if (items[middle].time <= time) low = middle + 1;
+    else high = middle;
+  }
+  return low;
+}
+
+function composeTimeline(bubbles: readonly Bubble[], localSends: readonly LocalSend[],
+  canonicalSends: ReadonlyMap<string, CanonicalMessage>,
+  sendsByIdentity: ReadonlyMap<string, LocalSend>): TimelineItem[] {
+  const anchoredSendIdentities = new Set<string>();
+  const anchors: TimelineAnchor[] = bubbles.map((bubble, order) => {
+    const identity = canonicalSendIdentity(bubble.record);
+    const send = identity && !anchoredSendIdentities.has(identity) ? sendsByIdentity.get(identity) : undefined;
+    if (identity && send) anchoredSendIdentities.add(identity);
+    const item: TimelineItem = { kind: 'bubble', bubble, scrollKey: send ? `local-${send.clientMessageId}` : undefined };
+    return { item, record: bubble.record, order };
+  });
+  const unmatched: UnmatchedTimelineItem[] = [];
+  let order = bubbles.length;
+  for (const send of localSends) {
+    const canonical = canonicalSends.get(sendIdentity(send));
+    const item: TimelineItem = { kind: 'local', send, canonical };
+    if (canonical) {
+      anchors.push({ item, record: canonical, order });
+    } else {
+      const parsed = Date.parse(send.submittedAt);
+      unmatched.push({ item, time: Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY, order });
+    }
+    order++;
   }
 
-  const submittedAt = Date.parse(send.submittedAt);
-  if (!Number.isFinite(submittedAt)) return items.length;
-  const index = items.findIndex((item) => {
+  anchors.sort((left, right) => left.record.seq - right.record.seq ||
+    left.record.id.localeCompare(right.record.id) ||
+    Number(left.item.kind !== 'bubble') - Number(right.item.kind !== 'bubble') || left.order - right.order);
+
+  const timedAnchors: TimedTimelineAnchor[] = [];
+  const earliestBubbleAtTime = new Map<number, number>();
+  for (let position = 0; position < anchors.length; position++) {
+    const item = anchors[position].item;
     const time = itemTime(item);
-    return time !== undefined && (time > submittedAt || (time === submittedAt && item.kind === 'bubble'));
-  });
-  return index < 0 ? items.length : index;
+    if (time === undefined) continue;
+    const isBubble = item.kind === 'bubble';
+    timedAnchors.push({ time, position });
+    if (isBubble) {
+      const prior = earliestBubbleAtTime.get(time);
+      if (prior === undefined || position < prior) earliestBubbleAtTime.set(time, position);
+    }
+  }
+  // Canonical order follows sequence, but an unmatched send follows its timestamp.
+  // The suffix minimum finds the earliest sequence position satisfying each time query.
+  timedAnchors.sort((left, right) => left.time - right.time || left.position - right.position);
+  const earliestPositionAtOrAfterTime = new Array<number>(timedAnchors.length);
+  let earliestPosition = anchors.length;
+  for (let index = timedAnchors.length - 1; index >= 0; index--) {
+    earliestPosition = Math.min(earliestPosition, timedAnchors[index].position);
+    earliestPositionAtOrAfterTime[index] = earliestPosition;
+  }
+
+  unmatched.sort((left, right) => left.time - right.time || left.order - right.order);
+  const insertions = new Map<number, TimelineItem[]>();
+  for (const pending of unmatched) {
+    let position = anchors.length;
+    if (Number.isFinite(pending.time)) {
+      const firstGreaterTime = upperBoundByTime(timedAnchors, pending.time);
+      const firstLaterAnchor = firstGreaterTime < timedAnchors.length
+        ? earliestPositionAtOrAfterTime[firstGreaterTime] : anchors.length;
+      const firstEqualBubble = earliestBubbleAtTime.get(pending.time) ?? anchors.length;
+      position = Math.min(firstLaterAnchor, firstEqualBubble);
+    }
+    const bucket = insertions.get(position);
+    if (bucket) bucket.push(pending.item);
+    else insertions.set(position, [pending.item]);
+  }
+
+  const timeline: TimelineItem[] = [];
+  for (let position = 0; position <= anchors.length; position++) {
+    const bucket = insertions.get(position);
+    if (bucket) timeline.push(...bucket);
+    if (position < anchors.length) timeline.push(anchors[position].item);
+  }
+  return timeline;
 }
 
 const markdownPlugins = [remarkGfm];
@@ -388,19 +469,7 @@ function ChatBody({ runtime, renderMessage, className }: {
   const localSends = useMemo(() => state.sends.filter((send) =>
     !visibleSendIdentities.has(sendIdentity(send))), [state.sends, visibleSendIdentities]);
   const timeline = useMemo(() => {
-    const anchoredSendIdentities = new Set<string>();
-    const items: TimelineItem[] = bubbles.map((bubble) => {
-      const identity = canonicalSendIdentity(bubble.record);
-      const send = identity && !anchoredSendIdentities.has(identity) ? sendsByIdentity.get(identity) : undefined;
-      if (identity && send) anchoredSendIdentities.add(identity);
-      return { kind: 'bubble', bubble, scrollKey: send ? `local-${send.clientMessageId}` : undefined };
-    });
-    for (const send of localSends) {
-      const canonical = canonicalSends.get(sendIdentity(send));
-      const item: TimelineItem = { kind: 'local', send, canonical };
-      items.splice(timelineInsertionIndex(items, send, canonical), 0, item);
-    }
-    return items;
+    return composeTimeline(bubbles, localSends, canonicalSends, sendsByIdentity);
   }, [bubbles, canonicalSends, localSends, sendsByIdentity]);
   const statusName = statusText(state);
 
