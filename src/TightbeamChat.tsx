@@ -1,10 +1,11 @@
-import { forwardRef, memo, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore,
+import { forwardRef, memo, useCallback, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore,
   type AnchorHTMLAttributes, type FormEvent, type HTMLAttributes, type ImgHTMLAttributes,
   type ReactNode, type RefObject, type TableHTMLAttributes } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { ChatRuntime, CanonicalMessage, ConversationRecord, RuntimeState, TightbeamAdapter, TurnProvenance } from './types';
 import { provenanceHasHumanSource, turnSourceKind } from './provenance';
+import { useReadingPosition } from './useReadingPosition';
 import './style.css';
 
 export interface RenderContext {
@@ -189,12 +190,15 @@ function StatusIcon({ state }: { state: RuntimeState }) {
   return <span className={`tb-chat-status-dot tb-chat-status-${status}`} aria-hidden="true" />;
 }
 
-const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName }: {
+const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, registerRow }: {
   bubble: Bubble;
   renderMessage?: TightbeamChatProps['renderMessage'];
   agentName: string;
+  registerRow: (key: string, element: HTMLElement | null) => void;
 }) {
   const { record } = bubble;
+  const scrollKey = bubble.derived ? bubble.key : record.id;
+  const rowRef = useCallback((element: HTMLElement | null) => registerRow(scrollKey, element), [registerRow, scrollKey]);
   const time = localTimestamp(record.createdAt);
   const context: RenderContext = {
     sessionKey: record.sessionKey,
@@ -203,7 +207,7 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName }: 
     copyText: () => navigator.clipboard.writeText(record.content),
   };
   const custom = bubble.derived ? undefined : renderMessage?.(record, context);
-  return <article className={`tb-chat-bubble tb-chat-bubble-${bubble.side}`} data-record-key={bubble.key}
+  return <article ref={rowRef} className={`tb-chat-bubble tb-chat-bubble-${bubble.side}`} data-record-key={bubble.key} data-scroll-key={scrollKey}
     aria-label={`Message from ${bubble.sender || sourceLabel(bubble.side, agentName)}`}>
     <div className="tb-chat-bubble-body">{custom === undefined ? defaultBody(record, bubble.displayContent) : custom}</div>
     <time className="tb-chat-time" dateTime={time.dateTime}>{time.text}</time>
@@ -311,12 +315,10 @@ function ChatBody({ runtime, renderMessage, className }: {
   className?: string;
 }) {
   const state = useSyncExternalStore(runtime.subscribe, runtime.getSnapshot, runtime.getSnapshot);
-  const viewport = useRef<HTMLDivElement>(null);
+  const reading = useReadingPosition(state.status === 'ready', state);
+  const { viewport } = reading;
   const root = useRef<HTMLElement>(null);
   const composer = useRef<ComposerHandle>(null);
-  const initialScrollDone = useRef(false);
-  const atBottom = useRef(true);
-  const anchor = useRef<{ id: string; top: number } | null>(null);
   const agentName = state.agentDisplayName ?? '';
   const bubbles = useMemo(() => visibleBubbles(state, agentName),
     [state.records, state.provenance, state.provenanceAvailable, state.activeTurn, agentName]);
@@ -399,44 +401,10 @@ function ChatBody({ runtime, renderMessage, className }: {
     };
   }, []);
 
-  const captureAnchor = () => {
-    const box = viewport.current;
-    if (!box) return;
-    const top = box.getBoundingClientRect().top;
-    const first = [...box.querySelectorAll<HTMLElement>('[data-record-key]')]
-      .find((row) => row.getBoundingClientRect().bottom > top);
-    if (first) anchor.current = { id: first.dataset.recordKey || '', top: first.getBoundingClientRect().top };
-    atBottom.current = false;
-  };
-
   const loadOlder = () => {
-    captureAnchor();
+    reading.holdPosition();
     void runtime.loadOlder();
   };
-
-  useLayoutEffect(() => {
-    const box = viewport.current;
-    if (!box) return;
-    if (anchor.current) {
-      if (state.status === 'ready' && state.loadingOlder) return;
-      if (state.status !== 'ready' || state.historyError) {
-        anchor.current = null;
-        return;
-      }
-      const saved = anchor.current;
-      const row = [...box.querySelectorAll<HTMLElement>('[data-record-key]')]
-        .find((element) => element.dataset.recordKey === saved.id);
-      if (row) box.scrollTop += row.getBoundingClientRect().top - saved.top;
-      anchor.current = null;
-      return;
-    }
-    if (state.status === 'ready' && !initialScrollDone.current) {
-      box.scrollTop = box.scrollHeight;
-      initialScrollDone.current = true;
-    } else if (initialScrollDone.current && atBottom.current) {
-      box.scrollTop = box.scrollHeight;
-    }
-  }, [state.records, state.provenance, state.status, state.loadingOlder, state.historyError, state.activeTurn, state.sends]);
 
   useLayoutEffect(() => {
     const box = viewport.current;
@@ -448,12 +416,7 @@ function ChatBody({ runtime, renderMessage, className }: {
   const handleScroll = () => {
     const box = viewport.current;
     if (!box) return;
-    atBottom.current = box.scrollHeight - box.scrollTop - box.clientHeight < 48;
-    if (state.loadingOlder && anchor.current) {
-      if (atBottom.current) anchor.current = null;
-      else captureAnchor();
-      return;
-    }
+    reading.onScroll();
     if (box.scrollTop < 80 && state.status === 'ready' && state.hasOlder && !state.loadingOlder) loadOlder();
   };
 
@@ -464,8 +427,11 @@ function ChatBody({ runtime, renderMessage, className }: {
           : statusName;
 
   return <section ref={root} className={`tb-chat ${className || ''}`} aria-label={agentName ? `${agentName} conversation` : 'Conversation'}>
-    <div className="tb-chat-viewport" ref={viewport} onScroll={handleScroll} role="log"
+    <div className="tb-chat-viewport" ref={viewport} onScroll={handleScroll} role="log" tabIndex={-1}
+      onWheel={reading.interrupt} onTouchStart={reading.interrupt} onPointerDown={reading.interrupt}
+      onKeyDown={(event) => { if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) reading.interrupt(); }}
       aria-label={`${agentName || 'Conversation'} messages`} aria-live="polite" aria-relevant="additions text">
+      <div className="tb-chat-message-content" ref={reading.content}>
       {notice && <div className={`tb-chat-notice tb-chat-notice-${state.status}`} role={state.status === 'loading' ? 'status' : 'alert'}>
         <span>{notice}</span>
       </div>}
@@ -474,12 +440,12 @@ function ChatBody({ runtime, renderMessage, className }: {
         <span>Earlier messages could not be loaded: {state.historyError}</span>
         <button type="button" onClick={loadOlder}>Retry loading messages</button>
       </div>}
-      {bubbles.map((bubble) => <RecordRow key={bubble.key} bubble={bubble} renderMessage={renderMessage} agentName={agentName} />)}
+      {bubbles.map((bubble) => <RecordRow key={bubble.key} bubble={bubble} renderMessage={renderMessage} agentName={agentName} registerRow={reading.registerRow} />)}
       {localSends.map((send) => {
         const time = localTimestamp(send.submittedAt);
         const retryAvailable = ['failed', 'uncertain'].includes(send.status) && !send.reconciled;
-        return <article className="tb-chat-bubble tb-chat-bubble-human tb-chat-local" key={send.clientMessageId}
-          data-record-key={`local-${send.clientMessageId}`} aria-label={`Your message, ${send.status}`}>
+        return <article ref={element => reading.registerRow(`local-${send.clientMessageId}`, element)} className="tb-chat-bubble tb-chat-bubble-human tb-chat-local" key={send.clientMessageId}
+          data-record-key={`local-${send.clientMessageId}`} data-scroll-key={`local-${send.clientMessageId}`} aria-label={`Your message, ${send.status}`}>
           <div className="tb-chat-bubble-body">{markdownBody(send.content)}</div>
           <p className="tb-chat-send-state">{send.status === 'uncertain' ? 'Delivery is uncertain' : send.status === 'failed' ? 'Message could not be sent' : send.status === 'pending' ? 'Sending…' : 'Sent'}</p>
           {send.reason && <p className="tb-chat-send-reason" role="alert">
@@ -501,7 +467,12 @@ function ChatBody({ runtime, renderMessage, className }: {
       </div>}
       {state.status === 'ready' && state.records.length === 0 && localSends.length === 0 && !state.hasOlder &&
         <p className="tb-chat-empty">No messages yet.</p>}
+      </div>
     </div>
+    {reading.showLatest && <button type="button" className="tb-chat-scroll-latest" data-scroll-latest="true"
+      aria-label="Scroll to latest messages" onMouseDown={(event) => event.preventDefault()} onClick={reading.scrollToLatest}>
+      <span aria-hidden="true">↓</span> Latest messages
+    </button>}
     <Composer ref={composer} runtime={runtime} state={state} agentName={agentName} root={root} />
   </section>;
 }

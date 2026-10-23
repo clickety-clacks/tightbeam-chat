@@ -45,12 +45,32 @@ body { background: #f6f6f6; color: #1e1e1e; }
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
-  padding: clamp(1rem, 3.5vw, 2rem) clamp(.85rem, 4vw, 2.2rem)
+  padding: calc(clamp(1rem, 3.5vw, 2rem) + var(--tb-chat-anchor-space, 0px)) clamp(.85rem, 4vw, 2.2rem)
     calc(var(--tb-chat-composer-height, 5rem) + 3rem + env(safe-area-inset-bottom));
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
   touch-action: pan-y;
   -webkit-overflow-scrolling: touch;
+  overflow-anchor: none;
+}
+.tb-chat-message-content {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: .8rem;
+  min-width: 0;
+}
+.tb-chat-scroll-latest {
+  position: absolute;
+  z-index: 4;
+  right: clamp(.65rem, 3vw, 1.4rem);
+  bottom: calc(var(--tb-chat-keyboard-inset, 0px) + env(safe-area-inset-bottom) + var(--tb-chat-composer-height, 5rem) + 1.4rem);
+  padding: .45rem .8rem;
+  border: 1px solid var(--tb-chat-border);
+  border-radius: 1.2rem;
+  color: var(--tb-chat-text);
+  background: var(--tb-chat-background);
+  box-shadow: 0 2px 8px rgb(0 0 0 / .12);
 }
 .tb-chat-bubble {
   flex: 0 0 auto;
