@@ -125,7 +125,7 @@ function visibleBubbles(state: RuntimeState, agentName: string): Bubble[] {
       continue;
     }
     if (isBatchEnvelope(record)) {
-      bubbles.push({ key: record.id, record, side: 'agent', sender: 'Activity batch', derived: false });
+      bubbles.push({ key: record.id, record, side: 'human', sender: 'You', derived: false });
       continue;
     }
     if (record.role === 'assistant' && record.messageType === 'assistant') {
@@ -296,7 +296,7 @@ function ChatBody({ runtime, renderMessage, className }: {
   const composer = useRef<ComposerHandle>(null);
   const initialScrollDone = useRef(false);
   const atBottom = useRef(true);
-  const anchor = useRef<{ id: string; top: number } | null>(null);
+  const anchor = useRef<{ id: string; top: number }[] | null>(null);
   const agentName = state.agentDisplayName ?? '';
   const bubbles = useMemo(() => visibleBubbles(state, agentName),
     [state.records, state.provenance, state.provenanceAvailable, state.activeTurn, agentName]);
@@ -383,9 +383,14 @@ function ChatBody({ runtime, renderMessage, className }: {
     const box = viewport.current;
     if (!box) return;
     const top = box.getBoundingClientRect().top;
-    const first = [...box.querySelectorAll<HTMLElement>('[data-record-key]')]
-      .find((row) => row.getBoundingClientRect().bottom > top);
-    if (first) anchor.current = { id: first.dataset.recordKey || '', top: first.getBoundingClientRect().top };
+    const rows = [...box.querySelectorAll<HTMLElement>('[data-record-key]')].map((row) => {
+      const bounds = row.getBoundingClientRect();
+      return { id: row.dataset.recordKey || '', top: bounds.top, bottom: bounds.bottom };
+    });
+    const first = rows.findIndex((row) => row.bottom > top);
+    // Paging can reveal an excluded parent and remove the first visible reply.
+    // Keep successors (then predecessors) at their own saved viewport offsets.
+    anchor.current = first < 0 ? null : [...rows.slice(first), ...rows.slice(0, first).reverse()];
     atBottom.current = false;
   };
 
@@ -403,10 +408,18 @@ function ChatBody({ runtime, renderMessage, className }: {
         anchor.current = null;
         return;
       }
-      const saved = anchor.current;
-      const row = [...box.querySelectorAll<HTMLElement>('[data-record-key]')]
-        .find((element) => element.dataset.recordKey === saved.id);
-      if (row) box.scrollTop += row.getBoundingClientRect().top - saved.top;
+      const rows = new Map([...box.querySelectorAll<HTMLElement>('[data-record-key]')]
+        .map((row) => [row.dataset.recordKey, row]));
+      const saved = anchor.current.find((candidate) => rows.has(candidate.id));
+      if (saved) {
+        // Newly visible older history replaces any space retained after filtering.
+        box.style.removeProperty('--tb-chat-anchor-space');
+        const target = box.scrollTop + rows.get(saved.id)!.getBoundingClientRect().top - saved.top;
+        // A hidden-only page can shorten the top of the list. Browsers clamp
+        // negative scrollTop, so retain that space to keep surviving text still.
+        if (target < 0) box.style.setProperty('--tb-chat-anchor-space', `${-target}px`);
+        box.scrollTop = Math.max(0, target);
+      }
       anchor.current = null;
       return;
     }

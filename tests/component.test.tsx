@@ -122,8 +122,12 @@ function expectVisibilityMix(log: HTMLElement, prefix: string): void {
     `Human exchange ${prefix}`, `Reply to human ${prefix}`,
     `Reply to batch ${prefix}`,
   ]) expect(within(log).getByText(label)).toBeTruthy();
-  expect(log.querySelector(`[data-record-key="${prefix}-batch"]`)?.textContent)
-    .toContain(`Visible batch envelope ${prefix}`);
+  const batchBubble = log.querySelector(`[data-record-key="${prefix}-batch"]`);
+  expect(batchBubble?.classList.contains('tb-chat-bubble-human')).toBe(true);
+  expect(batchBubble?.getAttribute('aria-label')).toBe('Message from You');
+  expect(batchBubble?.textContent).toContain(`Visible batch envelope ${prefix}`);
+  expect(batchBubble?.textContent).toContain('sender=process:notifications');
+  expect(batchBubble?.textContent).toContain('coalesced by notices');
   for (const label of [
     `Hidden assistant substrate marker ${prefix}`, `Hidden agent wake ${prefix}`,
     `Hidden reply to agent wake ${prefix}`, `Hidden process notice ${prefix}`,
@@ -234,9 +238,11 @@ describe('conversation surface', () => {
     expect(within(log).getByText('const value = 1;')).toBeTruthy();
     expect(within(log).getByText('A quotation')).toBeTruthy();
     expect(within(log).getByRole('table')).toBeTruthy();
-    expect(log.textContent).toContain('[batched notices: 2]');
-    expect(log.textContent).toContain('Batch question from the person');
-    expect(log.textContent).toContain('Substrate payload must stay visible inside the envelope');
+    const batchBubble = log.querySelector('[data-record-key="batch-trigger"]');
+    expect(batchBubble?.classList.contains('tb-chat-bubble-human')).toBe(true);
+    expect(batchBubble?.getAttribute('aria-label')).toBe('Message from You');
+    for (const line of batchText.split('\n').filter(Boolean)) expect(batchBubble?.textContent).toContain(line);
+    expect(batch.content).toBe(batchText);
     expect(within(log).getByText('Answer to the batch question')).toBeTruthy();
     expect(within(log).queryByText('A system event marker')).toBeNull();
     expect(within(log).queryByText('An agent sent a wake')).toBeNull();
@@ -342,6 +348,94 @@ describe('conversation surface', () => {
     expect(within(log).queryByText('An older agent wake')).toBeNull();
     expect(within(log).queryByText('A reply whose parent is not loaded')).toBeNull();
     expect(runtime.getSnapshot().records.map((record) => record.id)).toContain('unloaded-parent-reply');
+  });
+
+  it.each([
+    { scenario: 'the anchored reply survives its human parent loading', excluded: false, visibleOlder: false },
+    { scenario: 'the anchored reply is excluded alongside visible older history', excluded: true, visibleOlder: true },
+    { scenario: 'a hidden-only page excludes the anchored reply at the top', excluded: true, visibleOlder: false },
+  ])('preserves the reading viewport when $scenario', async ({ excluded, visibleOlder }) => {
+    const sessionKey = 'reading-anchor';
+    const parent = row(sessionKey, 'parent', 'The previously unloaded trigger', {
+      role: 'user', sender: excluded ? 'agent:external' : 'user:person',
+      messageType: excluded ? 'agent' : 'chat',
+    });
+    const reply = row(sessionKey, 'anchored-reply', 'The first visible reply', {
+      sender: 'agent:selected', messageType: 'assistant', replyToMessageId: parent.id,
+    });
+    const human = (id: string) => row(sessionKey, id, `Human message ${id}`, {
+      role: 'user', sender: 'user:person', messageType: 'chat',
+    });
+    const runtime = new FakeRuntime(sessionKey, {
+      records: [reply, human('reading'), human('following'), human('newest')],
+      provenanceAvailable: false,
+    });
+    runtime.olderPages.push({
+      records: [...(visibleOlder ? [human('older-a'), human('older-b'), human('older-c')] : []), parent],
+      provenance: [], hasOlder: false,
+    });
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+    const log = screen.getByRole('log');
+    const reading = within(log).getByText('Human message reading').closest('article')!;
+    const following = within(log).getByText('Human message following').closest('article')!;
+    const firstReply = within(log).getByText('The first visible reply').closest('article')!;
+
+    // jsdom has no layout: model normal stacked rows, padding, and the browser's
+    // scroll range. In particular, a negative scrollTop cannot preserve a row.
+    const rows = () => [...log.querySelectorAll<HTMLElement>(':scope > [data-record-key]')];
+    const topSpace = () => Number.parseFloat(log.style.getPropertyValue('--tb-chat-anchor-space')) || 0;
+    const height = () => 16 + topSpace() + rows().length * 92 + 200;
+    let scrollTop = 20;
+    Object.defineProperties(log, {
+      clientHeight: { configurable: true, get: () => 180 },
+      scrollHeight: { configurable: true, get: height },
+      scrollTop: {
+        configurable: true, get: () => scrollTop,
+        set: (value: number) => { scrollTop = Math.max(0, Math.min(value, height() - 180)); },
+      },
+    });
+    const originalBounds = HTMLElement.prototype.getBoundingClientRect;
+    const bounds = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this === log) return new DOMRect(0, 100, 320, 180);
+      const index = rows().indexOf(this);
+      if (index >= 0) return new DOMRect(0, 100 + 16 + topSpace() + index * 92 - scrollTop, 320, 80);
+      return originalBounds.call(this);
+    });
+    const viewportOffset = (element: HTMLElement) => element.getBoundingClientRect().top - log.getBoundingClientRect().top;
+    try {
+      const readingBefore = viewportOffset(reading);
+      const followingBefore = viewportOffset(following);
+      const replyBefore = viewportOffset(firstReply);
+      expect(replyBefore).toBeLessThan(0);
+      expect(firstReply.getBoundingClientRect().bottom).toBeGreaterThan(log.getBoundingClientRect().top);
+
+      act(() => runtime.update({ hasOlder: true }));
+      fireEvent.scroll(log);
+      await waitFor(() => {
+        expect(runtime.getSnapshot().records).toContain(parent);
+        expect(runtime.getSnapshot().loadingOlder).toBe(false);
+        expect(firstReply.isConnected).toBe(!excluded);
+      });
+      expect(viewportOffset(reading)).toBe(readingBefore);
+      expect(viewportOffset(following)).toBe(followingBefore);
+      if (!excluded) expect(viewportOffset(firstReply)).toBe(replyBefore);
+      expect(log.scrollTop).toBeGreaterThanOrEqual(0);
+      expect(runtime.getSnapshot().records).toContain(reply);
+
+      if (excluded && !visibleOlder) {
+        expect(topSpace()).toBeGreaterThan(0);
+        // A later visible page replaces the retained space without another jump.
+        runtime.olderPages.push({ records: [human('earlier')], provenance: [], hasOlder: false });
+        act(() => runtime.update({ hasOlder: true }));
+        fireEvent.scroll(log);
+        await within(log).findByText('Human message earlier');
+        expect(topSpace()).toBe(0);
+        expect(viewportOffset(reading)).toBe(readingBefore);
+        expect(viewportOffset(following)).toBe(followingBefore);
+      }
+    } finally {
+      bounds.mockRestore();
+    }
   });
 
   it('does not revisit loaded message rows while typing with a production-sized history', async () => {
