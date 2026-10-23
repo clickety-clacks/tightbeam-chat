@@ -8,7 +8,7 @@ export interface HumanMember {
 }
 
 export type MessageClassification =
-  | { readonly kind: 'human' | 'assistant' | 'nonhuman' | 'separate-carrier' }
+  | { readonly kind: 'human' | 'assistant' | 'nonhuman' | 'separate-carrier' | 'unknown' }
   | { readonly kind: 'batch'; readonly members: readonly HumanMember[]; readonly includesHuman: boolean }
   | { readonly kind: 'invalid'; readonly reason: string };
 
@@ -89,7 +89,7 @@ export function classifyMessage(record: CanonicalMessage): MessageClassification
   } else if (record.role === 'assistant') {
     result = { kind: 'assistant' };
   } else {
-    result = { kind: 'nonhuman' };
+    result = { kind: 'unknown' };
   }
   classifications.set(record, result);
   return result;
@@ -132,9 +132,12 @@ export function projectMessages(records: readonly ConversationRecord[]): {
       const parent = record.replyToMessageId ? byId.get(record.replyToMessageId) : undefined;
       const humanParent = parent?.kind === 'human' || (parent?.kind === 'batch' && parent.includesHuman);
       if (record.turnIncludesHuman === false && humanParent) issues.push('Reply classification conflicts with its human parent');
+      if (record.turnIncludesHuman === true && (parent?.kind === 'nonhuman' || (parent?.kind === 'batch' && !parent.includesHuman))) {
+        issues.push('Reply classification conflicts with its nonhuman parent');
+      }
       // Preserve a demonstrated human exchange even if the delivered flag conflicts.
       if (humanParent || record.turnIncludesHuman === true || (record.turnIncludesHuman === undefined &&
-          (!parent || parent.kind === 'separate-carrier' || parent.kind === 'assistant'))) {
+          (!parent || parent.kind === 'separate-carrier' || parent.kind === 'assistant' || parent.kind === 'unknown'))) {
         messages.push({ key: record.id, source: record, side: 'agent' });
       }
     }
