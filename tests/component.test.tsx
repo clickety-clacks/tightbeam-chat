@@ -251,7 +251,6 @@ describe('conversation surface', () => {
   it('hides typed non-envelope activity and keeps human exchanges across pages, live updates, and reconnects', async () => {
     const sessionKey = 'conversation-without-provenance';
     const firstPage = visibilityMix(sessionKey, 'first-page');
-    const human = firstPage[0];
     const unprovenAgent = row(sessionKey, 'unproven-agent', 'An unproven assistant reply', {
       role: 'assistant', messageType: 'chat', turnSeq: 10,
     });
