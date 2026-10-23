@@ -220,8 +220,9 @@ body { background: #f6f6f6; color: #1e1e1e; }
 .tb-chat-status-ready { background: #398b55; }
 .tb-chat-status-loading, .tb-chat-status-stale { background: #c38c21; }
 .tb-chat-status-error, .tb-chat-status-unauthorized, .tb-chat-status-unsupported { background: #b34a4a; }
-.tb-chat-send-button { right: var(--tb-chat-control-gap); color: #fff !important; background: var(--tb-chat-control) !important; }
-.tb-chat-send-button svg { width: 1.2rem; height: 1.2rem; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 2.4; }
+.tb-chat-send-button { right: var(--tb-chat-control-gap); color: #fff !important; background: transparent !important; }
+.tb-chat-send-button-disc { position: absolute; inset: 7.5%; border-radius: 50%; background: var(--tb-chat-control); }
+.tb-chat-send-button svg { position: relative; z-index: 1; width: 1.2rem; height: 1.2rem; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 2.4; }
 .tb-chat-send-button:disabled { opacity: .48; }
 .tb-chat-status-popup {
   position: absolute;

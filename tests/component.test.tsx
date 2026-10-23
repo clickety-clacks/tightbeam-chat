@@ -36,6 +36,7 @@ class FakeRuntime implements ChatRuntime {
   listeners = new Set<() => void>();
   disposed = false;
   sent: string[] = [];
+  sendResult: string | null = 'fixture-send';
   retried: string[] = [];
   loadOlderCalls = 0;
   rebuildCalls = 0;
@@ -66,7 +67,7 @@ class FakeRuntime implements ChatRuntime {
       hasOlder: page.hasOlder, loadingOlder: false };
     this.publish();
   };
-  send = (text: string) => { this.sent.push(text); return 'fixture-send'; };
+  send = (text: string) => { this.sent.push(text); return this.sendResult; };
   retrySend = async (id: string) => { this.retried.push(id); };
   rebuild = async (options?: { restart?: boolean }) => { this.rebuildCalls++; this.rebuildOptions.push(options); };
   dispose = () => { this.disposed = true; this.listeners.clear(); };
@@ -394,6 +395,49 @@ describe('conversation surface', () => {
       for (const listener of runtime.listeners) listener();
     });
     expect(composer).toHaveProperty('disabled', true);
+  });
+
+  it.each([
+    ['Shift+Return', { shiftKey: true }],
+    ['Ctrl+Return', { ctrlKey: true }],
+  ] as const)('%s sends through the existing button path and keeps composer focus', (shortcut, modifiers) => {
+    const runtime = new FakeRuntime(`send-${shortcut}`);
+    render(<TightbeamChat sessionKey={runtime.state.sessionKey} adapter={adapterFor(runtime)} />);
+    const composer = screen.getByRole('textbox', { name: 'Message to Research assistant' });
+    fireEvent.change(composer, { target: { value: `draft from ${shortcut}` } });
+    composer.focus();
+    expect(document.activeElement).toBe(composer);
+
+    expect(fireEvent.keyDown(composer, { key: 'Enter', ...modifiers })).toBe(false);
+    expect(runtime.sent).toEqual([`draft from ${shortcut}`]);
+    expect(composer).toHaveProperty('value', '');
+    expect(document.activeElement).toBe(composer);
+  });
+
+  it('leaves plain Return and IME Return to the browser, and preserves a draft when sending is unavailable', () => {
+    const runtime = new FakeRuntime('keyboard-eligibility');
+    render(<TightbeamChat sessionKey="keyboard-eligibility" adapter={adapterFor(runtime)} />);
+    const composer = screen.getByRole('textbox', { name: 'Message to Research assistant' });
+    fireEvent.change(composer, { target: { value: 'keep this draft' } });
+
+    expect(fireEvent.keyDown(composer, { key: 'Enter' })).toBe(true);
+    expect(fireEvent.keyDown(composer, { key: 'Enter', ctrlKey: true, isComposing: true })).toBe(true);
+    expect(fireEvent.keyDown(composer, { key: 'Enter', shiftKey: true, keyCode: 229 })).toBe(true);
+    expect(runtime.sent).toEqual([]);
+    expect(composer).toHaveProperty('value', 'keep this draft');
+
+    runtime.sendResult = null;
+    expect(fireEvent.keyDown(composer, { key: 'Enter', shiftKey: true })).toBe(false);
+    expect(runtime.sent).toEqual(['keep this draft']);
+    expect(composer).toHaveProperty('value', 'keep this draft');
+
+    act(() => {
+      runtime.state = { ...runtime.state, status: 'stale' };
+      for (const listener of runtime.listeners) listener();
+    });
+    expect(fireEvent.keyDown(composer, { key: 'Enter', ctrlKey: true })).toBe(false);
+    expect(runtime.sent).toEqual(['keep this draft']);
+    expect(composer).toHaveProperty('value', 'keep this draft');
   });
 
   it('keeps failed and uncertain submissions in their own bubbles with retry and restore actions', () => {
