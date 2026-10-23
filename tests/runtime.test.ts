@@ -97,43 +97,59 @@ class ControlledTransport implements ChatTransport {
 async function settle() { await vi.waitFor(() => {}, { timeout: 50 }); }
 
 describe('framework-independent runtime', () => {
-  it('hydrates a human trigger outside the loaded page from authoritative turn provenance', async () => {
+  it('keeps filtering on message records and performs no turn or trigger lookups', async () => {
     const transport = new ControlledTransport();
     const trigger = message(1, { role: 'user', sender: 'user:person', content: 'Earlier source prompt' });
-    const reply = message(4, { turnSeq: 44, content: 'Selected agent reply' });
+    const reply = message(4, { turnSeq: 44, replyToMessageId: trigger.id, messageType: 'assistant', content: 'Selected agent reply' });
     const active: CanonicalTurn = { seq: 44, sessionKey, status: 'running', messageId: trigger.id,
       origin: 'user:person', raw: { seq: 44 } };
     transport.rows = [trigger, message(2), message(3), reply];
     transport.recentTurns = [active];
+    const readRecentTurns = vi.spyOn(transport, 'readRecentTurns');
+    const readTurn = vi.spyOn(transport, 'readTurn');
+    const readMessage = vi.spyOn(transport, 'readMessage');
+    const resolveOriginDisplayName = vi.spyOn(transport, 'resolveOriginDisplayName');
 
     const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
     expect(runtime.getSnapshot().records.map((record) => record.id)).toEqual(['m2', 'm3', 'm4']);
-    expect(runtime.getSnapshot().provenance).toMatchObject([{
-      turn: { seq: 44, messageId: 'm1', origin: 'user:person' },
-      sourceKind: 'human', trigger: { id: 'm1', content: 'Earlier source prompt' },
-    }]);
-    expect(runtime.getSnapshot().activeTurn?.turn.seq).toBe(44);
+    expect(runtime.getSnapshot().provenance).toEqual([]);
+    expect(runtime.getSnapshot().provenanceAvailable).toBe(false);
+    expect(runtime.getSnapshot().activeTurn).toBeUndefined();
+    expect(readRecentTurns).not.toHaveBeenCalled();
+    expect(readTurn).not.toHaveBeenCalled();
+    expect(readMessage).not.toHaveBeenCalled();
+    expect(resolveOriginDisplayName).not.toHaveBeenCalled();
     runtime.dispose();
   });
 
-  it('keeps history and sends available when the optional recent-turns read is forbidden', async () => {
+  it('keeps history and sends available without optional turn reads', async () => {
     const transport = new ControlledTransport();
     transport.rows = [message(7, { role: 'user', content: 'Can you help?' }),
       message(8, { content: 'The answer remains visible.', turnSeq: 44 })];
     transport.readRecentTurns = async () => { throw new AuthorizationError('Recent turns are not authorized.'); };
+    transport.readTurn = async () => { throw new AuthorizationError('Exact turn detail is not authorized.'); };
+    const readRecentTurns = vi.spyOn(transport, 'readRecentTurns');
+    const readTurn = vi.spyOn(transport, 'readTurn');
+    const readMessage = vi.spyOn(transport, 'readMessage');
     const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
 
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
     expect(runtime.getSnapshot().records.map((record) => record.id)).toEqual(['m7', 'm8']);
     expect(runtime.getSnapshot().provenanceAvailable).toBe(false);
     expect(runtime.getSnapshot().activeTurn).toBeUndefined();
+    expect(readRecentTurns).not.toHaveBeenCalled();
+    expect(readTurn).not.toHaveBeenCalled();
+    expect(readMessage).not.toHaveBeenCalled();
 
     const live = message(9, { content: 'A live reply also appears.' });
     transport.rows.push(live);
     transport.emit(live);
     await vi.waitFor(() => expect(runtime.getSnapshot().records.at(-1)?.id).toBe('m9'));
     expect(runtime.getSnapshot().status).toBe('ready');
+    expect(readRecentTurns).not.toHaveBeenCalled();
+    expect(readTurn).not.toHaveBeenCalled();
+    expect(readMessage).not.toHaveBeenCalled();
 
     const clientMessageId = runtime.send('Still available');
     expect(clientMessageId).toBeTruthy();

@@ -4,7 +4,7 @@ import { forwardRef, memo, useEffect, useId, useImperativeHandle, useLayoutEffec
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { ChatRuntime, CanonicalMessage, ConversationRecord, RuntimeState, TightbeamAdapter, TurnProvenance } from './types';
-import { provenanceHasHumanSource, turnSourceKind } from './provenance';
+import { turnSourceKind } from './provenance';
 import './style.css';
 
 export interface RenderContext {
@@ -92,65 +92,53 @@ function sourceLabel(side: Bubble['side'], agentName: string): string {
   return agentName || 'Assistant';
 }
 
+function isBatchEnvelope(record: CanonicalMessage): boolean {
+  return record.role === 'user' && record.messageType === 'substrate';
+}
+
+function isHiddenNonEnvelope(record: CanonicalMessage, preservedReplyParents?: ReadonlySet<string>): boolean {
+  if (record.messageType === 'marker') return true;
+  if (isBatchEnvelope(record)) return false;
+  if (record.messageType === 'substrate' || record.messageType === 'agent' || record.messageType === 'process') return true;
+  const senderKind = record.sender ? turnSourceKind(record.sender) : 'unknown';
+  if (senderKind === 'substrate') return true;
+  if (senderKind === 'agent') {
+    return !(record.role === 'assistant' && record.replyToMessageId && preservedReplyParents?.has(record.replyToMessageId));
+  }
+  return false;
+}
+
+function isProvenHumanMessage(record: CanonicalMessage): boolean {
+  if (record.role !== 'user' || isBatchEnvelope(record) || isHiddenNonEnvelope(record)) return false;
+  if (record.messageType === 'assistant') return false;
+  const senderKind = record.sender ? turnSourceKind(record.sender) : 'unknown';
+  if (senderKind === 'human') return true;
+  if (senderKind !== 'unknown') return false;
+  return Boolean(record.clientMessageId && record.deviceId);
+}
+
 function visibleBubbles(state: RuntimeState, agentName: string): Bubble[] {
-  if (state.provenanceAvailable === false) {
-    return state.records.flatMap((record): Bubble[] => {
-      if (record.kind !== 'message') return [];
-      if (record.role === 'user') {
-        return [{ key: record.id, record, side: 'human', sender: 'You', derived: false }];
-      }
-      if (record.role === 'assistant') {
-        return [{ key: record.id, record, side: 'agent', sender: sourceLabel('agent', agentName), derived: false }];
-      }
-      return [];
-    });
-  }
-  const provenance = state.provenance ?? [];
-  const byTurn = new Map(provenance.map((item) => [item.turn.seq, item]));
-  const byMessage = new Map<string, TurnProvenance[]>();
-  for (const item of provenance) {
-    const matching = byMessage.get(item.turn.messageId);
-    if (matching) matching.push(item);
-    else byMessage.set(item.turn.messageId, [item]);
-  }
-  const messageIds = new Set(state.records.filter((record): record is CanonicalMessage => record.kind === 'message')
+  const messages = state.records.filter((record): record is CanonicalMessage => record.kind === 'message');
+  const preservedReplyParents = new Set(messages
+    .filter((record) => isBatchEnvelope(record) || isProvenHumanMessage(record))
+    .map((record) => record.id));
+  const hiddenIds = new Set(messages
+    .filter((record) => isHiddenNonEnvelope(record, preservedReplyParents))
     .map((record) => record.id));
   const bubbles: Bubble[] = [];
-  const addedTriggers = new Set<number>();
-  const addHumanTrigger = (item: TurnProvenance) => {
-    if (addedTriggers.has(item.turn.seq)) return;
-    addedTriggers.add(item.turn.seq);
-    if (item.batchCount !== undefined && item.trigger) {
-      for (const member of item.humanMembers) {
-        bubbles.push({
-          key: `${item.turn.messageId}:human:${member.index}`, record: item.trigger,
-          side: 'human', sender: 'You', displayContent: member.content, derived: true,
-        });
-      }
-    } else if (item.sourceKind === 'human' && item.trigger) {
-      bubbles.push({ key: `${item.trigger.id}:provenance:${item.turn.seq}`, record: item.trigger,
-        side: 'human', sender: 'You', derived: false });
+  for (const record of messages) {
+    if (hiddenIds.has(record.id) || (record.replyToMessageId && hiddenIds.has(record.replyToMessageId))) continue;
+    if (record.role === 'user' && isProvenHumanMessage(record)) {
+      bubbles.push({ key: record.id, record, side: 'human', sender: 'You', derived: false });
+      continue;
     }
-  };
-  for (const record of state.records) {
-    if (record.kind !== 'message') continue;
-    const triggers = byMessage.get(record.id) ?? [];
-    let displayedAsTrigger = false;
-    for (const item of triggers) {
-      addHumanTrigger(item);
-      displayedAsTrigger ||= provenanceHasHumanSource(item);
+    if (isBatchEnvelope(record)) {
+      bubbles.push({ key: record.id, record, side: 'agent', sender: 'Activity batch', derived: false });
+      continue;
     }
-    if (displayedAsTrigger) continue;
-    const turnSeq = record.turnSeq;
-    const item = turnSeq === undefined ? undefined : byTurn.get(turnSeq);
-    if (item && item.turn.messageId !== record.id && provenanceHasHumanSource(item)) {
-      if (!messageIds.has(item.turn.messageId)) addHumanTrigger(item);
+    if (record.role === 'assistant' && record.messageType === 'assistant') {
       bubbles.push({ key: record.id, record, side: 'agent', sender: sourceLabel('agent', agentName), derived: false });
     }
-  }
-  const active = state.activeTurn;
-  if (active && active.turn.status === 'running' && !messageIds.has(active.turn.messageId)) {
-    addHumanTrigger(active);
   }
   return bubbles;
 }

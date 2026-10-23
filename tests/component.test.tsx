@@ -65,6 +65,10 @@ class FakeRuntime implements ChatRuntime {
       hasOlder: page.hasOlder, loadingOlder: false };
     this.publish();
   };
+  update = (patch: Partial<RuntimeState>) => {
+    this.state = { ...this.state, ...patch };
+    this.publish();
+  };
   send = (text: string) => { this.sent.push(text); return 'fixture-send'; };
   retrySend = async (id: string) => { this.retried.push(id); };
   rebuild = async () => { this.rebuildCalls++; };
@@ -122,9 +126,11 @@ describe('conversation surface', () => {
     }
   });
 
-  it('filters with turn provenance and renders safe Markdown without exposing batch wrappers', async () => {
+  it('uses typed message links to keep human exchanges and mixed batch envelopes', async () => {
     const sessionKey = 'conversation-a';
-    const human = row(sessionKey, 'human-trigger', 'Could you explain this?', { role: 'user', sender: 'person', turnSeq: 1 });
+    const human = row(sessionKey, 'human-trigger', 'Could you explain this?', {
+      role: 'user', sender: 'user:person', clientMessageId: 'client-human', deviceId: 'human-device', turnSeq: 1,
+    });
     const unprovenHuman = row(sessionKey, 'unproven-human', 'Role alone must not prove this exchange', { role: 'user' });
     const answer = row(sessionKey, 'selected-answer', [
       '## A **useful** answer', '', '- first item', '- second item', '',
@@ -132,9 +138,16 @@ describe('conversation surface', () => {
       '```ts', 'const value = 1;', '```', '', '> A quotation', '',
       '| Name | Value |', '| --- | --- |', '| count | 2 |', '',
       '<script>window.compromised = true</script>',
-    ].join('\n'), { turnSeq: 1 });
-    const otherTrigger = row(sessionKey, 'other-trigger', 'Other agent request', { role: 'assistant' });
-    const otherAnswer = row(sessionKey, 'other-answer', 'Must remain hidden', { turnSeq: 2 });
+    ].join('\n'), { sender: 'agent:selected', turnSeq: 1, messageType: 'assistant', replyToMessageId: human.id });
+    const otherTrigger = row(sessionKey, 'other-trigger', 'An agent sent a wake', {
+      role: 'user', sender: 'agent:external', messageType: 'agent', turnSeq: 2,
+    });
+    const otherAnswer = row(sessionKey, 'other-answer', 'Must remain hidden', {
+      turnSeq: 2, messageType: 'assistant', replyToMessageId: otherTrigger.id,
+    });
+    const substrateMarker = row(sessionKey, 'substrate-marker', 'A system event marker', {
+      role: 'assistant', sender: 'process:notifications', messageType: 'substrate',
+    });
     const batchText = [
       '[batched notices: 2]',
       '',
@@ -142,18 +155,19 @@ describe('conversation surface', () => {
       'Batch question from the person',
       '',
       '[2] source=event-b sender=process:maintenance cause=refresh class=fyi',
-      'Substrate payload must stay hidden',
+      'Substrate payload must stay visible inside the envelope',
       '',
       'coalesced by notice-batching-v1',
     ].join('\n');
-    const batch = row(sessionKey, 'batch-trigger', batchText, { role: 'assistant', turnSeq: 3 });
-    const batchAnswer = row(sessionKey, 'batch-answer', 'Answer to the batch question', { turnSeq: 3 });
-    const humanTurn = provenance(1, sessionKey, human.id, 'user:person', human);
-    const otherTurn = provenance(2, sessionKey, otherTrigger.id, 'agent:another-agent', otherTrigger, 'Another agent');
-    const batchTurn = provenance(3, sessionKey, batch.id, 'process:maintenance', batch, undefined, 'running');
+    const batch = row(sessionKey, 'batch-trigger', batchText, {
+      role: 'user', sender: 'process:maintenance', messageType: 'substrate', turnSeq: 3,
+    });
+    const batchAnswer = row(sessionKey, 'batch-answer', 'Answer to the batch question', {
+      sender: 'agent:selected', turnSeq: 3, messageType: 'assistant', replyToMessageId: batch.id,
+    });
     const runtime = new FakeRuntime(sessionKey, {
-      records: [answer, otherAnswer, batch, batchAnswer, unprovenHuman],
-      provenance: [humanTurn, otherTurn, batchTurn], activeTurn: batchTurn,
+      records: [human, answer, otherTrigger, otherAnswer, batch, batchAnswer, unprovenHuman, substrateMarker],
+      provenanceAvailable: false,
     });
     render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
 
@@ -166,41 +180,135 @@ describe('conversation surface', () => {
     expect(within(log).getByText('const value = 1;')).toBeTruthy();
     expect(within(log).getByText('A quotation')).toBeTruthy();
     expect(within(log).getByRole('table')).toBeTruthy();
-    expect(within(log).getByText('Batch question from the person')).toBeTruthy();
+    expect(log.textContent).toContain('[batched notices: 2]');
+    expect(log.textContent).toContain('Batch question from the person');
+    expect(log.textContent).toContain('Substrate payload must stay visible inside the envelope');
     expect(within(log).getByText('Answer to the batch question')).toBeTruthy();
-    expect(within(log).queryByText('Substrate payload must stay hidden')).toBeNull();
+    expect(within(log).queryByText('A system event marker')).toBeNull();
+    expect(within(log).queryByText('An agent sent a wake')).toBeNull();
     expect(within(log).queryByText('Must remain hidden')).toBeNull();
     expect(within(log).queryByText('Role alone must not prove this exchange')).toBeNull();
-    expect(within(log).queryByText(/batched notices/)).toBeNull();
     expect(document.querySelector('script, img')).toBeNull();
-    expect(within(log).getByRole('status', { name: 'Active turn: Processing message batch' })).toBeTruthy();
+    expect(within(log).queryByRole('status', { name: /Active turn:/ })).toBeNull();
     expect(screen.queryByRole('button', { name: /copy/i })).toBeNull();
     expect(screen.queryByRole('button', { name: /load earlier/i })).toBeNull();
     expect(screen.getByRole('textbox', { name: 'Message to Research assistant' }).getAttribute('placeholder'))
       .toBe('Research assistant');
   });
 
-  it('shows selected-session messages without filtering or activity captions when turn provenance is unavailable', () => {
+  it('hides typed non-envelope activity and keeps human exchanges across pages, live updates, and reconnects', async () => {
     const sessionKey = 'conversation-without-provenance';
-    const human = row(sessionKey, 'human-message', 'A retained human message', { role: 'user' });
-    const agent = row(sessionKey, 'agent-message', 'An agent reply to another participant', { role: 'assistant' });
-    const active = provenance(10, sessionKey, 'unloaded-trigger', 'user:person', undefined, undefined, 'running');
-    const runtime = new FakeRuntime(sessionKey, {
-      records: [human, agent], provenanceAvailable: false, activeTurn: active,
+    const human = row(sessionKey, 'human-message', 'A retained human message', {
+      role: 'user', sender: 'person-1', messageType: 'chat', clientMessageId: 'client-human', deviceId: 'human-device',
     });
+    const batch = row(sessionKey, 'system-batch', [
+      '[batched notices: 1]', '',
+      '[1] source=event-1 sender=process:notifications cause=refresh class=fyi',
+      'A system update inside this envelope remains visible.', '', 'coalesced by notice-batching-v1',
+    ].join('\n'), {
+      role: 'user', sender: 'process:notifications', messageType: 'substrate', turnSeq: 10,
+    });
+    const marker = row(sessionKey, 'system-marker', 'A system event marker', {
+      role: 'assistant', sender: 'process:notifications', messageType: 'substrate',
+    });
+    const unprovenAgent = row(sessionKey, 'unproven-agent', 'An unproven assistant reply', {
+      role: 'assistant', messageType: 'chat', turnSeq: 10,
+    });
+    const unprovenSelectedReply = row(sessionKey, 'unproven-selected-reply', 'A selected reply without a provable trigger', {
+      role: 'assistant', messageType: 'assistant', turnSeq: 12,
+    });
+    const identifiedAgentReply = row(sessionKey, 'identified-agent-reply', 'A reply with a known agent sender', {
+      role: 'assistant', sender: 'agent:external', messageType: 'assistant', turnSeq: 13,
+    });
+    const agentWake = row(sessionKey, 'agent-wake', 'An unselected agent sent a wake', {
+      role: 'user', sender: 'agent:external', messageType: 'agent', turnSeq: 11,
+    });
+    const agentReply = row(sessionKey, 'agent-reply', 'A reply to the unselected agent', {
+      role: 'assistant', messageType: 'assistant', replyToMessageId: 'agent-wake', turnSeq: 11,
+    });
+    const unprovenHuman = row(sessionKey, 'unproven-human', 'An unproven user row', {
+      role: 'user', messageType: 'chat',
+    });
+    const processNotice = row(sessionKey, 'process-notice', 'A standalone process notice', {
+      role: 'user', sender: 'process:notifications', messageType: 'chat', turnSeq: 14,
+    });
+    const processReply = row(sessionKey, 'process-reply', 'A reply to the standalone process notice', {
+      role: 'assistant', messageType: 'assistant', replyToMessageId: processNotice.id, turnSeq: 14,
+    });
+    const olderHuman = row(sessionKey, 'older-human', 'An earlier human message', {
+      role: 'user', sender: 'user:person-1', messageType: 'chat', seq: 1,
+    });
+    const olderReply = row(sessionKey, 'older-reply', 'A reply linked to earlier human history', {
+      role: 'assistant', sender: 'agent:selected', messageType: 'assistant', replyToMessageId: olderHuman.id, seq: 2,
+    });
+    const olderBatch = row(sessionKey, 'older-batch', [
+      '[batched notices: 1]', '',
+      '[1] source=event-2 sender=process:notifications cause=refresh class=fyi',
+      'An earlier system update inside this envelope remains visible.', '', 'coalesced by notice-batching-v1',
+    ].join('\n'), {
+      role: 'user', sender: 'process:notifications', messageType: 'substrate', seq: 2,
+    });
+    const runtime = new FakeRuntime(sessionKey, {
+      records: [human, batch, marker, unprovenAgent, unprovenSelectedReply, identifiedAgentReply,
+        agentWake, agentReply, unprovenHuman, processNotice, processReply], provenanceAvailable: false,
+    });
+    runtime.olderPages.push({ records: [olderHuman, olderReply, olderBatch], provenance: [], hasOlder: false });
 
     render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
     const log = screen.getByRole('log');
     expect(within(log).getByText('A retained human message')).toBeTruthy();
-    expect(within(log).getByText('An agent reply to another participant')).toBeTruthy();
-    expect(within(log).queryByText('Replying to you')).toBeNull();
+    expect(log.textContent).toContain('A system update inside this envelope remains visible.');
+    expect(within(log).queryByText('An unproven assistant reply')).toBeNull();
+    expect(within(log).queryByText('A system event marker')).toBeNull();
+    expect(within(log).getByText('A selected reply without a provable trigger')).toBeTruthy();
+    expect(within(log).queryByText('A reply with a known agent sender')).toBeNull();
+    expect(within(log).queryByText('An unselected agent sent a wake')).toBeNull();
+    expect(within(log).queryByText('A reply to the unselected agent')).toBeNull();
+    expect(within(log).queryByText('A standalone process notice')).toBeNull();
+    expect(within(log).queryByText('A reply to the standalone process notice')).toBeNull();
+    expect(within(log).queryByText('An unproven user row')).toBeNull();
+    expect(runtime.getSnapshot().records.map((record) => record.id)).toEqual([
+      'human-message', 'system-batch', 'system-marker', 'unproven-agent', 'unproven-selected-reply',
+      'identified-agent-reply', 'agent-wake', 'agent-reply', 'unproven-human', 'process-notice', 'process-reply',
+    ]);
+
+    act(() => runtime.update({ hasOlder: true }));
+    await waitFor(() => expect(within(log).getByText('An earlier human message')).toBeTruthy());
+    expect(within(log).getByText('A reply linked to earlier human history')).toBeTruthy();
+    expect(log.textContent).toContain('An earlier system update inside this envelope remains visible.');
+
+    const liveHuman = row(sessionKey, 'live-human', 'A live human message', {
+      role: 'user', sender: 'person-1', messageType: 'chat', clientMessageId: 'client-live', deviceId: 'human-device',
+    });
+    const liveReply = row(sessionKey, 'live-reply', 'A reply linked to a live human message', {
+      role: 'assistant', sender: 'agent:selected', messageType: 'assistant', replyToMessageId: 'live-human',
+    });
+    const liveMarker = row(sessionKey, 'live-marker', 'A live system event marker', {
+      role: 'assistant', sender: 'process:notifications', messageType: 'substrate',
+    });
+    act(() => runtime.update({ records: [...runtime.getSnapshot().records, liveHuman, liveReply, liveMarker] }));
+    expect(within(log).getByText('A live human message')).toBeTruthy();
+    expect(within(log).getByText('A reply linked to a live human message')).toBeTruthy();
+    expect(within(log).queryByText('A live system event marker')).toBeNull();
+
+    act(() => runtime.update({ status: 'stale', generation: 2 }));
+    act(() => runtime.update({ status: 'ready', provenanceAvailable: false,
+      provenance: [], activeTurn: undefined }));
+    expect(within(log).getByText('A retained human message')).toBeTruthy();
+    expect(within(log).getByText('An earlier human message')).toBeTruthy();
+    expect(within(log).getByText('A reply linked to earlier human history')).toBeTruthy();
+    expect(within(log).getByText('A reply linked to a live human message')).toBeTruthy();
+    expect(within(log).queryByText('A system event marker')).toBeNull();
+    expect(within(log).queryByText('An unproven assistant reply')).toBeNull();
+    expect(within(log).queryByText('A reply to the unselected agent')).toBeNull();
+    expect(runtime.getSnapshot().records.map((record) => record.id)).toContain('system-batch');
   });
 
   it('does not revisit loaded message rows while typing with a production-sized history', async () => {
     const sessionKey = 'long-conversation';
     const messages = Array.from({ length: 1200 }, (_, index) => row(
       sessionKey, `message-${index + 1}`, `Message ${index + 1}`,
-      { seq: index + 1, rowVersion: index + 1, role: 'user', turnSeq: index + 1 },
+      { seq: index + 1, rowVersion: index + 1, role: 'user', sender: 'user:person', turnSeq: index + 1 },
     ));
     const provenanceRows = messages.map((message, index) => provenance(
       index + 1, sessionKey, message.id, 'user:person', message,
@@ -223,8 +331,8 @@ describe('conversation surface', () => {
 
   it('keeps focus, selection, and draft across stale refreshes while hiding exact target details in notices', () => {
     const sessionKey = 'selected-session';
-    const human = row(sessionKey, 'human', 'Initial question', { role: 'user', turnSeq: 4 });
-    const answer = row(sessionKey, 'answer', 'Initial reply', { turnSeq: 4 });
+    const human = row(sessionKey, 'human', 'Initial question', { role: 'user', sender: 'user:person', turnSeq: 4 });
+    const answer = row(sessionKey, 'answer', 'Initial reply', { turnSeq: 4, messageType: 'assistant', replyToMessageId: human.id });
     const humanTurn = provenance(4, sessionKey, human.id, 'user:person', human);
     const runtime = new FakeRuntime(sessionKey, { records: [human, answer], provenance: [humanTurn] });
     render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
@@ -233,8 +341,10 @@ describe('conversation surface', () => {
     fireEvent.change(composer, { target: { value: 'keep this draft' } });
     composer.setSelectionRange(5, 5);
 
-    const nextHuman = row(sessionKey, 'new-human', 'A new question', { role: 'user', turnSeq: 5 });
-    const nextReply = row(sessionKey, 'new-answer', 'A new answer', { turnSeq: 5 });
+    const nextHuman = row(sessionKey, 'new-human', 'A new question', { role: 'user', sender: 'user:person', turnSeq: 5 });
+    const nextReply = row(sessionKey, 'new-answer', 'A new answer', {
+      turnSeq: 5, messageType: 'assistant', replyToMessageId: nextHuman.id,
+    });
     const nextTurn = provenance(5, sessionKey, nextHuman.id, 'user:person', nextHuman);
     act(() => {
       runtime.state = { ...runtime.state, status: 'stale', statusDetail: `Selected ${sessionKey} at https://gateway.example`,
@@ -287,43 +397,15 @@ describe('conversation surface', () => {
     expect(within(disconnected).getByRole('button', { name: 'Reconnect' })).toBeTruthy();
   });
 
-  it('uses source-specific captions for one-message batches and suppresses unknown batch fallbacks', () => {
-    const cases = [
-      { count: 1, senders: ['user:person'], type: 'batch', name: undefined, caption: 'Replying to you', visible: 'Human member' },
-      { count: 1, senders: ['agent:helper'], type: 'batch', name: 'Helper agent', caption: 'Helper agent' },
-      { count: 1, senders: ['process:maintenance'], type: 'maintenance.notice', name: undefined, caption: 'maintenance notice' },
-      { count: 1, senders: ['other:unknown'], type: 'batch', name: undefined, caption: undefined },
-      { count: 2, senders: ['agent:helper', 'process:maintenance'], type: 'batch', name: undefined,
-        caption: 'Processing message batch' },
-    ];
-
-    for (const [index, sample] of cases.entries()) {
-      const sessionKey = `caption-${index}`;
-      const batchText = [
-        `[batched notices: ${sample.count}]`, '',
-        ...sample.senders.flatMap((sender, memberIndex) => [
-          `[${memberIndex + 1}] source=event-${memberIndex} sender=${sender} cause=notice class=fyi`,
-          memberIndex === 0 ? sample.visible ?? 'Non-human activity' : 'Additional activity', '',
-        ]),
-        'coalesced by notice-batching-v1',
-      ].join('\n');
-      const trigger = row(sessionKey, `batch-${index}`, batchText, { messageType: sample.type });
-      const reply = row(sessionKey, `reply-${index}`, `Reply ${index}`, { turnSeq: 20 + index });
-      const active = provenance(20 + index, sessionKey, trigger.id, 'process:notifications', trigger,
-        sample.name, 'running');
-      const runtime = new FakeRuntime(sessionKey, { records: [trigger, reply], provenance: [active], activeTurn: active });
-      const view = render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
-
-      if (sample.caption) {
-        expect(screen.getByRole('status', { name: `Active turn: ${sample.caption}` })).toBeTruthy();
-      } else {
-        expect(screen.queryByRole('status', { name: /Active turn:/ })).toBeNull();
-      }
-      if (sample.visible) expect(screen.getByText(sample.visible)).toBeTruthy();
-      if (sample.senders[0] !== 'user:person') expect(screen.queryByText(`Reply ${index}`)).toBeNull();
-      if (sample.count > 1) expect(screen.queryByText('Additional activity')).toBeNull();
-      view.unmount();
-    }
+  it('suppresses cached active-turn captions when delivered turn state is unavailable', () => {
+    const sessionKey = 'caption-lifecycle';
+    const human = row(sessionKey, 'human-trigger', 'A human question', { role: 'user', sender: 'user:person' });
+    const humanTurn = provenance(31, sessionKey, human.id, 'user:person', human, undefined, 'running');
+    const runtime = new FakeRuntime(sessionKey, {
+      records: [human], provenance: [humanTurn], activeTurn: humanTurn, provenanceAvailable: false,
+    });
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+    expect(screen.queryByRole('status', { name: /Active turn:/ })).toBeNull();
   });
 
   it('shows a friendly timestamp for recent messages and a fallback when time is missing', () => {
@@ -333,10 +415,10 @@ describe('conversation surface', () => {
     const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1, 9, 5);
     const samples = [today, yesterday];
     const messages = samples.map((sample, index) => row(sessionKey, `time-${index}`, `Message ${index}`, {
-      role: 'user', turnSeq: index + 1, createdAt: sample.toISOString(),
+      role: 'user', sender: 'user:person', turnSeq: index + 1, createdAt: sample.toISOString(),
     }));
     messages.push(row(sessionKey, 'time-unavailable', 'Message without a recorded time', {
-      role: 'user', turnSeq: samples.length + 1,
+      role: 'user', sender: 'user:person', turnSeq: samples.length + 1,
     }));
     const provenanceRows = messages.map((message, index) => provenance(index + 1, sessionKey,
       message.id, 'user:person', message));
@@ -355,7 +437,9 @@ describe('conversation surface', () => {
     const hiddenTrigger = row(sessionKey, 'other-trigger', 'Another agent activity', { role: 'assistant' });
     const hiddenReply = row(sessionKey, 'hidden-reply', 'Not a human conversation', { turnSeq: 7 });
     const hiddenTurn = provenance(7, sessionKey, hiddenTrigger.id, 'agent:other', hiddenTrigger, 'Other agent');
-    const olderHuman = row(sessionKey, 'older-human', 'Older human message', { role: 'user', turnSeq: 8 });
+    const olderHuman = row(sessionKey, 'older-human', 'Older human message', {
+      role: 'user', sender: 'user:person', turnSeq: 8,
+    });
     const olderTurn = provenance(8, sessionKey, olderHuman.id, 'user:person', olderHuman);
     const runtime = new FakeRuntime(sessionKey, { hasOlder: true });
     runtime.olderPages = [
@@ -373,7 +457,7 @@ describe('conversation surface', () => {
     const runtimes: FakeRuntime[] = [];
     const adapter: TightbeamAdapter = { open: (key) => {
       const runtime = new FakeRuntime(key);
-      const human = row(key, `${key}-human`, 'A question', { role: 'user', turnSeq: 1 });
+      const human = row(key, `${key}-human`, 'A question', { role: 'user', sender: 'user:person', turnSeq: 1 });
       runtime.state = { ...runtime.state, records: [human],
         provenance: [provenance(1, key, human.id, 'user:person', human)] };
       runtimes.push(runtime);
@@ -390,7 +474,7 @@ describe('conversation surface', () => {
     expect(runtimes[0].listeners.size).toBe(0);
     expect(screen.queryByText('draft A')).toBeNull();
     expect(renderMessage.mock.calls.some(([record, context]) => record.raw.source === 'fixture' &&
-      context.recordKey.startsWith('B-human:provenance:')))
+      context.recordKey === 'B-human'))
       .toBe(true);
   });
 
