@@ -594,6 +594,44 @@ describe('conversation surface', () => {
     expect(screen.queryByRole('button', { name: /load earlier/i })).toBeNull();
   });
 
+  it('passes individual member views to custom rendering and copying while retaining their canonical source', async () => {
+    const sessionKey = 'member-rendering';
+    const content = [
+      '[batched notices: 3]', '',
+      '[430] source=human-first sender=user:person cause=notice class=fyi',
+      '**First** human body', '',
+      '[431] source=other sender=agent:helper session-key cause=notice class=fyi',
+      'Nonhuman content', '',
+      '[434] source=human-second sender=user:person cause=notice class=fyi',
+      'Second human body', '', 'coalesced by batch-format (3 notices)',
+    ].join('\n');
+    const carrier = row(sessionKey, 'carrier', content, { seq: 5, role: 'user',
+      sender: 'process:notifications', messageType: 'substrate', createdAt: '2026-10-23T09:00:00Z' });
+    const runtime = new FakeRuntime(sessionKey, { records: [carrier] });
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    const renderer = vi.fn((record: ConversationRecord, context: RenderContext) =>
+      record.kind === 'message' ? <div><span>{record.content}</span><button onClick={() => void context.copyText()}>Copy member</button></div> : undefined);
+    const view = render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} renderMessage={renderer} />);
+    const articles = () => [...view.container.querySelectorAll<HTMLElement>('article')];
+    expect(articles().map((article) => article.querySelector('span')?.textContent))
+      .toEqual(['**First** human body', 'Second human body']);
+    expect(articles().every((article) => article.classList.contains('tb-chat-bubble-human'))).toBe(true);
+    expect(view.container.textContent).not.toContain('Nonhuman content');
+    expect(view.container.textContent).not.toContain('coalesced by');
+    const keys = articles().map((article) => article.dataset.scrollKey);
+    for (const [record, context] of renderer.mock.calls) {
+      expect(context.sourceRecord).toBe(carrier);
+      expect(record.raw).not.toBe(carrier.raw);
+      expect(record.raw).toMatchObject({ carrierId: carrier.id, memberSourceId: context.member?.sourceId });
+    }
+    fireEvent.click(screen.getAllByRole('button', { name: 'Copy member' })[0]);
+    expect(writeText).toHaveBeenCalledWith('**First** human body');
+    act(() => runtime.update({ records: [{ ...carrier, rowVersion: 2 }] }));
+    expect(articles().map((article) => article.dataset.scrollKey)).toEqual(keys);
+    expect(runtime.getSnapshot().records[0]).toMatchObject({ id: 'carrier', content });
+  });
+
   it('keeps local selection isolated and preserves canonical metadata for a host renderer', async () => {
     const runtimes: FakeRuntime[] = [];
     const adapter: TightbeamAdapter = { open: (key) => {

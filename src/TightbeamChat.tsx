@@ -5,13 +5,16 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { ChatRuntime, CanonicalMessage, ConversationRecord, LocalSend, RuntimeState, TightbeamAdapter, TurnProvenance } from './types';
 import { turnSourceKind } from './provenance';
-import { projectMessages } from './messageVisibility';
+import { projectMessages, type HumanMember } from './messageVisibility';
 import { useReadingPosition } from './useReadingPosition';
 import './style.css';
 
 export interface RenderContext {
   readonly sessionKey: string;
   readonly recordKey: string;
+  /** Intact source for a projected member; not its display body. */
+  readonly sourceRecord?: CanonicalMessage;
+  readonly member?: HumanMember;
   readonly defaultRender: () => ReactNode;
   readonly copyText: () => Promise<void>;
 }
@@ -31,6 +34,7 @@ interface Bubble {
   readonly side: 'human' | 'agent';
   readonly sender: string;
   readonly displayContent?: string;
+  readonly member?: HumanMember;
   readonly derived: boolean;
 }
 
@@ -269,10 +273,20 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, re
   const context: RenderContext = {
     sessionKey: record.sessionKey,
     recordKey: bubble.key,
+    ...(bubble.member ? { sourceRecord: record, member: bubble.member } : {}),
     defaultRender: () => bubble.derived ? markdownBody(bubble.displayContent ?? '') : defaultBody(record),
     copyText: () => navigator.clipboard.writeText(bubble.displayContent ?? record.content),
   };
-  const custom = bubble.derived ? undefined : renderMessage?.(record, context);
+  // Existing renderers consume record.content. Give them only the member view;
+  // the original carrier remains available explicitly as source context.
+  const displayRecord: CanonicalMessage = bubble.member ? Object.freeze({
+    kind: 'message', id: bubble.key, sessionKey: record.sessionKey, seq: record.seq,
+    rowVersion: record.rowVersion, role: 'user', sender: bubble.member.sender,
+    content: bubble.member.content, createdAt: record.createdAt,
+    raw: Object.freeze({ carrierId: record.id, memberSourceId: bubble.member.sourceId,
+      memberIndex: bubble.member.index, sender: bubble.member.sender, content: bubble.member.content }),
+  }) : record;
+  const custom = renderMessage?.(displayRecord, context);
   return <article ref={rowRef} className={`tb-chat-bubble tb-chat-bubble-${bubble.side}`} data-record-key={bubble.key} data-scroll-key={scrollKey}
     aria-label={`Message from ${bubble.sender || sourceLabel(bubble.side, agentName)}`}>
     <div className="tb-chat-bubble-body">{custom === undefined ? context.defaultRender() : custom}</div>
@@ -390,7 +404,7 @@ function ChatBody({ runtime, renderMessage, className }: {
   const bubbles: Bubble[] = useMemo(() => projection.messages.map((message) => ({
     key: message.key, record: message.source, side: message.side,
     sender: sourceLabel(message.side, agentName), derived: Boolean(message.member),
-    displayContent: message.member?.content,
+    displayContent: message.member?.content, member: message.member,
   })), [projection, agentName]);
   const caption = state.provenanceAvailable === false ? undefined : activeCaption(state.activeTurn);
   const visibleSendIdentities = useMemo(() => new Set(bubbles.flatMap((bubble) => {
