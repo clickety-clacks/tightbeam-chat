@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef, useState } from 'react';
 
 // About two lines of conversation text. Measure intent before content grows.
 const bottomThreshold = 64;
-type Anchor = { key: string; top: number };
+type Anchor = { key: string; top: number; bottom: number };
 
 export function useReadingPosition(ready: boolean, revision: unknown) {
   const viewport = useRef<HTMLDivElement>(null);
@@ -12,6 +12,7 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
   const animating = useRef(false);
   const target = useRef<number | undefined>(undefined);
   const anchors = useRef<Anchor[]>([]);
+  const readingTop = useRef(0);
   const latestReady = useRef(ready);
   const [showLatest, setShowLatest] = useState(false);
   latestReady.current = ready;
@@ -20,12 +21,15 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
   const capture = () => {
     const box = viewport.current;
     if (!box) return;
-    const top = box.getBoundingClientRect().top;
+    const top = box.getBoundingClientRect().top - box.scrollTop;
     const rows = [...box.querySelectorAll<HTMLElement>('[data-scroll-key]')];
-    const positions = rows.map(row => ({ key: row.dataset.scrollKey!, top: row.getBoundingClientRect().top - top,
-      bottom: row.getBoundingClientRect().bottom - top }));
-    const first = positions.findIndex(row => row.bottom > 0);
-    anchors.current = first < 0 ? [] : [...positions.slice(first), ...positions.slice(0, first).reverse()];
+    // Measure once per layout, in content coordinates. Scrolling only changes
+    // readingTop; it must not measure or allocate an array for the full history.
+    anchors.current = rows.map(row => {
+      const rect = row.getBoundingClientRect();
+      return { key: row.dataset.scrollKey!, top: rect.top - top, bottom: rect.bottom - top };
+    });
+    readingTop.current = box.scrollTop;
   };
 
   const moveToLatest = (smooth: boolean) => {
@@ -59,12 +63,21 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
       const saved = anchors.current;
       const rows = new Map([...box.querySelectorAll<HTMLElement>('[data-scroll-key]')]
         .map(row => [row.dataset.scrollKey, row]));
-      const survivor = saved.find(anchor => rows.has(anchor.key));
+      const first = saved.findIndex(anchor => anchor.bottom > readingTop.current);
+      let survivor: Anchor | undefined;
+      for (let i = first; i >= 0 && i < saved.length; i++) {
+        if (rows.has(saved[i].key)) { survivor = saved[i]; break; }
+      }
+      if (!survivor) {
+        for (let i = (first < 0 ? saved.length : first) - 1; i >= 0; i--) {
+          if (rows.has(saved[i].key)) { survivor = saved[i]; break; }
+        }
+      }
       if (survivor) {
         // Retain the next visible row if filtering removed the original anchor.
         box.style.removeProperty('--tb-chat-anchor-space');
         const offset = rows.get(survivor.key)!.getBoundingClientRect().top - box.getBoundingClientRect().top;
-        const wanted = box.scrollTop + offset - survivor.top;
+        const wanted = box.scrollTop + offset - (survivor.top - readingTop.current);
         // A removed first row can require negative scrollTop; browsers clamp it.
         if (wanted < 0) box.style.setProperty('--tb-chat-anchor-space', `${-wanted}px`);
         if (Math.abs(box.scrollTop - Math.max(0, wanted)) > .5) box.scrollTop = Math.max(0, wanted);
@@ -94,7 +107,7 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
     // Intermediate animation frames are not a user's decision to leave the tail.
     if (!animating.current) following.current = distance(box) <= bottomThreshold;
     setShowLatest(!following.current);
-    capture();
+    readingTop.current = box.scrollTop;
   };
 
   const interrupt = () => {
@@ -104,12 +117,11 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
     animating.current = false;
     target.current = undefined;
     following.current = distance(box) <= bottomThreshold;
-    capture();
+    readingTop.current = box.scrollTop;
   };
   const holdPosition = () => {
     interrupt();
     following.current = false;
-    capture();
   };
   const scrollToLatest = () => {
     const box = viewport.current;
