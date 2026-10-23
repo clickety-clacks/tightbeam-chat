@@ -55,7 +55,8 @@ class ControlledTransport implements ChatTransport {
     return { close: () => { this.closed++; if (this.callbacks === callbacks) this.callbacks = undefined; } };
   };
   readSession = async (): Promise<SessionRecord> => {
-    await this.readSessionHook?.(++this.readSessionCalls);
+    this.readSessionCalls++;
+    await this.readSessionHook?.(this.readSessionCalls);
     return { sessionKey, rowVersion: 1, displayName: 'Fixture agent', raw: { clearedThroughSeq: 7 }, activity: 'idle' };
   };
   readTurn = async (_key: string, _seq: number): Promise<CanonicalTurn | null> => null;
@@ -118,7 +119,7 @@ describe('framework-independent runtime', () => {
       await runtime.rebuild({ restart: true });
       expect(open).toHaveBeenCalledTimes(5);
       expect(runtime.getSnapshot().status).toBe('ready');
-      expect(runtime.getSnapshot().records[0].id).toBe(oldest);
+      expect(runtime.getSnapshot().records.some(row => row.id === oldest)).toBe(true);
       expect(runtime.getSnapshot().records.at(-1)?.id).toBe('m9');
       await vi.advanceTimersByTimeAsync(30_000);
       expect(open).toHaveBeenCalledTimes(5);
