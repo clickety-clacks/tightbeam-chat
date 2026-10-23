@@ -40,6 +40,7 @@ class FakeRuntime implements ChatRuntime {
   loadOlderCalls = 0;
   rebuildCalls = 0;
   olderPages: OlderPage[] = [];
+  rebuildSnapshots: Partial<RuntimeState>[] = [];
   state: RuntimeState;
 
   constructor(sessionKey: string, patch: Partial<RuntimeState> = {}) {
@@ -71,11 +72,62 @@ class FakeRuntime implements ChatRuntime {
   };
   send = (text: string) => { this.sent.push(text); return 'fixture-send'; };
   retrySend = async (id: string) => { this.retried.push(id); };
-  rebuild = async () => { this.rebuildCalls++; };
+  rebuild = async () => {
+    this.rebuildCalls++;
+    const snapshot = this.rebuildSnapshots.shift();
+    if (snapshot) this.update(snapshot);
+  };
   dispose = () => { this.disposed = true; this.listeners.clear(); };
 }
 
 function adapterFor(runtime: FakeRuntime): TightbeamAdapter { return { open: () => runtime }; }
+
+function visibilityMix(sessionKey: string, prefix: string): readonly CanonicalMessage[] {
+  const human = row(sessionKey, `${prefix}-human`, `Human exchange ${prefix}`, {
+    role: 'user', messageType: 'chat', raw: { source: 'fixture', id: `${prefix}-human`, sender: null },
+  });
+  const humanReply = row(sessionKey, `${prefix}-human-reply`, `Reply to human ${prefix}`, {
+    sender: 'agent:selected', messageType: 'assistant', replyToMessageId: human.id,
+  });
+  const batch = row(sessionKey, `${prefix}-batch`, [
+    '[batched notices: 1]', '',
+    `[1] source=process sender=process:notifications cause=fixture class=fyi`,
+    `Visible batch envelope ${prefix}`, '', 'coalesced by notices',
+  ].join('\n'), {
+    role: 'user', sender: 'process:notifications', messageType: 'substrate',
+  });
+  const batchReply = row(sessionKey, `${prefix}-batch-reply`, `Reply to batch ${prefix}`, {
+    sender: 'agent:selected', messageType: 'assistant', replyToMessageId: batch.id,
+  });
+  const marker = row(sessionKey, `${prefix}-marker`, `Hidden assistant substrate marker ${prefix}`, {
+    sender: 'process:notifications', messageType: 'substrate',
+  });
+  const agentWake = row(sessionKey, `${prefix}-agent-wake`, `Hidden agent wake ${prefix}`, {
+    role: 'user', sender: 'agent:external', messageType: 'agent',
+  });
+  const agentReply = row(sessionKey, `${prefix}-agent-reply`, `Hidden reply to agent wake ${prefix}`, {
+    sender: 'agent:selected', messageType: 'assistant', replyToMessageId: agentWake.id,
+  });
+  const processNotice = row(sessionKey, `${prefix}-process`, `Hidden process notice ${prefix}`, {
+    role: 'user', sender: 'process:notifications', messageType: 'chat',
+  });
+  const processReply = row(sessionKey, `${prefix}-process-reply`, `Hidden reply to process notice ${prefix}`, {
+    sender: 'agent:selected', messageType: 'assistant', replyToMessageId: processNotice.id,
+  });
+  return [human, humanReply, batch, batchReply, marker, agentWake, agentReply, processNotice, processReply];
+}
+
+function expectVisibilityMix(log: HTMLElement, prefix: string): void {
+  for (const label of [
+    `Human exchange ${prefix}`, `Reply to human ${prefix}`,
+    `Visible batch envelope ${prefix}`, `Reply to batch ${prefix}`,
+  ]) expect(within(log).getByText(label)).toBeTruthy();
+  for (const label of [
+    `Hidden assistant substrate marker ${prefix}`, `Hidden agent wake ${prefix}`,
+    `Hidden reply to agent wake ${prefix}`, `Hidden process notice ${prefix}`,
+    `Hidden reply to process notice ${prefix}`,
+  ]) expect(within(log).queryByText(label)).toBeNull();
+}
 
 describe('conversation surface', () => {
   it('revalidates history on resume after a heartbeat window unless the target is locked', async () => {
@@ -198,19 +250,8 @@ describe('conversation surface', () => {
 
   it('hides typed non-envelope activity and keeps human exchanges across pages, live updates, and reconnects', async () => {
     const sessionKey = 'conversation-without-provenance';
-    const human = row(sessionKey, 'human-message', 'A retained human message', {
-      role: 'user', sender: 'user:person-1', messageType: 'chat', clientMessageId: 'client-human', deviceId: 'human-device',
-    });
-    const batch = row(sessionKey, 'system-batch', [
-      '[batched notices: 1]', '',
-      '[1] source=event-1 sender=process:notifications cause=refresh class=fyi',
-      'A system update inside this envelope remains visible.', '', 'coalesced by notice-batching-v1',
-    ].join('\n'), {
-      role: 'user', sender: 'process:notifications', messageType: 'substrate', turnSeq: 10,
-    });
-    const marker = row(sessionKey, 'system-marker', 'A system event marker', {
-      role: 'assistant', sender: 'process:notifications', messageType: 'substrate',
-    });
+    const firstPage = visibilityMix(sessionKey, 'first-page');
+    const human = firstPage[0];
     const unprovenAgent = row(sessionKey, 'unproven-agent', 'An unproven assistant reply', {
       role: 'assistant', messageType: 'chat', turnSeq: 10,
     });
@@ -220,88 +261,50 @@ describe('conversation surface', () => {
     const unlinkedSelectedReply = row(sessionKey, 'unlinked-selected-reply', 'A selected reply without a parent link', {
       role: 'assistant', sender: 'agent:selected', messageType: 'assistant', turnSeq: 13,
     });
-    const agentWake = row(sessionKey, 'agent-wake', 'An unselected agent sent a wake', {
-      role: 'user', sender: 'agent:external', messageType: 'agent', turnSeq: 11,
-    });
-    const agentReply = row(sessionKey, 'agent-reply', 'A reply to the unselected agent', {
-      role: 'assistant', messageType: 'assistant', replyToMessageId: 'agent-wake', turnSeq: 11,
-    });
     const unprovenHuman = row(sessionKey, 'unproven-human', 'An unproven user row', {
       role: 'user', messageType: 'chat',
     });
-    const processNotice = row(sessionKey, 'process-notice', 'A standalone process notice', {
-      role: 'user', sender: 'process:notifications', messageType: 'chat', turnSeq: 14,
-    });
-    const processReply = row(sessionKey, 'process-reply', 'A reply to the standalone process notice', {
-      role: 'assistant', messageType: 'assistant', replyToMessageId: processNotice.id, turnSeq: 14,
-    });
-    const olderHuman = row(sessionKey, 'older-human', 'An earlier human message', {
-      role: 'user', sender: 'user:person-1', messageType: 'chat', seq: 1,
-    });
-    const olderReply = row(sessionKey, 'older-reply', 'A reply linked to earlier human history', {
-      role: 'assistant', sender: 'agent:selected', messageType: 'assistant', replyToMessageId: olderHuman.id, seq: 2,
-    });
-    const olderBatch = row(sessionKey, 'older-batch', [
-      '[batched notices: 1]', '',
-      '[1] source=event-2 sender=process:notifications cause=refresh class=fyi',
-      'An earlier system update inside this envelope remains visible.', '', 'coalesced by notice-batching-v1',
-    ].join('\n'), {
-      role: 'user', sender: 'process:notifications', messageType: 'substrate', seq: 2,
-    });
+    const olderPage = visibilityMix(sessionKey, 'older-page');
     const runtime = new FakeRuntime(sessionKey, {
-      records: [human, batch, marker, unprovenAgent, unprovenSelectedReply, unlinkedSelectedReply,
-        agentWake, agentReply, unprovenHuman, processNotice, processReply], provenanceAvailable: false,
+      records: [...firstPage, unprovenAgent, unprovenSelectedReply, unlinkedSelectedReply, unprovenHuman],
+      provenanceAvailable: false,
     });
-    runtime.olderPages.push({ records: [olderHuman, olderReply, olderBatch], provenance: [], hasOlder: false });
+    runtime.olderPages.push({ records: olderPage, provenance: [], hasOlder: false });
 
     render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
     const log = screen.getByRole('log');
-    expect(within(log).getByText('A retained human message')).toBeTruthy();
-    expect(log.textContent).toContain('A system update inside this envelope remains visible.');
+    expectVisibilityMix(log, 'first-page');
     expect(within(log).queryByText('An unproven assistant reply')).toBeNull();
-    expect(within(log).queryByText('A system event marker')).toBeNull();
     expect(within(log).getByText('A selected reply without a provable trigger')).toBeTruthy();
     expect(within(log).getByText('A selected reply without a parent link')).toBeTruthy();
-    expect(within(log).queryByText('An unselected agent sent a wake')).toBeNull();
-    expect(within(log).queryByText('A reply to the unselected agent')).toBeNull();
-    expect(within(log).queryByText('A standalone process notice')).toBeNull();
-    expect(within(log).queryByText('A reply to the standalone process notice')).toBeNull();
     expect(within(log).queryByText('An unproven user row')).toBeNull();
-    expect(runtime.getSnapshot().records.map((record) => record.id)).toEqual([
-      'human-message', 'system-batch', 'system-marker', 'unproven-agent', 'unproven-selected-reply',
-      'unlinked-selected-reply', 'agent-wake', 'agent-reply', 'unproven-human', 'process-notice', 'process-reply',
-    ]);
 
     act(() => runtime.update({ hasOlder: true }));
-    await waitFor(() => expect(within(log).getByText('An earlier human message')).toBeTruthy());
-    expect(within(log).getByText('A reply linked to earlier human history')).toBeTruthy();
-    expect(log.textContent).toContain('An earlier system update inside this envelope remains visible.');
+    await waitFor(() => expect(within(log).getByText('Human exchange older-page')).toBeTruthy());
+    expectVisibilityMix(log, 'older-page');
 
-    const liveHuman = row(sessionKey, 'live-human', 'A live human message', {
-      role: 'user', sender: 'user:person-1', messageType: 'chat', clientMessageId: 'client-live', deviceId: 'human-device',
-    });
-    const liveReply = row(sessionKey, 'live-reply', 'A reply linked to a live human message', {
-      role: 'assistant', sender: 'agent:selected', messageType: 'assistant', replyToMessageId: 'live-human',
-    });
-    const liveMarker = row(sessionKey, 'live-marker', 'A live system event marker', {
-      role: 'assistant', sender: 'process:notifications', messageType: 'substrate',
-    });
-    act(() => runtime.update({ records: [...runtime.getSnapshot().records, liveHuman, liveReply, liveMarker] }));
-    expect(within(log).getByText('A live human message')).toBeTruthy();
-    expect(within(log).getByText('A reply linked to a live human message')).toBeTruthy();
-    expect(within(log).queryByText('A live system event marker')).toBeNull();
+    const liveUpdate = visibilityMix(sessionKey, 'live-update');
+    act(() => runtime.update({ records: [...runtime.getSnapshot().records, ...liveUpdate] }));
+    expectVisibilityMix(log, 'live-update');
 
     act(() => runtime.update({ status: 'stale', generation: 2 }));
-    act(() => runtime.update({ status: 'ready', provenanceAvailable: false,
-      provenance: [], activeTurn: undefined }));
-    expect(within(log).getByText('A retained human message')).toBeTruthy();
-    expect(within(log).getByText('An earlier human message')).toBeTruthy();
-    expect(within(log).getByText('A reply linked to earlier human history')).toBeTruthy();
-    expect(within(log).getByText('A reply linked to a live human message')).toBeTruthy();
-    expect(within(log).queryByText('A system event marker')).toBeNull();
-    expect(within(log).queryByText('An unproven assistant reply')).toBeNull();
-    expect(within(log).queryByText('A reply to the unselected agent')).toBeNull();
-    expect(runtime.getSnapshot().records.map((record) => record.id)).toContain('system-batch');
+    const reconnect = visibilityMix(sessionKey, 'reconnect');
+    runtime.rebuildSnapshots.push({
+      status: 'ready', generation: 3, provenanceAvailable: false, provenance: [], activeTurn: undefined,
+      records: [...runtime.getSnapshot().records, ...reconnect],
+    });
+    await act(async () => runtime.rebuild());
+    expect(runtime.rebuildCalls).toBe(1);
+    expectVisibilityMix(log, 'reconnect');
+    expect(within(log).getByText('Human exchange first-page')).toBeTruthy();
+    expect(within(log).getByText('Human exchange older-page')).toBeTruthy();
+    expect(within(log).getByText('Human exchange live-update')).toBeTruthy();
+    expect(runtime.getSnapshot().records.map((record) => record.id)).toEqual(expect.arrayContaining([
+      'first-page-marker', 'first-page-agent-wake', 'first-page-agent-reply', 'first-page-batch',
+      'older-page-marker', 'older-page-agent-wake', 'older-page-agent-reply', 'older-page-batch',
+      'live-update-marker', 'live-update-agent-wake', 'live-update-agent-reply', 'live-update-batch',
+      'reconnect-marker', 'reconnect-agent-wake', 'reconnect-agent-reply', 'reconnect-batch',
+    ]));
   });
 
   it('keeps null-linked and unloaded-parent replies until loaded fields prove exclusion', async () => {
