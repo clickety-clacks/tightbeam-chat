@@ -3,7 +3,7 @@ import { forwardRef, memo, useCallback, useEffect, useId, useImperativeHandle, u
   type ReactNode, type RefObject, type TableHTMLAttributes } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import type { ChatRuntime, CanonicalMessage, ConversationRecord, RuntimeState, TightbeamAdapter, TurnProvenance } from './types';
+import type { ChatRuntime, CanonicalMessage, ConversationRecord, LocalSend, RuntimeState, TightbeamAdapter, TurnProvenance } from './types';
 import { provenanceHasHumanSource, turnSourceKind } from './provenance';
 import { useReadingPosition } from './useReadingPosition';
 import './style.css';
@@ -31,6 +31,134 @@ interface Bubble {
   readonly sender: string;
   readonly displayContent?: string;
   readonly derived: boolean;
+}
+
+type TimelineItem =
+  | { readonly kind: 'bubble'; readonly bubble: Bubble; readonly scrollKey?: string }
+  | { readonly kind: 'local'; readonly send: LocalSend; readonly canonical?: CanonicalMessage };
+
+function sendIdentity(value: Pick<LocalSend, 'sessionKey' | 'deviceId' | 'clientMessageId'>): string {
+  return JSON.stringify([value.sessionKey, value.deviceId, value.clientMessageId]);
+}
+
+function canonicalSendIdentity(record: CanonicalMessage): string | undefined {
+  return record.deviceId && record.clientMessageId
+    ? sendIdentity({ sessionKey: record.sessionKey, deviceId: record.deviceId,
+      clientMessageId: record.clientMessageId })
+    : undefined;
+}
+
+function itemTime(item: TimelineItem): number | undefined {
+  const value = item.kind === 'bubble' ? item.bubble.record.createdAt
+    : item.canonical?.createdAt ?? item.send.submittedAt;
+  if (!value) return undefined;
+  const time = Date.parse(value);
+  return Number.isFinite(time) ? time : undefined;
+}
+
+interface TimelineAnchor {
+  readonly item: TimelineItem;
+  readonly record: CanonicalMessage;
+  readonly order: number;
+}
+
+interface TimedTimelineAnchor {
+  readonly time: number;
+  readonly position: number;
+}
+
+interface UnmatchedTimelineItem {
+  readonly item: TimelineItem;
+  readonly time: number;
+  readonly order: number;
+}
+
+function upperBoundByTime(items: readonly TimedTimelineAnchor[], time: number): number {
+  let low = 0;
+  let high = items.length;
+  while (low < high) {
+    const middle = low + Math.floor((high - low) / 2);
+    if (items[middle].time <= time) low = middle + 1;
+    else high = middle;
+  }
+  return low;
+}
+
+function composeTimeline(bubbles: readonly Bubble[], localSends: readonly LocalSend[],
+  canonicalSends: ReadonlyMap<string, CanonicalMessage>,
+  sendsByIdentity: ReadonlyMap<string, LocalSend>): TimelineItem[] {
+  const anchoredSendIdentities = new Set<string>();
+  const anchors: TimelineAnchor[] = bubbles.map((bubble, order) => {
+    const identity = canonicalSendIdentity(bubble.record);
+    const send = identity && !anchoredSendIdentities.has(identity) ? sendsByIdentity.get(identity) : undefined;
+    if (identity && send) anchoredSendIdentities.add(identity);
+    const item: TimelineItem = { kind: 'bubble', bubble, scrollKey: send ? `local-${send.clientMessageId}` : undefined };
+    return { item, record: bubble.record, order };
+  });
+  const unmatched: UnmatchedTimelineItem[] = [];
+  let order = bubbles.length;
+  for (const send of localSends) {
+    const canonical = canonicalSends.get(sendIdentity(send));
+    const item: TimelineItem = { kind: 'local', send, canonical };
+    if (canonical) {
+      anchors.push({ item, record: canonical, order });
+    } else {
+      const parsed = Date.parse(send.submittedAt);
+      unmatched.push({ item, time: Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY, order });
+    }
+    order++;
+  }
+
+  anchors.sort((left, right) => left.record.seq - right.record.seq ||
+    left.record.id.localeCompare(right.record.id) ||
+    Number(left.item.kind !== 'bubble') - Number(right.item.kind !== 'bubble') || left.order - right.order);
+
+  const timedAnchors: TimedTimelineAnchor[] = [];
+  const earliestBubbleAtTime = new Map<number, number>();
+  for (let position = 0; position < anchors.length; position++) {
+    const item = anchors[position].item;
+    const time = itemTime(item);
+    if (time === undefined) continue;
+    const isBubble = item.kind === 'bubble';
+    timedAnchors.push({ time, position });
+    if (isBubble) {
+      const prior = earliestBubbleAtTime.get(time);
+      if (prior === undefined || position < prior) earliestBubbleAtTime.set(time, position);
+    }
+  }
+  // Canonical order follows sequence, but an unmatched send follows its timestamp.
+  // The suffix minimum finds the earliest sequence position satisfying each time query.
+  timedAnchors.sort((left, right) => left.time - right.time || left.position - right.position);
+  const earliestPositionAtOrAfterTime = new Array<number>(timedAnchors.length);
+  let earliestPosition = anchors.length;
+  for (let index = timedAnchors.length - 1; index >= 0; index--) {
+    earliestPosition = Math.min(earliestPosition, timedAnchors[index].position);
+    earliestPositionAtOrAfterTime[index] = earliestPosition;
+  }
+
+  unmatched.sort((left, right) => left.time - right.time || left.order - right.order);
+  const insertions = new Map<number, TimelineItem[]>();
+  for (const pending of unmatched) {
+    let position = anchors.length;
+    if (Number.isFinite(pending.time)) {
+      const firstGreaterTime = upperBoundByTime(timedAnchors, pending.time);
+      const firstLaterAnchor = firstGreaterTime < timedAnchors.length
+        ? earliestPositionAtOrAfterTime[firstGreaterTime] : anchors.length;
+      const firstEqualBubble = earliestBubbleAtTime.get(pending.time) ?? anchors.length;
+      position = Math.min(firstLaterAnchor, firstEqualBubble);
+    }
+    const bucket = insertions.get(position);
+    if (bucket) bucket.push(pending.item);
+    else insertions.set(position, [pending.item]);
+  }
+
+  const timeline: TimelineItem[] = [];
+  for (let position = 0; position <= anchors.length; position++) {
+    const bucket = insertions.get(position);
+    if (bucket) timeline.push(...bucket);
+    if (position < anchors.length) timeline.push(anchors[position].item);
+  }
+  return timeline;
 }
 
 const markdownPlugins = [remarkGfm];
@@ -189,14 +317,15 @@ function StatusIcon({ state }: { state: RuntimeState }) {
   return <span className={`tb-chat-status-dot tb-chat-status-${status}`} aria-hidden="true" />;
 }
 
-const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, registerRow }: {
+const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, registerRow, scrollKey: scrollKeyOverride }: {
   bubble: Bubble;
   renderMessage?: TightbeamChatProps['renderMessage'];
   agentName: string;
   registerRow: (key: string, element: HTMLElement | null) => void;
+  scrollKey?: string;
 }) {
   const { record } = bubble;
-  const scrollKey = bubble.derived ? bubble.key : record.id;
+  const scrollKey = scrollKeyOverride ?? (bubble.derived ? bubble.key : record.id);
   const rowRef = useCallback((element: HTMLElement | null) => registerRow(scrollKey, element), [registerRow, scrollKey]);
   const time = localTimestamp(record.createdAt);
   const context: RenderContext = {
@@ -322,8 +451,26 @@ function ChatBody({ runtime, renderMessage, className }: {
   const bubbles = useMemo(() => visibleBubbles(state, agentName),
     [state.records, state.provenance, state.provenanceAvailable, state.activeTurn, agentName]);
   const caption = state.provenanceAvailable === false ? undefined : activeCaption(state.activeTurn);
-  const visibleCanonicalIds = useMemo(() => new Set(bubbles.map((bubble) => bubble.record.clientMessageId).filter(Boolean)), [bubbles]);
-  const localSends = state.sends.filter((send) => !visibleCanonicalIds.has(send.clientMessageId));
+  const visibleSendIdentities = useMemo(() => new Set(bubbles.flatMap((bubble) => {
+    const identity = canonicalSendIdentity(bubble.record);
+    return identity ? [identity] : [];
+  })), [bubbles]);
+  const sendsByIdentity = useMemo(() => new Map(state.sends.map((send) => [sendIdentity(send), send])), [state.sends]);
+  const canonicalSends = useMemo(() => {
+    const records = new Map<string, CanonicalMessage>();
+    for (const record of state.records) {
+      if (record.kind === 'message') {
+        const identity = canonicalSendIdentity(record);
+        if (identity) records.set(identity, record);
+      }
+    }
+    return records;
+  }, [state.records]);
+  const localSends = useMemo(() => state.sends.filter((send) =>
+    !visibleSendIdentities.has(sendIdentity(send))), [state.sends, visibleSendIdentities]);
+  const timeline = useMemo(() => {
+    return composeTimeline(bubbles, localSends, canonicalSends, sendsByIdentity);
+  }, [bubbles, canonicalSends, localSends, sendsByIdentity]);
   const statusName = statusText(state);
 
   useEffect(() => {
@@ -439,8 +586,13 @@ function ChatBody({ runtime, renderMessage, className }: {
         <span>Earlier messages could not be loaded: {state.historyError}</span>
         <button type="button" onClick={loadOlder}>Retry loading messages</button>
       </div>}
-      {bubbles.map((bubble) => <RecordRow key={bubble.key} bubble={bubble} renderMessage={renderMessage} agentName={agentName} registerRow={reading.registerRow} />)}
-      {localSends.map((send) => {
+      {timeline.map((item) => {
+        if (item.kind === 'bubble') {
+          const { bubble } = item;
+          return <RecordRow key={bubble.key} bubble={bubble} scrollKey={item.scrollKey}
+            renderMessage={renderMessage} agentName={agentName} registerRow={reading.registerRow} />;
+        }
+        const { send } = item;
         const time = localTimestamp(send.submittedAt);
         const retryAvailable = ['failed', 'uncertain'].includes(send.status) && !send.reconciled;
         return <article ref={element => reading.registerRow(`local-${send.clientMessageId}`, element)} className="tb-chat-bubble tb-chat-bubble-human tb-chat-local" key={send.clientMessageId}

@@ -4,7 +4,7 @@ import { TightbeamChat } from '../src/TightbeamChat';
 import type { RenderContext } from '../src/TightbeamChat';
 import { createTurnProvenance } from '../src/provenance';
 import type {
-  CanonicalMessage, CanonicalTurn, ChatRuntime, ConversationRecord, RuntimeState,
+  CanonicalMessage, CanonicalTurn, ChatRuntime, ConversationRecord, LocalSend, RuntimeState,
   TightbeamAdapter, TurnProvenance,
 } from '../src/types';
 
@@ -415,5 +415,106 @@ describe('conversation surface', () => {
     expect(runtime.retried).toEqual(['failed-id']);
     fireEvent.click(screen.getAllByRole('button', { name: 'Restore text to the composer' })[1]);
     expect(screen.getByRole('textbox', { name: 'Message to Research assistant' })).toHaveProperty('value', 'Uncertain text');
+  });
+
+  it('places a retried local send at its authoritative history position and keeps its reading key through reconciliation', () => {
+    const sessionKey = 'chronological-send';
+    const submittedAt = '2026-10-23T09:00:00.000Z';
+    const prompt = row(sessionKey, 'retried-prompt', 'Original prompt', {
+      seq: 3, role: 'user', createdAt: submittedAt, clientMessageId: 'retry-id', deviceId: 'device',
+    });
+    const laterPrompt = row(sessionKey, 'later-prompt', 'Later question', {
+      seq: 8, role: 'user', createdAt: '2026-10-23T09:05:00.000Z',
+    });
+    const laterReply = row(sessionKey, 'later-reply', 'Later reply', {
+      seq: 9, turnSeq: 2, createdAt: '2026-10-23T09:06:00.000Z',
+    });
+    const laterTurn = provenance(2, sessionKey, laterPrompt.id, 'user:person', laterPrompt);
+    const send: LocalSend = {
+      sessionKey, deviceId: 'device', clientMessageId: 'retry-id', content: 'Original prompt',
+      submittedAt, status: 'accepted', reconciled: true,
+    };
+    const runtime = new FakeRuntime(sessionKey, {
+      records: [prompt, laterPrompt, laterReply], provenance: [laterTurn], sends: [send],
+    });
+    const view = render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+    const messageRows = () => [...view.container.querySelectorAll<HTMLElement>('.tb-chat-bubble')];
+    const order = () => messageRows().map((element) => element.textContent ?? '');
+    expect(order().findIndex((text) => text.includes('Original prompt')))
+      .toBeLessThan(order().findIndex((text) => text.includes('Later question')));
+    expect(order().findIndex((text) => text.includes('Later question')))
+      .toBeLessThan(order().findIndex((text) => text.includes('Later reply')));
+    expect(screen.getAllByText('Original prompt')).toHaveLength(1);
+    expect(messageRows().find((element) => element.textContent?.includes('Original prompt'))?.dataset.scrollKey)
+      .toBe('local-retry-id');
+
+    const originalTurn = provenance(1, sessionKey, prompt.id, 'user:person', prompt);
+    act(() => {
+      runtime.state = { ...runtime.state, provenance: [originalTurn, laterTurn] };
+      for (const listener of runtime.listeners) listener();
+    });
+
+    expect(order().findIndex((text) => text.includes('Original prompt')))
+      .toBeLessThan(order().findIndex((text) => text.includes('Later question')));
+    expect(order().findIndex((text) => text.includes('Later question')))
+      .toBeLessThan(order().findIndex((text) => text.includes('Later reply')));
+    expect(screen.getAllByText('Original prompt')).toHaveLength(1);
+    expect(messageRows().find((element) => element.textContent?.includes('Original prompt'))?.dataset.scrollKey)
+      .toBe('local-retry-id');
+  });
+
+  it('inserts an unmatched send by its original submission time instead of pinning it below later history', () => {
+    const sessionKey = 'unmatched-send-order';
+    const otherDevicePrompt = row(sessionKey, 'other-device-prompt', 'Other device message', {
+      seq: 2, role: 'user', createdAt: '2026-10-23T08:55:00.000Z',
+      clientMessageId: 'retry-id', deviceId: 'other-device',
+    });
+    const laterPrompt = row(sessionKey, 'later-prompt', 'Later question', {
+      seq: 8, role: 'user', createdAt: '2026-10-23T09:05:00.000Z',
+    });
+    const laterReply = row(sessionKey, 'later-reply', 'Later reply', {
+      seq: 9, turnSeq: 2, createdAt: '2026-10-23T09:06:00.000Z',
+    });
+    const laterTurn = provenance(2, sessionKey, laterPrompt.id, 'user:person', laterPrompt);
+    const otherDeviceTurn = provenance(1, sessionKey, otherDevicePrompt.id, 'user:person', otherDevicePrompt);
+    const runtime = new FakeRuntime(sessionKey, {
+      records: [otherDevicePrompt, laterPrompt, laterReply], provenance: [otherDeviceTurn, laterTurn], sends: [{
+        sessionKey, deviceId: 'device', clientMessageId: 'retry-id', content: 'Original prompt',
+        submittedAt: '2026-10-23T09:00:00.000Z', status: 'accepted', reconciled: false,
+      }],
+    });
+    const view = render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+    const order = [...view.container.querySelectorAll<HTMLElement>('.tb-chat-bubble')]
+      .map((element) => element.textContent ?? '');
+    expect(order.findIndex((text) => text.includes('Other device message')))
+      .toBeLessThan(order.findIndex((text) => text.includes('Original prompt')));
+    expect(order.findIndex((text) => text.includes('Original prompt')))
+      .toBeLessThan(order.findIndex((text) => text.includes('Later question')));
+    expect(order.findIndex((text) => text.includes('Later question')))
+      .toBeLessThan(order.findIndex((text) => text.includes('Later reply')));
+    expect(screen.getAllByText('Original prompt')).toHaveLength(1);
+  });
+
+  it('keeps many retained sends interleaved throughout a long chronological history', () => {
+    const sessionKey = 'long-chronological-history';
+    const start = Date.parse('2026-10-23T00:00:00.000Z');
+    const history = Array.from({ length: 120 }, (_, index) => row(sessionKey, `history-${index}`,
+      `History ${index}`, { seq: index + 1, createdAt: new Date(start + index * 120_000).toISOString() }));
+    const sends: LocalSend[] = Array.from({ length: history.length - 1 }, (_, index) => ({
+      sessionKey, deviceId: 'device', clientMessageId: `retained-${index}`, content: `Retained ${index}`,
+      submittedAt: new Date(start + (index * 2 + 1) * 60_000).toISOString(),
+      status: 'accepted', reconciled: false,
+    }));
+    const runtime = new FakeRuntime(sessionKey, { records: history, provenanceAvailable: false, sends });
+    const view = render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+    const rows = [...view.container.querySelectorAll<HTMLElement>('.tb-chat-bubble')]
+      .map((element) => element.textContent ?? '');
+    const expected: string[] = [];
+    for (let index = 0; index < history.length; index++) {
+      expected.push(`History ${index}`);
+      if (index < sends.length) expected.push(`Retained ${index}`);
+    }
+    expect(rows).toHaveLength(expected.length);
+    for (let index = 0; index < expected.length; index++) expect(rows[index]).toContain(expected[index]);
   });
 });
