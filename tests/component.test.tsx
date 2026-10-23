@@ -217,8 +217,8 @@ describe('conversation surface', () => {
     const unprovenSelectedReply = row(sessionKey, 'unproven-selected-reply', 'A selected reply without a provable trigger', {
       role: 'assistant', messageType: 'assistant', turnSeq: 12,
     });
-    const identifiedAgentReply = row(sessionKey, 'identified-agent-reply', 'A reply with a known agent sender', {
-      role: 'assistant', sender: 'agent:external', messageType: 'assistant', turnSeq: 13,
+    const unlinkedSelectedReply = row(sessionKey, 'unlinked-selected-reply', 'A selected reply without a parent link', {
+      role: 'assistant', sender: 'agent:selected', messageType: 'assistant', turnSeq: 13,
     });
     const agentWake = row(sessionKey, 'agent-wake', 'An unselected agent sent a wake', {
       role: 'user', sender: 'agent:external', messageType: 'agent', turnSeq: 11,
@@ -249,7 +249,7 @@ describe('conversation surface', () => {
       role: 'user', sender: 'process:notifications', messageType: 'substrate', seq: 2,
     });
     const runtime = new FakeRuntime(sessionKey, {
-      records: [human, batch, marker, unprovenAgent, unprovenSelectedReply, identifiedAgentReply,
+      records: [human, batch, marker, unprovenAgent, unprovenSelectedReply, unlinkedSelectedReply,
         agentWake, agentReply, unprovenHuman, processNotice, processReply], provenanceAvailable: false,
     });
     runtime.olderPages.push({ records: [olderHuman, olderReply, olderBatch], provenance: [], hasOlder: false });
@@ -261,7 +261,7 @@ describe('conversation surface', () => {
     expect(within(log).queryByText('An unproven assistant reply')).toBeNull();
     expect(within(log).queryByText('A system event marker')).toBeNull();
     expect(within(log).getByText('A selected reply without a provable trigger')).toBeTruthy();
-    expect(within(log).queryByText('A reply with a known agent sender')).toBeNull();
+    expect(within(log).getByText('A selected reply without a parent link')).toBeTruthy();
     expect(within(log).queryByText('An unselected agent sent a wake')).toBeNull();
     expect(within(log).queryByText('A reply to the unselected agent')).toBeNull();
     expect(within(log).queryByText('A standalone process notice')).toBeNull();
@@ -269,7 +269,7 @@ describe('conversation surface', () => {
     expect(within(log).queryByText('An unproven user row')).toBeNull();
     expect(runtime.getSnapshot().records.map((record) => record.id)).toEqual([
       'human-message', 'system-batch', 'system-marker', 'unproven-agent', 'unproven-selected-reply',
-      'identified-agent-reply', 'agent-wake', 'agent-reply', 'unproven-human', 'process-notice', 'process-reply',
+      'unlinked-selected-reply', 'agent-wake', 'agent-reply', 'unproven-human', 'process-notice', 'process-reply',
     ]);
 
     act(() => runtime.update({ hasOlder: true }));
@@ -314,10 +314,10 @@ describe('conversation surface', () => {
       clientMessageId: 'client-unknown', deviceId: 'unknown-device',
     });
     const nullLinkReply = row(sessionKey, 'null-link-reply', 'A reply without a parent link', {
-      role: 'assistant', messageType: 'assistant', replyToMessageId: undefined,
+      role: 'assistant', sender: 'agent:selected', messageType: 'assistant', replyToMessageId: undefined,
     });
     const unloadedParentReply = row(sessionKey, 'unloaded-parent-reply', 'A reply whose parent is not loaded', {
-      role: 'assistant', messageType: 'assistant', replyToMessageId: 'older-agent-trigger',
+      role: 'assistant', sender: 'agent:selected', messageType: 'assistant', replyToMessageId: 'older-agent-trigger',
     });
     const runtime = new FakeRuntime(sessionKey, {
       records: [nullSenderHuman, unknownSender, nullLinkReply, unloadedParentReply],

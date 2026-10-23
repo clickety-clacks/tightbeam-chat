@@ -96,15 +96,13 @@ function isBatchEnvelope(record: CanonicalMessage): boolean {
   return record.role === 'user' && record.messageType === 'substrate';
 }
 
-function isHiddenNonEnvelope(record: CanonicalMessage, preservedReplyParents?: ReadonlySet<string>): boolean {
+function isHiddenNonEnvelope(record: CanonicalMessage): boolean {
   if (record.messageType === 'marker') return true;
   if (isBatchEnvelope(record)) return false;
   if (record.messageType === 'substrate' || record.messageType === 'agent' || record.messageType === 'process') return true;
   const senderKind = record.sender ? turnSourceKind(record.sender) : 'unknown';
   if (senderKind === 'substrate') return true;
-  if (senderKind === 'agent') {
-    return !(record.role === 'assistant' && record.replyToMessageId && preservedReplyParents?.has(record.replyToMessageId));
-  }
+  if (senderKind === 'agent') return !(record.role === 'assistant' && record.messageType === 'assistant');
   return false;
 }
 
@@ -116,11 +114,8 @@ function isProvenHumanMessage(record: CanonicalMessage): boolean {
 
 function visibleBubbles(state: RuntimeState, agentName: string): Bubble[] {
   const messages = state.records.filter((record): record is CanonicalMessage => record.kind === 'message');
-  const preservedReplyParents = new Set(messages
-    .filter((record) => isBatchEnvelope(record) || isProvenHumanMessage(record))
-    .map((record) => record.id));
   const hiddenIds = new Set(messages
-    .filter((record) => isHiddenNonEnvelope(record, preservedReplyParents))
+    .filter((record) => isHiddenNonEnvelope(record))
     .map((record) => record.id));
   const bubbles: Bubble[] = [];
   for (const record of messages) {
