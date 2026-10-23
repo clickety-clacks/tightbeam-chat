@@ -19,7 +19,7 @@ const identified2857 = { ...version, build: PUBLIC_019_BUILD_2857, sha: PUBLIC_0
 const identified2887 = { ...version, build: PUBLIC_019_BUILD_2887, sha: PUBLIC_019_GATEWAY_SHA_2887 };
 const identified2908 = { ...version, build: PUBLIC_019_BUILD_2908, sha: PUBLIC_019_GATEWAY_SHA_2908 };
 const item = {
-  id: 'm_1', seq: 9, sessionKey, role: 'user', content: 'hello', at: Date.parse('2026-10-12T00:00:00Z'),
+  id: 'm_1', seq: 9, sessionKey, role: 'user', content: 'hello', replyToMessageId: 'parent-1', at: Date.parse('2026-10-12T00:00:00Z'),
   sender: 'person-1', deviceId: 'device-1', clientMessageId: 'c_1', attachments: [],
   rowVersion: 9, model: 'source-supplied-model', unknownMetadata: { preserved: true },
 };
@@ -125,7 +125,6 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
       'https://host.example/version',
       'https://host.example/api/sessions/s-public',
       'https://host.example/api/sessions/s-public/messages?limit=50&tail=true',
-      'https://host.example/api/sessions/s-public/turns?limit=50&tail=true',
     ]);
     expect(runtime.getSnapshot().records.map((record) => record.id))
       .toEqual(['marker_before', 'm_1', 'marker_after']);
@@ -161,14 +160,13 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
       'https://host.example/version',
       'https://host.example/api/sessions/s-public',
       'https://host.example/api/sessions/s-public/messages?limit=50&tail=true',
-      'https://host.example/api/sessions/s-public/turns?limit=50&tail=true',
     ]);
     expect(runtime.getSnapshot().records.map((record) => record.id)).toEqual(['m_1']);
     expect(candidate.human.sent).toHaveLength(0);
     runtime.dispose();
   });
 
-  it('uses exact-turn reads when recent-turn collection is forbidden and keeps history and sends available', async () => {
+  it('does not fetch turn or trigger details when recent-turn collection is forbidden', async () => {
     const messages = [
       { ...item, id: 'human-message', seq: 9, role: 'user', sender: 'person-1', messageType: 'chat',
         clientMessageId: 'client-human', deviceId: 'device-1', turnSeq: 12, content: 'Can you help?' },
@@ -192,14 +190,11 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
     expect(runtime.getSnapshot().records.map((record) => record.id)).toEqual([
       'human-message', 'agent-message', 'system-batch', 'system-marker',
     ]);
-    expect(runtime.getSnapshot().provenanceAvailable).toBe(true);
-    expect(runtime.getSnapshot().provenance).toMatchObject([{
-      turn: { seq: 12, messageId: 'human-message', origin: 'user:person-1' },
-      sourceKind: 'human', trigger: { id: 'human-message', content: 'Can you help?' },
-    }]);
-    expect(runtime.getSnapshot().activeTurn?.turn.seq).toBe(12);
-    expect(candidate.paths).toContain(`https://host.example/api/sessions/${sessionKey}/turns?limit=50&tail=true`);
-    expect(candidate.paths).toContain('https://host.example/api/turns/12');
+    expect(runtime.getSnapshot().provenanceAvailable).toBe(false);
+    expect(runtime.getSnapshot().provenance).toEqual([]);
+    expect(runtime.getSnapshot().activeTurn).toBeUndefined();
+    expect(candidate.paths.some((path) => path.includes('/turns'))).toBe(false);
+    expect(candidate.paths.some((path) => /\/messages\/[^?]+$/.test(path))).toBe(false);
     expect(candidate.changes.closed).toBe(false);
 
     const clientMessageId = runtime.send('Still available');
@@ -457,7 +452,7 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
     expect(paths).toEqual(['https://host.example/version', 'https://host.example/api/sessions/s-public']);
     expect(decodePublic019Message(item, sessionKey)).toMatchObject({
       id: 'm_1', seq: 9, createdAt: '2026-10-12T00:00:00.000Z',
-      clientMessageId: 'c_1', raw: { at: item.at, unknownMetadata: { preserved: true } },
+      clientMessageId: 'c_1', replyToMessageId: 'parent-1', raw: { at: item.at, unknownMetadata: { preserved: true } },
     });
     expect(() => decodePublic019Message({ ...item, at: '2026-10-12T00:00:00Z' }, sessionKey))
       .toThrow(UnsupportedTargetError);

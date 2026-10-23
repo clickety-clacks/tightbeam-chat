@@ -193,6 +193,7 @@ export function decodePublic019Message(value: unknown, sessionKey: string): Conv
     seq: positiveInteger(row, 'seq'),
     rowVersion: positiveInteger(row, 'rowVersion'),
     role: requiredString(row, 'role'),
+    replyToMessageId: optionalString(row, 'replyToMessageId'),
     content: typeof row.content === 'string' ? row.content : requiredString(row, 'content'),
     sender: optionalString(row, 'sender'),
     messageType: optionalString(row, 'messageType'),
