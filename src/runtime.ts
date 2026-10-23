@@ -403,8 +403,18 @@ class SessionRuntime implements ChatRuntime {
     }
   }
 
-  rebuild = (): Promise<void> => {
+  rebuild = (options?: { restart?: boolean }): Promise<void> => {
+    if (options?.restart) {
+      if (this.disposed || this.state.status === 'unauthorized' || this.state.status === 'unsupported') return Promise.resolve();
+      // A suspended connection/read can outlive the background interval. Start
+      // a new generation instead of waiting for that attempt to settle.
+      this.rebuildPromise = undefined;
+      this.retryDelayMs = 250;
+    }
     if (this.rebuildPromise) return this.rebuildPromise;
+    // An explicit recovery supersedes a retry that may have been throttled.
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = undefined;
     const work = this.doRebuild();
     const tracked = work.finally(() => {
       if (this.rebuildPromise === tracked) this.rebuildPromise = undefined;
