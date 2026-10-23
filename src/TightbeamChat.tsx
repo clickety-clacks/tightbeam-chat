@@ -33,6 +33,7 @@ interface Bubble {
 }
 
 const markdownPlugins = [remarkGfm];
+const backgroundRefreshThresholdMs = 45_000;
 const markdownComponents = {
   a: ({ href, children, ...props }: AnchorHTMLAttributes<HTMLAnchorElement>) =>
     <a {...props} href={href} target="_blank" rel="noreferrer noopener">{children}</a>,
@@ -330,6 +331,26 @@ function ChatBody({ runtime, renderMessage, className }: {
     document.title = agentName;
     return () => { if (document.title === agentName) document.title = priorTitle; };
   }, [agentName]);
+
+  useEffect(() => {
+    let hiddenAt = document.visibilityState === 'hidden' ? Date.now() : undefined;
+    const refreshAfterBackground = () => {
+      if (document.visibilityState === 'hidden') {
+        hiddenAt = Date.now();
+        return;
+      }
+      if (document.visibilityState !== 'visible' || hiddenAt === undefined) return;
+      const hiddenFor = Date.now() - hiddenAt;
+      hiddenAt = undefined;
+      const status = runtime.getSnapshot().status;
+      if (hiddenFor >= backgroundRefreshThresholdMs && status !== 'unauthorized' && status !== 'unsupported') {
+        // Background timer throttling can delay the heartbeat timeout; revalidate as soon as the page resumes.
+        void runtime.rebuild();
+      }
+    };
+    document.addEventListener('visibilitychange', refreshAfterBackground);
+    return () => document.removeEventListener('visibilitychange', refreshAfterBackground);
+  }, [runtime]);
 
   useEffect(() => {
     const element = root.current;
