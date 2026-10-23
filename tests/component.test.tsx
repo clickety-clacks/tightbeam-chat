@@ -594,7 +594,7 @@ describe('conversation surface', () => {
     expect(screen.queryByRole('button', { name: /load earlier/i })).toBeNull();
   });
 
-  it('passes individual member views to custom rendering and copying while retaining their canonical source', async () => {
+  it('passes only the individual member and source identity to custom rendering and copying', async () => {
     const sessionKey = 'member-rendering';
     const content = [
       '[batched notices: 3]', '',
@@ -621,7 +621,19 @@ describe('conversation surface', () => {
     expect(view.container.textContent).not.toContain('coalesced by');
     const keys = articles().map((article) => article.dataset.scrollKey);
     for (const [record, context] of renderer.mock.calls) {
-      expect(context.sourceRecord).toBe(carrier);
+      if (record.kind !== 'message') throw new Error('Expected a projected message');
+      expect(context.sourceRecord).toMatchObject({ id: carrier.id, sessionKey, seq: 5,
+        sender: 'process:notifications', messageType: 'substrate' });
+      expect(Object.isFrozen(context.sourceRecord)).toBe(true);
+      expect(Object.isFrozen(context.member)).toBe(true);
+      expect(Object.isFrozen(record)).toBe(true);
+      expect(context.sourceRecord).not.toHaveProperty('content');
+      expect(context.sourceRecord).not.toHaveProperty('raw');
+      expect(context.sourceRecord).not.toHaveProperty('attachments');
+      const exposed = JSON.stringify({ record, context });
+      expect(exposed).not.toContain('Nonhuman content');
+      expect(exposed).not.toContain('coalesced by');
+      expect(exposed).not.toContain(record.content === '**First** human body' ? 'Second human body' : '**First** human body');
       expect(record.raw).not.toBe(carrier.raw);
       expect(record.raw).toMatchObject({ carrierId: carrier.id, memberSourceId: context.member?.sourceId });
     }

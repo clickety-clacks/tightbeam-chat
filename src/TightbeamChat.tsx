@@ -12,8 +12,9 @@ import './style.css';
 export interface RenderContext {
   readonly sessionKey: string;
   readonly recordKey: string;
-  /** Intact source for a projected member; not its display body. */
-  readonly sourceRecord?: CanonicalMessage;
+  /** Carrier identity and provenance only; excludes its body and sibling data. */
+  readonly sourceRecord?: Readonly<Pick<CanonicalMessage,
+    'id' | 'sessionKey' | 'seq' | 'rowVersion' | 'sender' | 'messageType' | 'turnSeq' | 'createdAt'>>;
   readonly member?: HumanMember;
   readonly defaultRender: () => ReactNode;
   readonly copyText: () => Promise<void>;
@@ -273,12 +274,15 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, re
   const context: RenderContext = {
     sessionKey: record.sessionKey,
     recordKey: bubble.key,
-    ...(bubble.member ? { sourceRecord: record, member: bubble.member } : {}),
+    ...(bubble.member ? { sourceRecord: Object.freeze({
+      id: record.id, sessionKey: record.sessionKey, seq: record.seq, rowVersion: record.rowVersion,
+      sender: record.sender, messageType: record.messageType, turnSeq: record.turnSeq, createdAt: record.createdAt,
+    }), member: Object.freeze({ ...bubble.member }) } : {}),
     defaultRender: () => bubble.derived ? markdownBody(bubble.displayContent ?? '') : defaultBody(record),
     copyText: () => navigator.clipboard.writeText(bubble.displayContent ?? record.content),
   };
   // Existing renderers consume record.content. Give them only the member view;
-  // the original carrier remains available explicitly as source context.
+  // source context identifies the carrier without exposing hidden siblings.
   const displayRecord: CanonicalMessage = bubble.member ? Object.freeze({
     kind: 'message', id: bubble.key, sessionKey: record.sessionKey, seq: record.seq,
     rowVersion: record.rowVersion, role: 'user', sender: bubble.member.sender,
