@@ -36,7 +36,7 @@ const rect = (top: number, height: number) => ({ top, bottom: top + height, left
 beforeEach(() => {
   scrollTop = 0;
   reducedMotion = false;
-  animate = vi.fn(() => ({ cancel: vi.fn() }));
+  animate = vi.fn(() => ({ cancel: vi.fn(), onfinish: null }));
   Object.defineProperty(HTMLElement.prototype, 'animate', { configurable: true, value: animate });
   vi.stubGlobal('matchMedia', () => ({ matches: reducedMotion }));
   vi.stubGlobal('ResizeObserver', class {
@@ -81,6 +81,27 @@ function readAt(box: HTMLElement, position: number) {
 }
 
 describe('conversation reading position', () => {
+  it('releases a finished entrance without replaying it on ordinary rerenders', () => {
+    const { runtime } = setup();
+    act(() => runtime.publish({ records: [...initialRows, message(20)] }));
+    const animation = animate.mock.results[0].value;
+    act(() => animation.onfinish());
+    act(() => runtime.publish({ agentDisplayName: 'Updated assistant' }));
+    act(() => runtime.publish({ records: runtime.state.records.map(row => ({ ...row, rowVersion: 2 })) }));
+    expect(animate).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('Message 20')).toBeTruthy();
+    cleanup();
+    expect(animation.cancel).not.toHaveBeenCalled();
+  });
+
+  it('cancels an unfinished entrance when its row unmounts', () => {
+    const { runtime } = setup();
+    act(() => runtime.publish({ records: [...initialRows, message(20)] }));
+    const animation = animate.mock.results[0].value;
+    act(() => runtime.publish({ records: initialRows }));
+    expect(animation.cancel).toHaveBeenCalledTimes(1);
+  });
+
   it('fades new rows without moving an away reader or replaying history, refresh, and Sent rows', () => {
     const { runtime, box } = setup();
     expect(animate).not.toHaveBeenCalled();

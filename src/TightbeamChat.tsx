@@ -279,9 +279,11 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, re
   useLayoutEffect(() => {
     if (!arriving || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
     // Opacity leaves row geometry intact for reading anchors and smooth follow.
-    entrance.current = row.current?.animate?.([{ opacity: 0 }, { opacity: 1 }], {
+    const animation = row.current?.animate?.([{ opacity: 0 }, { opacity: 1 }], {
       duration: 180, easing: 'ease-out',
     });
+    entrance.current = animation;
+    if (animation) animation.onfinish = () => { entrance.current = undefined; };
   }, [arriving]);
   useLayoutEffect(() => () => entrance.current?.cancel(), []);
   const time = localTimestamp(record.createdAt);
