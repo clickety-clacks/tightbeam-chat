@@ -28,6 +28,7 @@ const initialRows = Array.from({ length: 20 }, (_, i) => message(i));
 let scrollTop = 0;
 let scrollTo: ReturnType<typeof vi.fn>;
 let reducedMotion = false;
+let animate: ReturnType<typeof vi.fn>;
 const resizeCallbacks = new Set<ResizeObserverCallback>();
 const rows = () => [...document.querySelectorAll<HTMLElement>('article[data-record-key]')];
 const scrollHeight = () => 32 + rows().length * 92 + Number.parseFloat(document.querySelector<HTMLElement>('.tb-chat-viewport')?.style.getPropertyValue('--tb-chat-anchor-space') || '0');
@@ -35,6 +36,8 @@ const rect = (top: number, height: number) => ({ top, bottom: top + height, left
 beforeEach(() => {
   scrollTop = 0;
   reducedMotion = false;
+  animate = vi.fn(() => ({ cancel: vi.fn() }));
+  Object.defineProperty(HTMLElement.prototype, 'animate', { configurable: true, value: animate });
   vi.stubGlobal('matchMedia', () => ({ matches: reducedMotion }));
   vi.stubGlobal('ResizeObserver', class {
     constructor(private callback: ResizeObserverCallback) { resizeCallbacks.add(callback); }
@@ -78,6 +81,49 @@ function readAt(box: HTMLElement, position: number) {
 }
 
 describe('conversation reading position', () => {
+  it('fades new rows without moving an away reader or replaying history, refresh, and Sent rows', () => {
+    const { runtime, box } = setup();
+    expect(animate).not.toHaveBeenCalled();
+    readAt(box, 600);
+    act(() => runtime.publish({ records: [...initialRows, message(20)] }));
+    expect(animate).toHaveBeenCalledTimes(1);
+    expect(animate.mock.contexts[0]).toBe(screen.getByText('Message 20').closest('article'));
+    expect(animate).toHaveBeenCalledWith([{ opacity: 0 }, { opacity: 1 }], { duration: 180, easing: 'ease-out' });
+    expect(box.scrollTop).toBe(600);
+    expect(scrollTo).not.toHaveBeenCalled();
+    act(() => runtime.publish({ records: [message(-1), ...runtime.state.records] }));
+    act(() => runtime.publish({ records: runtime.state.records.map(row => ({ ...row, rowVersion: 2 })) }));
+    expect(animate).toHaveBeenCalledTimes(1);
+    act(() => runtime.publish({ status: 'stale', generation: 2 }));
+    act(() => runtime.publish({ status: 'ready', records: [...runtime.state.records, message(21)] }));
+    expect(animate).toHaveBeenCalledTimes(1);
+    const send = { sessionKey: 'reading', clientMessageId: 'c_sent', deviceId: 'browser', content: 'A sent message',
+      status: 'accepted' as const, submittedAt: '2026-10-23T00:00:00Z', reconciled: false };
+    act(() => runtime.publish({ sends: [send] }));
+    act(() => runtime.publish({ records: [...runtime.state.records, { ...message(22),
+      content: send.content, deviceId: send.deviceId, clientMessageId: send.clientMessageId }] }));
+    expect(animate).toHaveBeenCalledTimes(1);
+    expect(document.querySelector('[data-scroll-key="local-c_sent"]')).toBeTruthy();
+    act(() => runtime.publish({ records: [...runtime.state.records, message(23)] }));
+    expect(animate).toHaveBeenCalledTimes(2);
+  });
+
+  it('animates only extracted human members of a new batch while smoothly following from near bottom', () => {
+    const { runtime, box } = setup();
+    readAt(box, box.scrollHeight - box.clientHeight - 40);
+    const carrier = { ...message(20), sender: 'process:notifications', messageType: 'substrate', content: [
+      '[batched notices: 2]', '', '[430] source=human sender=user:person cause=notice class=fyi',
+      'A new human message', '', '[431] source=other sender=agent:helper session-key cause=notice class=fyi',
+      'Nonhuman notice', '', 'coalesced by batch-format (2 notices)',
+    ].join('\n') };
+    act(() => runtime.publish({ records: [...initialRows, carrier] }));
+    expect(animate).toHaveBeenCalledTimes(1);
+    expect(animate.mock.contexts[0]).toBe(screen.getByText('A new human message').closest('article'));
+    expect(screen.queryByText('Nonhuman notice')).toBeNull();
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: box.scrollHeight - box.clientHeight, behavior: 'smooth' });
+    act(() => runtime.publish({ records: [...initialRows, { ...carrier, rowVersion: 2 }] }));
+    expect(animate).toHaveBeenCalledTimes(1);
+  });
   it('catches up after a failed connection on foreground return without losing the reader or draft', async () => {
     const profile: TargetProfile = { identity: 'fixture:recovery', label: 'Recovery', capabilities: {
       newestTail: true, stableOlderCursor: true, retainedHistoryAcrossResets: true,
@@ -273,7 +319,10 @@ describe('conversation reading position', () => {
 
   it('respects reduced motion when explicitly returning to the bottom', () => {
     reducedMotion = true;
-    const { box } = setup();
+    const { runtime, box } = setup();
+    act(() => runtime.publish({ records: [...initialRows, message(20)] }));
+    expect(animate).not.toHaveBeenCalled();
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: box.scrollHeight - box.clientHeight, behavior: 'instant' });
     readAt(box, 600);
     fireEvent.click(screen.getByRole('button', { name: 'Scroll to latest messages' }));
     expect(scrollTo).toHaveBeenLastCalledWith({ top: box.scrollHeight - box.clientHeight, behavior: 'instant' });
