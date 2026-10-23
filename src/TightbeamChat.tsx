@@ -1,4 +1,4 @@
-import { forwardRef, memo, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore,
+import { forwardRef, memo, useCallback, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore,
   type AnchorHTMLAttributes, type FormEvent, type HTMLAttributes, type ImgHTMLAttributes,
   type ReactNode, type RefObject, type TableHTMLAttributes } from 'react';
 import ReactMarkdown from 'react-markdown';
@@ -190,12 +190,15 @@ function StatusIcon({ state }: { state: RuntimeState }) {
   return <span className={`tb-chat-status-dot tb-chat-status-${status}`} aria-hidden="true" />;
 }
 
-const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName }: {
+const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, registerRow }: {
   bubble: Bubble;
   renderMessage?: TightbeamChatProps['renderMessage'];
   agentName: string;
+  registerRow: (key: string, element: HTMLElement | null) => void;
 }) {
   const { record } = bubble;
+  const scrollKey = bubble.derived ? bubble.key : record.id;
+  const rowRef = useCallback((element: HTMLElement | null) => registerRow(scrollKey, element), [registerRow, scrollKey]);
   const time = localTimestamp(record.createdAt);
   const context: RenderContext = {
     sessionKey: record.sessionKey,
@@ -204,7 +207,7 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName }: 
     copyText: () => navigator.clipboard.writeText(record.content),
   };
   const custom = bubble.derived ? undefined : renderMessage?.(record, context);
-  return <article className={`tb-chat-bubble tb-chat-bubble-${bubble.side}`} data-record-key={bubble.key} data-scroll-key={bubble.derived ? bubble.key : record.id}
+  return <article ref={rowRef} className={`tb-chat-bubble tb-chat-bubble-${bubble.side}`} data-record-key={bubble.key} data-scroll-key={scrollKey}
     aria-label={`Message from ${bubble.sender || sourceLabel(bubble.side, agentName)}`}>
     <div className="tb-chat-bubble-body">{custom === undefined ? defaultBody(record, bubble.displayContent) : custom}</div>
     <time className="tb-chat-time" dateTime={time.dateTime}>{time.text}</time>
@@ -437,11 +440,11 @@ function ChatBody({ runtime, renderMessage, className }: {
         <span>Earlier messages could not be loaded: {state.historyError}</span>
         <button type="button" onClick={loadOlder}>Retry loading messages</button>
       </div>}
-      {bubbles.map((bubble) => <RecordRow key={bubble.key} bubble={bubble} renderMessage={renderMessage} agentName={agentName} />)}
+      {bubbles.map((bubble) => <RecordRow key={bubble.key} bubble={bubble} renderMessage={renderMessage} agentName={agentName} registerRow={reading.registerRow} />)}
       {localSends.map((send) => {
         const time = localTimestamp(send.submittedAt);
         const retryAvailable = ['failed', 'uncertain'].includes(send.status) && !send.reconciled;
-        return <article className="tb-chat-bubble tb-chat-bubble-human tb-chat-local" key={send.clientMessageId}
+        return <article ref={element => reading.registerRow(`local-${send.clientMessageId}`, element)} className="tb-chat-bubble tb-chat-bubble-human tb-chat-local" key={send.clientMessageId}
           data-record-key={`local-${send.clientMessageId}`} data-scroll-key={`local-${send.clientMessageId}`} aria-label={`Your message, ${send.status}`}>
           <div className="tb-chat-bubble-body">{markdownBody(send.content)}</div>
           <p className="tb-chat-send-state">{send.status === 'uncertain' ? 'Delivery is uncertain' : send.status === 'failed' ? 'Message could not be sent' : send.status === 'pending' ? 'Sending…' : 'Sent'}</p>

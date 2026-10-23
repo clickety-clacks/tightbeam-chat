@@ -1,8 +1,8 @@
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 
 // About two lines of conversation text. Measure intent before content grows.
 const bottomThreshold = 64;
-type Anchor = { key: string; top: number; bottom: number };
+type Anchor = { key: string; top: number };
 
 export function useReadingPosition(ready: boolean, revision: unknown) {
   const viewport = useRef<HTMLDivElement>(null);
@@ -12,6 +12,11 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
   const animating = useRef(false);
   const target = useRef<number | undefined>(undefined);
   const anchors = useRef<Anchor[]>([]);
+  const registeredRows = useRef(new Map<string, HTMLElement>());
+  const registerRow = useCallback((key: string, element: HTMLElement | null) => {
+    if (element) registeredRows.current.set(key, element);
+    else registeredRows.current.delete(key);
+  }, []);
   const readingTop = useRef(0);
   const latestReady = useRef(ready);
   const [showLatest, setShowLatest] = useState(false);
@@ -20,16 +25,36 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
   const distance = (box: HTMLElement) => Math.max(0, box.scrollHeight - box.clientHeight - box.scrollTop);
   const capture = () => {
     const box = viewport.current;
-    if (!box) return;
-    const top = box.getBoundingClientRect().top - box.scrollTop;
-    const rows = [...box.querySelectorAll<HTMLElement>('[data-scroll-key]')];
-    // Measure once per layout, in content coordinates. Scrolling only changes
-    // readingTop; it must not measure or allocate an array for the full history.
-    anchors.current = rows.map(row => {
-      const rect = row.getBoundingClientRect();
-      return { key: row.dataset.scrollKey!, top: rect.top - top, bottom: rect.bottom - top };
-    });
+    const children = content.current?.children;
+    if (!box || !children) return;
     readingTop.current = box.scrollTop;
+    anchors.current = [];
+    if (following.current) return;
+    const bounds = box.getBoundingClientRect();
+    // Direct children are vertically ordered. Locate the viewport without
+    // enumerating history, then retain visible rows and one neighbor each side.
+    let low = 0;
+    let high = children.length;
+    while (low < high) {
+      const middle = Math.floor((low + high) / 2);
+      if (children[middle].getBoundingClientRect().bottom <= bounds.top) low = middle + 1;
+      else high = middle;
+    }
+    const remember = (row: HTMLElement, top: number) => {
+      if (row.dataset.scrollKey !== undefined) anchors.current.push({
+        key: row.dataset.scrollKey, top: top - bounds.top + box.scrollTop,
+      });
+    };
+    for (let i = low; i < children.length; i++) {
+      const row = children[i] as HTMLElement;
+      const rect = row.getBoundingClientRect();
+      remember(row, rect.top);
+      if (rect.top >= bounds.bottom) break;
+    }
+    if (low > 0) {
+      const previous = children[low - 1] as HTMLElement;
+      remember(previous, previous.getBoundingClientRect().top);
+    }
   };
 
   const moveToLatest = (smooth: boolean) => {
@@ -60,19 +85,8 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
     } else if (following.current) {
       moveToLatest(true);
     } else {
-      const saved = anchors.current;
-      const rows = new Map([...box.querySelectorAll<HTMLElement>('[data-scroll-key]')]
-        .map(row => [row.dataset.scrollKey, row]));
-      const first = saved.findIndex(anchor => anchor.bottom > readingTop.current);
-      let survivor: Anchor | undefined;
-      for (let i = first; i >= 0 && i < saved.length; i++) {
-        if (rows.has(saved[i].key)) { survivor = saved[i]; break; }
-      }
-      if (!survivor) {
-        for (let i = (first < 0 ? saved.length : first) - 1; i >= 0; i--) {
-          if (rows.has(saved[i].key)) { survivor = saved[i]; break; }
-        }
-      }
+      const rows = registeredRows.current;
+      const survivor = anchors.current.find(anchor => rows.has(anchor.key));
       if (survivor) {
         // Retain the next visible row if filtering removed the original anchor.
         box.style.removeProperty('--tb-chat-anchor-space');
@@ -107,7 +121,7 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
     // Intermediate animation frames are not a user's decision to leave the tail.
     if (!animating.current) following.current = distance(box) <= bottomThreshold;
     setShowLatest(!following.current);
-    readingTop.current = box.scrollTop;
+    capture();
   };
 
   const interrupt = () => {
@@ -117,11 +131,12 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
     animating.current = false;
     target.current = undefined;
     following.current = distance(box) <= bottomThreshold;
-    readingTop.current = box.scrollTop;
+    capture();
   };
   const holdPosition = () => {
     interrupt();
     following.current = false;
+    capture();
   };
   const scrollToLatest = () => {
     const box = viewport.current;
@@ -131,5 +146,5 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
     moveToLatest(true);
   };
 
-  return { viewport, content, showLatest, onScroll, interrupt, holdPosition, scrollToLatest };
+  return { viewport, content, registerRow, showLatest, onScroll, interrupt, holdPosition, scrollToLatest };
 }

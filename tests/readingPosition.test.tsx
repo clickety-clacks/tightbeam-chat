@@ -63,9 +63,9 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); resizeCallbacks.clear(); });
 
-function setup() {
+function setup(records = initialRows) {
   const runtime = new ReadingRuntime();
-  runtime.state = { ...runtime.state, records: initialRows };
+  runtime.state = { ...runtime.state, records };
   render(<TightbeamChat sessionKey="reading" adapter={{ open: () => runtime }} />);
   scrollTo.mockClear();
   return { runtime, box: screen.getByRole('log'), input: screen.getByRole('textbox') as HTMLTextAreaElement };
@@ -77,12 +77,12 @@ function readAt(box: HTMLElement, position: number) {
 }
 
 describe('conversation reading position', () => {
-  it('scrolls a long loaded history without measuring its rows again, then preserves position when older rows arrive', () => {
+  it('bounds scroll measurements to the viewport neighborhood in a long history and preserves position when older rows arrive', () => {
     function History({ ids }: { ids: number[] }) {
       const reading = useReadingPosition(true, ids);
       return <div ref={reading.viewport} className="tb-chat-viewport" onScroll={reading.onScroll}>
         <div ref={reading.content}>{ids.map((id, index) =>
-          <article key={id} data-record-key={id} data-scroll-key={id} data-test-position={index}>{id}</article>)}</div>
+          <article ref={element => reading.registerRow(String(id), element)} key={id} data-record-key={id} data-scroll-key={id} data-test-position={index}>{id}</article>)}</div>
       </div>;
     }
     const ids = Array.from({ length: 2000 }, (_, i) => i);
@@ -95,12 +95,41 @@ describe('conversation reading position', () => {
       box.scrollTop = 90000 + i * 30;
       fireEvent.scroll(box);
     }
-    expect(measure).not.toHaveBeenCalled();
+    expect(measure.mock.calls.length).toBeLessThan(30 * 25);
     expect(query).not.toHaveBeenCalled();
     const anchor = box.querySelector<HTMLElement>('[data-record-key="988"]')!;
     const offset = anchor.getBoundingClientRect().top;
     view.rerender(<History ids={[-2, -1, ...ids]} />);
     expect(anchor.getBoundingClientRect().top).toBe(offset);
+  });
+
+  it.each([40, 2000])('bounds anchor work across message, status and send updates with %i loaded rows', count => {
+    const measure = vi.mocked(HTMLElement.prototype.getBoundingClientRect);
+    measure.mockImplementation(function (this: HTMLElement) {
+      if (this.classList.contains('tb-chat-viewport')) return rect(0, 300);
+      const id = this.dataset.scrollKey;
+      if (id?.startsWith('message-')) return rect(16 + Number(id.slice(8)) * 92 - scrollTop, 80);
+      return rect(-scrollTop, 0);
+    });
+    const { runtime, box } = setup(Array.from({ length: count }, (_, i) => message(i)));
+    readAt(box, 1000);
+    const anchor = screen.getByText('Message 11').closest('article')!;
+    const offset = anchor.getBoundingClientRect().top;
+    const query = vi.spyOn(box, 'querySelectorAll');
+    for (let i = 0; i < 4; i++) {
+      for (const patch of [
+        { status: i % 2 ? 'ready' as const : 'stale' as const },
+        { sends: [] },
+        { records: [...runtime.state.records, message(count + i)] },
+      ]) {
+        measure.mockClear();
+        act(() => runtime.publish(patch));
+        // Binary search plus visible rows, not one measurement per loaded row.
+        expect(measure.mock.calls.length).toBeLessThan(35);
+        expect(query).not.toHaveBeenCalled();
+        expect(anchor.getBoundingClientRect().top).toBe(offset);
+      }
+    }
   });
 
   it('keeps the same visible row while content arrives below and exposes a latest-messages control', () => {
