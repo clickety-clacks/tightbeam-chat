@@ -205,7 +205,8 @@ export interface ChatRuntime {
   loadOlder(): Promise<void>;
   send(content: string): string | null;
   retrySend(clientMessageId: string): Promise<void>;
-  rebuild(): Promise<void>;
+  /** Restart bypasses an in-flight attempt, for foreground return or manual recovery. */
+  rebuild(options?: { restart?: boolean }): Promise<void>;
   dispose(): void;
 }
 

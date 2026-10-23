@@ -34,7 +34,6 @@ interface Bubble {
 }
 
 const markdownPlugins = [remarkGfm];
-const backgroundRefreshThresholdMs = 45_000;
 const markdownComponents = {
   a: ({ href, children, ...props }: AnchorHTMLAttributes<HTMLAnchorElement>) =>
     <a {...props} href={href} target="_blank" rel="noreferrer noopener">{children}</a>,
@@ -299,7 +298,7 @@ const Composer = forwardRef<ComposerHandle, {
           <dt>Model</dt><dd>{state.session?.model || 'Unavailable'}</dd>
           <dt>Harness</dt><dd>{state.session?.harness || 'Unavailable'}</dd>
         </dl>
-        {state.status === 'error' && <button type="button" onClick={() => void runtime.rebuild()}>Reconnect</button>}
+        {state.status === 'error' && <button type="button" onClick={() => void runtime.rebuild({ restart: true })}>Reconnect</button>}
       </div>}
       <button type="submit" className="tb-chat-send-button" aria-label="Send message"
         disabled={state.status !== 'ready' || !draft.trim()}>
@@ -335,19 +334,19 @@ function ChatBody({ runtime, renderMessage, className }: {
   }, [agentName]);
 
   useEffect(() => {
-    let hiddenAt = document.visibilityState === 'hidden' ? Date.now() : undefined;
+    let wasHidden = document.visibilityState === 'hidden';
     const refreshAfterBackground = () => {
       if (document.visibilityState === 'hidden') {
-        hiddenAt = Date.now();
+        wasHidden = true;
         return;
       }
-      if (document.visibilityState !== 'visible' || hiddenAt === undefined) return;
-      const hiddenFor = Date.now() - hiddenAt;
-      hiddenAt = undefined;
+      if (document.visibilityState !== 'visible' || !wasHidden) return;
+      wasHidden = false;
       const status = runtime.getSnapshot().status;
-      if (hiddenFor >= backgroundRefreshThresholdMs && status !== 'unauthorized' && status !== 'unsupported') {
-        // Background timer throttling can delay the heartbeat timeout; revalidate as soon as the page resumes.
-        void runtime.rebuild();
+      if (status !== 'unauthorized' && status !== 'unsupported') {
+        // Foreground return is a fresh attempt, independent of background timers
+        // and any connection or read still pending from before suspension.
+        void runtime.rebuild({ restart: true });
       }
     };
     document.addEventListener('visibilitychange', refreshAfterBackground);

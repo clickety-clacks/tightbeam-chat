@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { TightbeamChat } from '../src/TightbeamChat';
 import { useReadingPosition } from '../src/useReadingPosition';
+import { createTightbeamAdapter } from '../src/runtime';
+import { AuthorizationError, type ChatTransport, type TargetProfile } from '../src/types';
 import { createTurnProvenance } from '../src/provenance';
 import type { CanonicalMessage, ChatRuntime, RuntimeState } from '../src/types';
 
@@ -77,6 +79,73 @@ function readAt(box: HTMLElement, position: number) {
 }
 
 describe('conversation reading position', () => {
+  it('catches up after a failed connection on foreground return without losing the reader or draft', async () => {
+    const profile: TargetProfile = { identity: 'fixture:recovery', label: 'Recovery', capabilities: {
+      newestTail: true, stableOlderCursor: true, retainedHistoryAcrossResets: true,
+      orderedTransitions: true, snapshotCoverage: true, versionedNotices: true,
+      humanSendDedupe: true, authoritativeTurnProvenance: true,
+    } };
+    let offline = false;
+    let historyGate: Promise<void> | undefined;
+    let releaseHistory = () => {};
+    let records = initialRows;
+    const connect = vi.fn(async () => {
+      if (offline) throw new Error('Connection unavailable');
+      return { close() {} };
+    });
+    const transport: ChatTransport = {
+      currentIdentity: () => ({ principalKey: 'reader', deviceId: 'browser' }),
+      inspectTarget: async () => profile, openChanges: connect,
+      readSession: async () => ({ sessionKey: 'reading', rowVersion: 1, displayName: 'Assistant', raw: {} }),
+      readTail: async () => { await historyGate; return { records, hasOlder: false, oldestCursor: null, coverage: 'reading' }; },
+      readOlder: async () => ({ records: [], hasOlder: false, oldestCursor: null, coverage: 'reading' }),
+      readTurn: async () => null, readMessage: async () => null,
+      readRecentTurns: async () => { throw new AuthorizationError('Optional provenance unavailable'); },
+      resolveOriginDisplayName: async () => undefined, proveCoverage: () => true,
+      sendHuman: async () => { throw new Error('No send expected'); },
+    };
+    const runtime = createTightbeamAdapter(transport, profile).open('reading');
+    const original = Object.getOwnPropertyDescriptor(document, 'visibilityState');
+    let visibility = 'visible';
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => visibility });
+    try {
+      render(<TightbeamChat sessionKey="reading" adapter={{ open: () => runtime }} />);
+      await act(async () => { await runtime.rebuild(); });
+      const box = screen.getByRole('log');
+      readAt(box, 600);
+      const anchor = screen.getByText('Message 7').closest('article')!;
+      const offset = anchor.getBoundingClientRect().top;
+      const input = screen.getByRole('textbox') as HTMLTextAreaElement;
+      input.focus();
+      fireEvent.change(input, { target: { value: 'Keep this unsent draft' } });
+      input.setSelectionRange(5, 5);
+      visibility = 'hidden';
+      fireEvent(document, new Event('visibilitychange'));
+      offline = true;
+      await act(async () => { await runtime.rebuild(); });
+      expect(runtime.getSnapshot().status).toBe('error');
+      offline = false;
+      records = [...initialRows, message(20)];
+      historyGate = new Promise<void>(resolve => { releaseHistory = resolve; });
+      visibility = 'visible';
+      await act(async () => { fireEvent(document, new Event('visibilitychange')); });
+      expect(connect).toHaveBeenCalledTimes(3);
+      expect(runtime.getSnapshot().status).toBe('stale');
+      expect(screen.queryByText('Message 20')).toBeNull();
+      await act(async () => { releaseHistory(); await runtime.rebuild(); });
+      expect(runtime.getSnapshot().status).toBe('ready');
+      expect(screen.getByText('Message 20')).toBeTruthy();
+      expect(anchor.getBoundingClientRect().top).toBe(offset);
+      expect(input.value).toBe('Keep this unsent draft');
+      expect(input.selectionStart).toBe(5);
+      expect(document.activeElement).toBe(input);
+    } finally {
+      runtime.dispose();
+      if (original) Object.defineProperty(document, 'visibilityState', original);
+      else Reflect.deleteProperty(document, 'visibilityState');
+    }
+  });
+
   it('bounds scroll measurements to the viewport neighborhood in a long history and preserves position when older rows arrive', () => {
     function History({ ids }: { ids: number[] }) {
       const reading = useReadingPosition(true, ids);

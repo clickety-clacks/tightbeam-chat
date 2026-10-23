@@ -39,6 +39,7 @@ class FakeRuntime implements ChatRuntime {
   retried: string[] = [];
   loadOlderCalls = 0;
   rebuildCalls = 0;
+  rebuildOptions: Array<{ restart?: boolean } | undefined> = [];
   olderPages: OlderPage[] = [];
   state: RuntimeState;
 
@@ -67,58 +68,42 @@ class FakeRuntime implements ChatRuntime {
   };
   send = (text: string) => { this.sent.push(text); return 'fixture-send'; };
   retrySend = async (id: string) => { this.retried.push(id); };
-  rebuild = async () => { this.rebuildCalls++; };
+  rebuild = async (options?: { restart?: boolean }) => { this.rebuildCalls++; this.rebuildOptions.push(options); };
   dispose = () => { this.disposed = true; this.listeners.clear(); };
 }
 
 function adapterFor(runtime: FakeRuntime): TightbeamAdapter { return { open: () => runtime }; }
 
 describe('conversation surface', () => {
-  it('revalidates history on resume after a heartbeat window unless the target is locked', async () => {
+  it('starts a fresh attempt on each foreground return, including failed recovery, unless the target is locked', () => {
     const sessionKey = 'background-resume-session';
     const runtime = new FakeRuntime(sessionKey);
-    const originalVisibilityState = Object.getOwnPropertyDescriptor(document, 'visibilityState');
+    const original = Object.getOwnPropertyDescriptor(document, 'visibilityState');
     let visibility: DocumentVisibilityState = 'visible';
     Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => visibility });
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-10-23T00:00:00Z'));
-
     try {
       render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
-      const changeVisibility = async (next: DocumentVisibilityState, elapsedMs = 0) => {
-        await act(async () => {
-          visibility = next;
-          document.dispatchEvent(new Event('visibilitychange'));
-          if (elapsedMs > 0) await vi.advanceTimersByTimeAsync(elapsedMs);
-        });
-      };
-
-      await changeVisibility('hidden', 44_999);
-      await changeVisibility('visible');
-      expect(runtime.rebuildCalls).toBe(0);
-
-      await changeVisibility('hidden', 45_001);
-      await changeVisibility('visible');
-      expect(runtime.rebuildCalls).toBe(1);
-
-      runtime.state = { ...runtime.state, status: 'stale' };
-      await changeVisibility('hidden', 45_001);
-      await changeVisibility('visible');
-      expect(runtime.rebuildCalls).toBe(2);
-
-      runtime.state = { ...runtime.state, status: 'unsupported' };
-      await changeVisibility('hidden', 45_001);
-      await changeVisibility('visible');
-      expect(runtime.rebuildCalls).toBe(2);
-
-      runtime.state = { ...runtime.state, status: 'unauthorized' };
-      await changeVisibility('hidden', 45_001);
-      await changeVisibility('visible');
-      expect(runtime.rebuildCalls).toBe(2);
+      const changeVisibility = (next: DocumentVisibilityState) => act(() => {
+        visibility = next;
+        document.dispatchEvent(new Event('visibilitychange'));
+      });
+      for (const status of ['ready', 'stale', 'error', 'loading'] as const) {
+        runtime.state = { ...runtime.state, status };
+        changeVisibility('hidden');
+        changeVisibility('visible');
+      }
+      expect(runtime.rebuildOptions).toEqual(Array(4).fill({ restart: true }));
+      changeVisibility('visible');
+      expect(runtime.rebuildCalls).toBe(4);
+      for (const status of ['unsupported', 'unauthorized'] as const) {
+        runtime.state = { ...runtime.state, status };
+        changeVisibility('hidden');
+        changeVisibility('visible');
+      }
+      expect(runtime.rebuildCalls).toBe(4);
     } finally {
-      if (originalVisibilityState) Object.defineProperty(document, 'visibilityState', originalVisibilityState);
+      if (original) Object.defineProperty(document, 'visibilityState', original);
       else Reflect.deleteProperty(document, 'visibilityState');
-      vi.useRealTimers();
     }
   });
 
@@ -284,7 +269,8 @@ describe('conversation surface', () => {
     expect(screen.queryByText(/exact-session/)).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Connection status: Disconnected. Show details' }));
     const disconnected = screen.getByRole('dialog', { name: 'Connection details' });
-    expect(within(disconnected).getByRole('button', { name: 'Reconnect' })).toBeTruthy();
+    fireEvent.click(within(disconnected).getByRole('button', { name: 'Reconnect' }));
+    expect(runtime.rebuildOptions).toEqual([{ restart: true }]);
   });
 
   it('uses source-specific captions for one-message batches and suppresses unknown batch fallbacks', () => {

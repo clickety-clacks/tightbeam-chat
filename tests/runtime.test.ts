@@ -55,7 +55,8 @@ class ControlledTransport implements ChatTransport {
     return { close: () => { this.closed++; if (this.callbacks === callbacks) this.callbacks = undefined; } };
   };
   readSession = async (): Promise<SessionRecord> => {
-    await this.readSessionHook?.(++this.readSessionCalls);
+    this.readSessionCalls++;
+    await this.readSessionHook?.(this.readSessionCalls);
     return { sessionKey, rowVersion: 1, displayName: 'Fixture agent', raw: { clearedThroughSeq: 7 }, activity: 'idle' };
   };
   readTurn = async (_key: string, _seq: number): Promise<CanonicalTurn | null> => null;
@@ -97,6 +98,78 @@ class ControlledTransport implements ChatTransport {
 async function settle() { await vi.waitFor(() => {}, { timeout: 50 }); }
 
 describe('framework-independent runtime', () => {
+  it('starts recovery immediately after repeated failures and cancels the old backoff retry', async () => {
+    vi.useFakeTimers();
+    const transport = new ControlledTransport();
+    const connect = transport.openChanges;
+    const open = vi.fn(async (...args: Parameters<typeof connect>) => connect(...args));
+    transport.openChanges = open;
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    try {
+      await runtime.rebuild();
+      await runtime.loadOlder();
+      const oldest = runtime.getSnapshot().records[0].id;
+      open.mockRejectedValue(new Error('Connection unavailable'));
+      transport.doubt();
+      for (const delay of [250, 500, 1000]) await vi.advanceTimersByTimeAsync(delay);
+      expect(runtime.getSnapshot().status).toBe('error');
+      expect(open).toHaveBeenCalledTimes(4);
+      transport.rows.push(message(9));
+      open.mockImplementation((...args) => connect(...args));
+      await runtime.rebuild({ restart: true });
+      expect(open).toHaveBeenCalledTimes(5);
+      expect(runtime.getSnapshot().status).toBe('ready');
+      expect(runtime.getSnapshot().records.some(row => row.id === oldest)).toBe(true);
+      expect(runtime.getSnapshot().records.at(-1)?.id).toBe('m9');
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(open).toHaveBeenCalledTimes(5);
+    } finally { runtime.dispose(); vi.useRealTimers(); }
+  });
+
+  it('replaces a stalled recovery and stays stale until fresh subscription and history catch-up complete', async () => {
+    const transport = new ControlledTransport();
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    try {
+      await runtime.rebuild();
+      const stalled = deferred<void>();
+      const subscribed = deferred<void>();
+      const history = deferred<void>();
+      const connect = transport.openChanges;
+      let attempts = 0;
+      let oldSignal: AbortSignal | undefined;
+      transport.openChanges = async (key, callbacks, signal?: AbortSignal) => {
+        attempts++;
+        if (attempts === 1) { oldSignal = signal; await stalled.promise; }
+        else await subscribed.promise;
+        return connect(key, callbacks);
+      };
+      const pending = runtime.rebuild();
+      await vi.waitFor(() => expect(attempts).toBe(1));
+      const readTail = transport.readTail;
+      transport.readTail = async () => { await history.promise; return readTail(); };
+      const fresh = runtime.rebuild({ restart: true });
+      await vi.waitFor(() => expect(attempts).toBe(2));
+      expect(oldSignal?.aborted).toBe(true);
+      expect(runtime.getSnapshot().status).toBe('stale');
+      expect(transport.readTailCalls).toBe(1);
+      subscribed.resolve();
+      await vi.waitFor(() => expect(transport.readSessionCalls).toBe(2));
+      expect(runtime.getSnapshot().status).toBe('stale');
+      transport.rows.push(message(9));
+      transport.emit(message(10));
+      history.resolve();
+      await fresh;
+      expect(runtime.getSnapshot().status).toBe('ready');
+      expect(runtime.getSnapshot().records.map(row => row.id)).toContain('m9');
+      expect(runtime.getSnapshot().records.map(row => row.id)).toContain('m10');
+      const generation = runtime.getSnapshot().generation;
+      stalled.resolve();
+      await pending;
+      expect(runtime.getSnapshot().generation).toBe(generation);
+      expect(runtime.getSnapshot().status).toBe('ready');
+    } finally { runtime.dispose(); }
+  });
+
   it('hydrates a human trigger outside the loaded page from authoritative turn provenance', async () => {
     const transport = new ControlledTransport();
     const trigger = message(1, { role: 'user', sender: 'user:person', content: 'Earlier source prompt' });
