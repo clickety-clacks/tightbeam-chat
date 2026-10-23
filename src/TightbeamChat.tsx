@@ -356,6 +356,7 @@ const Composer = forwardRef<ComposerHandle, {
   const [statusOpen, setStatusOpen] = useState(false);
   const input = useRef<HTMLTextAreaElement>(null);
   const statusControl = useRef<HTMLButtonElement>(null);
+  const sendControl = useRef<HTMLButtonElement>(null);
   const shell = useRef<HTMLFormElement>(null);
   const titleId = useId();
   const composerLocked = state.status === 'unsupported' || state.status === 'unauthorized';
@@ -408,7 +409,14 @@ const Composer = forwardRef<ComposerHandle, {
     <label className="tb-chat-sr-only" htmlFor={`${titleId}-input`}>Message to {agentName || 'the selected agent'}</label>
     <div className="tb-chat-input-shell">
       <textarea ref={input} id={`${titleId}-input`} value={draft}
-        onChange={(event) => setDraft(event.target.value)} rows={1} disabled={composerLocked}
+        onChange={(event) => setDraft(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key !== 'Enter' || (!event.shiftKey && !event.ctrlKey)) return;
+          if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
+          event.preventDefault();
+          sendControl.current?.click();
+        }}
+        rows={1} disabled={composerLocked}
         aria-label={`Message to ${agentName || 'the selected agent'}`} placeholder={agentName}
         autoComplete="off" spellCheck />
       <button ref={statusControl} type="button" className="tb-chat-status-control" aria-label={`Connection status: ${statusName}. Show details`}
@@ -429,8 +437,9 @@ const Composer = forwardRef<ComposerHandle, {
         </dl>
         {state.status === 'error' && <button type="button" onClick={() => void runtime.rebuild({ restart: true })}>Reconnect</button>}
       </div>}
-      <button type="submit" className="tb-chat-send-button" aria-label="Send message"
+      <button ref={sendControl} type="submit" className="tb-chat-send-button" aria-label="Send message"
         disabled={state.status !== 'ready' || !draft.trim()}>
+        <span className="tb-chat-send-button-disc" aria-hidden="true" />
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5m0 0L6 11m6-6 6 6" /></svg>
       </button>
     </div>
