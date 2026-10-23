@@ -120,8 +120,10 @@ function visibilityMix(sessionKey: string, prefix: string): readonly CanonicalMe
 function expectVisibilityMix(log: HTMLElement, prefix: string): void {
   for (const label of [
     `Human exchange ${prefix}`, `Reply to human ${prefix}`,
-    `Visible batch envelope ${prefix}`, `Reply to batch ${prefix}`,
+    `Reply to batch ${prefix}`,
   ]) expect(within(log).getByText(label)).toBeTruthy();
+  expect(log.querySelector(`[data-record-key="${prefix}-batch"]`)?.textContent)
+    .toContain(`Visible batch envelope ${prefix}`);
   for (const label of [
     `Hidden assistant substrate marker ${prefix}`, `Hidden agent wake ${prefix}`,
     `Hidden reply to agent wake ${prefix}`, `Hidden process notice ${prefix}`,
