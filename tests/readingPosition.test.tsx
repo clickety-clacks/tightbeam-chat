@@ -4,7 +4,6 @@ import { TightbeamChat } from '../src/TightbeamChat';
 import { useReadingPosition } from '../src/useReadingPosition';
 import { createTightbeamAdapter } from '../src/runtime';
 import { AuthorizationError, type ChatTransport, type TargetProfile } from '../src/types';
-import { createTurnProvenance } from '../src/provenance';
 import type { CanonicalMessage, ChatRuntime, RuntimeState } from '../src/types';
 
 class ReadingRuntime implements ChatRuntime {
@@ -24,7 +23,7 @@ class ReadingRuntime implements ChatRuntime {
   dispose = () => {};
 }
 const message = (id: number): CanonicalMessage => ({ kind: 'message', id: `message-${id}`, sessionKey: 'reading',
-  seq: id, rowVersion: 1, role: 'user', content: `Message ${id}`, raw: {} });
+  seq: id, rowVersion: 1, role: 'user', sender: 'user:person', content: `Message ${id}`, raw: {} });
 const initialRows = Array.from({ length: 20 }, (_, i) => message(i));
 let scrollTop = 0;
 let scrollTo: ReturnType<typeof vi.fn>;
@@ -256,9 +255,8 @@ describe('conversation reading position', () => {
     const offset = screen.getByText('Message 11').closest('article')!.getBoundingClientRect().top;
     fireEvent.change(input, { target: { value: 'Unsent draft' } });
     act(() => runtime.publish({ status: 'stale' }));
-    act(() => runtime.publish({ status: 'ready', provenanceAvailable: true,
-      provenance: initialRows.slice(5).map(trigger => createTurnProvenance({ seq: trigger.seq, sessionKey: 'reading',
-        messageId: trigger.id, origin: 'user:reader', status: 'completed', raw: {} }, trigger)) }));
+    act(() => runtime.publish({ status: 'ready', records: initialRows.map((record, index) =>
+      index < 5 ? { ...record, sender: 'agent:other', messageType: 'agent' } : record) }));
     expect(screen.getByText('Message 11').closest('article')!.getBoundingClientRect().top).toBe(offset);
     expect(input.value).toBe('Unsent draft');
     expect(runtime.state.records).toHaveLength(20);

@@ -7,6 +7,9 @@ export interface CanonicalMessage {
   readonly rowVersion: number;
   readonly role: string;
   readonly sender?: string;
+  readonly replyToMessageId?: string;
+  readonly turnIncludesHuman?: boolean;
+  readonly isBatchCarrier?: boolean;
   readonly content: string;
   readonly messageType?: string;
   readonly createdAt?: string;

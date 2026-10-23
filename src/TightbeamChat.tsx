@@ -4,7 +4,8 @@ import { forwardRef, memo, useCallback, useEffect, useId, useImperativeHandle, u
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { ChatRuntime, CanonicalMessage, ConversationRecord, LocalSend, RuntimeState, TightbeamAdapter, TurnProvenance } from './types';
-import { provenanceHasHumanSource, turnSourceKind } from './provenance';
+import { turnSourceKind } from './provenance';
+import { projectMessages } from './messageVisibility';
 import { useReadingPosition } from './useReadingPosition';
 import './style.css';
 
@@ -89,7 +90,7 @@ function composeTimeline(bubbles: readonly Bubble[], localSends: readonly LocalS
   sendsByIdentity: ReadonlyMap<string, LocalSend>): TimelineItem[] {
   const anchoredSendIdentities = new Set<string>();
   const anchors: TimelineAnchor[] = bubbles.map((bubble, order) => {
-    const identity = canonicalSendIdentity(bubble.record);
+    const identity = bubble.derived ? undefined : canonicalSendIdentity(bubble.record);
     const send = identity && !anchoredSendIdentities.has(identity) ? sendsByIdentity.get(identity) : undefined;
     if (identity && send) anchoredSendIdentities.add(identity);
     const item: TimelineItem = { kind: 'bubble', bubble, scrollKey: send ? `local-${send.clientMessageId}` : undefined };
@@ -220,69 +221,6 @@ function sourceLabel(side: Bubble['side'], agentName: string): string {
   return agentName || 'Assistant';
 }
 
-function visibleBubbles(state: RuntimeState, agentName: string): Bubble[] {
-  if (state.provenanceAvailable === false) {
-    return state.records.flatMap((record): Bubble[] => {
-      if (record.kind !== 'message') return [];
-      if (record.role === 'user') {
-        return [{ key: record.id, record, side: 'human', sender: 'You', derived: false }];
-      }
-      if (record.role === 'assistant') {
-        return [{ key: record.id, record, side: 'agent', sender: sourceLabel('agent', agentName), derived: false }];
-      }
-      return [];
-    });
-  }
-  const provenance = state.provenance ?? [];
-  const byTurn = new Map(provenance.map((item) => [item.turn.seq, item]));
-  const byMessage = new Map<string, TurnProvenance[]>();
-  for (const item of provenance) {
-    const matching = byMessage.get(item.turn.messageId);
-    if (matching) matching.push(item);
-    else byMessage.set(item.turn.messageId, [item]);
-  }
-  const messageIds = new Set(state.records.filter((record): record is CanonicalMessage => record.kind === 'message')
-    .map((record) => record.id));
-  const bubbles: Bubble[] = [];
-  const addedTriggers = new Set<number>();
-  const addHumanTrigger = (item: TurnProvenance) => {
-    if (addedTriggers.has(item.turn.seq)) return;
-    addedTriggers.add(item.turn.seq);
-    if (item.batchCount !== undefined && item.trigger) {
-      for (const member of item.humanMembers) {
-        bubbles.push({
-          key: `${item.turn.messageId}:human:${member.index}`, record: item.trigger,
-          side: 'human', sender: 'You', displayContent: member.content, derived: true,
-        });
-      }
-    } else if (item.sourceKind === 'human' && item.trigger) {
-      bubbles.push({ key: `${item.trigger.id}:provenance:${item.turn.seq}`, record: item.trigger,
-        side: 'human', sender: 'You', derived: false });
-    }
-  };
-  for (const record of state.records) {
-    if (record.kind !== 'message') continue;
-    const triggers = byMessage.get(record.id) ?? [];
-    let displayedAsTrigger = false;
-    for (const item of triggers) {
-      addHumanTrigger(item);
-      displayedAsTrigger ||= provenanceHasHumanSource(item);
-    }
-    if (displayedAsTrigger) continue;
-    const turnSeq = record.turnSeq;
-    const item = turnSeq === undefined ? undefined : byTurn.get(turnSeq);
-    if (item && item.turn.messageId !== record.id && provenanceHasHumanSource(item)) {
-      if (!messageIds.has(item.turn.messageId)) addHumanTrigger(item);
-      bubbles.push({ key: record.id, record, side: 'agent', sender: sourceLabel('agent', agentName), derived: false });
-    }
-  }
-  const active = state.activeTurn;
-  if (active && active.turn.status === 'running' && !messageIds.has(active.turn.messageId)) {
-    addHumanTrigger(active);
-  }
-  return bubbles;
-}
-
 function statusText(state: RuntimeState): string {
   switch (state.status) {
     case 'ready': return 'Connected';
@@ -331,13 +269,13 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, re
   const context: RenderContext = {
     sessionKey: record.sessionKey,
     recordKey: bubble.key,
-    defaultRender: () => defaultBody(record, bubble.displayContent),
-    copyText: () => navigator.clipboard.writeText(record.content),
+    defaultRender: () => bubble.derived ? markdownBody(bubble.displayContent ?? '') : defaultBody(record),
+    copyText: () => navigator.clipboard.writeText(bubble.displayContent ?? record.content),
   };
   const custom = bubble.derived ? undefined : renderMessage?.(record, context);
   return <article ref={rowRef} className={`tb-chat-bubble tb-chat-bubble-${bubble.side}`} data-record-key={bubble.key} data-scroll-key={scrollKey}
     aria-label={`Message from ${bubble.sender || sourceLabel(bubble.side, agentName)}`}>
-    <div className="tb-chat-bubble-body">{custom === undefined ? defaultBody(record, bubble.displayContent) : custom}</div>
+    <div className="tb-chat-bubble-body">{custom === undefined ? context.defaultRender() : custom}</div>
     <time className="tb-chat-time" dateTime={time.dateTime}>{time.text}</time>
   </article>;
 });
@@ -448,11 +386,15 @@ function ChatBody({ runtime, renderMessage, className }: {
   const root = useRef<HTMLElement>(null);
   const composer = useRef<ComposerHandle>(null);
   const agentName = state.agentDisplayName ?? '';
-  const bubbles = useMemo(() => visibleBubbles(state, agentName),
-    [state.records, state.provenance, state.provenanceAvailable, state.activeTurn, agentName]);
+  const projection = useMemo(() => projectMessages(state.records), [state.records]);
+  const bubbles: Bubble[] = useMemo(() => projection.messages.map((message) => ({
+    key: message.key, record: message.source, side: message.side,
+    sender: sourceLabel(message.side, agentName), derived: Boolean(message.member),
+    displayContent: message.member?.content,
+  })), [projection, agentName]);
   const caption = state.provenanceAvailable === false ? undefined : activeCaption(state.activeTurn);
   const visibleSendIdentities = useMemo(() => new Set(bubbles.flatMap((bubble) => {
-    const identity = canonicalSendIdentity(bubble.record);
+    const identity = bubble.derived ? undefined : canonicalSendIdentity(bubble.record);
     return identity ? [identity] : [];
   })), [bubbles]);
   const sendsByIdentity = useMemo(() => new Map(state.sends.map((send) => [sendIdentity(send), send])), [state.sends]);
@@ -585,6 +527,9 @@ function ChatBody({ runtime, renderMessage, className }: {
       {state.historyError && <div className="tb-chat-history-error" role="alert">
         <span>Earlier messages could not be loaded: {state.historyError}</span>
         <button type="button" onClick={loadOlder}>Retry loading messages</button>
+      </div>}
+      {projection.issues.length > 0 && <div className="tb-chat-history-error" role="alert">
+        Some message sources could not be interpreted. Conversation filtering is incomplete.
       </div>}
       {timeline.map((item) => {
         if (item.kind === 'bubble') {
