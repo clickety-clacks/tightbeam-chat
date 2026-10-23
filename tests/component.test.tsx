@@ -42,6 +42,7 @@ class FakeRuntime implements ChatRuntime {
   rebuildCalls = 0;
   rebuildOptions: Array<{ restart?: boolean } | undefined> = [];
   olderPages: OlderPage[] = [];
+  rebuildSnapshots: Partial<RuntimeState>[] = [];
   state: RuntimeState;
 
   constructor(sessionKey: string, patch: Partial<RuntimeState> = {}) {
@@ -67,13 +68,64 @@ class FakeRuntime implements ChatRuntime {
       hasOlder: page.hasOlder, loadingOlder: false };
     this.publish();
   };
+  update = (patch: Partial<RuntimeState>) => { this.state = { ...this.state, ...patch }; this.publish(); };
   send = (text: string) => { this.sent.push(text); return this.sendResult; };
   retrySend = async (id: string) => { this.retried.push(id); };
-  rebuild = async (options?: { restart?: boolean }) => { this.rebuildCalls++; this.rebuildOptions.push(options); };
+  rebuild = async (options?: { restart?: boolean }) => { this.rebuildCalls++; this.rebuildOptions.push(options); const snapshot = this.rebuildSnapshots.shift(); if (snapshot) this.update(snapshot); };
   dispose = () => { this.disposed = true; this.listeners.clear(); };
 }
 
 function adapterFor(runtime: FakeRuntime): TightbeamAdapter { return { open: () => runtime }; }
+
+function visibilityMix(sessionKey: string, prefix: string): readonly CanonicalMessage[] {
+  const human = row(sessionKey, `${prefix}-human`, `Human exchange ${prefix}`, {
+    role: 'user', messageType: 'chat', raw: { source: 'fixture', id: `${prefix}-human`, sender: null },
+  });
+  const humanReply = row(sessionKey, `${prefix}-human-reply`, `Reply to human ${prefix}`, {
+    sender: 'assistant-service', messageType: 'assistant', replyToMessageId: human.id,
+  });
+  const batch = row(sessionKey, `${prefix}-batch`, [
+    '[batched notices: 1]', '',
+    `[1] source=process sender=user:person cause=fixture class=fyi`,
+    `Extracted question ${prefix}`, '', 'coalesced by notices',
+  ].join('\n'), {
+    role: 'user', sender: 'process:notifications', messageType: 'substrate',
+  });
+  const batchReply = row(sessionKey, `${prefix}-batch-reply`, `Reply to batch ${prefix}`, {
+    sender: 'assistant-service', messageType: 'assistant', replyToMessageId: batch.id,
+  });
+  const marker = row(sessionKey, `${prefix}-marker`, `Hidden assistant substrate marker ${prefix}`, {
+    sender: 'process:notifications', messageType: 'substrate',
+  });
+  const agentWake = row(sessionKey, `${prefix}-agent-wake`, `Hidden agent wake ${prefix}`, {
+    role: 'user', sender: 'agent:external', messageType: 'agent',
+  });
+  const agentReply = row(sessionKey, `${prefix}-agent-reply`, `Hidden reply to agent wake ${prefix}`, {
+    sender: 'assistant-service', messageType: 'assistant', replyToMessageId: agentWake.id,
+  });
+  const processNotice = row(sessionKey, `${prefix}-process`, `Hidden process notice ${prefix}`, {
+    role: 'user', sender: 'process:notifications', messageType: 'chat',
+  });
+  const processReply = row(sessionKey, `${prefix}-process-reply`, `Hidden reply to process notice ${prefix}`, {
+    sender: 'assistant-service', messageType: 'assistant', replyToMessageId: processNotice.id,
+  });
+  return [human, humanReply, batch, batchReply, marker, agentWake, agentReply, processNotice, processReply];
+}
+
+function expectVisibilityMix(log: HTMLElement, prefix: string): void {
+  for (const label of [
+    `Human exchange ${prefix}`, `Reply to human ${prefix}`,
+    `Reply to batch ${prefix}`,
+  ]) expect(within(log).getByText(label)).toBeTruthy();
+  const batchBubble = within(log).getByText(`Extracted question ${prefix}`).closest('article');
+  expect(batchBubble?.classList.contains('tb-chat-bubble-human')).toBe(true);
+  expect(batchBubble?.textContent).not.toContain('coalesced by');
+  for (const label of [
+    `Hidden assistant substrate marker ${prefix}`, `Hidden agent wake ${prefix}`,
+    `Hidden reply to agent wake ${prefix}`, `Hidden process notice ${prefix}`,
+    `Hidden reply to process notice ${prefix}`,
+  ]) expect(within(log).queryByText(label)).toBeNull();
+}
 
 describe('conversation surface', () => {
   it('starts a fresh attempt on each foreground return, including failed recovery, unless the target is locked', () => {
@@ -108,9 +160,9 @@ describe('conversation surface', () => {
     }
   });
 
-  it('filters with turn provenance and renders safe Markdown without exposing batch wrappers', async () => {
+  it('filters with message provenance and renders safe Markdown without exposing batch wrappers', async () => {
     const sessionKey = 'conversation-a';
-    const human = row(sessionKey, 'human-trigger', 'Could you explain this?', { role: 'user', sender: 'person', turnSeq: 1 });
+    const human = row(sessionKey, 'human-trigger', 'Could you explain this?', { role: 'user', sender: 'user:person', turnSeq: 1 });
     const unprovenHuman = row(sessionKey, 'unproven-human', 'Role alone must not prove this exchange', { role: 'user' });
     const answer = row(sessionKey, 'selected-answer', [
       '## A **useful** answer', '', '- first item', '- second item', '',
@@ -118,9 +170,16 @@ describe('conversation surface', () => {
       '```ts', 'const value = 1;', '```', '', '> A quotation', '',
       '| Name | Value |', '| --- | --- |', '| count | 2 |', '',
       '<script>window.compromised = true</script>',
-    ].join('\n'), { turnSeq: 1 });
-    const otherTrigger = row(sessionKey, 'other-trigger', 'Other agent request', { role: 'assistant' });
-    const otherAnswer = row(sessionKey, 'other-answer', 'Must remain hidden', { turnSeq: 2 });
+    ].join('\n'), { sender: 'assistant-service', turnSeq: 1, messageType: 'assistant', replyToMessageId: human.id });
+    const otherTrigger = row(sessionKey, 'other-trigger', 'An agent sent a wake', {
+      role: 'user', sender: 'agent:external', messageType: 'agent', turnSeq: 2,
+    });
+    const otherAnswer = row(sessionKey, 'other-answer', 'Must remain hidden', {
+      turnSeq: 2, messageType: 'assistant', replyToMessageId: otherTrigger.id,
+    });
+    const substrateMarker = row(sessionKey, 'substrate-marker', 'A system event marker', {
+      role: 'assistant', sender: 'process:notifications', messageType: 'substrate',
+    });
     const batchText = [
       '[batched notices: 2]',
       '',
@@ -132,14 +191,15 @@ describe('conversation surface', () => {
       '',
       'coalesced by notice-batching-v1',
     ].join('\n');
-    const batch = row(sessionKey, 'batch-trigger', batchText, { role: 'assistant', turnSeq: 3 });
-    const batchAnswer = row(sessionKey, 'batch-answer', 'Answer to the batch question', { turnSeq: 3 });
-    const humanTurn = provenance(1, sessionKey, human.id, 'user:person', human);
-    const otherTurn = provenance(2, sessionKey, otherTrigger.id, 'agent:another-agent', otherTrigger, 'Another agent');
-    const batchTurn = provenance(3, sessionKey, batch.id, 'process:maintenance', batch, undefined, 'running');
+    const batch = row(sessionKey, 'batch-trigger', batchText, {
+      role: 'user', sender: 'process:maintenance', messageType: 'substrate', turnSeq: 3,
+    });
+    const batchAnswer = row(sessionKey, 'batch-answer', 'Answer to the batch question', {
+      sender: 'assistant-service', turnSeq: 3, messageType: 'assistant', replyToMessageId: batch.id,
+    });
     const runtime = new FakeRuntime(sessionKey, {
-      records: [answer, otherAnswer, batch, batchAnswer, unprovenHuman],
-      provenance: [humanTurn, otherTurn, batchTurn], activeTurn: batchTurn,
+      records: [human, answer, otherTrigger, otherAnswer, batch, batchAnswer, unprovenHuman, substrateMarker],
+      provenanceAvailable: false,
     });
     render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
 
@@ -152,41 +212,216 @@ describe('conversation surface', () => {
     expect(within(log).getByText('const value = 1;')).toBeTruthy();
     expect(within(log).getByText('A quotation')).toBeTruthy();
     expect(within(log).getByRole('table')).toBeTruthy();
-    expect(within(log).getByText('Batch question from the person')).toBeTruthy();
-    expect(within(log).getByText('Answer to the batch question')).toBeTruthy();
+    const batchBubble = within(log).getByText('Batch question from the person').closest('article');
+    expect(batchBubble?.classList.contains('tb-chat-bubble-human')).toBe(true);
+    expect(batchBubble?.getAttribute('aria-label')).toBe('Message from You');
+    expect(batchBubble?.textContent).not.toContain('coalesced by');
     expect(within(log).queryByText('Substrate payload must stay hidden')).toBeNull();
+    expect(batch.content).toBe(batchText);
+    expect(within(log).getByText('Answer to the batch question')).toBeTruthy();
+    expect(within(log).queryByText('A system event marker')).toBeNull();
+    expect(within(log).queryByText('An agent sent a wake')).toBeNull();
     expect(within(log).queryByText('Must remain hidden')).toBeNull();
     expect(within(log).queryByText('Role alone must not prove this exchange')).toBeNull();
-    expect(within(log).queryByText(/batched notices/)).toBeNull();
     expect(document.querySelector('script, img')).toBeNull();
-    expect(within(log).getByRole('status', { name: 'Active turn: Processing message batch' })).toBeTruthy();
+    expect(within(log).queryByRole('status', { name: /Active turn:/ })).toBeNull();
     expect(screen.queryByRole('button', { name: /copy/i })).toBeNull();
     expect(screen.queryByRole('button', { name: /load earlier/i })).toBeNull();
     expect(screen.getByRole('textbox', { name: 'Message to Research assistant' }).getAttribute('placeholder'))
       .toBe('Research assistant');
   });
 
-  it('shows selected-session messages without filtering or activity captions when turn provenance is unavailable', () => {
+  it('hides typed non-envelope activity and keeps human exchanges across pages, live updates, and reconnects', async () => {
     const sessionKey = 'conversation-without-provenance';
-    const human = row(sessionKey, 'human-message', 'A retained human message', { role: 'user' });
-    const agent = row(sessionKey, 'agent-message', 'An agent reply to another participant', { role: 'assistant' });
-    const active = provenance(10, sessionKey, 'unloaded-trigger', 'user:person', undefined, undefined, 'running');
-    const runtime = new FakeRuntime(sessionKey, {
-      records: [human, agent], provenanceAvailable: false, activeTurn: active,
+    const firstPage = visibilityMix(sessionKey, 'first-page');
+    const unprovenAgent = row(sessionKey, 'unproven-agent', 'An unproven assistant reply', {
+      role: 'assistant', sender: 'agent:external', messageType: 'chat', turnSeq: 10,
     });
+    const unprovenSelectedReply = row(sessionKey, 'unproven-selected-reply', 'A selected reply without a provable trigger', {
+      role: 'assistant', messageType: 'assistant', turnSeq: 12,
+    });
+    const unlinkedSelectedReply = row(sessionKey, 'unlinked-selected-reply', 'A selected reply without a parent link', {
+      role: 'assistant', sender: 'assistant-service', messageType: 'assistant', turnSeq: 13,
+    });
+    const unprovenHuman = row(sessionKey, 'unproven-human', 'An unproven user row', {
+      role: 'user', messageType: 'chat',
+    });
+    const olderPage = visibilityMix(sessionKey, 'older-page');
+    const runtime = new FakeRuntime(sessionKey, {
+      records: [...firstPage, unprovenAgent, unprovenSelectedReply, unlinkedSelectedReply, unprovenHuman],
+      provenanceAvailable: false,
+    });
+    runtime.olderPages.push({ records: olderPage, provenance: [], hasOlder: false });
 
     render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
     const log = screen.getByRole('log');
-    expect(within(log).getByText('A retained human message')).toBeTruthy();
-    expect(within(log).getByText('An agent reply to another participant')).toBeTruthy();
-    expect(within(log).queryByText('Replying to you')).toBeNull();
+    expectVisibilityMix(log, 'first-page');
+    expect(within(log).queryByText('An unproven assistant reply')).toBeNull();
+    expect(within(log).getByText('A selected reply without a provable trigger')).toBeTruthy();
+    expect(within(log).getByText('A selected reply without a parent link')).toBeTruthy();
+    expect(within(log).queryByText('An unproven user row')).toBeNull();
+
+    act(() => runtime.update({ hasOlder: true }));
+    await waitFor(() => expect(within(log).getByText('Human exchange older-page')).toBeTruthy());
+    expectVisibilityMix(log, 'older-page');
+
+    const liveUpdate = visibilityMix(sessionKey, 'live-update');
+    act(() => runtime.update({ records: [...runtime.getSnapshot().records, ...liveUpdate] }));
+    expectVisibilityMix(log, 'live-update');
+
+    act(() => runtime.update({ status: 'stale', generation: 2 }));
+    const reconnect = visibilityMix(sessionKey, 'reconnect');
+    runtime.rebuildSnapshots.push({
+      status: 'ready', generation: 3, provenanceAvailable: false, provenance: [], activeTurn: undefined,
+      records: [...runtime.getSnapshot().records, ...reconnect],
+    });
+    await act(async () => runtime.rebuild());
+    expect(runtime.rebuildCalls).toBe(1);
+    expectVisibilityMix(log, 'reconnect');
+    expect(within(log).getByText('Human exchange first-page')).toBeTruthy();
+    expect(within(log).getByText('Human exchange older-page')).toBeTruthy();
+    expect(within(log).getByText('Human exchange live-update')).toBeTruthy();
+    expect(runtime.getSnapshot().records.map((record) => record.id)).toEqual(expect.arrayContaining([
+      'first-page-marker', 'first-page-agent-wake', 'first-page-agent-reply', 'first-page-batch',
+      'older-page-marker', 'older-page-agent-wake', 'older-page-agent-reply', 'older-page-batch',
+      'live-update-marker', 'live-update-agent-wake', 'live-update-agent-reply', 'live-update-batch',
+      'reconnect-marker', 'reconnect-agent-wake', 'reconnect-agent-reply', 'reconnect-batch',
+    ]));
+  });
+
+  it('keeps null-linked and unloaded-parent replies until loaded fields prove exclusion', async () => {
+    const sessionKey = 'unresolved-reply-parent';
+    const nullSenderHuman = row(sessionKey, 'null-sender-human', 'A human message with a null sender', {
+      role: 'user', messageType: 'chat', raw: { source: 'fixture', id: 'null-sender-human', sender: null },
+    });
+    const unknownSender = row(sessionKey, 'unknown-sender', 'An absent sender is not proven human by metadata alone', {
+      role: 'user', messageType: 'chat',
+      clientMessageId: 'client-unknown', deviceId: 'unknown-device',
+    });
+    const nullLinkReply = row(sessionKey, 'null-link-reply', 'A reply without a parent link', {
+      role: 'assistant', sender: 'assistant-service', messageType: 'assistant', replyToMessageId: undefined,
+    });
+    const unloadedParentReply = row(sessionKey, 'unloaded-parent-reply', 'A reply whose parent is not loaded', {
+      role: 'assistant', sender: 'assistant-service', messageType: 'assistant', replyToMessageId: 'older-agent-trigger',
+    });
+    const runtime = new FakeRuntime(sessionKey, {
+      records: [nullSenderHuman, unknownSender, nullLinkReply, unloadedParentReply],
+    });
+    runtime.olderPages = [{ records: [row(sessionKey, 'older-agent-trigger', 'An older agent wake', {
+      role: 'user', sender: 'agent:external', messageType: 'agent',
+    })], provenance: [], hasOlder: false }];
+
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+    const log = screen.getByRole('log');
+    expect(within(log).getByText('A human message with a null sender')).toBeTruthy();
+    expect(within(log).queryByText('An absent sender is not proven human by metadata alone')).toBeNull();
+    expect(within(log).getByText('A reply without a parent link')).toBeTruthy();
+    expect(within(log).getByText('A reply whose parent is not loaded')).toBeTruthy();
+
+    act(() => runtime.update({ hasOlder: true }));
+    await waitFor(() => expect(runtime.loadOlderCalls).toBe(1));
+    expect(within(log).queryByText('An older agent wake')).toBeNull();
+    expect(within(log).queryByText('A reply whose parent is not loaded')).toBeNull();
+    expect(runtime.getSnapshot().records.map((record) => record.id)).toContain('unloaded-parent-reply');
+  });
+
+  it.each([
+    { scenario: 'the anchored reply survives its human parent loading', excluded: false, visibleOlder: false },
+    { scenario: 'the anchored reply is excluded alongside visible older history', excluded: true, visibleOlder: true },
+    { scenario: 'a hidden-only page excludes the anchored reply at the top', excluded: true, visibleOlder: false },
+  ])('preserves the reading viewport when $scenario', async ({ excluded, visibleOlder }) => {
+    const sessionKey = 'reading-anchor';
+    const parent = row(sessionKey, 'parent', 'The previously unloaded trigger', {
+      seq: 40, role: 'user', sender: excluded ? 'agent:external' : 'user:person',
+      messageType: excluded ? 'agent' : 'chat',
+    });
+    const reply = row(sessionKey, 'anchored-reply', 'The first visible reply', {
+      seq: 50, sender: 'assistant-service', messageType: 'assistant', replyToMessageId: parent.id,
+    });
+    const sequences: Record<string, number> = { earlier: 5, 'older-a': 10, 'older-b': 20, 'older-c': 30, reading: 60, following: 70, newest: 80 };
+    const human = (id: string) => row(sessionKey, id, `Human message ${id}`, {
+      seq: sequences[id], role: 'user', sender: 'user:person', messageType: 'chat',
+    });
+    const runtime = new FakeRuntime(sessionKey, {
+      records: [reply, human('reading'), human('following'), human('newest')],
+      provenanceAvailable: false,
+    });
+    runtime.olderPages.push({
+      records: [...(visibleOlder ? [human('older-a'), human('older-b'), human('older-c')] : []), parent],
+      provenance: [], hasOlder: false,
+    });
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+    const log = screen.getByRole('log');
+    const reading = within(log).getByText('Human message reading').closest('article')!;
+    const following = within(log).getByText('Human message following').closest('article')!;
+    const firstReply = within(log).getByText('The first visible reply').closest('article')!;
+
+    // jsdom has no layout: model normal stacked rows, padding, and the browser's
+    // scroll range. In particular, a negative scrollTop cannot preserve a row.
+    const rows = () => [...log.querySelectorAll<HTMLElement>(':scope > .tb-chat-message-content > [data-record-key]')];
+    const topSpace = () => Number.parseFloat(log.style.getPropertyValue('--tb-chat-anchor-space')) || 0;
+    const height = () => 16 + topSpace() + rows().length * 92 + 200;
+    let scrollTop = 20;
+    Object.defineProperties(log, {
+      clientHeight: { configurable: true, get: () => 180 },
+      scrollHeight: { configurable: true, get: height },
+      scrollTop: {
+        configurable: true, get: () => scrollTop,
+        set: (value: number) => { scrollTop = Math.max(0, Math.min(value, height() - 180)); },
+      },
+    });
+    Object.defineProperty(log, 'scrollTo', { configurable: true, value: (options: ScrollToOptions) => { log.scrollTop = options.top ?? 0; } });
+    const originalBounds = HTMLElement.prototype.getBoundingClientRect;
+    const bounds = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this === log) return new DOMRect(0, 100, 320, 180);
+      const index = rows().indexOf(this);
+      if (index >= 0) return new DOMRect(0, 100 + 16 + topSpace() + index * 92 - scrollTop, 320, 80);
+      return originalBounds.call(this);
+    });
+    const viewportOffset = (element: HTMLElement) => element.getBoundingClientRect().top - log.getBoundingClientRect().top;
+    try {
+      fireEvent.wheel(log, { deltaY: -100 });
+      fireEvent.scroll(log);
+      const readingBefore = viewportOffset(reading);
+      const followingBefore = viewportOffset(following);
+      const replyBefore = viewportOffset(firstReply);
+      expect(replyBefore).toBeLessThan(0);
+      expect(firstReply.getBoundingClientRect().bottom).toBeGreaterThan(log.getBoundingClientRect().top);
+
+      act(() => runtime.update({ hasOlder: true }));
+      fireEvent.scroll(log);
+      await waitFor(() => {
+        expect(runtime.getSnapshot().records).toContain(parent);
+        expect(runtime.getSnapshot().loadingOlder).toBe(false);
+        expect(firstReply.isConnected).toBe(!excluded);
+      });
+      expect(viewportOffset(reading)).toBe(readingBefore);
+      expect(viewportOffset(following)).toBe(followingBefore);
+      if (!excluded) expect(viewportOffset(firstReply)).toBe(replyBefore);
+      expect(log.scrollTop).toBeGreaterThanOrEqual(0);
+      expect(runtime.getSnapshot().records).toContain(reply);
+
+      if (excluded && !visibleOlder) {
+        expect(topSpace()).toBeGreaterThan(0);
+        // A later visible page replaces the retained space without another jump.
+        runtime.olderPages.push({ records: [human('earlier')], provenance: [], hasOlder: false });
+        act(() => runtime.update({ hasOlder: true }));
+        fireEvent.scroll(log);
+        await within(log).findByText('Human message earlier');
+        expect(topSpace()).toBe(0);
+        expect(viewportOffset(reading)).toBe(readingBefore);
+        expect(viewportOffset(following)).toBe(followingBefore);
+      }
+    } finally {
+      bounds.mockRestore();
+    }
   });
 
   it('does not revisit loaded message rows while typing with a production-sized history', async () => {
     const sessionKey = 'long-conversation';
     const messages = Array.from({ length: 1200 }, (_, index) => row(
       sessionKey, `message-${index + 1}`, `Message ${index + 1}`,
-      { seq: index + 1, rowVersion: index + 1, role: 'user', turnSeq: index + 1 },
+      { seq: index + 1, rowVersion: index + 1, role: 'user', sender: 'user:person', turnSeq: index + 1 },
     ));
     const provenanceRows = messages.map((message, index) => provenance(
       index + 1, sessionKey, message.id, 'user:person', message,
@@ -209,8 +444,8 @@ describe('conversation surface', () => {
 
   it('keeps focus, selection, and draft across stale refreshes while hiding exact target details in notices', () => {
     const sessionKey = 'selected-session';
-    const human = row(sessionKey, 'human', 'Initial question', { role: 'user', turnSeq: 4 });
-    const answer = row(sessionKey, 'answer', 'Initial reply', { turnSeq: 4 });
+    const human = row(sessionKey, 'human', 'Initial question', { role: 'user', sender: 'user:person', turnSeq: 4 });
+    const answer = row(sessionKey, 'answer', 'Initial reply', { turnSeq: 4, messageType: 'assistant', replyToMessageId: human.id });
     const humanTurn = provenance(4, sessionKey, human.id, 'user:person', human);
     const runtime = new FakeRuntime(sessionKey, { records: [human, answer], provenance: [humanTurn] });
     render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
@@ -219,8 +454,10 @@ describe('conversation surface', () => {
     fireEvent.change(composer, { target: { value: 'keep this draft' } });
     composer.setSelectionRange(5, 5);
 
-    const nextHuman = row(sessionKey, 'new-human', 'A new question', { role: 'user', turnSeq: 5 });
-    const nextReply = row(sessionKey, 'new-answer', 'A new answer', { turnSeq: 5 });
+    const nextHuman = row(sessionKey, 'new-human', 'A new question', { role: 'user', sender: 'user:person', turnSeq: 5 });
+    const nextReply = row(sessionKey, 'new-answer', 'A new answer', {
+      turnSeq: 5, messageType: 'assistant', replyToMessageId: nextHuman.id,
+    });
     const nextTurn = provenance(5, sessionKey, nextHuman.id, 'user:person', nextHuman);
     act(() => {
       runtime.state = { ...runtime.state, status: 'stale', statusDetail: `Selected ${sessionKey} at https://gateway.example`,
@@ -294,8 +531,8 @@ describe('conversation surface', () => {
         ]),
         'coalesced by notice-batching-v1',
       ].join('\n');
-      const trigger = row(sessionKey, `batch-${index}`, batchText, { messageType: sample.type });
-      const reply = row(sessionKey, `reply-${index}`, `Reply ${index}`, { turnSeq: 20 + index });
+      const trigger = row(sessionKey, `batch-${index}`, batchText, { role: 'user', sender: 'process:notifications', messageType: sample.type });
+      const reply = row(sessionKey, `reply-${index}`, `Reply ${index}`, { turnSeq: 20 + index, replyToMessageId: trigger.id });
       const active = provenance(20 + index, sessionKey, trigger.id, 'process:notifications', trigger,
         sample.name, 'running');
       const runtime = new FakeRuntime(sessionKey, { records: [trigger, reply], provenance: [active], activeTurn: active });
@@ -320,10 +557,10 @@ describe('conversation surface', () => {
     const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1, 9, 5);
     const samples = [today, yesterday];
     const messages = samples.map((sample, index) => row(sessionKey, `time-${index}`, `Message ${index}`, {
-      role: 'user', turnSeq: index + 1, createdAt: sample.toISOString(),
+      role: 'user', sender: 'user:person', turnSeq: index + 1, createdAt: sample.toISOString(),
     }));
     messages.push(row(sessionKey, 'time-unavailable', 'Message without a recorded time', {
-      role: 'user', turnSeq: samples.length + 1,
+      role: 'user', sender: 'user:person', turnSeq: samples.length + 1,
     }));
     const provenanceRows = messages.map((message, index) => provenance(index + 1, sessionKey,
       message.id, 'user:person', message));
@@ -339,14 +576,16 @@ describe('conversation surface', () => {
 
   it('automatically follows hidden-only older pages until a displayable human message arrives', async () => {
     const sessionKey = 'paged-session';
-    const hiddenTrigger = row(sessionKey, 'other-trigger', 'Another agent activity', { role: 'assistant' });
-    const hiddenReply = row(sessionKey, 'hidden-reply', 'Not a human conversation', { turnSeq: 7 });
+    const hiddenTrigger = row(sessionKey, 'other-trigger', 'Another agent activity', { role: 'user', sender: 'agent:other', messageType: 'agent' });
+    const hiddenReply = row(sessionKey, 'hidden-reply', 'Not a human conversation', { turnSeq: 7, replyToMessageId: hiddenTrigger.id });
     const hiddenTurn = provenance(7, sessionKey, hiddenTrigger.id, 'agent:other', hiddenTrigger, 'Other agent');
-    const olderHuman = row(sessionKey, 'older-human', 'Older human message', { role: 'user', turnSeq: 8 });
+    const olderHuman = row(sessionKey, 'older-human', 'Older human message', {
+      role: 'user', sender: 'user:person', turnSeq: 8,
+    });
     const olderTurn = provenance(8, sessionKey, olderHuman.id, 'user:person', olderHuman);
     const runtime = new FakeRuntime(sessionKey, { hasOlder: true });
     runtime.olderPages = [
-      { records: [hiddenReply], provenance: [hiddenTurn], hasOlder: true },
+      { records: [hiddenTrigger, hiddenReply], provenance: [hiddenTurn], hasOlder: true },
       { records: [olderHuman], provenance: [olderTurn], hasOlder: false },
     ];
     render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
@@ -356,11 +595,61 @@ describe('conversation surface', () => {
     expect(screen.queryByRole('button', { name: /load earlier/i })).toBeNull();
   });
 
+  it('passes only the individual member and source identity to custom rendering and copying', async () => {
+    const sessionKey = 'member-rendering';
+    const content = [
+      '[batched notices: 3]', '',
+      '[430] source=human-first sender=user:person cause=notice class=fyi',
+      '**First** human body', '',
+      '[431] source=other sender=agent:helper session-key cause=notice class=fyi',
+      'Nonhuman content', '',
+      '[434] source=human-second sender=user:person cause=notice class=fyi',
+      'Second human body', '', 'coalesced by batch-format (3 notices)',
+    ].join('\n');
+    const carrier = row(sessionKey, 'carrier', content, { seq: 5, role: 'user',
+      sender: 'process:notifications', messageType: 'substrate', createdAt: '2026-10-23T09:00:00Z' });
+    const runtime = new FakeRuntime(sessionKey, { records: [carrier] });
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    const renderer = vi.fn((record: ConversationRecord, context: RenderContext) =>
+      record.kind === 'message' ? <div><span>{record.content}</span><button onClick={() => void context.copyText()}>Copy member</button></div> : undefined);
+    const view = render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} renderMessage={renderer} />);
+    const articles = () => [...view.container.querySelectorAll<HTMLElement>('article')];
+    expect(articles().map((article) => article.querySelector('span')?.textContent))
+      .toEqual(['**First** human body', 'Second human body']);
+    expect(articles().every((article) => article.classList.contains('tb-chat-bubble-human'))).toBe(true);
+    expect(view.container.textContent).not.toContain('Nonhuman content');
+    expect(view.container.textContent).not.toContain('coalesced by');
+    const keys = articles().map((article) => article.dataset.scrollKey);
+    for (const [record, context] of renderer.mock.calls) {
+      if (record.kind !== 'message') throw new Error('Expected a projected message');
+      expect(context.sourceRecord).toMatchObject({ id: carrier.id, sessionKey, seq: 5,
+        sender: 'process:notifications', messageType: 'substrate' });
+      expect(Object.isFrozen(context.sourceRecord)).toBe(true);
+      expect(Object.isFrozen(context.member)).toBe(true);
+      expect(Object.isFrozen(record)).toBe(true);
+      expect(context.sourceRecord).not.toHaveProperty('content');
+      expect(context.sourceRecord).not.toHaveProperty('raw');
+      expect(context.sourceRecord).not.toHaveProperty('attachments');
+      const exposed = JSON.stringify({ record, context });
+      expect(exposed).not.toContain('Nonhuman content');
+      expect(exposed).not.toContain('coalesced by');
+      expect(exposed).not.toContain(record.content === '**First** human body' ? 'Second human body' : '**First** human body');
+      expect(record.raw).not.toBe(carrier.raw);
+      expect(record.raw).toMatchObject({ carrierId: carrier.id, memberSourceId: context.member?.sourceId });
+    }
+    fireEvent.click(screen.getAllByRole('button', { name: 'Copy member' })[0]);
+    expect(writeText).toHaveBeenCalledWith('**First** human body');
+    act(() => runtime.update({ records: [{ ...carrier, rowVersion: 2 }] }));
+    expect(articles().map((article) => article.dataset.scrollKey)).toEqual(keys);
+    expect(runtime.getSnapshot().records[0]).toMatchObject({ id: 'carrier', content });
+  });
+
   it('keeps local selection isolated and preserves canonical metadata for a host renderer', async () => {
     const runtimes: FakeRuntime[] = [];
     const adapter: TightbeamAdapter = { open: (key) => {
       const runtime = new FakeRuntime(key);
-      const human = row(key, `${key}-human`, 'A question', { role: 'user', turnSeq: 1 });
+      const human = row(key, `${key}-human`, 'A question', { role: 'user', sender: 'user:person', turnSeq: 1 });
       runtime.state = { ...runtime.state, records: [human],
         provenance: [provenance(1, key, human.id, 'user:person', human)] };
       runtimes.push(runtime);
@@ -377,7 +666,7 @@ describe('conversation surface', () => {
     expect(runtimes[0].listeners.size).toBe(0);
     expect(screen.queryByText('draft A')).toBeNull();
     expect(renderMessage.mock.calls.some(([record, context]) => record.raw.source === 'fixture' &&
-      context.recordKey.startsWith('B-human:provenance:')))
+      context.recordKey === 'B-human'))
       .toBe(true);
   });
 
@@ -465,10 +754,10 @@ describe('conversation surface', () => {
     const sessionKey = 'chronological-send';
     const submittedAt = '2026-10-23T09:00:00.000Z';
     const prompt = row(sessionKey, 'retried-prompt', 'Original prompt', {
-      seq: 3, role: 'user', createdAt: submittedAt, clientMessageId: 'retry-id', deviceId: 'device',
+      seq: 3, role: 'user', sender: 'user:person', createdAt: submittedAt, clientMessageId: 'retry-id', deviceId: 'device',
     });
     const laterPrompt = row(sessionKey, 'later-prompt', 'Later question', {
-      seq: 8, role: 'user', createdAt: '2026-10-23T09:05:00.000Z',
+      seq: 8, role: 'user', sender: 'user:person', createdAt: '2026-10-23T09:05:00.000Z',
     });
     const laterReply = row(sessionKey, 'later-reply', 'Later reply', {
       seq: 9, turnSeq: 2, createdAt: '2026-10-23T09:06:00.000Z',
@@ -510,11 +799,11 @@ describe('conversation surface', () => {
   it('inserts an unmatched send by its original submission time instead of pinning it below later history', () => {
     const sessionKey = 'unmatched-send-order';
     const otherDevicePrompt = row(sessionKey, 'other-device-prompt', 'Other device message', {
-      seq: 2, role: 'user', createdAt: '2026-10-23T08:55:00.000Z',
+      seq: 2, role: 'user', sender: 'user:person', createdAt: '2026-10-23T08:55:00.000Z',
       clientMessageId: 'retry-id', deviceId: 'other-device',
     });
     const laterPrompt = row(sessionKey, 'later-prompt', 'Later question', {
-      seq: 8, role: 'user', createdAt: '2026-10-23T09:05:00.000Z',
+      seq: 8, role: 'user', sender: 'user:person', createdAt: '2026-10-23T09:05:00.000Z',
     });
     const laterReply = row(sessionKey, 'later-reply', 'Later reply', {
       seq: 9, turnSeq: 2, createdAt: '2026-10-23T09:06:00.000Z',
