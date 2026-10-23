@@ -110,11 +110,8 @@ function isHiddenNonEnvelope(record: CanonicalMessage, preservedReplyParents?: R
 
 function isProvenHumanMessage(record: CanonicalMessage): boolean {
   if (record.role !== 'user' || isBatchEnvelope(record) || isHiddenNonEnvelope(record)) return false;
-  if (record.messageType === 'assistant') return false;
   const senderKind = record.sender ? turnSourceKind(record.sender) : 'unknown';
-  if (senderKind === 'human') return true;
-  if (senderKind !== 'unknown') return false;
-  return Boolean(record.clientMessageId && record.deviceId);
+  return senderKind === 'human' || record.raw.sender === null;
 }
 
 function visibleBubbles(state: RuntimeState, agentName: string): Bubble[] {

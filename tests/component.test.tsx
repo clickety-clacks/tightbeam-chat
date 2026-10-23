@@ -199,7 +199,7 @@ describe('conversation surface', () => {
   it('hides typed non-envelope activity and keeps human exchanges across pages, live updates, and reconnects', async () => {
     const sessionKey = 'conversation-without-provenance';
     const human = row(sessionKey, 'human-message', 'A retained human message', {
-      role: 'user', sender: 'person-1', messageType: 'chat', clientMessageId: 'client-human', deviceId: 'human-device',
+      role: 'user', sender: 'user:person-1', messageType: 'chat', clientMessageId: 'client-human', deviceId: 'human-device',
     });
     const batch = row(sessionKey, 'system-batch', [
       '[batched notices: 1]', '',
@@ -278,7 +278,7 @@ describe('conversation surface', () => {
     expect(log.textContent).toContain('An earlier system update inside this envelope remains visible.');
 
     const liveHuman = row(sessionKey, 'live-human', 'A live human message', {
-      role: 'user', sender: 'person-1', messageType: 'chat', clientMessageId: 'client-live', deviceId: 'human-device',
+      role: 'user', sender: 'user:person-1', messageType: 'chat', clientMessageId: 'client-live', deviceId: 'human-device',
     });
     const liveReply = row(sessionKey, 'live-reply', 'A reply linked to a live human message', {
       role: 'assistant', sender: 'agent:selected', messageType: 'assistant', replyToMessageId: 'live-human',
@@ -302,6 +302,42 @@ describe('conversation surface', () => {
     expect(within(log).queryByText('An unproven assistant reply')).toBeNull();
     expect(within(log).queryByText('A reply to the unselected agent')).toBeNull();
     expect(runtime.getSnapshot().records.map((record) => record.id)).toContain('system-batch');
+  });
+
+  it('keeps null-linked and unloaded-parent replies until loaded fields prove exclusion', async () => {
+    const sessionKey = 'unresolved-reply-parent';
+    const nullSenderHuman = row(sessionKey, 'null-sender-human', 'A human message with a null sender', {
+      role: 'user', messageType: 'chat', raw: { source: 'fixture', id: 'null-sender-human', sender: null },
+    });
+    const unknownSender = row(sessionKey, 'unknown-sender', 'An absent sender is not proven human by metadata alone', {
+      role: 'user', messageType: 'chat',
+      clientMessageId: 'client-unknown', deviceId: 'unknown-device',
+    });
+    const nullLinkReply = row(sessionKey, 'null-link-reply', 'A reply without a parent link', {
+      role: 'assistant', messageType: 'assistant', replyToMessageId: undefined,
+    });
+    const unloadedParentReply = row(sessionKey, 'unloaded-parent-reply', 'A reply whose parent is not loaded', {
+      role: 'assistant', messageType: 'assistant', replyToMessageId: 'older-agent-trigger',
+    });
+    const runtime = new FakeRuntime(sessionKey, {
+      records: [nullSenderHuman, unknownSender, nullLinkReply, unloadedParentReply],
+    });
+    runtime.olderPages = [{ records: [row(sessionKey, 'older-agent-trigger', 'An older agent wake', {
+      role: 'user', sender: 'agent:external', messageType: 'agent',
+    })], provenance: [], hasOlder: false }];
+
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+    const log = screen.getByRole('log');
+    expect(within(log).getByText('A human message with a null sender')).toBeTruthy();
+    expect(within(log).queryByText('An absent sender is not proven human by metadata alone')).toBeNull();
+    expect(within(log).getByText('A reply without a parent link')).toBeTruthy();
+    expect(within(log).getByText('A reply whose parent is not loaded')).toBeTruthy();
+
+    act(() => runtime.update({ hasOlder: true }));
+    await waitFor(() => expect(runtime.loadOlderCalls).toBe(1));
+    expect(within(log).queryByText('An older agent wake')).toBeNull();
+    expect(within(log).queryByText('A reply whose parent is not loaded')).toBeNull();
+    expect(runtime.getSnapshot().records.map((record) => record.id)).toContain('unloaded-parent-reply');
   });
 
   it('does not revisit loaded message rows while typing with a production-sized history', async () => {
