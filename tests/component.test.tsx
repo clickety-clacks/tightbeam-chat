@@ -331,14 +331,15 @@ describe('conversation surface', () => {
   ])('preserves the reading viewport when $scenario', async ({ excluded, visibleOlder }) => {
     const sessionKey = 'reading-anchor';
     const parent = row(sessionKey, 'parent', 'The previously unloaded trigger', {
-      role: 'user', sender: excluded ? 'agent:external' : 'user:person',
+      seq: 40, role: 'user', sender: excluded ? 'agent:external' : 'user:person',
       messageType: excluded ? 'agent' : 'chat',
     });
     const reply = row(sessionKey, 'anchored-reply', 'The first visible reply', {
-      sender: 'assistant-service', messageType: 'assistant', replyToMessageId: parent.id,
+      seq: 50, sender: 'assistant-service', messageType: 'assistant', replyToMessageId: parent.id,
     });
+    const sequences: Record<string, number> = { earlier: 5, 'older-a': 10, 'older-b': 20, 'older-c': 30, reading: 60, following: 70, newest: 80 };
     const human = (id: string) => row(sessionKey, id, `Human message ${id}`, {
-      role: 'user', sender: 'user:person', messageType: 'chat',
+      seq: sequences[id], role: 'user', sender: 'user:person', messageType: 'chat',
     });
     const runtime = new FakeRuntime(sessionKey, {
       records: [reply, human('reading'), human('following'), human('newest')],
