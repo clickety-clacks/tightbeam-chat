@@ -1,0 +1,36 @@
+:root {
+  color-scheme: light dark;
+  --tb-chat-background: #F1EEE9;
+  --tb-chat-text: #31302D;
+  --tb-chat-muted: #5C5854;
+  --tb-chat-border: #DEDAD3;
+  --tb-chat-surface: #E4E0DB;
+  --tb-chat-human: #DBDBD5;
+  --tb-chat-control-fill: rgba(60,45,30,0.07);
+  --tb-chat-accent: #526657;
+  --tb-chat-on-accent: #F3F0EA;
+  --tb-chat-ok: #4E6547;
+  --tb-chat-caution: #73592A;
+  --tb-chat-danger: #A63A2A;
+  --tb-chat-idle: #5C5854;
+  --tb-chat-shadow: #31302D;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --tb-chat-background: #161514;
+    --tb-chat-text: #DDD9D1;
+    --tb-chat-muted: #9E9992;
+    --tb-chat-border: #2C2A27;
+    --tb-chat-surface: #201F1D;
+    --tb-chat-human: #2A2C29;
+    --tb-chat-control-fill: rgba(240,230,215,0.10);
+    --tb-chat-accent: #A5BAA9;
+    --tb-chat-on-accent: #19211B;
+    --tb-chat-ok: #A5BC9C;
+    --tb-chat-caution: #D8BE84;
+    --tb-chat-danger: #EE8B75;
+    --tb-chat-idle: #9E9992;
+    --tb-chat-shadow: #000000;
+  }
+}
