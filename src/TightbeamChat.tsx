@@ -1,5 +1,5 @@
 import { forwardRef, memo, useCallback, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore,
-  type AnchorHTMLAttributes, type FormEvent, type HTMLAttributes, type ImgHTMLAttributes, type KeyboardEvent as ReactKeyboardEvent,
+  type AnchorHTMLAttributes, type FormEvent, type HTMLAttributes, type ImgHTMLAttributes,
   type ReactNode, type RefObject, type TableHTMLAttributes } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -467,6 +467,9 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
   const { viewport } = reading;
   const root = useRef<HTMLElement>(null);
   const composer = useRef<ComposerHandle>(null);
+  const lastPointerInChat = useRef(false);
+  const keyboardActions = useRef({ optedIn: host.optedIn, composerHidden: host.composerHidden, scrollBy: reading.scrollBy });
+  keyboardActions.current = { optedIn: host.optedIn, composerHidden: host.composerHidden, scrollBy: reading.scrollBy };
   const agentName = state.agentDisplayName ?? '';
   const projection = useMemo(() => projectMessages(state.records), [state.records]);
   const bubbles: Bubble[] = useMemo(() => projection.messages.map((message) => ({
@@ -514,6 +517,53 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
     document.title = agentName;
     return () => { if (document.title === agentName) document.title = priorTitle; };
   }, [agentName]);
+
+  useEffect(() => {
+    const element = root.current;
+    if (!element) return;
+    const onPointerDown = (event: PointerEvent) => {
+      lastPointerInChat.current = event.target instanceof Node && element.contains(event.target);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      const { optedIn, composerHidden, scrollBy } = keyboardActions.current;
+      // A host that opted into its native composer owns keyboard behavior.
+      if (optedIn || composerHidden) return;
+      const target = event.target;
+      const targetNode = target instanceof Node ? target : null;
+      const inChat = Boolean(targetNode && element.contains(targetNode));
+      const bodyFocused = target === document.body && document.activeElement === document.body;
+      const standalonePage = Boolean(element.closest('[data-chat-standalone]'));
+      // Body-targeted events belong to Chat only on the standalone example or
+      // after a pointer interaction in the embedded Chat surface.
+      if (!inChat && !(bodyFocused && (standalonePage || lastPointerInChat.current))) return;
+      if (event.key === 'Tab') {
+        if (event.shiftKey || (targetNode && composer.current?.contains(targetNode))) return;
+        if (composer.current?.focusAtEnd()) event.preventDefault();
+        return;
+      }
+      if (!event.ctrlKey || event.altKey || event.metaKey) return;
+      const box = viewport.current;
+      if (!box) return;
+      const key = event.key.toLowerCase();
+      let distance: number | undefined;
+      if (key === 'j' || key === 'k') {
+        const style = getComputedStyle(box);
+        const lineHeight = Number.parseFloat(style.lineHeight) || (Number.parseFloat(style.fontSize) || 16) * 1.5;
+        distance = lineHeight * 3 * (key === 'j' ? 1 : -1);
+      } else if (key === 'u' || key === 'd') {
+        distance = Math.max(1, box.clientHeight * 0.85) * (key === 'd' ? 1 : -1);
+      }
+      if (distance === undefined) return;
+      event.preventDefault();
+      scrollBy(distance);
+    };
+    document.addEventListener('pointerdown', onPointerDown, true);
+    document.addEventListener('keydown', onKeyDown, true);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown, true);
+      document.removeEventListener('keydown', onKeyDown, true);
+    };
+  }, []);
 
   useEffect(() => {
     let wasHidden = document.visibilityState === 'hidden';
@@ -587,31 +637,6 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
     void runtime.loadOlder();
   };
 
-  const handleChatKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
-    // A host that opted into its native composer owns keyboard behavior.
-    if (host.optedIn || host.composerHidden) return;
-    if (event.key === 'Tab') {
-      if (composer.current?.contains(event.target)) return;
-      if (composer.current?.focusAtEnd()) event.preventDefault();
-      return;
-    }
-    if (!event.ctrlKey || event.altKey || event.metaKey) return;
-    const box = viewport.current;
-    if (!box) return;
-    const key = event.key.toLowerCase();
-    let distance: number | undefined;
-    if (key === 'j' || key === 'k') {
-      const style = getComputedStyle(box);
-      const lineHeight = Number.parseFloat(style.lineHeight) || (Number.parseFloat(style.fontSize) || 16) * 1.5;
-      distance = lineHeight * 3 * (key === 'j' ? 1 : -1);
-    } else if (key === 'u' || key === 'd') {
-      distance = Math.max(1, box.clientHeight * 0.85) * (key === 'd' ? 1 : -1);
-    }
-    if (distance === undefined) return;
-    event.preventDefault();
-    reading.scrollBy(distance);
-  };
-
   useLayoutEffect(() => {
     const box = viewport.current;
     if (!box || state.status !== 'ready' || !state.hasOlder || state.loadingOlder || state.historyError || box.scrollTop >= 80) return;
@@ -635,7 +660,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
           : statusName;
 
   return <section ref={root} className={`tb-chat ${host.composerHidden ? 'tb-chat-host-composer-hidden' : ''} ${className || ''}`}
-    aria-label={agentName ? `${agentName} conversation` : 'Conversation'} onKeyDown={handleChatKeyDown}>
+    aria-label={agentName ? `${agentName} conversation` : 'Conversation'}>
     <div className="tb-chat-viewport" ref={viewport} onScroll={handleScroll} role="log" tabIndex={-1}
       onWheel={reading.interrupt} onTouchStart={reading.interrupt} onPointerDown={reading.interrupt}
       onKeyDown={(event) => { if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) reading.interrupt(); }}

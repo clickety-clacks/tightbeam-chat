@@ -105,6 +105,60 @@ describe('conversation reading position', () => {
     expect(input.value).toBe('preserve this draft');
   });
 
+  it('handles navigation from an unfocused standalone page and after focus returns to the body', () => {
+    const { box, input } = setup();
+    box.closest('.tb-chat')!.parentElement!.setAttribute('data-chat-standalone', '');
+    expect(document.activeElement).toBe(document.body);
+    const bottom = box.scrollHeight - box.clientHeight;
+
+    expect(fireEvent.keyDown(document.body, { key: 'k', ctrlKey: true })).toBe(false);
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: bottom - 72, behavior: 'smooth' });
+    expect(document.activeElement).toBe(document.body);
+    expect(fireEvent.keyDown(document.body, { key: 'Tab' })).toBe(false);
+    expect(document.activeElement).toBe(input);
+
+    fireEvent.change(input, { target: { value: 'body focus keeps the draft' } });
+    input.blur();
+    expect(document.activeElement).toBe(document.body);
+    expect(fireEvent.keyDown(document.body, { key: 'j', ctrlKey: true })).toBe(false);
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: bottom, behavior: 'smooth' });
+    expect(input.value).toBe('body focus keeps the draft');
+  });
+
+  it('does not take body shortcuts from an embedded host until interaction is inside Chat', () => {
+    const runtime = new ReadingRuntime();
+    runtime.state = { ...runtime.state, records: initialRows };
+    const view = render(<><button type="button">Host action</button>
+      <TightbeamChat sessionKey="reading" adapter={{ open: () => runtime }} /></>);
+    const box = screen.getByRole('log');
+    expect(document.activeElement).toBe(document.body);
+
+    expect(fireEvent.keyDown(document.body, { key: 'k', ctrlKey: true })).toBe(true);
+    expect(scrollTo).not.toHaveBeenCalled();
+
+    fireEvent.pointerDown(view.container.querySelector('.tb-chat')!);
+    expect(fireEvent.keyDown(document.body, { key: 'k', ctrlKey: true })).toBe(false);
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Host action' }));
+    expect(fireEvent.keyDown(document.body, { key: 'j', ctrlKey: true })).toBe(true);
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves reverse Tab native while sending forward Tab to the composer', () => {
+    const { box, input } = setup();
+    const hostLink = document.createElement('a');
+    hostLink.href = '#host';
+    document.body.insertBefore(hostLink, box.closest('.tb-chat')!.parentElement);
+    box.focus();
+
+    expect(fireEvent.keyDown(box, { key: 'Tab', shiftKey: true })).toBe(true);
+    expect(document.activeElement).toBe(box);
+    expect(fireEvent.keyDown(box, { key: 'Tab' })).toBe(false);
+    expect(document.activeElement).toBe(input);
+    hostLink.remove();
+  });
+
   for (const focusTarget of ['transcript', 'composer'] as const) {
     it.each([
       ['j', 72], ['k', -72], ['u', -255], ['d', 255],
