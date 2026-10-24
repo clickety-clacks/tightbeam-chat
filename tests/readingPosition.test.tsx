@@ -86,6 +86,141 @@ function readAt(box: HTMLElement, position: number) {
 }
 
 describe('conversation reading position', () => {
+  it('uses Tab from outside the composer to focus it at the end of the draft and leaves Tab inside alone', () => {
+    const { box, input } = setup();
+    fireEvent.change(input, { target: { value: 'preserve this draft' } });
+    input.setSelectionRange(3, 3);
+    box.focus();
+
+    expect(fireEvent.keyDown(box, { key: 'Tab' })).toBe(false);
+    expect(document.activeElement).toBe(input);
+    expect(input.selectionStart).toBe(input.value.length);
+    expect(input.selectionEnd).toBe(input.value.length);
+    expect(input.value).toBe('preserve this draft');
+
+    input.setSelectionRange(4, 4);
+    expect(fireEvent.keyDown(input, { key: 'Tab' })).toBe(true);
+    expect(document.activeElement).toBe(input);
+    expect(input.selectionStart).toBe(4);
+    expect(input.value).toBe('preserve this draft');
+  });
+
+  it('handles navigation from an unfocused standalone page and after focus returns to the body', () => {
+    const { box, input } = setup();
+    box.closest('.tb-chat')!.parentElement!.setAttribute('data-chat-standalone', '');
+    expect(document.activeElement).toBe(document.body);
+    const bottom = box.scrollHeight - box.clientHeight;
+
+    expect(fireEvent.keyDown(document.body, { key: 'k', ctrlKey: true })).toBe(false);
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: bottom - 72, behavior: 'smooth' });
+    expect(document.activeElement).toBe(document.body);
+    expect(fireEvent.keyDown(document.body, { key: 'Tab' })).toBe(false);
+    expect(document.activeElement).toBe(input);
+
+    fireEvent.change(input, { target: { value: 'body focus keeps the draft' } });
+    input.blur();
+    expect(document.activeElement).toBe(document.body);
+    expect(fireEvent.keyDown(document.body, { key: 'j', ctrlKey: true })).toBe(false);
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: bottom, behavior: 'smooth' });
+    expect(input.value).toBe('body focus keeps the draft');
+  });
+
+  it('does not take body shortcuts from an embedded host until interaction is inside Chat', () => {
+    const runtime = new ReadingRuntime();
+    runtime.state = { ...runtime.state, records: initialRows };
+    const view = render(<><button type="button">Host action</button>
+      <TightbeamChat sessionKey="reading" adapter={{ open: () => runtime }} /></>);
+    scrollTo.mockClear();
+    expect(document.activeElement).toBe(document.body);
+
+    expect(fireEvent.keyDown(document.body, { key: 'k', ctrlKey: true })).toBe(true);
+    expect(scrollTo).not.toHaveBeenCalled();
+
+    fireEvent.pointerDown(view.container.querySelector('.tb-chat')!);
+    expect(fireEvent.keyDown(document.body, { key: 'k', ctrlKey: true })).toBe(false);
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Host action' }));
+    expect(fireEvent.keyDown(document.body, { key: 'j', ctrlKey: true })).toBe(true);
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves reverse Tab native while sending forward Tab to the composer', () => {
+    const { box, input } = setup();
+    const hostLink = document.createElement('a');
+    hostLink.href = '#host';
+    document.body.insertBefore(hostLink, box.closest('.tb-chat')!.parentElement);
+    box.focus();
+
+    expect(fireEvent.keyDown(box, { key: 'Tab', shiftKey: true })).toBe(true);
+    expect(document.activeElement).toBe(box);
+    expect(fireEvent.keyDown(box, { key: 'Tab' })).toBe(false);
+    expect(document.activeElement).toBe(input);
+    hostLink.remove();
+  });
+
+  for (const focusTarget of ['transcript', 'composer'] as const) {
+    it.each([
+      ['j', 72], ['k', -72], ['u', -255], ['d', 255],
+    ] as const)(`handles Ctrl+%s with focus in the ${focusTarget} without changing the draft`, (key, amount) => {
+      const { box, input } = setup();
+      readAt(box, 600);
+      fireEvent.change(input, { target: { value: 'keyboard scrolling keeps this' } });
+      const target = focusTarget === 'composer' ? input : box;
+      target.focus();
+      const start = box.scrollTop;
+      const expected = Math.max(0, Math.min(box.scrollHeight - box.clientHeight, start + amount));
+
+      expect(fireEvent.keyDown(target, { key, ctrlKey: true })).toBe(false);
+      expect(scrollTo).toHaveBeenLastCalledWith({ top: expected, behavior: 'smooth' });
+      expect(input.value).toBe('keyboard scrolling keeps this');
+    });
+  }
+
+  it('continues repeated Ctrl+K movement from the pending smooth-scroll destination', () => {
+    const { box, input } = setup();
+    readAt(box, 900);
+    fireEvent.change(input, { target: { value: 'repeat without editing' } });
+    input.focus();
+    const start = box.scrollTop;
+
+    fireEvent.keyDown(input, { key: 'k', ctrlKey: true });
+    fireEvent.keyDown(input, { key: 'k', ctrlKey: true, repeat: true });
+
+    expect(scrollTo).toHaveBeenNthCalledWith(1, { top: start - 72, behavior: 'smooth' });
+    expect(scrollTo).toHaveBeenNthCalledWith(2, { top: start - 144, behavior: 'smooth' });
+    expect(input.value).toBe('repeat without editing');
+  });
+
+  it('stops bottom-follow while scrolling up and resumes it after a page reaches the bottom', () => {
+    const { runtime, box, input } = setup();
+    const bottom = box.scrollHeight - box.clientHeight;
+    fireEvent.keyDown(box, { key: 'k', ctrlKey: true });
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: bottom - 72, behavior: 'smooth' });
+    box.scrollTop = bottom - 72;
+    fireEvent.scroll(box);
+    expect(screen.getByRole('button', { name: 'Scroll to latest messages' })).toBeTruthy();
+
+    scrollTo.mockClear();
+    act(() => runtime.publish({ records: [...initialRows, message(20)] }));
+    expect(scrollTo).not.toHaveBeenCalled();
+    expect(box.scrollTop).toBe(bottom - 72);
+
+    fireEvent.change(input, { target: { value: 'paging leaves the draft alone' } });
+    input.focus();
+    const newBottom = box.scrollHeight - box.clientHeight;
+    fireEvent.keyDown(input, { key: 'd', ctrlKey: true });
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: newBottom, behavior: 'smooth' });
+    box.scrollTop = newBottom;
+    fireEvent.scroll(box);
+    expect(screen.queryByRole('button', { name: 'Scroll to latest messages' })).toBeNull();
+    expect(input.value).toBe('paging leaves the draft alone');
+
+    scrollTo.mockClear();
+    act(() => runtime.publish({ records: [...runtime.state.records, message(21)] }));
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: box.scrollHeight - box.clientHeight, behavior: 'smooth' });
+  });
+
   it('releases a finished entrance without replaying it on ordinary rerenders', () => {
     const { runtime } = setup();
     act(() => runtime.publish({ records: [...initialRows, message(20)] }));
