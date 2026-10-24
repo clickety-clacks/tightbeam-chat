@@ -130,6 +130,7 @@ describe('conversation reading position', () => {
     runtime.state = { ...runtime.state, records: initialRows };
     const view = render(<><button type="button">Host action</button>
       <TightbeamChat sessionKey="reading" adapter={{ open: () => runtime }} /></>);
+    scrollTo.mockClear();
     expect(document.activeElement).toBe(document.body);
 
     expect(fireEvent.keyDown(document.body, { key: 'k', ctrlKey: true })).toBe(true);
