@@ -66,9 +66,10 @@ function tokenColor(tokens: Tokens, name: string): Color {
 }
 
 function rule(css: string, selector: string): string {
-  const normalizedSelector = selector.replace(/\s+/g, ' ').trim();
+  const requestedSelectors = selector.split(',').map((candidate) => candidate.replace(/\s+/g, ' ').trim());
   const matches = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
-    .filter(([, selectors]) => selectors.split(',').some((candidate) => candidate.replace(/\s+/g, ' ').trim() === normalizedSelector));
+    .filter(([, selectors]) => selectors.split(',').some((candidate) =>
+      requestedSelectors.includes(candidate.replace(/\s+/g, ' ').trim())));
   if (matches.length === 0) throw new Error(`Missing CSS rule for ${selector}`);
   return matches.map(([, , body]) => body).join('\n');
 }
