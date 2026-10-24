@@ -74,4 +74,9 @@ function gatewayBridge(): Plugin {
 }
 
 export default defineConfig({ root: resolve(import.meta.dirname), plugins: [react(), gatewayBridge()],
-  server: { host: '127.0.0.1', port: 5173, strictPort: true } });
+  server: { host: '127.0.0.1', port: 5173, strictPort: true },
+  build: { rollupOptions: { input: {
+    main: resolve(import.meta.dirname, 'index.html'),
+    hostComposer: resolve(import.meta.dirname, 'host-composer.html'),
+  } } },
+});

@@ -62,6 +62,49 @@ const adapter = createTightbeamAdapter(transport, profile);
 
 The host chooses `sessionKey`, owns the human principal and authenticated REST/Firehose/human `/ws` connections, and changes `identityKey` when that principal or transport lifetime changes. The component opens one isolated runtime for that selection and disposes it on switch or unmount. There is no sidebar, picker, terminal, provider control, attachment composition, or credential UI. See [the browser example](examples/main.tsx) for a complete local host and [the adapter contract](docs/adapter-contract.md) before connecting a real target.
 
+## Host-supplied composer, version 1
+
+An embedding page may supply its own composer while Chat keeps rendering the transcript. The full [version 1 protocol contract](docs/host-composer.md) defines every command and event. The opt-in is in the top-level Chat page itself; Chat does not accept these commands through `postMessage` or another cross-window channel. A page without a declaration behaves as standalone Chat. An unsupported or malformed declaration is declined and also leaves the normal web composer available.
+
+Set the declaration before mounting Chat. The public names are fixed for version 1:
+
+```js
+window.__TIGHTBEAM_CHAT_HOST__ = {
+  versions: [1],
+  onEvent(event) {
+    if (event.event === 'ready') {
+      // Show the native composer only now, and retain this lifetime and target.
+    }
+  },
+};
+```
+
+Chat exposes `window.__TIGHTBEAM_CHAT_COMMAND__`. When the host user submits text, call it with a fresh `c_` plus UUIDv4 correlation. The command is synchronous; rejections post nothing and do not change an existing attempt.
+
+```js
+window.__TIGHTBEAM_CHAT_COMMAND__({
+  type: 'send',
+  lifetimeId: latestReady.lifetimeId,
+  sessionKey: latestReady.sessionKey,
+  correlationId: `c_${crypto.randomUUID()}`,
+  content: draft,
+});
+```
+
+The first `ready` arrives only after the selected-session subscription and canonical history catch-up are ready. Its fields are `version: 1`, `lifetimeId`, `sessionKey`, `gatewayOrigin`, `agentDisplayName`, and `capabilities: { text: true }`. It carries no credential, token, device secret, model or harness detail. V1 accepts text only; attachment composition is not advertised and may be added in a future version.
+
+Every attempt event carries `lifetimeId`, `correlationId`, and its per-lifetime `attempt` number. `accepted` only means the Gateway acknowledged the post. `delivered` means Chat later reconciled the canonical conversation row for the selected session, device and correlation; it says nothing about whether the agent read or answered. One attempt ends with exactly one `delivered`, `failed`, or `uncertain` event. A typed refusal is `failed` with reason `refused` and its Gateway code in `detail`. An unavailable retry is `failed` with reason `retry-unavailable`. Uncertain reasons are `ack-lost`, `accepted-unreconciled`, and `lifetime-ended`.
+
+The command rejection reasons are checked in this order: `not-ready`, `target-mismatch`, `invalid-correlation`, `empty`, `attempt-in-flight`, `already-delivered`, and `correlation-conflict`. Each rejection preserves all prior attempt state. A retry must be a user action using `retry: true`, the same correlation and byte-for-byte content. Chat first checks canonical history; it posts again only if the current profile supports the existing human-send deduplication. Chat never retries automatically. Edited content is a new logical message with a new correlation.
+
+On `unavailable`, disable host sending and keep the host draft. A later `ready` in that same lifetime re-enables it. On `lifetime-ended`, send nothing until the next `ready`; target or principal changes create a new opaque lifetime. On page reload Chat requires a fresh declaration and fresh `ready` before it hides the HTML composer again. The host retains the draft and any correlation it still holds, and can offer a same-correlation retry after readiness. If an app restart loses the correlation, a restored draft is sent only after a new user action with a new correlation and without `retry`; that may create a second canonical row, so present it as a new send.
+
+Chat removes its HTML composer and reserved bottom space only after the first `ready`. It keeps the transcript at the newest message or the reader's visible anchor as the host resizes the web view; the host passes no keyboard geometry and leaves its existing landscape side-inset variables unchanged. Host-originated local bubbles show failure or uncertainty without Chat retry or text-restore controls. While opted in, Chat shows no status dot or popup; exceptional notices remain in the transcript with Reconnect on a disconnected notice. Without a supported opt-in, the standalone status details and composer remain unchanged.
+
+The host injects the declaration only into the top-level main frame for the configured private Chat origin and ignores events from other frames or origins. The seam is in-page only: do not use cross-window messaging, and send no credentials through it. The Chat server's existing origin checks protect its browser service; they do not cover this seam. V1 adds no signatures, nonces, replay controls, or separate origin-verification protocol.
+
+The [minimal host-composer page](examples/host-composer.html) demonstrates the handshake, text send, same-correlation retry and ready/unavailable handling. It is a source example, not an exercised native app or live service. `npm run example` serves it locally at `/host-composer.html`; the Vite server and bridge remain loopback-only and development-only.
+
 `renderMessage` receives the intact canonical record and its stable key, session, default renderer, and copy operation. Return `undefined` for the default. Message `role`/`sender` remain canonical attribution; optional `messageType` does not decide whether a row belongs in the visible exchange. Unknown and legacy kinds remain readable. Recorded transitions are separate canonical entries, ordered with messages and never inferred from message text or current session settings; transition bubbles are hidden. Attachment metadata is displayed as text; no attachment action is promised. Default message bodies support headings, emphasis, lists, links, inline and block code, quotes, and tables. Raw HTML is not activated, and wide code or tables scroll within their bubble.
 
 ## Conversation and send behavior

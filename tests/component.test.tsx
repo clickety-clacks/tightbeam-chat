@@ -69,8 +69,12 @@ class FakeRuntime implements ChatRuntime {
     this.publish();
   };
   update = (patch: Partial<RuntimeState>) => { this.state = { ...this.state, ...patch }; this.publish(); };
-  send = (text: string) => { this.sent.push(text); return this.sendResult; };
+  send = (text: string, clientMessageId?: string) => { this.sent.push(text); return clientMessageId ?? this.sendResult; };
   retrySend = async (id: string) => { this.retried.push(id); };
+  observeHostSend = () => () => {};
+  refreshHostSend = async () => 'absent' as const;
+  retryHostSend = (id: string, content: string) => { this.retried.push(`${id}:${content}`); };
+  markHostSendUncertain = () => {};
   rebuild = async (options?: { restart?: boolean }) => { this.rebuildCalls++; this.rebuildOptions.push(options); const snapshot = this.rebuildSnapshots.shift(); if (snapshot) this.update(snapshot); };
   dispose = () => { this.disposed = true; this.listeners.clear(); };
 }

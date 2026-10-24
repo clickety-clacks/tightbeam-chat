@@ -20,6 +20,10 @@ class ReadingRuntime implements ChatRuntime {
   rebuild = async () => {};
   send = () => null;
   retrySend = async () => {};
+  observeHostSend = () => () => {};
+  refreshHostSend = async () => 'absent' as const;
+  retryHostSend = () => {};
+  markHostSendUncertain = () => {};
   dispose = () => {};
 }
 const message = (id: number): CanonicalMessage => ({ kind: 'message', id: `message-${id}`, sessionKey: 'reading',

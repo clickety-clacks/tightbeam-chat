@@ -53,6 +53,9 @@ body { background: #f6f6f6; color: #1e1e1e; }
   -webkit-overflow-scrolling: touch;
   overflow-anchor: none;
 }
+.tb-chat-host-composer-hidden .tb-chat-viewport {
+  padding-bottom: calc(clamp(1rem, 3.5vw, 2rem) + env(safe-area-inset-bottom));
+}
 .tb-chat-message-content {
   display: flex;
   flex: 0 0 auto;
@@ -73,6 +76,9 @@ body { background: #f6f6f6; color: #1e1e1e; }
   color: var(--tb-chat-text);
   background: var(--tb-chat-background);
   box-shadow: 0 2px 8px rgb(0 0 0 / .12);
+}
+.tb-chat-host-composer-hidden .tb-chat-scroll-latest {
+  bottom: calc(env(safe-area-inset-bottom) + 1.4rem);
 }
 .tb-chat-bubble {
   flex: 0 0 auto;
