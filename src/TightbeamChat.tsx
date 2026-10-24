@@ -7,6 +7,7 @@ import type { ChatRuntime, CanonicalMessage, ConversationRecord, LocalSend, Runt
 import { turnSourceKind } from './provenance';
 import { projectMessages, type HumanMember } from './messageVisibility';
 import { useReadingPosition } from './useReadingPosition';
+import { getHostComposerSnapshot, HostComposerBridge, subscribeHostComposer } from './hostComposer';
 import './style.css';
 
 export interface RenderContext {
@@ -323,7 +324,8 @@ const Composer = forwardRef<ComposerHandle, {
   state: RuntimeState;
   agentName: string;
   root: RefObject<HTMLElement | null>;
-}>(function Composer({ runtime, state, agentName, root }, ref) {
+  suppressStatus: boolean;
+}>(function Composer({ runtime, state, agentName, root, suppressStatus }, ref) {
   const [draft, setDraft] = useState('');
   const [statusOpen, setStatusOpen] = useState(false);
   const input = useRef<HTMLTextAreaElement>(null);
@@ -391,11 +393,11 @@ const Composer = forwardRef<ComposerHandle, {
         rows={1} disabled={composerLocked}
         aria-label={`Message to ${agentName || 'the selected agent'}`} placeholder={agentName}
         autoComplete="off" spellCheck />
-      <button ref={statusControl} type="button" className="tb-chat-status-control" aria-label={`Connection status: ${statusName}. Show details`}
+      {!suppressStatus && <button ref={statusControl} type="button" className="tb-chat-status-control" aria-label={`Connection status: ${statusName}. Show details`}
         aria-expanded={statusOpen} aria-controls={statusId} onClick={() => setStatusOpen((open) => !open)}>
         <StatusIcon state={state} />
-      </button>
-      {statusOpen && <div className="tb-chat-status-popup" id={statusId} role="dialog" aria-label="Connection details">
+      </button>}
+      {!suppressStatus && statusOpen && <div className="tb-chat-status-popup" id={statusId} role="dialog" aria-label="Connection details">
         <div className="tb-chat-popup-heading"><StatusIcon state={state} /><strong>{statusName}</strong>
           <button type="button" aria-label="Close connection details" onClick={closeStatusPopup}>×</button>
         </div>
@@ -418,13 +420,18 @@ const Composer = forwardRef<ComposerHandle, {
   </form>;
 });
 
-function ChatBody({ runtime, renderMessage, className }: {
+function ChatBody({ runtime, renderMessage, className, hostBridge }: {
   runtime: ChatRuntime;
   renderMessage?: TightbeamChatProps['renderMessage'];
   className?: string;
+  hostBridge: HostComposerBridge | null;
 }) {
   const state = useSyncExternalStore(runtime.subscribe, runtime.getSnapshot, runtime.getSnapshot);
-  const reading = useReadingPosition(state.status === 'ready', state);
+  const subscribeHost = useCallback((listener: () => void) => subscribeHostComposer(hostBridge, listener), [hostBridge]);
+  const getHostSnapshot = useCallback(() => getHostComposerSnapshot(hostBridge), [hostBridge]);
+  const host = useSyncExternalStore(subscribeHost, getHostSnapshot, getHostSnapshot);
+  const readingRevision = useMemo(() => ({ state, host }), [state, host]);
+  const reading = useReadingPosition(state.status === 'ready', readingRevision);
   const { viewport } = reading;
   const root = useRef<HTMLElement>(null);
   const composer = useRef<ComposerHandle>(null);
@@ -565,10 +572,13 @@ function ChatBody({ runtime, renderMessage, className }: {
   const notice = state.status === 'ready' ? undefined
     : state.status === 'loading' ? 'Connecting to the selected conversation…'
       : state.status === 'stale' ? 'Reconnecting; the conversation may be out of date.'
-        : state.status === 'error' ? 'Disconnected. Open connection details to reconnect.'
+        : state.status === 'error' ? (host.optedIn
+          ? 'Disconnected. Reconnect to refresh the conversation.'
+          : 'Disconnected. Open connection details to reconnect.')
           : statusName;
 
-  return <section ref={root} className={`tb-chat ${className || ''}`} aria-label={agentName ? `${agentName} conversation` : 'Conversation'}>
+  return <section ref={root} className={`tb-chat ${host.composerHidden ? 'tb-chat-host-composer-hidden' : ''} ${className || ''}`}
+    aria-label={agentName ? `${agentName} conversation` : 'Conversation'}>
     <div className="tb-chat-viewport" ref={viewport} onScroll={handleScroll} role="log" tabIndex={-1}
       onWheel={reading.interrupt} onTouchStart={reading.interrupt} onPointerDown={reading.interrupt}
       onKeyDown={(event) => { if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) reading.interrupt(); }}
@@ -576,6 +586,8 @@ function ChatBody({ runtime, renderMessage, className }: {
       <div className="tb-chat-message-content" ref={reading.content}>
       {notice && <div className={`tb-chat-notice tb-chat-notice-${state.status}`} role={state.status === 'loading' ? 'status' : 'alert'}>
         <span>{notice}</span>
+        {host.optedIn && state.status === 'error' &&
+          <button type="button" onClick={() => void runtime.rebuild({ restart: true })}>Reconnect</button>}
       </div>}
       {state.loadingOlder && <div className="tb-chat-history-loading" role="status">Loading earlier messages…</div>}
       {state.historyError && <div className="tb-chat-history-error" role="alert">
@@ -594,15 +606,23 @@ function ChatBody({ runtime, renderMessage, className }: {
         }
         const { send } = item;
         const time = localTimestamp(send.submittedAt);
-        const retryAvailable = ['failed', 'uncertain'].includes(send.status) && !send.reconciled;
+        const hostManaged = send.hostSend !== undefined;
+        const retryAvailable = !hostManaged && ['failed', 'uncertain'].includes(send.status) && !send.reconciled;
         return <article ref={element => reading.registerRow(`local-${send.clientMessageId}`, element)} className="tb-chat-bubble tb-chat-bubble-human tb-chat-local" key={send.clientMessageId}
           data-record-key={`local-${send.clientMessageId}`} data-scroll-key={`local-${send.clientMessageId}`} aria-label={`Your message, ${send.status}`}>
           <div className="tb-chat-bubble-body">{markdownBody(send.content)}</div>
-          <p className="tb-chat-send-state">{send.status === 'uncertain' ? 'Delivery is uncertain' : send.status === 'failed' ? 'Message could not be sent' : send.status === 'pending' ? 'Sending…' : 'Sent'}</p>
+          <p className="tb-chat-send-state">{send.status === 'uncertain' ? 'Delivery is uncertain'
+            : send.status === 'failed' ? 'Message could not be sent'
+              : send.status === 'pending' ? 'Sending…'
+                : hostManaged && !send.reconciled ? 'Accepted; checking conversation history' : 'Sent'}</p>
           {send.reason && <p className="tb-chat-send-reason" role="alert">
             {send.status === 'uncertain'
-              ? 'Delivery could not be confirmed. Retry after the connection is current.'
-              : 'The message could not be sent. Retry it or restore the text to the composer.'}
+              ? hostManaged
+                ? 'Delivery could not be confirmed. Use the host composer to decide whether to retry.'
+                : 'Delivery could not be confirmed. Retry after the connection is current.'
+              : hostManaged
+                ? 'This message was refused. Any retry or text editing belongs in the host composer.'
+                : 'The message could not be sent. Retry it or restore the text to the composer.'}
           </p>}
           {retryAvailable && <div className="tb-chat-send-actions">
             <button type="button" disabled={state.status !== 'ready'}
@@ -624,21 +644,43 @@ function ChatBody({ runtime, renderMessage, className }: {
       aria-label="Scroll to latest messages" onMouseDown={(event) => event.preventDefault()} onClick={reading.scrollToLatest}>
       <span aria-hidden="true">↓</span> Latest messages
     </button>}
-    <Composer ref={composer} runtime={runtime} state={state} agentName={agentName} root={root} />
+    {!host.composerHidden && <Composer ref={composer} runtime={runtime} state={state} agentName={agentName}
+      root={root} suppressStatus={host.optedIn} />}
   </section>;
 }
 
 /** One host-selected session. Changing selection/identity disposes the old runtime. */
 export function TightbeamChat({ sessionKey, adapter, identityKey, renderMessage, className }: TightbeamChatProps) {
   const key = `${sessionKey}\u0000${identityKey || ''}`;
+  const latest = useRef({ key, sessionKey, adapter });
+  latest.current = { key, sessionKey, adapter };
   const [opened, setOpened] = useState<{ key: string; adapter: TightbeamAdapter; runtime: ChatRuntime } | null>(null);
+  const bridgeRef = useRef<HostComposerBridge | null>(null);
+  const [hostBridge, setHostBridge] = useState<HostComposerBridge | null>(null);
+  useEffect(() => {
+    const bridge = typeof window === 'undefined' ? null : HostComposerBridge.create(window);
+    bridgeRef.current = bridge;
+    setHostBridge(bridge);
+    return () => {
+      bridge?.dispose();
+      if (bridgeRef.current === bridge) bridgeRef.current = null;
+    };
+  }, []);
   useEffect(() => {
     const runtime = adapter.open(sessionKey);
     setOpened({ key, adapter, runtime });
-    return () => runtime.dispose();
+    bridgeRef.current?.attach(runtime);
+    return () => {
+      const current = latest.current;
+      const reason = current.sessionKey !== sessionKey ? 'target-changed'
+        : current.key !== key || current.adapter !== adapter ? 'identity-changed' : 'disposed';
+      bridgeRef.current?.detach(reason);
+      runtime.dispose();
+    };
   }, [adapter, sessionKey, key]);
   if (!opened || opened.key !== key || opened.adapter !== adapter) {
     return <section className={`tb-chat ${className || ''}`} aria-label="Conversation" role="status">Connecting…</section>;
   }
-  return <ChatBody key={key} runtime={opened.runtime} renderMessage={renderMessage} className={className} />;
+  return <ChatBody key={key} runtime={opened.runtime} renderMessage={renderMessage}
+    className={className} hostBridge={hostBridge} />;
 }

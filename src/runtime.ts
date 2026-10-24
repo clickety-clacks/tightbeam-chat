@@ -9,6 +9,9 @@ import {
   type ConversationPage,
   type ConversationRecord,
   type HostIdentity,
+  type HostSendObserver,
+  type HostSendContext,
+  type HostSendSignal,
   type HumanSubmission,
   type LocalSend,
   type RuntimeState,
@@ -42,6 +45,7 @@ function recordsFrom(map: Map<string, ConversationRecord>): readonly Conversatio
 }
 
 const noProvenance: readonly TurnProvenance[] = Object.freeze([]);
+const hostCorrelationPattern = /^c_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 /** A target-independent runtime. Its transport is the only backend-specific code. */
 export function createTightbeamAdapter(transport: ChatTransport, profile: TargetProfile): TightbeamAdapter {
@@ -58,6 +62,8 @@ class SessionRuntime implements ChatRuntime {
   private readonly pendingHistoryUpserts = new Map<string, ConversationRecord>();
   private readonly sendControllers = new Map<string, AbortController>();
   private readonly pendingReconciledIds = new Set<string>();
+  private readonly hostSendObservers = new Map<string, Set<HostSendObserver>>();
+  private readonly coverageReaders = new Set<ChangeNotice[]>();
   private connection: ChangeConnection | undefined;
   private controller: AbortController | undefined;
   private cursor: string | null = null;
@@ -98,6 +104,24 @@ class SessionRuntime implements ChatRuntime {
     for (const listener of this.listeners) listener();
   }
 
+  private notifyHostSend(id: string, signal: HostSendSignal): void {
+    for (const observer of [...(this.hostSendObservers.get(id) ?? [])]) observer(signal);
+  }
+
+  observeHostSend = (clientMessageId: string, observer: HostSendObserver): (() => void) => {
+    let observers = this.hostSendObservers.get(clientMessageId);
+    if (!observers) {
+      observers = new Set();
+      this.hostSendObservers.set(clientMessageId, observers);
+    }
+    observers.add(observer);
+    return () => {
+      const current = this.hostSendObservers.get(clientMessageId);
+      current?.delete(observer);
+      if (current?.size === 0) this.hostSendObservers.delete(clientMessageId);
+    };
+  };
+
   private isCurrent(generation: number): boolean {
     return !this.disposed && generation === this.generation;
   }
@@ -115,6 +139,7 @@ class SessionRuntime implements ChatRuntime {
     this.pendingHistoryUpserts.clear();
     this.publish({
       generation: this.generation, status: 'unauthorized',
+      identityChanged: true,
       statusDetail: 'Host principal or device changed. Open a new component lifetime.',
       records: Object.freeze([]), sends: Object.freeze([]), hasOlder: false,
       session: undefined, agentDisplayName: undefined, provenance: Object.freeze([]),
@@ -155,6 +180,7 @@ class SessionRuntime implements ChatRuntime {
       if (sends.some((send, index) => send !== this.state.sends[index])) {
         this.publish({ sends: Object.freeze(sends) });
       }
+      this.notifyHostSend(record.clientMessageId, { kind: 'reconciled' });
     }
   }
 
@@ -227,6 +253,7 @@ class SessionRuntime implements ChatRuntime {
       this.buffered.push(notice);
       return;
     }
+    for (const captured of this.coverageReaders) captured.push(notice);
     if (this.apply(notice)) this.publish({ records: recordsFrom(this.rows) });
   }
 
@@ -234,6 +261,9 @@ class SessionRuntime implements ChatRuntime {
     const sends = this.state.sends.map((send) =>
       send.status === 'pending' ? { ...send, status: 'uncertain' as const, reason } : send,
     );
+    for (const send of this.state.sends) {
+      if (send.status === 'pending') this.notifyHostSend(send.clientMessageId, { kind: 'uncertain', reason: 'ack-lost' });
+    }
     for (const controller of this.sendControllers.values()) controller.abort();
     this.sendControllers.clear();
     this.publish({ sends: Object.freeze(sends) });
@@ -272,6 +302,9 @@ class SessionRuntime implements ChatRuntime {
           reason: 'Target became unsupported before acknowledgement; send outcome is unknown.' }
         : send))
       : Object.freeze([]);
+    for (const send of this.state.sends) {
+      if (send.status === 'pending') this.notifyHostSend(send.clientMessageId, { kind: 'uncertain', reason: 'ack-lost' });
+    }
     this.controller?.abort();
     this.connection?.close();
     this.connection = undefined;
@@ -425,6 +458,9 @@ class SessionRuntime implements ChatRuntime {
         provenance: noProvenance, provenanceAvailable: false, activeTurn: undefined,
         hasOlder, historyError: undefined,
       });
+      for (const send of sends) {
+        if (send.reconciled) this.notifyHostSend(send.clientMessageId, { kind: 'reconciled' });
+      }
       // A synchronous callback may have buffered a notice during publication.
       for (const notice of this.buffered.splice(0)) this.receive(notice, generation);
     } catch (error) {
@@ -492,14 +528,17 @@ class SessionRuntime implements ChatRuntime {
     }
   };
 
-  send = (content: string): string | null => {
+  send = (content: string, clientMessageId?: string, hostSend?: HostSendContext): string | null => {
     if (!content.trim() || this.disposed || !this.checkIdentity() || this.state.status !== 'ready') return null;
+    const id = clientMessageId ?? `c_${crypto.randomUUID()}`;
+    if (clientMessageId && !hostCorrelationPattern.test(clientMessageId)) return null;
+    if (this.state.sends.some((send) => send.clientMessageId === id)) return null;
     const submission: HumanSubmission = Object.freeze({
       sessionKey: this.sessionKey, deviceId: this.identity.deviceId,
-      clientMessageId: `c_${crypto.randomUUID()}`, content,
+      clientMessageId: id, content,
     });
     const send: LocalSend = Object.freeze({ ...submission, submittedAt: new Date().toISOString(),
-      status: 'pending', reconciled: false });
+      status: 'pending', reconciled: false, ...(hostSend ? { hostSend: Object.freeze({ ...hostSend }) } : {}) });
     this.publish({ sends: Object.freeze([...this.state.sends, send]) });
     void this.post(submission);
     return submission.clientMessageId;
@@ -520,14 +559,23 @@ class SessionRuntime implements ChatRuntime {
             ? { ...send, status: 'failed', reason: result.reason }
             : { ...send, status: 'uncertain', reason: result.reason };
       });
+      if (result.outcome === 'accepted') this.notifyHostSend(submission.clientMessageId, { kind: 'accepted' });
+      else if (result.outcome === 'refused') this.notifyHostSend(submission.clientMessageId, {
+        kind: 'failed', reason: 'refused', detail: result.reason,
+      });
+      else this.notifyHostSend(submission.clientMessageId, { kind: 'uncertain', reason: 'ack-lost' });
     } catch (error) {
       if (this.isCurrent(generation) && !controller.signal.aborted) {
         if (error instanceof AuthorizationError) {
+          this.notifyHostSend(submission.clientMessageId, {
+            kind: 'failed', reason: 'refused', detail: 'unauthorized',
+          });
           this.failClosed('unauthorized', errorText(error));
           return;
         }
         this.updateSend(submission.clientMessageId, (send) => send.reconciled ? send
           : { ...send, status: 'uncertain', reason: errorText(error) });
+        this.notifyHostSend(submission.clientMessageId, { kind: 'uncertain', reason: 'ack-lost' });
       }
     } finally {
       if (this.sendControllers.get(submission.clientMessageId) === controller) {
@@ -558,6 +606,102 @@ class SessionRuntime implements ChatRuntime {
       sessionKey: send.sessionKey, deviceId: send.deviceId,
       clientMessageId: send.clientMessageId, content: send.content,
     });
+  };
+
+  refreshHostSend = async (clientMessageId: string): Promise<'found' | 'absent' | 'unavailable'> => {
+    if (this.disposed || !this.checkIdentity() || this.state.status !== 'ready' || !this.controller) return 'unavailable';
+    const generation = this.generation;
+    const signal = this.controller.signal;
+    const captured: ChangeNotice[] = [];
+    this.coverageReaders.add(captured);
+    try {
+      const [session, page] = await Promise.all([
+        this.transport.readSession(this.sessionKey, signal),
+        this.transport.readTail(this.sessionKey, signal),
+      ]);
+      if (!this.isCurrent(generation) || !this.checkIdentity() || signal.aborted) return 'unavailable';
+      if (session.sessionKey !== this.sessionKey) throw new UnsupportedTargetError('Session refresh returned another selection.');
+      this.validatePage(page);
+      if (!this.transport.proveCoverage(session, page, captured)) {
+        throw new UnsupportedTargetError('Canonical refresh lacks verified subscription coverage.');
+      }
+      for (const record of page.records) this.put(record);
+      this.reconcilePendingHistory(page.hasOlder);
+      const currentSession = !this.state.session || session.rowVersion > this.state.session.rowVersion
+        ? session : this.state.session;
+      this.publish({ records: recordsFrom(this.rows), session: currentSession,
+        agentDisplayName: currentSession.displayName });
+      const found = [...this.rows.values()].some((record) => record.kind === 'message' &&
+        record.sessionKey === this.sessionKey && record.deviceId === this.identity.deviceId &&
+        record.clientMessageId === clientMessageId);
+      return found ? 'found' : 'absent';
+    } catch (error) {
+      if (!this.isCurrent(generation) || signal.aborted) return 'unavailable';
+      if (error instanceof AuthorizationError) this.failClosed('unauthorized', errorText(error));
+      else if (error instanceof UnsupportedTargetError) this.failClosed('unsupported', errorText(error));
+      return 'unavailable';
+    } finally {
+      this.coverageReaders.delete(captured);
+    }
+  };
+
+  retryHostSend = (clientMessageId: string, content: string, hostSend?: HostSendContext): void => {
+    if (this.disposed || !this.checkIdentity() || this.state.status !== 'ready' ||
+        !hostCorrelationPattern.test(clientMessageId) || !content.trim()) {
+      this.notifyHostSend(clientMessageId, { kind: 'uncertain', reason: 'ack-lost' });
+      return;
+    }
+    const previous = this.state.sends.find((send) => send.clientMessageId === clientMessageId);
+    if (previous && previous.content !== content) return;
+    const submission: HumanSubmission = Object.freeze({ sessionKey: this.sessionKey,
+      deviceId: this.identity.deviceId, clientMessageId, content });
+    const local: LocalSend = Object.freeze({ ...submission,
+      submittedAt: previous?.submittedAt ?? new Date().toISOString(), status: 'pending', reconciled: false,
+      ...(hostSend ? { hostSend: Object.freeze({ ...hostSend }) } : {}) });
+    this.publish({ sends: Object.freeze(previous
+      ? this.state.sends.map((send) => send.clientMessageId === clientMessageId ? local : send)
+      : [...this.state.sends, local]) });
+    void (async () => {
+      const canonical = await this.refreshHostSend(clientMessageId);
+      if (canonical === 'found') {
+        this.notifyHostSend(clientMessageId, { kind: 'reconciled' });
+        return;
+      }
+      if (canonical === 'unavailable') {
+        this.updateSend(clientMessageId, (send) => send.reconciled ? send
+          : { ...send, status: 'uncertain', reason: 'Canonical history could not be checked before retry.' });
+        this.notifyHostSend(clientMessageId, { kind: 'uncertain', reason: 'ack-lost' });
+        return;
+      }
+      if (!this.profile.capabilities.humanSendDedupe) {
+        this.updateSend(clientMessageId, (send) => ({ ...send, status: 'failed', reason: 'Retry is unavailable for this target.' }));
+        this.notifyHostSend(clientMessageId, { kind: 'failed', reason: 'retry-unavailable' });
+        return;
+      }
+      if (this.disposed || !this.checkIdentity() || this.state.status !== 'ready') {
+        this.updateSend(clientMessageId, (send) => ({ ...send, status: 'uncertain', reason: 'Connection changed before retry.' }));
+        this.notifyHostSend(clientMessageId, { kind: 'uncertain', reason: 'ack-lost' });
+        return;
+      }
+      void this.post(submission);
+    })();
+  };
+
+  recordHostSendOutcome = (clientMessageId: string, hostSend: HostSendContext,
+    outcome: 'delivered' | 'failed' | 'uncertain'): void => {
+    const current = this.state.sends.find((send) => send.clientMessageId === clientMessageId);
+    if (!current?.hostSend || current.hostSend.lifetimeId !== hostSend.lifetimeId ||
+        current.hostSend.attempt !== hostSend.attempt) return;
+    this.updateSend(clientMessageId, (send) => ({
+      ...send,
+      hostSend: { ...hostSend, outcome },
+    }));
+  };
+
+  markHostSendUncertain = (clientMessageId: string, reason: 'accepted-unreconciled'): void => {
+    this.updateSend(clientMessageId, (send) => send.reconciled ? send
+      : { ...send, status: 'uncertain', reason: 'Accepted, but no matching canonical row appeared in the refreshed conversation.' });
+    this.notifyHostSend(clientMessageId, { kind: 'uncertain', reason });
   };
 
   dispose = (): void => {
