@@ -22,7 +22,7 @@ function turn(seq: number, sessionKey: string, messageId: string, origin: string
 }
 
 function provenance(seq: number, sessionKey: string, messageId: string, origin: string,
-  trigger?: CanonicalMessage, displayName?: string, status = 'completed'): TurnProvenance {
+  trigger?: CanonicalMessage, _displayName?: string, status = 'completed'): TurnProvenance {
   return createTurnProvenance({ ...turn(seq, sessionKey, messageId, origin, status), triggerSource: 'other' }, trigger ? [trigger] : [], 'person', 'person');
 }
 
