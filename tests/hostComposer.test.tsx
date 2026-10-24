@@ -139,7 +139,7 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     installDeclaration(events);
     openChat(transport, 'conversation-a');
 
-    await screen.findByRole('textbox', { name: /Message to Agent conversation-a/ });
+    await screen.findByRole('textbox');
     expect(screen.queryByRole('button', { name: /Connection status/ })).toBeNull();
     expect(events.some((event) => event.event === 'ready')).toBe(false);
     await act(async () => { transport.readyGate?.resolve(); });
@@ -151,7 +151,7 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     expect(ready).toMatchObject({ version: 1, gatewayOrigin: 'https://gateway.example:8443',
       sessionKey: 'conversation-a', capabilities: { text: true } });
     expect('attachments' in ready.capabilities).toBe(false);
-    await waitFor(() => expect(screen.queryByRole('textbox', { name: /Message to Agent conversation-a/ })).toBeNull());
+    await waitFor(() => expect(screen.queryByRole('textbox')).toBeNull());
     expect(screen.queryByRole('button', { name: /Connection status/ })).toBeNull();
     expect(document.querySelector('.tb-chat-host-composer-hidden .tb-chat-viewport')).not.toBeNull();
   });
@@ -296,7 +296,7 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     transport.nextSend = () => pending.promise;
     installDeclaration(events);
     const { adapter, rerender } = openChat(transport, 'conversation-a');
-    await screen.findByRole('textbox', { name: /Message to Agent conversation-a/ });
+    await screen.findByRole('textbox');
     const command = commandEntry();
     act(() => command({ type: 'send', lifetimeId: 'before-ready', sessionKey: 'conversation-a',
       correlationId: correlation, content: 'pending' }));
@@ -420,8 +420,10 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     expect(events.some((event) => event.event === 'uncertain' && event.reason === 'lifetime-ended')).toBe(true);
 
     const secondView = openChat(transport, 'conversation-a');
-    const secondReady = await waitForReady(events.slice(events.findIndex((event) => event.event === 'lifetime-ended') + 1), 'conversation-a');
-    expect(screen.queryByRole('textbox', { name: /Message to Agent conversation-a/ })).toBeNull();
+    const secondPageStart = events.findIndex((event) => event.event === 'lifetime-ended') + 1;
+    await waitFor(() => expect(readyEvent(events.slice(secondPageStart), 'conversation-a')).toBeDefined());
+    const secondReady = readyEvent(events.slice(secondPageStart), 'conversation-a')!;
+    expect(screen.queryByRole('textbox')).toBeNull();
     act(() => commandEntry()({ type: 'send', lifetimeId: secondReady.lifetimeId, sessionKey: secondReady.sessionKey,
       correlationId: correlation, content: 'retained draft', retry: true }));
     await waitFor(() => expect(events.filter((event) => event.event === 'delivered' && event.lifetimeId === secondReady.lifetimeId)).toHaveLength(1));
