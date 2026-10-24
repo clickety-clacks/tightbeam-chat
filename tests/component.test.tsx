@@ -707,7 +707,7 @@ describe('conversation surface', () => {
   it.each([
     ['Shift+Return', { shiftKey: true }],
     ['Ctrl+Return', { ctrlKey: true }],
-  ] as const)('%s leaves newline insertion to the textarea without sending', (shortcut, modifiers) => {
+  ] as const)('%s inserts a newline at the caret without sending', (shortcut, modifiers) => {
     const runtime = new FakeRuntime(`newline-${shortcut}`);
     render(<TightbeamChat sessionKey={runtime.state.sessionKey} adapter={adapterFor(runtime)} />);
     const composer = screen.getByRole('textbox', { name: 'Message to Research assistant' }) as HTMLTextAreaElement;
@@ -715,12 +715,10 @@ describe('conversation surface', () => {
     composer.focus();
     composer.setSelectionRange(6, 6);
 
-    // A real textarea performs the default newline insertion after keydown.
-    // This unit check ensures the component does not prevent that behavior or send.
-    expect(fireEvent.keyDown(composer, { key: 'Enter', ...modifiers })).toBe(true);
+    expect(fireEvent.keyDown(composer, { key: 'Enter', ...modifiers })).toBe(false);
     expect(runtime.sent).toEqual([]);
-    expect(composer.value).toBe('beforeafter');
-    expect(composer.selectionStart).toBe(6);
+    expect(composer.value).toBe('before\nafter');
+    expect(composer.selectionStart).toBe(7);
     expect(document.activeElement).toBe(composer);
   });
 
