@@ -385,8 +385,11 @@ const Composer = forwardRef<ComposerHandle, {
       <textarea ref={input} id={`${titleId}-input`} value={draft}
         onChange={(event) => setDraft(event.target.value)}
         onKeyDown={(event) => {
-          if (event.key !== 'Enter' || (!event.shiftKey && !event.ctrlKey)) return;
+          if (event.key !== 'Enter') return;
           if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
+          // Leave modified Return to the textarea so it inserts a newline at
+          // the current selection; only unmodified Return submits the form.
+          if (event.shiftKey || event.ctrlKey || event.altKey || event.metaKey) return;
           event.preventDefault();
           sendControl.current?.click();
         }}

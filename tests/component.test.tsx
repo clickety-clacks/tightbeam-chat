@@ -691,37 +691,52 @@ describe('conversation surface', () => {
     expect(composer).toHaveProperty('disabled', true);
   });
 
-  it.each([
-    ['Shift+Return', { shiftKey: true }],
-    ['Ctrl+Return', { ctrlKey: true }],
-  ] as const)('%s sends through the existing button path and keeps composer focus', (shortcut, modifiers) => {
-    const runtime = new FakeRuntime(`send-${shortcut}`);
-    render(<TightbeamChat sessionKey={runtime.state.sessionKey} adapter={adapterFor(runtime)} />);
+  it('sends plain Return through the existing button path and keeps composer focus', () => {
+    const runtime = new FakeRuntime('keyboard-eligibility');
+    render(<TightbeamChat sessionKey="keyboard-eligibility" adapter={adapterFor(runtime)} />);
     const composer = screen.getByRole('textbox', { name: 'Message to Research assistant' });
-    fireEvent.change(composer, { target: { value: `draft from ${shortcut}` } });
+    fireEvent.change(composer, { target: { value: 'plain Return draft' } });
     composer.focus();
-    expect(document.activeElement).toBe(composer);
 
-    expect(fireEvent.keyDown(composer, { key: 'Enter', ...modifiers })).toBe(false);
-    expect(runtime.sent).toEqual([`draft from ${shortcut}`]);
+    expect(fireEvent.keyDown(composer, { key: 'Enter' })).toBe(false);
+    expect(runtime.sent).toEqual(['plain Return draft']);
     expect(composer).toHaveProperty('value', '');
     expect(document.activeElement).toBe(composer);
   });
 
-  it('leaves plain Return and IME Return to the browser, and preserves a draft when sending is unavailable', () => {
+  it.each([
+    ['Shift+Return', { shiftKey: true }],
+    ['Ctrl+Return', { ctrlKey: true }],
+  ] as const)('%s leaves newline insertion to the textarea without sending', (shortcut, modifiers) => {
+    const runtime = new FakeRuntime(`newline-${shortcut}`);
+    render(<TightbeamChat sessionKey={runtime.state.sessionKey} adapter={adapterFor(runtime)} />);
+    const composer = screen.getByRole('textbox', { name: 'Message to Research assistant' }) as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: 'beforeafter' } });
+    composer.focus();
+    composer.setSelectionRange(6, 6);
+
+    // A real textarea performs the default newline insertion after keydown.
+    // This unit check ensures the component does not prevent that behavior or send.
+    expect(fireEvent.keyDown(composer, { key: 'Enter', ...modifiers })).toBe(true);
+    expect(runtime.sent).toEqual([]);
+    expect(composer.value).toBe('beforeafter');
+    expect(composer.selectionStart).toBe(6);
+    expect(document.activeElement).toBe(composer);
+  });
+
+  it('does not submit during IME composition and preserves the draft when send fails or is ineligible', () => {
     const runtime = new FakeRuntime('keyboard-eligibility');
     render(<TightbeamChat sessionKey="keyboard-eligibility" adapter={adapterFor(runtime)} />);
     const composer = screen.getByRole('textbox', { name: 'Message to Research assistant' });
     fireEvent.change(composer, { target: { value: 'keep this draft' } });
 
-    expect(fireEvent.keyDown(composer, { key: 'Enter' })).toBe(true);
-    expect(fireEvent.keyDown(composer, { key: 'Enter', ctrlKey: true, isComposing: true })).toBe(true);
-    expect(fireEvent.keyDown(composer, { key: 'Enter', shiftKey: true, keyCode: 229 })).toBe(true);
+    expect(fireEvent.keyDown(composer, { key: 'Enter', isComposing: true })).toBe(true);
+    expect(fireEvent.keyDown(composer, { key: 'Enter', keyCode: 229 })).toBe(true);
     expect(runtime.sent).toEqual([]);
     expect(composer).toHaveProperty('value', 'keep this draft');
 
     runtime.sendResult = null;
-    expect(fireEvent.keyDown(composer, { key: 'Enter', shiftKey: true })).toBe(false);
+    expect(fireEvent.keyDown(composer, { key: 'Enter' })).toBe(false);
     expect(runtime.sent).toEqual(['keep this draft']);
     expect(composer).toHaveProperty('value', 'keep this draft');
 
@@ -729,7 +744,7 @@ describe('conversation surface', () => {
       runtime.state = { ...runtime.state, status: 'stale' };
       for (const listener of runtime.listeners) listener();
     });
-    expect(fireEvent.keyDown(composer, { key: 'Enter', ctrlKey: true })).toBe(false);
+    expect(fireEvent.keyDown(composer, { key: 'Enter' })).toBe(false);
     expect(runtime.sent).toEqual(['keep this draft']);
     expect(composer).toHaveProperty('value', 'keep this draft');
   });
