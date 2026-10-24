@@ -329,6 +329,7 @@ const Composer = forwardRef<ComposerHandle, {
   const [draft, setDraft] = useState('');
   const [statusOpen, setStatusOpen] = useState(false);
   const input = useRef<HTMLTextAreaElement>(null);
+  const pendingCaret = useRef<number | null>(null);
   const statusControl = useRef<HTMLButtonElement>(null);
   const sendControl = useRef<HTMLButtonElement>(null);
   const shell = useRef<HTMLFormElement>(null);
@@ -360,6 +361,11 @@ const Composer = forwardRef<ComposerHandle, {
     if (!element) return;
     element.style.height = 'auto';
     element.style.height = `${Math.min(element.scrollHeight, Number.parseFloat(getComputedStyle(element).maxHeight) || element.scrollHeight)}px`;
+    if (pendingCaret.current !== null) {
+      const caret = Math.min(pendingCaret.current, element.value.length);
+      element.setSelectionRange(caret, caret);
+      pendingCaret.current = null;
+    }
   }, [draft]);
 
   useLayoutEffect(() => {
@@ -385,8 +391,21 @@ const Composer = forwardRef<ComposerHandle, {
       <textarea ref={input} id={`${titleId}-input`} value={draft}
         onChange={(event) => setDraft(event.target.value)}
         onKeyDown={(event) => {
-          if (event.key !== 'Enter' || (!event.shiftKey && !event.ctrlKey)) return;
+          if (event.key !== 'Enter') return;
           if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
+          if (event.shiftKey || event.ctrlKey) {
+            // Insert into the controlled value explicitly: Ctrl+Return does not
+            // produce a textarea newline in every browser. Restore the caret
+            // after React commits the updated value.
+            event.preventDefault();
+            const element = event.currentTarget;
+            const start = element.selectionStart;
+            const end = element.selectionEnd;
+            pendingCaret.current = start + 1;
+            setDraft((current) => `${current.slice(0, start)}\n${current.slice(end)}`);
+            return;
+          }
+          if (event.altKey || event.metaKey) return;
           event.preventDefault();
           sendControl.current?.click();
         }}
