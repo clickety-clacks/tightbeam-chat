@@ -66,9 +66,11 @@ function tokenColor(tokens: Tokens, name: string): Color {
 }
 
 function rule(css: string, selector: string): string {
-  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const body = css.match(new RegExp(`${escaped}\\s*\\{([^}]*)\\}`))?.[1];
-  if (!body) throw new Error(`Missing CSS rule for ${selector}`);
+  const normalizedSelector = selector.replace(/\s+/g, ' ').trim();
+  const matches = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+    .filter(([, selectors]) => selectors.split(',').some((candidate) => candidate.replace(/\s+/g, ' ').trim() === normalizedSelector));
+  const body = matches.at(-1)?.[2];
+  if (body === undefined) throw new Error(`Missing CSS rule for ${selector}`);
   return body;
 }
 
