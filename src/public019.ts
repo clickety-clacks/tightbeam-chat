@@ -215,7 +215,10 @@ export function decodePublic019Turn(value: unknown, sessionKey: string): Canonic
   }
   return Object.freeze({
     seq: positiveInteger(row, 'seq'), sessionKey, status: requiredString(row, 'status'),
-    messageId: requiredString(row, 'messageId'), origin: requiredString(row, 'origin'),
+    messageId: optionalString(row, 'messageId'), origin: requiredString(row, 'origin'),
+    triggerSource: ['batch', 'mike', 'agent', 'process', 'other'].includes(String(row.triggerSource))
+      ? row.triggerSource as CanonicalTurn['triggerSource'] : undefined,
+    batchMemberCount: optionalPositiveInteger(row, 'batchMemberCount'),
     raw: Object.freeze({ ...row }),
   });
 }
@@ -251,11 +254,10 @@ export function decodePublic019Notice(value: unknown, sessionKey: string): Chang
       frame.resource === 'sessions' && frame.op === 'upsert') {
     return { operation: 'session', session: decodePublic019Session(frame.payload, sessionKey) };
   }
-  // Turn and wake events can affect the selected session's activity without
-  // carrying a complete session projection. Refresh that projection instead.
-  if ((frame.class === 'turn.started' || frame.class === 'turn.ended') &&
+  // The payload seq identifies the turn; the outer seq orders this subscription.
+  if (['turn.queued', 'turn.started', 'turn.ended'].includes(frame.class) &&
       frame.resource === 'turns' && frame.op === 'upsert') {
-    return { operation: 'observe', sessionKey, resource: frame.class };
+    return { operation: 'turn', turn: decodePublic019Turn(frame.payload, sessionKey) };
   }
   if (['wake.scheduled', 'wake.fired', 'wake.canceled'].includes(frame.class) &&
       frame.resource === 'wakes' && frame.op === 'upsert') {

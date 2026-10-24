@@ -26,8 +26,10 @@ export interface CanonicalTurn {
   readonly seq: number;
   readonly sessionKey: string;
   readonly status: string;
-  readonly messageId: string;
+  readonly messageId?: string;
   readonly origin: string;
+  readonly triggerSource?: 'batch' | 'mike' | 'agent' | 'process' | 'other';
+  readonly batchMemberCount?: number;
   readonly raw: Readonly<Record<string, unknown>>;
 }
 
@@ -39,7 +41,7 @@ export interface BatchMember {
 
 export type TurnSourceKind = 'human' | 'agent' | 'substrate' | 'unknown';
 
-/** Source-backed trigger detail used for display filtering and active-turn captions. */
+/** Source-backed live turn detail used for active-turn captions. */
 export interface TurnProvenance {
   readonly turn: CanonicalTurn;
   readonly trigger?: CanonicalMessage;
@@ -90,6 +92,7 @@ export type ChangeNotice =
   | { readonly operation: 'upsert'; readonly record: ConversationRecord }
   | { readonly operation: 'delete'; readonly sessionKey: string; readonly id: string; readonly rowVersion: number }
   | { readonly operation: 'session'; readonly session: SessionRecord }
+  | { readonly operation: 'turn'; readonly turn: CanonicalTurn }
   | { readonly operation: 'ignore'; readonly sessionKey: string; readonly resource: string }
   | { readonly operation: 'observe' | 'unknown'; readonly sessionKey: string; readonly resource: string };
 
@@ -199,6 +202,8 @@ export type HostSendSignal =
 export type HostSendObserver = (signal: HostSendSignal) => void;
 
 export interface RuntimeState {
+  /** Exact non-secret authenticated Gateway principal, independent of send correlation. */
+  readonly principalKey?: string;
   readonly sessionKey: string;
   readonly generation: number;
   readonly status: RuntimeStatus;
@@ -208,7 +213,7 @@ export interface RuntimeState {
   readonly records: readonly ConversationRecord[];
   readonly session?: SessionRecord;
   readonly provenance?: readonly TurnProvenance[];
-  /** False when optional turn reads are unavailable for this connection generation. */
+  /** False until a typed turn record arrives on this connection generation. */
   readonly provenanceAvailable?: boolean;
   readonly activeTurn?: TurnProvenance;
   readonly targetGateway?: string;

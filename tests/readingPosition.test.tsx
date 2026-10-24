@@ -8,7 +8,7 @@ import type { CanonicalMessage, ChatRuntime, RuntimeState } from '../src/types';
 
 class ReadingRuntime implements ChatRuntime {
   listeners = new Set<() => void>();
-  state: RuntimeState = { sessionKey: 'reading', generation: 1, status: 'ready', targetLabel: 'Example', records: [],
+  state: RuntimeState = { sessionKey: 'reading', principalKey: 'person', generation: 1, status: 'ready', targetLabel: 'Example', records: [],
     provenanceAvailable: false, hasOlder: false, loadingOlder: false, sends: [], agentDisplayName: 'Assistant' };
   getSnapshot = () => this.state;
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => this.listeners.delete(listener); };
@@ -269,20 +269,20 @@ describe('conversation reading position', () => {
     expect(animate).toHaveBeenCalledTimes(2);
   });
 
-  it('animates only extracted human members of a new batch while smoothly following from near bottom', () => {
+  it('animates only canonical human members of a new batch while smoothly following from near bottom', () => {
     const { runtime, box } = setup();
     readAt(box, box.scrollHeight - box.clientHeight - 40);
-    const carrier = { ...message(20), sender: 'process:notifications', messageType: 'substrate', content: [
+    const carrier = { ...message(20), isBatchCarrier: true, sender: 'process:notifications', messageType: 'substrate', content: [
       '[batched notices: 2]', '', '[430] source=human sender=user:person cause=notice class=fyi',
       'A new human message', '', '[431] source=other sender=agent:helper session-key cause=notice class=fyi',
       'Nonhuman notice', '', 'coalesced by batch-format (2 notices)',
     ].join('\n') };
-    act(() => runtime.publish({ records: [...initialRows, carrier] }));
+    act(() => runtime.publish({ records: [...initialRows, carrier, { ...message(21), content: 'A new human message' }] }));
     expect(animate).toHaveBeenCalledTimes(1);
     expect(animate.mock.contexts[0]).toBe(screen.getByText('A new human message').closest('article'));
     expect(screen.queryByText('Nonhuman notice')).toBeNull();
     expect(scrollTo).toHaveBeenLastCalledWith({ top: box.scrollHeight - box.clientHeight, behavior: 'smooth' });
-    act(() => runtime.publish({ records: [...initialRows, { ...carrier, rowVersion: 2 }] }));
+    act(() => runtime.publish({ records: [...initialRows, { ...carrier, rowVersion: 2 }, { ...message(21), content: 'A new human message' }] }));
     expect(animate).toHaveBeenCalledTimes(1);
   });
   it('catches up after a failed connection on foreground return without losing the reader or draft', async () => {
@@ -300,7 +300,7 @@ describe('conversation reading position', () => {
       return { close() {} };
     });
     const transport: ChatTransport = {
-      currentIdentity: () => ({ principalKey: 'reader', deviceId: 'browser' }),
+      currentIdentity: () => ({ principalKey: 'person', deviceId: 'browser' }),
       inspectTarget: async () => profile, openChanges: connect,
       readSession: async () => ({ sessionKey: 'reading', rowVersion: 1, displayName: 'Assistant', raw: {} }),
       readTail: async () => { await historyGate; return { records, hasOlder: false, oldestCursor: null, coverage: 'reading' }; },

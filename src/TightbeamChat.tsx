@@ -4,7 +4,6 @@ import { forwardRef, memo, useCallback, useEffect, useId, useImperativeHandle, u
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { ChatRuntime, CanonicalMessage, ConversationRecord, LocalSend, RuntimeState, TightbeamAdapter, TurnProvenance } from './types';
-import { turnSourceKind } from './provenance';
 import { projectMessages, type HumanMember } from './messageVisibility';
 import { useReadingPosition } from './useReadingPosition';
 import { getHostComposerSnapshot, HostComposerBridge, subscribeHostComposer } from './hostComposer';
@@ -241,7 +240,8 @@ function statusText(state: RuntimeState): string {
 function activeCaption(provenance?: TurnProvenance): { icon: string; text: string } | undefined {
   if (!provenance || provenance.turn.status !== 'running') return undefined;
   if (provenance.batchCount !== undefined && provenance.batchCount > 1) return { icon: '▣', text: 'Processing message batch' };
-  const kind = turnSourceKind(provenance.captionOrigin);
+  if (provenance.turn.triggerSource === 'batch' && provenance.batchCount !== 1) return undefined;
+  const kind = provenance.sourceKind;
   if (kind === 'human') return { icon: '●', text: 'Replying to you' };
   if (kind === 'agent') {
     if (provenance.sourceDisplayName) return { icon: '◌', text: provenance.sourceDisplayName };
@@ -250,7 +250,7 @@ function activeCaption(provenance?: TurnProvenance): { icon: string; text: strin
   if (kind === 'substrate') {
     const messageType = provenance.sourceMessageType?.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/[._-]+/g, ' ').trim();
     if (messageType) return { icon: '⚙', text: messageType };
-    return undefined;
+    return provenance.batchCount !== undefined ? undefined : { icon: '⚙', text: 'Other activity' };
   }
   if (provenance.batchCount !== undefined) return undefined;
   return { icon: '⚙', text: 'Other activity' };
@@ -471,7 +471,8 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
   const keyboardActions = useRef({ optedIn: host.optedIn, composerHidden: host.composerHidden, scrollBy: reading.scrollBy });
   keyboardActions.current = { optedIn: host.optedIn, composerHidden: host.composerHidden, scrollBy: reading.scrollBy };
   const agentName = state.agentDisplayName ?? '';
-  const projection = useMemo(() => projectMessages(state.records), [state.records]);
+  const projection = useMemo(() => projectMessages(state.records, state.principalKey, state.session?.raw.ownerUserId),
+    [state.records, state.principalKey, state.session?.raw.ownerUserId]);
   const bubbles: Bubble[] = useMemo(() => projection.messages.map((message) => ({
     key: message.key, record: message.source, side: message.side,
     sender: sourceLabel(message.side, agentName), derived: Boolean(message.member),

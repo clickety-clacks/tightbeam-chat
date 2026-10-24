@@ -2,6 +2,7 @@ import {
   AuthorizationError,
   InvalidCursorError,
   UnsupportedTargetError,
+  type CanonicalTurn,
   type ChangeConnection,
   type ChangeNotice,
   type ChatRuntime,
@@ -21,6 +22,7 @@ import {
   type TightbeamAdapter,
   type TurnProvenance,
 } from './types';
+import { createTurnProvenance } from './provenance';
 
 const requiredCapabilities: readonly (keyof TargetCapabilities)[] = [
   'newestTail', 'stableOlderCursor', 'retainedHistoryAcrossResets',
@@ -54,6 +56,7 @@ export function createTightbeamAdapter(transport: ChatTransport, profile: Target
 
 class SessionRuntime implements ChatRuntime {
   private state: RuntimeState;
+  private latestTurn?: CanonicalTurn;
   private readonly listeners = new Set<() => void>();
   private readonly identity: HostIdentity;
   private readonly rows = new Map<string, ConversationRecord>();
@@ -84,7 +87,7 @@ class SessionRuntime implements ChatRuntime {
   ) {
     this.identity = transport.currentIdentity();
     this.state = Object.freeze({
-      sessionKey, generation: 0, status: 'loading', records: Object.freeze([]),
+      sessionKey, principalKey: this.identity.principalKey, generation: 0, status: 'loading', records: Object.freeze([]),
       hasOlder: false, loadingOlder: false, sends: Object.freeze([]), targetLabel: profile.label,
       targetGateway: transport.targetGateway, provenance: noProvenance, provenanceAvailable: false,
     });
@@ -100,7 +103,15 @@ class SessionRuntime implements ChatRuntime {
 
   private publish(patch: Partial<RuntimeState>): void {
     if (this.disposed) return;
-    this.state = Object.freeze({ ...this.state, ...patch });
+    const next = { ...this.state, ...patch };
+    if (next.status !== 'ready') next.activeTurn = undefined;
+    else if ('records' in patch || 'session' in patch || 'activeTurn' in patch || 'status' in patch) {
+      next.activeTurn = this.latestTurn?.status === 'running'
+        ? createTurnProvenance(this.latestTurn, next.records, this.identity.principalKey, next.session?.raw.ownerUserId)
+        : undefined;
+      next.provenanceAvailable = this.latestTurn !== undefined;
+    }
+    this.state = Object.freeze(next);
     for (const listener of this.listeners) listener();
   }
 
@@ -234,6 +245,16 @@ class SessionRuntime implements ChatRuntime {
           this.publish({ session: notice.session, agentDisplayName: notice.session.displayName });
         }
         return false;
+      case 'turn': {
+        const turn = notice.turn;
+        if (turn.sessionKey !== this.sessionKey) return false;
+        const previous = this.latestTurn;
+        if (previous && (turn.seq < previous.seq || (turn.seq === previous.seq &&
+            Number(turn.raw.rowVersion ?? 0) < Number(previous.raw.rowVersion ?? 0)))) return false;
+        this.latestTurn = turn;
+        if (!this.initializing) this.publish({ activeTurn: undefined });
+        return false;
+      }
       case 'ignore':
         return false;
       case 'observe':
@@ -357,6 +378,7 @@ class SessionRuntime implements ChatRuntime {
     this.controller = controller;
     this.buffered = [];
     this.bufferedSession = undefined;
+    this.latestTurn = undefined;
     this.pendingReconciledIds.clear();
     this.pendingHistoryUpserts.clear();
     this.initializing = true;
@@ -508,8 +530,7 @@ class SessionRuntime implements ChatRuntime {
       this.reconcilePendingHistory(page.hasOlder);
       this.cursor = page.oldestCursor;
       this.restoreDepth++;
-      this.publish({ records: recordsFrom(this.rows), provenance: noProvenance, activeTurn: undefined,
-        provenanceAvailable: false, hasOlder: page.hasOlder, loadingOlder: false });
+      this.publish({ records: recordsFrom(this.rows), hasOlder: page.hasOlder, loadingOlder: false });
     } catch (error) {
       if (!this.isCurrent(generation) || signal.aborted) return;
       if (error instanceof AuthorizationError) {

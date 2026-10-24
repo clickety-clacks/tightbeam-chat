@@ -98,6 +98,42 @@ class ControlledTransport implements ChatTransport {
 async function settle() { await vi.waitFor(() => {}, { timeout: 50 }); }
 
 describe('framework-independent runtime', () => {
+  it('keeps live activity through paging, rebuilds it from the new subscription, and ignores the old generation', async () => {
+    const transport = new ControlledTransport();
+    transport.rows[7] = message(8, { role: 'user', sender: 'user:person', turnSeq: 90 });
+    const reads = [vi.spyOn(transport, 'readTurn'), vi.spyOn(transport, 'readMessage'), vi.spyOn(transport, 'readRecentTurns'),
+      vi.spyOn(transport, 'resolveOriginDisplayName')];
+    const active: CanonicalTurn = { seq: 90, sessionKey, status: 'running', messageId: 'm8',
+      origin: 'user:someone-else', triggerSource: 'mike', raw: { rowVersion: 1 } };
+    transport.tailHook = () => transport.callbacks?.onNotice({ operation: 'turn', turn: active });
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await runtime.rebuild();
+    expect(runtime.getSnapshot().activeTurn?.sourceKind).toBe('human');
+    await runtime.loadOlder();
+    expect(runtime.getSnapshot().activeTurn?.turn.seq).toBe(90);
+    const oldCallbacks = transport.callbacks!;
+    transport.doubt();
+    expect(runtime.getSnapshot().activeTurn).toBeUndefined();
+    transport.tailHook = undefined;
+    await runtime.rebuild();
+    expect(runtime.getSnapshot().activeTurn).toBeUndefined();
+    oldCallbacks.onNotice({ operation: 'turn', turn: active });
+    expect(runtime.getSnapshot().activeTurn).toBeUndefined();
+    transport.callbacks?.onNotice({ operation: 'turn', turn: { ...active, sessionKey: 'another-session' } });
+    expect(runtime.getSnapshot().activeTurn).toBeUndefined();
+    transport.callbacks?.onNotice({ operation: 'turn', turn: active });
+    expect(runtime.getSnapshot().activeTurn?.sourceKind).toBe('human');
+    for (const status of ['completed', 'failed', 'canceled']) {
+      transport.callbacks?.onNotice({ operation: 'turn', turn: { ...active, status, raw: { rowVersion: 2 } } });
+      expect(runtime.getSnapshot().activeTurn).toBeUndefined();
+    }
+    // An older buffered seed must not resurrect a completed turn.
+    transport.callbacks?.onNotice({ operation: 'turn', turn: active });
+    expect(runtime.getSnapshot().activeTurn).toBeUndefined();
+    expect(reads.every(read => read.mock.calls.length === 0)).toBe(true);
+    runtime.dispose();
+  });
+
   it('starts recovery immediately after repeated failures and cancels the old backoff retry', async () => {
     vi.useFakeTimers();
     const transport = new ControlledTransport();
