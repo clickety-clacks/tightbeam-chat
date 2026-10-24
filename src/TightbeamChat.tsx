@@ -617,8 +617,12 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
                 : hostManaged && !send.reconciled ? 'Accepted; checking conversation history' : 'Sent'}</p>
           {send.reason && <p className="tb-chat-send-reason" role="alert">
             {send.status === 'uncertain'
-              ? 'Delivery could not be confirmed. Retry after the connection is current.'
-              : 'The message could not be sent. Retry it or restore the text to the composer.'}
+              ? hostManaged
+                ? 'Delivery could not be confirmed. Use the host composer to decide whether to retry.'
+                : 'Delivery could not be confirmed. Retry after the connection is current.'
+              : hostManaged
+                ? 'This message was refused. Any retry or text editing belongs in the host composer.'
+                : 'The message could not be sent. Retry it or restore the text to the composer.'}
           </p>}
           {retryAvailable && <div className="tb-chat-send-actions">
             <button type="button" disabled={state.status !== 'ready'}

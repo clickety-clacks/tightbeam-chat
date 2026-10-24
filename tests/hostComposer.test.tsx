@@ -233,6 +233,12 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     await waitFor(() => expect(events.some((event) => event.event === 'uncertain' && event.correlationId === second)).toBe(true));
     expect(events.find((event) => event.event === 'uncertain' && event.correlationId === second))
       .toMatchObject({ reason: 'ack-lost', attempt: 1 });
+    expect(screen.getByText('Message could not be sent')).toBeTruthy();
+    expect(screen.getByText('Delivery is uncertain')).toBeTruthy();
+    expect(screen.getByText('This message was refused. Any retry or text editing belongs in the host composer.')).toBeTruthy();
+    expect(screen.getByText('Delivery could not be confirmed. Use the host composer to decide whether to retry.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Retry message' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Restore text to the composer' })).toBeNull();
     expect(transport.submissions).toHaveLength(2);
   });
 
