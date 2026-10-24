@@ -1,0 +1,48 @@
+:root {
+  color-scheme: light dark;
+  --tb-chat-background: #F1EEE9;
+  --tb-chat-text: #31302D;
+  --tb-chat-muted: #5C5854;
+  --tb-chat-border: #DEDAD3;
+  --tb-chat-agent-surface: #E6E1D8;
+  --tb-chat-human-surface: #DCE3DA;
+  --tb-chat-code: #E2DCD2;
+  --tb-chat-accent: #526657;
+  --tb-chat-on-accent: #F3F0EA;
+  --tb-chat-teak: #7A5540;
+  --tb-chat-fjord: #4D6470;
+  --tb-chat-ok: #4E6547;
+  --tb-chat-caution: #73592A;
+  --tb-chat-danger: #A63A2A;
+  --tb-chat-idle: #5C5854;
+  --tb-chat-placeholder: #53504C;
+  --tb-chat-glass: rgba(250,246,238,0.74);
+  --tb-chat-glass-edge: rgba(60,45,30,0.10);
+  --tb-chat-shadow: rgb(60,45,30);
+  --tb-chat-composer-shadow-alpha: 12%;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --tb-chat-background: #161514;
+    --tb-chat-text: #DDD9D1;
+    --tb-chat-muted: #9E9992;
+    --tb-chat-border: #2C2A27;
+    --tb-chat-agent-surface: #24221F;
+    --tb-chat-human-surface: #26302A;
+    --tb-chat-code: #1C1B19;
+    --tb-chat-accent: #A5BAA9;
+    --tb-chat-on-accent: #19211B;
+    --tb-chat-teak: #C9A891;
+    --tb-chat-fjord: #9FB4BF;
+    --tb-chat-ok: #A5BC9C;
+    --tb-chat-caution: #D8BE84;
+    --tb-chat-danger: #EE8B75;
+    --tb-chat-idle: #9E9992;
+    --tb-chat-placeholder: #D2CDC6;
+    --tb-chat-glass: rgba(46,42,37,0.74);
+    --tb-chat-glass-edge: rgba(240,230,215,0.10);
+    --tb-chat-shadow: #000000;
+    --tb-chat-composer-shadow-alpha: 35%;
+  }
+}

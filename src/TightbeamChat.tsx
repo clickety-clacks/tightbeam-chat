@@ -611,7 +611,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
         return <article ref={element => reading.registerRow(`local-${send.clientMessageId}`, element)} className="tb-chat-bubble tb-chat-bubble-human tb-chat-local" key={send.clientMessageId}
           data-record-key={`local-${send.clientMessageId}`} data-scroll-key={`local-${send.clientMessageId}`} aria-label={`Your message, ${send.status}`}>
           <div className="tb-chat-bubble-body">{markdownBody(send.content)}</div>
-          <p className="tb-chat-send-state">{send.status === 'uncertain' ? 'Delivery is uncertain'
+          <p className="tb-chat-send-state" data-send-status={send.status}>{send.status === 'uncertain' ? 'Delivery is uncertain'
             : send.status === 'failed' ? 'Message could not be sent'
               : send.status === 'pending' ? 'Sending…'
                 : hostManaged && !send.reconciled ? 'Accepted; checking conversation history' : 'Sent'}</p>
