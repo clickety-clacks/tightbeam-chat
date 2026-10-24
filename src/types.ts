@@ -129,6 +129,12 @@ export interface HumanSubmission {
   readonly content: string;
 }
 
+/** In-page correlation metadata for one host-managed logical message. */
+export interface HostSendContext {
+  readonly lifetimeId: string;
+  readonly attempt: number;
+}
+
 export type HumanSendResult =
   | { readonly outcome: 'accepted' }
   | { readonly outcome: 'refused'; readonly reason: string }
@@ -180,6 +186,7 @@ export interface LocalSend extends HumanSubmission {
   readonly status: SendStatus;
   readonly reason?: string;
   readonly reconciled: boolean;
+  readonly hostSend?: HostSendContext;
 }
 
 /** A source-backed lifecycle signal for a host-owned, correlated send. */
@@ -216,14 +223,14 @@ export interface ChatRuntime {
   getSnapshot(): RuntimeState;
   subscribe(listener: () => void): () => void;
   loadOlder(): Promise<void>;
-  send(content: string, clientMessageId?: string): string | null;
+  send(content: string, clientMessageId?: string, hostSend?: HostSendContext): string | null;
   retrySend(clientMessageId: string): Promise<void>;
   /** Subscribe before a host-correlated send so ack and reconciliation order is preserved. */
   observeHostSend(clientMessageId: string, observer: HostSendObserver): () => void;
   /** Rebuild/inspect canonical state without replacing the active changes subscription. */
   refreshHostSend(clientMessageId: string): Promise<'found' | 'absent' | 'unavailable'>;
   /** Retry is always explicitly initiated by the host and uses the same correlation/content. */
-  retryHostSend(clientMessageId: string, content: string): void;
+  retryHostSend(clientMessageId: string, content: string, hostSend?: HostSendContext): void;
   /** Reflect an accepted attempt that reached a caught-up snapshot without its row. */
   markHostSendUncertain(clientMessageId: string, reason: 'accepted-unreconciled'): void;
   /** Restart bypasses an in-flight attempt, for foreground return or manual recovery. */

@@ -10,6 +10,7 @@ import {
   type ConversationRecord,
   type HostIdentity,
   type HostSendObserver,
+  type HostSendContext,
   type HostSendSignal,
   type HumanSubmission,
   type LocalSend,
@@ -527,7 +528,7 @@ class SessionRuntime implements ChatRuntime {
     }
   };
 
-  send = (content: string, clientMessageId?: string): string | null => {
+  send = (content: string, clientMessageId?: string, hostSend?: HostSendContext): string | null => {
     if (!content.trim() || this.disposed || !this.checkIdentity() || this.state.status !== 'ready') return null;
     const id = clientMessageId ?? `c_${crypto.randomUUID()}`;
     if (clientMessageId && !hostCorrelationPattern.test(clientMessageId)) return null;
@@ -537,7 +538,7 @@ class SessionRuntime implements ChatRuntime {
       clientMessageId: id, content,
     });
     const send: LocalSend = Object.freeze({ ...submission, submittedAt: new Date().toISOString(),
-      status: 'pending', reconciled: false });
+      status: 'pending', reconciled: false, ...(hostSend ? { hostSend: Object.freeze({ ...hostSend }) } : {}) });
     this.publish({ sends: Object.freeze([...this.state.sends, send]) });
     void this.post(submission);
     return submission.clientMessageId;
@@ -644,7 +645,7 @@ class SessionRuntime implements ChatRuntime {
     }
   };
 
-  retryHostSend = (clientMessageId: string, content: string): void => {
+  retryHostSend = (clientMessageId: string, content: string, hostSend?: HostSendContext): void => {
     if (this.disposed || !this.checkIdentity() || this.state.status !== 'ready' ||
         !hostCorrelationPattern.test(clientMessageId) || !content.trim()) {
       this.notifyHostSend(clientMessageId, { kind: 'uncertain', reason: 'ack-lost' });
@@ -655,7 +656,8 @@ class SessionRuntime implements ChatRuntime {
     const submission: HumanSubmission = Object.freeze({ sessionKey: this.sessionKey,
       deviceId: this.identity.deviceId, clientMessageId, content });
     const local: LocalSend = Object.freeze({ ...submission,
-      submittedAt: previous?.submittedAt ?? new Date().toISOString(), status: 'pending', reconciled: false });
+      submittedAt: previous?.submittedAt ?? new Date().toISOString(), status: 'pending', reconciled: false,
+      ...(hostSend ? { hostSend: Object.freeze({ ...hostSend }) } : {}) });
     this.publish({ sends: Object.freeze(previous
       ? this.state.sends.map((send) => send.clientMessageId === clientMessageId ? local : send)
       : [...this.state.sends, local]) });

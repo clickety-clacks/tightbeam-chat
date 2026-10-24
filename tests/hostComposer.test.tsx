@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { TightbeamChat } from '../src/TightbeamChat';
 import { createTightbeamAdapter } from '../src/runtime';
-import { HOST_COMMAND_NAME, HOST_DECLARATION_NAME, type HostComposerCommandEntry, type HostComposerEvent } from '../src/hostComposer';
+import { HOST_COMMAND_NAME, HOST_DECLARATION_NAME, HostComposerBridge, type HostComposerCommandEntry, type HostComposerEvent } from '../src/hostComposer';
 import type {
   CanonicalMessage, CanonicalTurn, ChangeCallbacks, ChangeNotice, ChatRuntime, ChatTransport,
   ConversationPage, ConversationRecord, HostIdentity, HumanSendResult, HumanSubmission,
@@ -211,6 +211,56 @@ describe('versioned host composer seam on the real adapter and surface', () => {
       correlationId: correlation, content: 'Hello from the host', retry: true }));
     expect(events.at(-1)).toMatchObject({ event: 'rejected', reason: 'already-delivered' });
     expect(transport.submissions).toHaveLength(1);
+  });
+
+  it('keeps bridge snapshots constant-size after many settled sends and still rejects delivered correlations', async () => {
+    const events: HostComposerEvent[] = [];
+    const delivered = new Set<string>();
+    (window as unknown as Record<string, unknown>)[HOST_DECLARATION_NAME] = {
+      versions: [1],
+      onEvent: (event: HostComposerEvent) => {
+        events.push(event);
+        if (event.event === 'delivered') delivered.add(event.correlationId);
+      },
+    };
+    const transport = new HostComposerTransport();
+    transport.nextSend = async (submission) => {
+      transport.addCanonical(submission);
+      return { outcome: 'accepted' };
+    };
+    const runtime = createTightbeamAdapter(transport, profile).open('conversation-a');
+    const bridge = HostComposerBridge.create(window);
+    expect(bridge).not.toBeNull();
+    if (!bridge) {
+      runtime.dispose();
+      throw new Error('The test declaration should create a host bridge.');
+    }
+    bridge.attach(runtime);
+
+    try {
+      const ready = await waitForReady(events, 'conversation-a');
+      const snapshotKeys = ['composerHidden', 'optedIn', 'ready'];
+      expect(Object.keys(bridge.getSnapshot()).sort()).toEqual(snapshotKeys);
+      const ids: string[] = [];
+      for (let index = 0; index < 64; index++) {
+        const id = `c_00000000-0000-4000-8000-${index.toString(16).padStart(12, '0')}`;
+        ids.push(id);
+        commandEntry()({ type: 'send', lifetimeId: ready.lifetimeId, sessionKey: ready.sessionKey,
+          correlationId: id, content: `Host message ${index}` });
+        await waitFor(() => expect(delivered.has(id)).toBe(true));
+        expect(Object.keys(bridge.getSnapshot()).sort()).toEqual(snapshotKeys);
+      }
+
+      expect(runtime.getSnapshot().sends).toHaveLength(ids.length);
+      expect(runtime.getSnapshot().sends.every((send) => send.hostSend?.attempt === 1)).toBe(true);
+      commandEntry()({ type: 'send', lifetimeId: ready.lifetimeId, sessionKey: ready.sessionKey,
+        correlationId: ids[0], content: 'Host message 0', retry: true });
+      expect(events.at(-1)).toMatchObject({ event: 'rejected', reason: 'already-delivered' });
+      expect(transport.submissions).toHaveLength(ids.length);
+    } finally {
+      bridge.dispose();
+      runtime.dispose();
+    }
   });
 
   it('reports refusal and uncertain outcomes without automatically reposting', async () => {

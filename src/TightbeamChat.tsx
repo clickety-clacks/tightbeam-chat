@@ -606,7 +606,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
         }
         const { send } = item;
         const time = localTimestamp(send.submittedAt);
-        const hostManaged = host.hostCorrelations.includes(send.clientMessageId);
+        const hostManaged = send.hostSend !== undefined;
         const retryAvailable = !hostManaged && ['failed', 'uncertain'].includes(send.status) && !send.reconciled;
         return <article ref={element => reading.registerRow(`local-${send.clientMessageId}`, element)} className="tb-chat-bubble tb-chat-bubble-human tb-chat-local" key={send.clientMessageId}
           data-record-key={`local-${send.clientMessageId}`} data-scroll-key={`local-${send.clientMessageId}`} aria-label={`Your message, ${send.status}`}>

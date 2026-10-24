@@ -41,16 +41,13 @@ export interface HostComposerSnapshot {
   readonly optedIn: boolean;
   readonly composerHidden: boolean;
   readonly ready: boolean;
-  readonly hostCorrelations: readonly string[];
 }
 
 interface Attempt {
   readonly correlationId: string;
-  readonly content: string;
   readonly number: number;
   accepted: boolean;
   settled: boolean;
-  outcome?: 'delivered' | 'failed' | 'uncertain';
   lastCheckedGeneration: number;
   stopObserving?: () => void;
 }
@@ -65,7 +62,7 @@ interface Lifetime {
 }
 
 const emptySnapshot: HostComposerSnapshot = Object.freeze({
-  optedIn: false, composerHidden: false, ready: false, hostCorrelations: Object.freeze([]),
+  optedIn: false, composerHidden: false, ready: false,
 });
 const correlationPattern = /^c_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const declinedDeclarations = new WeakSet<object>();
@@ -116,7 +113,6 @@ export class HostComposerBridge {
   }
 
   private readonly listeners = new Set<() => void>();
-  private readonly hostCorrelations = new Set<string>();
   private readonly priorCommand: PropertyDescriptor | undefined;
   private readonly command: HostComposerCommandEntry;
   private snapshot: HostComposerSnapshot = Object.freeze({ ...emptySnapshot, optedIn: true });
@@ -145,7 +141,6 @@ export class HostComposerBridge {
       optedIn: true,
       composerHidden: this.snapshot.composerHidden,
       ready: Boolean(this.current?.ready),
-      hostCorrelations: Object.freeze([...this.hostCorrelations]),
     });
     for (const listener of this.listeners) listener();
   }
@@ -176,9 +171,9 @@ export class HostComposerBridge {
   detach(reason: 'target-changed' | 'identity-changed' | 'disposed' | 'unloading'): void {
     const lifetime = this.current;
     if (!lifetime) return;
-    for (const attempt of lifetime.attempts.values()) {
+    for (const attempt of [...lifetime.attempts.values()]) {
       if (attempt.settled) continue;
-      this.settle(attempt, {
+      this.settle(lifetime, attempt, {
         event: 'uncertain', lifetimeId: lifetime.lifetimeId, correlationId: attempt.correlationId,
         attempt: attempt.number, reason: attempt.accepted ? 'accepted-unreconciled' : 'lifetime-ended',
       });
@@ -243,26 +238,29 @@ export class HostComposerBridge {
     if (typeof correlationId !== 'string' || !correlationPattern.test(correlationId)) return reject('invalid-correlation');
     if (typeof command.content !== 'string' || !command.content.trim()) return reject('empty');
 
-    const prior = lifetime.attempts.get(correlationId);
-    if (prior && !prior.settled) return reject('attempt-in-flight');
-    if (prior?.outcome === 'delivered') return reject('already-delivered');
     const retry = command.retry === true;
-    if (prior && (!retry || prior.content !== command.content)) return reject('correlation-conflict');
-    if (!prior && !retry && lifetime.runtime.getSnapshot().sends.some((send) => send.clientMessageId === correlationId)) {
+    const priorAttempt = lifetime.attempts.get(correlationId);
+    if (priorAttempt) return reject('attempt-in-flight');
+    const priorSend = lifetime.runtime.getSnapshot().sends.find((send) => send.clientMessageId === correlationId);
+    if (priorSend?.hostSend?.lifetimeId === lifetime.lifetimeId && priorSend.reconciled) {
+      return reject('already-delivered');
+    }
+    if (priorSend && (!priorSend.hostSend || !retry || priorSend.content !== command.content)) {
       return reject('correlation-conflict');
     }
 
     const attempt: Attempt = {
-      correlationId, content: command.content, number: (prior?.number ?? 0) + 1,
+      correlationId,
+      number: priorSend?.hostSend?.lifetimeId === lifetime.lifetimeId ? priorSend.hostSend.attempt + 1 : 1,
       accepted: false, settled: false, lastCheckedGeneration: -1,
     };
     lifetime.attempts.set(correlationId, attempt);
-    this.hostCorrelations.add(correlationId);
     attempt.stopObserving = lifetime.runtime.observeHostSend(correlationId, (signal) => this.onSendSignal(lifetime, attempt, signal));
     this.publish();
-    if (retry) lifetime.runtime.retryHostSend(correlationId, command.content);
-    else if (!lifetime.runtime.send(command.content, correlationId)) {
-      this.settle(attempt, { event: 'failed', lifetimeId: lifetime.lifetimeId,
+    const hostSend = { lifetimeId: lifetime.lifetimeId, attempt: attempt.number } as const;
+    if (retry) lifetime.runtime.retryHostSend(correlationId, command.content, hostSend);
+    else if (!lifetime.runtime.send(command.content, correlationId, hostSend)) {
+      this.settle(lifetime, attempt, { event: 'failed', lifetimeId: lifetime.lifetimeId,
         correlationId, attempt: attempt.number, reason: 'refused', detail: 'send-not-started' });
     }
   }
@@ -278,15 +276,15 @@ export class HostComposerBridge {
         this.checkAccepted(lifetime, attempt, lifetime.runtime.getSnapshot().generation);
         return;
       case 'reconciled':
-        this.settle(attempt, { event: 'delivered', lifetimeId: lifetime.lifetimeId,
+        this.settle(lifetime, attempt, { event: 'delivered', lifetimeId: lifetime.lifetimeId,
           correlationId: attempt.correlationId, attempt: attempt.number });
         return;
       case 'failed':
-        this.settle(attempt, { event: 'failed', lifetimeId: lifetime.lifetimeId,
+        this.settle(lifetime, attempt, { event: 'failed', lifetimeId: lifetime.lifetimeId,
           correlationId: attempt.correlationId, attempt: attempt.number, reason: signal.reason, detail: signal.detail });
         return;
       case 'uncertain':
-        this.settle(attempt, { event: 'uncertain', lifetimeId: lifetime.lifetimeId,
+        this.settle(lifetime, attempt, { event: 'uncertain', lifetimeId: lifetime.lifetimeId,
           correlationId: attempt.correlationId, attempt: attempt.number, reason: signal.reason });
         return;
     }
@@ -303,21 +301,19 @@ export class HostComposerBridge {
     const result = await lifetime.runtime.refreshHostSend(attempt.correlationId);
     if (this.current !== lifetime || attempt.settled) return;
     if (result === 'found') {
-      this.settle(attempt, { event: 'delivered', lifetimeId: lifetime.lifetimeId,
+      this.settle(lifetime, attempt, { event: 'delivered', lifetimeId: lifetime.lifetimeId,
         correlationId: attempt.correlationId, attempt: attempt.number });
     } else if (result === 'absent') {
       lifetime.runtime.markHostSendUncertain(attempt.correlationId, 'accepted-unreconciled');
     }
   }
 
-  private settle(attempt: Attempt, event: HostComposerEvent): void {
+  private settle(lifetime: Lifetime, attempt: Attempt, event: HostComposerEvent): void {
     if (attempt.settled) return;
     attempt.settled = true;
-    attempt.outcome = event.event === 'delivered' ? 'delivered'
-      : event.event === 'failed' ? 'failed'
-        : event.event === 'uncertain' ? 'uncertain' : undefined;
     attempt.stopObserving?.();
     attempt.stopObserving = undefined;
+    if (lifetime.attempts.get(attempt.correlationId) === attempt) lifetime.attempts.delete(attempt.correlationId);
     this.emit(event);
     this.publish();
   }
