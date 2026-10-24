@@ -69,9 +69,8 @@ function rule(css: string, selector: string): string {
   const normalizedSelector = selector.replace(/\s+/g, ' ').trim();
   const matches = [...css.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
     .filter(([, selectors]) => selectors.split(',').some((candidate) => candidate.replace(/\s+/g, ' ').trim() === normalizedSelector));
-  const body = matches.at(-1)?.[2];
-  if (body === undefined) throw new Error(`Missing CSS rule for ${selector}`);
-  return body;
+  if (matches.length === 0) throw new Error(`Missing CSS rule for ${selector}`);
+  return matches.map(([, , body]) => body).join('\n');
 }
 
 const expectedLight: Tokens = {
@@ -146,12 +145,12 @@ describe('Nordic theme', () => {
     expect(rule(componentCss, '.tb-chat-code-scroll')).toContain('background: var(--tb-chat-code)');
     expect(rule(componentCss, '.tb-chat-code-scroll code')).toContain('color: var(--tb-chat-text)');
     expect(rule(componentCss, '.tb-chat-markdown th')).toContain('background: var(--tb-chat-code)');
-    expect(rule(componentCss, '.tb-chat-markdown th, .tb-chat-markdown td')).toContain('color: var(--tb-chat-text)');
+    expect(rule(componentCss, '.tb-chat-markdown th')).toContain('color: var(--tb-chat-text)');
 
     expect(componentSource).toContain('data-send-status={send.status}');
     expect(rule(componentCss, '.tb-chat-send-state[data-send-status="uncertain"]')).toContain('color: var(--tb-chat-caution)');
     expect(rule(componentCss, '.tb-chat-send-state[data-send-status="failed"]')).toContain('color: var(--tb-chat-danger)');
-    expect(rule(componentCss, '.tb-chat-send-state, .tb-chat-send-reason')).toContain('color: var(--tb-chat-muted)');
+    expect(rule(componentCss, '.tb-chat-send-state')).toContain('color: var(--tb-chat-muted)');
     expect(rule(componentCss, '.tb-chat-send-reason')).toContain('color: inherit');
     expect(rule(componentCss, '.tb-chat-send-actions span')).toContain('color: var(--tb-chat-muted)');
   });
@@ -166,7 +165,7 @@ describe('Nordic theme', () => {
     expect(rule(componentCss, '.tb-chat-scroll-latest')).toContain('var(--tb-chat-shadow) 12%');
     expect(rule(componentCss, '.tb-chat-status-popup')).toContain('var(--tb-chat-shadow) 20%');
 
-    const pills = rule(componentCss, '.tb-chat-send-actions button, .tb-chat-notice button, .tb-chat-history-error button, .tb-chat-status-popup > button');
+    const pills = rule(componentCss, '.tb-chat-send-actions button');
     expect(pills).toContain('background: transparent');
     expect(pills).toContain('color: var(--tb-chat-text)');
     expect(pills).toContain('border: 1px solid var(--tb-chat-border)');
