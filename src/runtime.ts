@@ -2,6 +2,7 @@ import {
   AuthorizationError,
   InvalidCursorError,
   UnsupportedTargetError,
+  type CanonicalTurn,
   type ChangeConnection,
   type ChangeNotice,
   type ChatRuntime,
@@ -21,6 +22,7 @@ import {
   type TightbeamAdapter,
   type TurnProvenance,
 } from './types';
+import { createTurnProvenance } from './provenance';
 
 const requiredCapabilities: readonly (keyof TargetCapabilities)[] = [
   'newestTail', 'stableOlderCursor', 'retainedHistoryAcrossResets',
@@ -44,6 +46,20 @@ function recordsFrom(map: Map<string, ConversationRecord>): readonly Conversatio
   return Object.freeze([...map.values()].sort(compareRecords));
 }
 
+/** Message publication can acquire its turn link without changing rowVersion. */
+function mergeRecord(previous: ConversationRecord | undefined, incoming: ConversationRecord): ConversationRecord {
+  if (!previous || incoming.rowVersion > previous.rowVersion) return incoming;
+  if (incoming.rowVersion === previous.rowVersion && previous.kind === 'message' && incoming.kind === 'message' &&
+      previous.id === incoming.id && previous.sessionKey === incoming.sessionKey &&
+      previous.turnSeq === undefined && incoming.turnSeq !== undefined) {
+    // Only the newly delivered link is authoritative at the same version. Keep
+    // the stored body, attribution, correlation and all other metadata intact.
+    return Object.freeze({ ...previous, turnSeq: incoming.turnSeq,
+      raw: Object.freeze({ ...previous.raw, turnSeq: incoming.turnSeq }) });
+  }
+  return previous;
+}
+
 const noProvenance: readonly TurnProvenance[] = Object.freeze([]);
 const hostCorrelationPattern = /^c_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -54,6 +70,7 @@ export function createTightbeamAdapter(transport: ChatTransport, profile: Target
 
 class SessionRuntime implements ChatRuntime {
   private state: RuntimeState;
+  private readonly turns = new Map<number, CanonicalTurn>();
   private readonly listeners = new Set<() => void>();
   private readonly identity: HostIdentity;
   private readonly rows = new Map<string, ConversationRecord>();
@@ -84,7 +101,7 @@ class SessionRuntime implements ChatRuntime {
   ) {
     this.identity = transport.currentIdentity();
     this.state = Object.freeze({
-      sessionKey, generation: 0, status: 'loading', records: Object.freeze([]),
+      sessionKey, principalKey: this.identity.principalKey, generation: 0, status: 'loading', records: Object.freeze([]),
       hasOlder: false, loadingOlder: false, sends: Object.freeze([]), targetLabel: profile.label,
       targetGateway: transport.targetGateway, provenance: noProvenance, provenanceAvailable: false,
     });
@@ -100,7 +117,19 @@ class SessionRuntime implements ChatRuntime {
 
   private publish(patch: Partial<RuntimeState>): void {
     if (this.disposed) return;
-    this.state = Object.freeze({ ...this.state, ...patch });
+    const next = { ...this.state, ...patch };
+    if (next.status !== 'ready') next.activeTurn = undefined;
+    else if ('records' in patch || 'session' in patch || 'activeTurn' in patch || 'status' in patch) {
+      let running: CanonicalTurn | undefined;
+      for (const turn of this.turns.values()) {
+        if (turn.status === 'running' && (!running || turn.seq > running.seq)) running = turn;
+      }
+      next.activeTurn = running
+        ? createTurnProvenance(running, next.records, this.identity.principalKey, next.session?.raw.ownerUserId)
+        : undefined;
+      next.provenanceAvailable = this.turns.size > 0;
+    }
+    this.state = Object.freeze(next);
     for (const listener of this.listeners) listener();
   }
 
@@ -162,11 +191,11 @@ class SessionRuntime implements ChatRuntime {
   private put(pageRecord: ConversationRecord): void {
     const pending = this.pendingHistoryUpserts.get(pageRecord.id);
     this.pendingHistoryUpserts.delete(pageRecord.id);
-    const record = pending && pending.rowVersion > pageRecord.rowVersion ? pending : pageRecord;
-    if (record.sessionKey !== this.sessionKey) return;
-    if ((this.tombstones.get(record.id) ?? -1) >= record.rowVersion) return;
-    const previous = this.rows.get(record.id);
-    if (!previous || record.rowVersion > previous.rowVersion) this.rows.set(record.id, record);
+    const incoming = pending ? mergeRecord(pageRecord, pending) : pageRecord;
+    if (incoming.sessionKey !== this.sessionKey) return;
+    if ((this.tombstones.get(incoming.id) ?? -1) >= incoming.rowVersion) return;
+    const record = mergeRecord(this.rows.get(incoming.id), incoming);
+    this.rows.set(record.id, record);
     if (record.kind === 'message' && record.clientMessageId && record.deviceId === this.identity.deviceId) {
       if (this.initializing) {
         this.pendingReconciledIds.add(record.clientMessageId);
@@ -205,7 +234,7 @@ class SessionRuntime implements ChatRuntime {
             return true;
           }
           const prior = this.pendingHistoryUpserts.get(record.id);
-          if (!prior || record.rowVersion > prior.rowVersion) this.pendingHistoryUpserts.set(record.id, record);
+          this.pendingHistoryUpserts.set(record.id, mergeRecord(prior, record));
           return false;
         }
         this.put(record);
@@ -234,6 +263,15 @@ class SessionRuntime implements ChatRuntime {
           this.publish({ session: notice.session, agentDisplayName: notice.session.displayName });
         }
         return false;
+      case 'turn': {
+        const turn = notice.turn;
+        if (turn.sessionKey !== this.sessionKey) return false;
+        const previous = this.turns.get(turn.seq);
+        if (previous && Number(turn.raw.rowVersion ?? 0) < Number(previous.raw.rowVersion ?? 0)) return false;
+        this.turns.set(turn.seq, turn);
+        if (!this.initializing) this.publish({ activeTurn: undefined });
+        return false;
+      }
       case 'ignore':
         return false;
       case 'observe':
@@ -357,6 +395,7 @@ class SessionRuntime implements ChatRuntime {
     this.controller = controller;
     this.buffered = [];
     this.bufferedSession = undefined;
+    this.turns.clear();
     this.pendingReconciledIds.clear();
     this.pendingHistoryUpserts.clear();
     this.initializing = true;
@@ -390,7 +429,7 @@ class SessionRuntime implements ChatRuntime {
       const candidate = new Map<string, ConversationRecord>();
       for (const record of tail.records) {
         const previous = candidate.get(record.id);
-        if (!previous || record.rowVersion > previous.rowVersion) candidate.set(record.id, record);
+        candidate.set(record.id, mergeRecord(previous, record));
       }
       let cursor = tail.oldestCursor;
       let hasOlder = tail.hasOlder;
@@ -405,7 +444,7 @@ class SessionRuntime implements ChatRuntime {
         if (page.oldestCursor === cursor && page.hasOlder) throw new UnsupportedTargetError('Older cursor did not advance.');
         for (const record of page.records) {
           const previous = candidate.get(record.id);
-          if (!previous || record.rowVersion > previous.rowVersion) candidate.set(record.id, record);
+          candidate.set(record.id, mergeRecord(previous, record));
         }
         cursor = page.oldestCursor;
         hasOlder = page.hasOlder;
@@ -508,8 +547,7 @@ class SessionRuntime implements ChatRuntime {
       this.reconcilePendingHistory(page.hasOlder);
       this.cursor = page.oldestCursor;
       this.restoreDepth++;
-      this.publish({ records: recordsFrom(this.rows), provenance: noProvenance, activeTurn: undefined,
-        provenanceAvailable: false, hasOlder: page.hasOlder, loadingOlder: false });
+      this.publish({ records: recordsFrom(this.rows), hasOlder: page.hasOlder, loadingOlder: false });
     } catch (error) {
       if (!this.isCurrent(generation) || signal.aborted) return;
       if (error instanceof AuthorizationError) {

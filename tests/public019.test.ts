@@ -73,6 +73,42 @@ function setup(heartbeatTimeoutMs?: number, observedVersion = version, configure
 }
 
 describe('public 0.1.9 released wire mapping and capability gates', () => {
+  it('consumes selected-session turn lifecycle payloads without turn queries or history refreshes', async () => {
+    const humanRow = { ...item, sender: 'user:person-1', turnSeq: 12 };
+    const candidate = setup(undefined, version, version, [humanRow]);
+    const runtime = createTightbeamAdapter(candidate.transport, candidate.profile).open(sessionKey);
+    await vi.waitFor(() => expect(candidate.changes.sent).toHaveLength(1));
+    candidate.changes.emit({ type: 'subscription_ready', subscriptionId: `chat:${sessionKey}` });
+    let sequence = 0;
+    const turnEvent = (status: string, extra: Record<string, unknown> = {}) => candidate.changes.emit({
+      type: 'change', schemaVersion: 2, subscriptionId: `chat:${sessionKey}`, seq: ++sequence,
+      class: status === 'queued' ? 'turn.queued' : status === 'running' ? 'turn.started' : 'turn.ended',
+      resource: 'turns', op: 'upsert', refs: { sessionKey, turnSeq: 12 },
+      payload: { seq: 12, rowVersion: sequence, sessionKey, status, messageId: humanRow.id,
+        origin: 'user:person-1', triggerSource: 'mike', ...extra },
+    });
+    turnEvent('running');
+    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+    expect(runtime.getSnapshot().principalKey).toBe('person-1');
+    expect(runtime.getSnapshot().activeTurn).toMatchObject({ sourceKind: 'human', turn: { seq: 12, status: 'running' } });
+    const history = runtime.getSnapshot().records;
+    const paths = [...candidate.paths];
+    turnEvent('completed');
+    expect(runtime.getSnapshot().activeTurn).toBeUndefined();
+    turnEvent('queued', { seq: 13, messageId: null });
+    expect(runtime.getSnapshot().activeTurn).toBeUndefined();
+    turnEvent('running', { seq: 13, messageId: null, triggerSource: 'batch', batchMemberCount: 2 });
+    expect(runtime.getSnapshot().activeTurn).toMatchObject({ batchCount: 2, turn: { seq: 13 } });
+    expect(runtime.getSnapshot().status).toBe('ready');
+    expect(runtime.getSnapshot().records).toBe(history);
+    expect(candidate.paths).toEqual(paths);
+    expect(candidate.paths.some(path => path.includes('/turns'))).toBe(false);
+    candidate.changes.disconnect();
+    expect(runtime.getSnapshot().status).toBe('stale');
+    expect(runtime.getSnapshot().activeTurn).toBeUndefined();
+    runtime.dispose();
+  });
+
   it('identifies Gateway 0.1.9+2857 exactly while keeping unqualified capabilities disabled', async () => {
     expect(PUBLIC_019_SOURCE_2857).toBe('45580d9ebac42218bbf35e1ce9694d536b378d76');
     const candidate = setup(undefined, identified2857);
@@ -333,13 +369,13 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
     await vi.waitFor(() => expect(tailStarted).toBe(true));
     changes.emit({ type: 'change', schemaVersion: 2, subscriptionId: 'chat:s-public', seq: 1,
       class: 'turn.started', resource: 'turns', op: 'upsert', refs: { sessionKey, turnSeq: 10 },
-      payload: { turnSeq: 10, sessionKey, status: 'running' } });
+      payload: { seq: 10, sessionKey, status: 'running', messageId: item.id, origin: 'user:person-1', triggerSource: 'mike' } });
     changes.emit({ type: 'change', schemaVersion: 2, subscriptionId: 'chat:s-public', seq: 2,
       class: 'session.updated', resource: 'sessions', op: 'upsert', refs: { sessionKey },
       payload: { ...session, rowVersion: 5, mechanicalStatus: 'running' } });
     releaseTail();
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
-    expect(sessionReads).toBe(2);
+    expect(sessionReads).toBe(1);
     expect(runtime.getSnapshot().session?.activity).toBe('running');
     expect(runtime.getSnapshot().records.map((record) => record.id)).toEqual(['m_1']);
     expect(runtime.send('one human message')).toBeTruthy();
@@ -545,8 +581,11 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
       record: { id: 'm_1', createdAt: '2026-10-12T00:00:00.000Z', raw: { at: item.at } } });
     expect(() => decodePublic019Notice({ ...notice, payload: { ...item, messageType: 'marker' } }, sessionKey))
       .toThrow(UnsupportedTargetError);
-    expect(decodePublic019Notice({ ...notice, class: 'turn.started', resource: 'turns' }, sessionKey))
-      .toEqual({ operation: 'observe', sessionKey, resource: 'turn.started' });
+    expect(decodePublic019Notice({ ...notice, class: 'turn.started', resource: 'turns', payload: {
+      seq: 12, sessionKey, status: 'running', messageId: null, origin: 'process:events', triggerSource: 'batch', batchMemberCount: 2,
+    } }, sessionKey)).toMatchObject({ operation: 'turn', turn: {
+      seq: 12, sessionKey, status: 'running', messageId: undefined, triggerSource: 'batch', batchMemberCount: 2,
+    } });
     expect(decodePublic019Notice({ ...notice, class: 'wake.fired', resource: 'wakes' }, sessionKey))
       .toEqual({ operation: 'observe', sessionKey, resource: 'wake.fired' });
     expect(decodePublic019Notice({ ...notice,

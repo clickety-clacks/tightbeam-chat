@@ -98,6 +98,116 @@ class ControlledTransport implements ChatTransport {
 async function settle() { await vi.waitFor(() => {}, { timeout: 50 }); }
 
 describe('framework-independent runtime', () => {
+  it.each(['live', 'running-first seed', 'queued-first seed'])(
+    'keeps the running caption across queued successors (%s)', async (arrival) => {
+      const transport = new ControlledTransport();
+      transport.rows[7] = message(8, { role: 'user', sender: 'user:person', turnSeq: 90 });
+      const running: CanonicalTurn = { seq: 90, sessionKey, status: 'running', messageId: 'm8',
+        origin: 'user:person', triggerSource: 'mike', raw: { rowVersion: 1 } };
+      const queued: CanonicalTurn = { ...running, seq: 91, status: 'queued' };
+      const emit = (turn: CanonicalTurn) => transport.callbacks?.onNotice({ operation: 'turn', turn });
+      if (arrival !== 'live') transport.tailHook = () => {
+        for (const turn of arrival === 'running-first seed' ? [running, queued] : [queued, running]) emit(turn);
+      };
+      const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+      await runtime.rebuild();
+      if (arrival === 'live') { emit(running); emit(queued); }
+      const caption = () => runtime.getSnapshot().activeTurn?.turn.seq;
+      expect(caption()).toBe(90);
+      emit({ ...queued, status: 'canceled', raw: { rowVersion: 2 } });
+      expect(caption()).toBe(90);
+      emit({ ...queued, seq: 92 });
+      expect(caption()).toBe(90);
+      emit({ ...running, status: 'completed', raw: { rowVersion: 2 } });
+      expect(caption()).toBeUndefined();
+      emit({ ...queued, seq: 92, status: 'running', raw: { rowVersion: 2 } });
+      expect(caption()).toBe(92);
+      emit({ ...running, status: 'completed', raw: { rowVersion: 3 } });
+      expect(caption()).toBe(92);
+      emit({ ...queued, seq: 92, status: 'completed', raw: { rowVersion: 3 } });
+      expect(caption()).toBeUndefined();
+      runtime.dispose();
+    });
+
+  it.each(['live', 'buffered rebuild', 'restored-page overlap', 'older-page race'])(
+    'enriches a missing same-version turn link without replacing other message fields (%s)', async (arrival) => {
+      const transport = new ControlledTransport();
+      const index = arrival === 'older-page race' ? 4 : 7;
+      const original = message(index + 1, { role: 'user', sender: 'user:person', content: 'Original human words',
+        attachments: [{ name: 'original.txt' }], raw: { turnSeq: null, preserved: 'metadata' } });
+      transport.rows[index] = original;
+      const enriched = { ...original, turnSeq: 90, content: 'Do not replace the stored words', sender: 'user:another',
+        attachments: [], turnIncludesHuman: false, raw: { turnSeq: 90, unrelated: 'not a new version' } };
+      const active: CanonicalTurn = { seq: 90, sessionKey, status: 'running', messageId: 'carrier',
+        origin: 'process:notifications', triggerSource: 'batch', batchMemberCount: 1, raw: { rowVersion: 1 } };
+      const emitTurn = () => transport.callbacks?.onNotice({ operation: 'turn', turn: active });
+      const reads = [vi.spyOn(transport, 'readTurn'), vi.spyOn(transport, 'readMessage'), vi.spyOn(transport, 'readRecentTurns')];
+      if (arrival === 'buffered rebuild') transport.tailHook = () => { emitTurn(); transport.emit(enriched); };
+      const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+      await runtime.rebuild();
+      if (arrival === 'restored-page overlap') {
+        await runtime.loadOlder();
+        transport.readOlder = async () => ({ records: [message(5), enriched], oldestCursor: 'm5', hasOlder: false, coverage: 'controlled-fixture' });
+        transport.tailHook = emitTurn;
+        await runtime.rebuild();
+      } else if (arrival !== 'buffered rebuild') {
+        emitTurn();
+        expect(runtime.getSnapshot().activeTurn?.sourceKind).toBe('unknown');
+        if (arrival === 'older-page race') {
+          // The original row arrives on the page after its enrichment notice.
+          transport.emit(original);
+          transport.emit(enriched);
+          await runtime.loadOlder();
+        } else transport.emit(enriched);
+      }
+      const stored = () => runtime.getSnapshot().records.find(row => row.id === original.id) as CanonicalMessage;
+      expect(stored()).toEqual({ ...original, turnSeq: 90, raw: { ...original.raw, turnSeq: 90 } });
+      expect(original.turnSeq).toBeUndefined();
+      expect(runtime.getSnapshot().activeTurn?.sourceKind).toBe('human');
+      transport.emit(original);
+      transport.emit({ ...enriched, turnSeq: 91 });
+      expect(stored().turnSeq).toBe(90);
+      expect(stored().content).toBe(original.content);
+      expect(reads.every(read => read.mock.calls.length === 0)).toBe(true);
+      runtime.dispose();
+    });
+
+  it('keeps live activity through paging, rebuilds it from the new subscription, and ignores the old generation', async () => {
+    const transport = new ControlledTransport();
+    transport.rows[7] = message(8, { role: 'user', sender: 'user:person', turnSeq: 90 });
+    const reads = [vi.spyOn(transport, 'readTurn'), vi.spyOn(transport, 'readMessage'), vi.spyOn(transport, 'readRecentTurns'),
+      vi.spyOn(transport, 'resolveOriginDisplayName')];
+    const active: CanonicalTurn = { seq: 90, sessionKey, status: 'running', messageId: 'm8',
+      origin: 'user:someone-else', triggerSource: 'mike', raw: { rowVersion: 1 } };
+    transport.tailHook = () => transport.callbacks?.onNotice({ operation: 'turn', turn: active });
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await runtime.rebuild();
+    expect(runtime.getSnapshot().activeTurn?.sourceKind).toBe('human');
+    await runtime.loadOlder();
+    expect(runtime.getSnapshot().activeTurn?.turn.seq).toBe(90);
+    const oldCallbacks = transport.callbacks!;
+    transport.doubt();
+    expect(runtime.getSnapshot().activeTurn).toBeUndefined();
+    transport.tailHook = undefined;
+    await runtime.rebuild();
+    expect(runtime.getSnapshot().activeTurn).toBeUndefined();
+    oldCallbacks.onNotice({ operation: 'turn', turn: active });
+    expect(runtime.getSnapshot().activeTurn).toBeUndefined();
+    transport.callbacks?.onNotice({ operation: 'turn', turn: { ...active, sessionKey: 'another-session' } });
+    expect(runtime.getSnapshot().activeTurn).toBeUndefined();
+    transport.callbacks?.onNotice({ operation: 'turn', turn: active });
+    expect(runtime.getSnapshot().activeTurn?.sourceKind).toBe('human');
+    for (const status of ['completed', 'failed', 'canceled']) {
+      transport.callbacks?.onNotice({ operation: 'turn', turn: { ...active, status, raw: { rowVersion: 2 } } });
+      expect(runtime.getSnapshot().activeTurn).toBeUndefined();
+    }
+    // An older buffered seed must not resurrect a completed turn.
+    transport.callbacks?.onNotice({ operation: 'turn', turn: active });
+    expect(runtime.getSnapshot().activeTurn).toBeUndefined();
+    expect(reads.every(read => read.mock.calls.length === 0)).toBe(true);
+    runtime.dispose();
+  });
+
   it('starts recovery immediately after repeated failures and cancels the old backoff retry', async () => {
     vi.useFakeTimers();
     const transport = new ControlledTransport();
