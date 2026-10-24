@@ -260,16 +260,32 @@ function StatusIcon({ state }: { state: RuntimeState }) {
   return <span className={`tb-chat-status-dot tb-chat-status-${status}`} aria-hidden="true" />;
 }
 
-const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, registerRow, scrollKey: scrollKeyOverride }: {
+const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, registerRow, scrollKey: scrollKeyOverride, arriving }: {
   bubble: Bubble;
   renderMessage?: TightbeamChatProps['renderMessage'];
   agentName: string;
   registerRow: (key: string, element: HTMLElement | null) => void;
   scrollKey?: string;
+  arriving: boolean;
 }) {
   const { record } = bubble;
   const scrollKey = scrollKeyOverride ?? (bubble.derived ? bubble.key : record.id);
-  const rowRef = useCallback((element: HTMLElement | null) => registerRow(scrollKey, element), [registerRow, scrollKey]);
+  const row = useRef<HTMLElement | null>(null);
+  const entrance = useRef<Animation | undefined>(undefined);
+  const rowRef = useCallback((element: HTMLElement | null) => {
+    row.current = element;
+    registerRow(scrollKey, element);
+  }, [registerRow, scrollKey]);
+  useLayoutEffect(() => {
+    if (!arriving || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+    // Opacity leaves row geometry intact for reading anchors and smooth follow.
+    const animation = row.current?.animate?.([{ opacity: 0 }, { opacity: 1 }], {
+      duration: 180, easing: 'ease-out',
+    });
+    entrance.current = animation;
+    if (animation) animation.onfinish = () => { entrance.current = undefined; };
+  }, [arriving]);
+  useLayoutEffect(() => () => entrance.current?.cancel(), []);
   const time = localTimestamp(record.createdAt);
   const context: RenderContext = {
     sessionKey: record.sessionKey,
@@ -440,6 +456,17 @@ function ChatBody({ runtime, renderMessage, className }: {
   const timeline = useMemo(() => {
     return composeTimeline(bubbles, localSends, canonicalSends, sendsByIdentity);
   }, [bubbles, canonicalSends, localSends, sendsByIdentity]);
+  const previousTail = useRef<{ generation: number; ready: boolean; seq: number } | null>(null);
+  // Canonical records are ordered by sequence. A high-water mark excludes old
+  // pages and newly revealed filtered rows without scanning retained history.
+  const tailSeq = state.records.at(-1)?.seq ?? -1;
+  const prior = previousTail.current;
+  const arrivalFloor = state.status === 'ready' && prior?.ready && prior.generation === state.generation
+    ? prior.seq : Infinity;
+  useLayoutEffect(() => {
+    previousTail.current = { generation: state.generation, ready: state.status === 'ready',
+      seq: Math.max(previousTail.current?.seq ?? -1, tailSeq) };
+  }, [state.generation, state.status, tailSeq]);
   const statusName = statusText(state);
 
   useEffect(() => {
@@ -562,6 +589,7 @@ function ChatBody({ runtime, renderMessage, className }: {
         if (item.kind === 'bubble') {
           const { bubble } = item;
           return <RecordRow key={bubble.key} bubble={bubble} scrollKey={item.scrollKey}
+            arriving={bubble.record.seq > arrivalFloor && !item.scrollKey}
             renderMessage={renderMessage} agentName={agentName} registerRow={reading.registerRow} />;
         }
         const { send } = item;

@@ -63,7 +63,9 @@ body { background: #f6f6f6; color: #1e1e1e; }
 .tb-chat-scroll-latest {
   position: absolute;
   z-index: 4;
-  right: clamp(.65rem, 3vw, 1.4rem);
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: calc(100% - 1.3rem);
   bottom: calc(var(--tb-chat-keyboard-inset, 0px) + env(safe-area-inset-bottom) + var(--tb-chat-composer-height, 5rem) + 1.4rem);
   padding: .45rem .8rem;
   border: 1px solid var(--tb-chat-border);
