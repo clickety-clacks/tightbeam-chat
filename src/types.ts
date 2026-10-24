@@ -133,6 +133,7 @@ export interface HumanSubmission {
 export interface HostSendContext {
   readonly lifetimeId: string;
   readonly attempt: number;
+  readonly outcome?: 'delivered' | 'failed' | 'uncertain';
 }
 
 export type HumanSendResult =
@@ -231,6 +232,9 @@ export interface ChatRuntime {
   refreshHostSend(clientMessageId: string): Promise<'found' | 'absent' | 'unavailable'>;
   /** Retry is always explicitly initiated by the host and uses the same correlation/content. */
   retryHostSend(clientMessageId: string, content: string, hostSend?: HostSendContext): void;
+  /** Retain only the latest terminal outcome beside its local message row for same-lifetime checks. */
+  recordHostSendOutcome(clientMessageId: string, hostSend: HostSendContext,
+    outcome: 'delivered' | 'failed' | 'uncertain'): void;
   /** Reflect an accepted attempt that reached a caught-up snapshot without its row. */
   markHostSendUncertain(clientMessageId: string, reason: 'accepted-unreconciled'): void;
   /** Restart bypasses an in-flight attempt, for foreground return or manual recovery. */

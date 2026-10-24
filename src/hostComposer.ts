@@ -242,7 +242,7 @@ export class HostComposerBridge {
     const priorAttempt = lifetime.attempts.get(correlationId);
     if (priorAttempt) return reject('attempt-in-flight');
     const priorSend = lifetime.runtime.getSnapshot().sends.find((send) => send.clientMessageId === correlationId);
-    if (priorSend?.hostSend?.lifetimeId === lifetime.lifetimeId && priorSend.reconciled) {
+    if (priorSend?.hostSend?.lifetimeId === lifetime.lifetimeId && priorSend.hostSend.outcome === 'delivered') {
       return reject('already-delivered');
     }
     if (priorSend && (!priorSend.hostSend || !retry || priorSend.content !== command.content)) {
@@ -313,6 +313,10 @@ export class HostComposerBridge {
     attempt.settled = true;
     attempt.stopObserving?.();
     attempt.stopObserving = undefined;
+    if (event.event === 'delivered' || event.event === 'failed' || event.event === 'uncertain') {
+      lifetime.runtime.recordHostSendOutcome(attempt.correlationId,
+        { lifetimeId: lifetime.lifetimeId, attempt: attempt.number }, event.event);
+    }
     if (lifetime.attempts.get(attempt.correlationId) === attempt) lifetime.attempts.delete(attempt.correlationId);
     this.emit(event);
     this.publish();

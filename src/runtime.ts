@@ -687,6 +687,17 @@ class SessionRuntime implements ChatRuntime {
     })();
   };
 
+  recordHostSendOutcome = (clientMessageId: string, hostSend: HostSendContext,
+    outcome: 'delivered' | 'failed' | 'uncertain'): void => {
+    const current = this.state.sends.find((send) => send.clientMessageId === clientMessageId);
+    if (!current?.hostSend || current.hostSend.lifetimeId !== hostSend.lifetimeId ||
+        current.hostSend.attempt !== hostSend.attempt) return;
+    this.updateSend(clientMessageId, (send) => ({
+      ...send,
+      hostSend: { ...hostSend, outcome },
+    }));
+  };
+
   markHostSendUncertain = (clientMessageId: string, reason: 'accepted-unreconciled'): void => {
     this.updateSend(clientMessageId, (send) => send.reconciled ? send
       : { ...send, status: 'uncertain', reason: 'Accepted, but no matching canonical row appeared in the refreshed conversation.' });

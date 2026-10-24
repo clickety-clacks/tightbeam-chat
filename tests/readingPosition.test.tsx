@@ -23,6 +23,7 @@ class ReadingRuntime implements ChatRuntime {
   observeHostSend = () => () => {};
   refreshHostSend = async () => 'absent' as const;
   retryHostSend = () => {};
+  recordHostSendOutcome = () => {};
   markHostSendUncertain = () => {};
   dispose = () => {};
 }
