@@ -156,6 +156,19 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     expect(document.querySelector('.tb-chat-host-composer-hidden .tb-chat-viewport')).not.toBeNull();
   });
 
+  it('leaves keyboard navigation to the host after native-composer opt-in', async () => {
+    const events: HostComposerEvent[] = [];
+    installDeclaration(events);
+    openChat(new HostComposerTransport(), 'native-keyboard');
+    await waitForReady(events, 'native-keyboard');
+    await waitFor(() => expect(screen.queryByRole('textbox')).toBeNull());
+
+    const transcript = screen.getByRole('log');
+    expect(fireEvent.keyDown(transcript, { key: 'Tab' })).toBe(true);
+    expect(fireEvent.keyDown(transcript, { key: 'j', ctrlKey: true })).toBe(true);
+    expect(fireEvent.keyDown(transcript, { key: 'u', ctrlKey: true })).toBe(true);
+  });
+
   it('keeps the standalone composer and status control for absent or unsupported opt-in', async () => {
     const transport = new HostComposerTransport();
     openChat(transport, 'standalone');

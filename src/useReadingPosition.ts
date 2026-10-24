@@ -85,6 +85,13 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
     } else if (following.current) {
       moveToLatest(true);
     } else {
+      // Content changes should preserve the reader's current anchor rather
+      // than compete with a still-running manual smooth scroll.
+      if (animating.current) {
+        box.scrollTo({ top: box.scrollTop, behavior: 'instant' });
+        animating.current = false;
+        target.current = undefined;
+      }
       const rows = registeredRows.current;
       const survivor = anchors.current.find(anchor => rows.has(anchor.key));
       if (survivor) {
@@ -114,7 +121,7 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
   const onScroll = () => {
     const box = viewport.current;
     if (!box) return;
-    if (animating.current && distance(box) < 1) {
+    if (animating.current && target.current !== undefined && Math.abs(box.scrollTop - target.current) < 1) {
       animating.current = false;
       target.current = undefined;
     }
@@ -138,6 +145,34 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
     following.current = false;
     capture();
   };
+  const scrollBy = (amount: number) => {
+    const box = viewport.current;
+    if (!box || !Number.isFinite(amount) || amount === 0) return;
+    const bottom = Math.max(0, box.scrollHeight - box.clientHeight);
+    // Repeat events build on the pending destination, so held keys continue
+    // moving instead of repeatedly resetting the same smooth scroll.
+    const origin = animating.current && target.current !== undefined ? target.current : box.scrollTop;
+    const destination = Math.max(0, Math.min(bottom, origin + amount));
+    if (Math.abs(destination - origin) < 1) {
+      if (!animating.current) {
+        following.current = distance(box) <= bottomThreshold;
+        setShowLatest(!following.current);
+        capture();
+      }
+      return;
+    }
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    animating.current = !reduceMotion;
+    target.current = animating.current ? destination : undefined;
+    following.current = bottom - destination <= bottomThreshold;
+    setShowLatest(!following.current);
+    box.scrollTo({ top: destination, behavior: animating.current ? 'smooth' : 'instant' });
+    if (!animating.current) {
+      following.current = distance(box) <= bottomThreshold;
+      setShowLatest(!following.current);
+    }
+    capture();
+  };
   const scrollToLatest = () => {
     const box = viewport.current;
     if (!box) return;
@@ -146,5 +181,5 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
     moveToLatest(true);
   };
 
-  return { viewport, content, registerRow, showLatest, onScroll, interrupt, holdPosition, scrollToLatest };
+  return { viewport, content, registerRow, showLatest, onScroll, interrupt, holdPosition, scrollBy, scrollToLatest };
 }
