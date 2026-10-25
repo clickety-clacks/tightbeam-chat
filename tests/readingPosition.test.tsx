@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { TightbeamChat, type TightbeamChatProps } from '../src/TightbeamChat';
 import { useReadingPosition } from '../src/useReadingPosition';
 import { createTightbeamAdapter } from '../src/runtime';
-import { AuthorizationError, type ChatTransport, type TargetProfile } from '../src/types';
+import { type ChatTransport, type TargetProfile } from '../src/types';
 import type { CanonicalMessage, ChatRuntime, ConversationRecord, RuntimeState } from '../src/types';
 
 class ReadingRuntime implements ChatRuntime {
@@ -316,9 +316,7 @@ describe('conversation reading position', () => {
       readSession: async () => ({ sessionKey: 'reading', rowVersion: 1, displayName: 'Assistant', raw: {} }),
       readTail: async () => { await historyGate; return { records, hasOlder: false, oldestCursor: null, coverage: 'reading' }; },
       readOlder: async () => ({ records: [], hasOlder: false, oldestCursor: null, coverage: 'reading' }),
-      readTurn: async () => null, readMessage: async () => null,
-      readRecentTurns: async () => { throw new AuthorizationError('Optional provenance unavailable'); },
-      resolveOriginDisplayName: async () => undefined, proveCoverage: () => true,
+      proveCoverage: () => true,
       sendHuman: async () => { throw new Error('No send expected'); },
     };
     const runtime = createTightbeamAdapter(transport, profile).open('reading');

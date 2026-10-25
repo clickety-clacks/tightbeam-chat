@@ -129,7 +129,9 @@ class SessionRuntime implements ChatRuntime {
     this.identity = transport.currentIdentity();
     this.state = Object.freeze({
       sessionKey, principalKey: this.identity.principalKey, generation: 0, status: 'loading', records: Object.freeze([]),
-      toolCallsEnabled: transport.openToolChanges && transport.readToolCalls ? true : undefined,
+      // The transcript is ready without optional tool history; the visible
+      // toggle starts its separate stream and history read only on request.
+      toolCallsEnabled: transport.openToolChanges && transport.readToolCalls ? false : undefined,
       toolCalls: Object.freeze([]), toolCallIndex: undefined,
       hasOlder: false, loadingOlder: false, sends: Object.freeze([]), targetLabel: profile.label,
       targetGateway: transport.targetGateway, provenance: noProvenance, provenanceAvailable: false,
@@ -380,8 +382,6 @@ class SessionRuntime implements ChatRuntime {
       }
       case 'tool':
         return false; // Only the separate optional category connection owns tool records.
-      case 'ignore':
-      case 'observe':
       case 'unknown':
         // These frames still advance the transport sequence, but they do not
         // change the selected transcript or justify replacing its snapshot.

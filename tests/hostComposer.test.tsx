@@ -4,7 +4,7 @@ import { TightbeamChat } from '../src/TightbeamChat';
 import { createTightbeamAdapter } from '../src/runtime';
 import { HOST_COMMAND_NAME, HOST_DECLARATION_NAME, HostComposerBridge, type HostComposerCommandEntry, type HostComposerEvent } from '../src/hostComposer';
 import type {
-  CanonicalMessage, CanonicalTurn, ChangeCallbacks, ChangeNotice, ChatRuntime, ChatTransport,
+  CanonicalMessage, ChangeCallbacks, ChangeNotice, ChatRuntime, ChatTransport,
   ConversationPage, ConversationRecord, HostIdentity, HumanSendResult, HumanSubmission,
   SessionRecord, TargetCapabilities, TargetObservation, TargetProfile, TightbeamAdapter,
 } from '../src/types';
@@ -58,11 +58,6 @@ class HostComposerTransport implements ChatTransport {
   readOlder = async (_sessionKey: string, _before: string): Promise<ConversationPage> => ({
     records: [], oldestCursor: null, hasOlder: false, coverage: _sessionKey,
   });
-  readTurn = async (_sessionKey: string, _seq: number): Promise<CanonicalTurn | null> => null;
-  readMessage = async (sessionKey: string, messageId: string): Promise<CanonicalMessage | null> =>
-    (this.records.get(sessionKey) ?? []).find((record): record is CanonicalMessage => record.kind === 'message' && record.id === messageId) ?? null;
-  readRecentTurns = async (): Promise<readonly CanonicalTurn[]> => [];
-  resolveOriginDisplayName = async (): Promise<string | undefined> => undefined;
   proveCoverage = (session: SessionRecord, page: ConversationPage, _buffered: readonly ChangeNotice[]) => page.coverage === session.sessionKey;
   sendHuman = async (submission: HumanSubmission): Promise<HumanSendResult> => {
     this.submissions.push(submission);
