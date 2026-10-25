@@ -46,6 +46,13 @@ function composite(foreground: Color, background: Color): Color {
   return { rgb, alpha: 1 };
 }
 
+function mix(foreground: Color, background: Color, weight: number): Color {
+  return {
+    rgb: foreground.rgb.map((channel, index) => channel * weight + background.rgb[index] * (1 - weight)) as unknown as Rgb,
+    alpha: 1,
+  };
+}
+
 function luminance(color: Color): number {
   const linear = color.rgb.map((channel) => {
     const value = channel / 255;
@@ -157,6 +164,7 @@ describe('Nordic theme', () => {
   });
 
   it('uses glass for the composer and the approved treatments for pills, status, popup, and host composer', () => {
+    const { light, dark } = tokenBlocks(themeCss);
     const shell = rule(componentCss, '.tb-chat-input-shell');
     expect(shell).toContain('border: var(--tb-chat-input-border-width) solid var(--tb-chat-glass-edge)');
     expect(shell).toContain('background: var(--tb-chat-glass)');
@@ -179,8 +187,30 @@ describe('Nordic theme', () => {
     expect(disabled).toContain('color: var(--tb-chat-muted)');
     expect(disabled).not.toContain('opacity:');
 
-    expect(rule(componentCss, '.tb-chat-active-caption > span:first-child')).toContain('color: var(--tb-chat-ok)');
-    expect(componentCss).toMatch(/\.tb-chat-notice-unauthorized, \.tb-chat-notice-unsupported, \.tb-chat-notice-error,\s*\.tb-chat-history-error\s*\{[^}]*color:\s*var\(--tb-chat-danger\);/);
+    const caption = rule(componentCss, '.tb-chat-caption');
+    expect(caption).toContain('font-size: .78rem');
+    expect(caption).toContain('text-align: start');
+    expect(caption).toContain('background: transparent');
+    expect(caption).toContain('border: 0');
+    expect(caption).toContain('box-shadow: none');
+    expect(rule(componentCss, '.tb-chat-caption::before')).toContain("content: '•'");
+    expect(rule(componentCss, '.tb-chat-caption-neutral')).toContain('color: var(--tb-chat-muted)');
+    expect(rule(componentCss, '.tb-chat-caption-caution')).toContain('var(--tb-chat-caution) 94%');
+    expect(rule(componentCss, '.tb-chat-caption-danger')).toContain('var(--tb-chat-danger) 94%');
+    for (const tokens of [light, dark]) {
+      const background = tokenColor(tokens, 'background');
+      for (const role of ['caution', 'danger']) {
+        expect(contrast(mix(tokenColor(tokens, role), background, .94), background), `${role} caption on its theme surface`)
+          .toBeGreaterThanOrEqual(4.5);
+      }
+    }
+    const captionAction = rule(componentCss, '.tb-chat-caption button');
+    expect(captionAction).toContain('min-height: 2.75rem');
+    expect(captionAction).toContain('background: transparent');
+    expect(captionAction).toContain('border: 0');
+    expect(captionAction).toContain('text-decoration: underline');
+    expect(rule(componentCss, '.tb-chat-tool-controls > button')).toContain('border: 1px solid currentColor');
+    expect(rule(componentCss, '.tb-chat-transition')).not.toContain('border:');
     expect(rule(componentCss, '.tb-chat-status-ready')).toContain('background: var(--tb-chat-ok)');
     expect(rule(componentCss, '.tb-chat-status-loading, .tb-chat-status-stale')).toContain('background: var(--tb-chat-caution)');
     expect(rule(componentCss, '.tb-chat-status-error, .tb-chat-status-unauthorized, .tb-chat-status-unsupported')).toContain('background: var(--tb-chat-danger)');
