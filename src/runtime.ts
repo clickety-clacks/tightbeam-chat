@@ -63,6 +63,24 @@ function mergeRecord(previous: ConversationRecord | undefined, incoming: Convers
 
 const noProvenance: readonly TurnProvenance[] = Object.freeze([]);
 const hostCorrelationPattern = /^c_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const humanSendRetryInitialDelayMs = 250;
+const humanSendRetryMaxDelayMs = 30_000;
+
+/** Pace only after a send socket has dropped; a live acknowledgement has no timeout. */
+function waitForHumanSendRetry(signal: AbortSignal, delayMs: number): Promise<boolean> {
+  if (signal.aborted) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    let timer: ReturnType<typeof setTimeout>;
+    const finish = (elapsed: boolean) => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', onAbort);
+      resolve(elapsed);
+    };
+    const onAbort = () => finish(false);
+    timer = setTimeout(() => finish(true), delayMs);
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
 
 /** A target-independent runtime. Its transport is the only backend-specific code. */
 export function createTightbeamAdapter(transport: ChatTransport, profile: TargetProfile): TightbeamAdapter {
@@ -568,6 +586,7 @@ class SessionRuntime implements ChatRuntime {
     this.sendControllers.set(submission.clientMessageId, controller);
     try {
       let result: HumanSendResult;
+      let retryDelayMs = humanSendRetryInitialDelayMs;
       while (true) {
         try {
           result = await this.transport.sendHuman(submission, controller.signal);
@@ -585,8 +604,28 @@ class SessionRuntime implements ChatRuntime {
         if (result.outcome !== 'retryable') break;
         // A live-update reconnect is separate from the human socket. Keep asking
         // the selected Gateway with the identical ID/content after each drop.
-        if (!this.profile.capabilities.humanSendDedupe ||
-            this.state.status === 'unsupported' || this.state.status === 'unauthorized') return;
+        // A small capped backoff paces repeated socket drops without giving up
+        // while waiting for any individual acknowledgement.
+        if (this.state.status === 'unauthorized') return;
+        if (!this.profile.capabilities.humanSendDedupe || this.state.status === 'unsupported') {
+          result = { outcome: 'uncertain', reason: 'retry-unavailable' };
+          break;
+        }
+        if (!await waitForHumanSendRetry(controller.signal, retryDelayMs)) return;
+        if (controller.signal.aborted || !this.checkIdentity()) return;
+        const statusAfterWait = this.getSnapshot().status;
+        const resumed = this.state.sends.find((send) => send.clientMessageId === submission.clientMessageId);
+        if (!resumed) return;
+        if (resumed.reconciled) {
+          result = { outcome: 'accepted' };
+          break;
+        }
+        if (statusAfterWait === 'unauthorized') return;
+        if (statusAfterWait === 'unsupported') {
+          result = { outcome: 'uncertain', reason: 'retry-unavailable' };
+          break;
+        }
+        retryDelayMs = Math.min(retryDelayMs * 2, humanSendRetryMaxDelayMs);
       }
       if (!this.checkIdentity() || controller.signal.aborted) return;
       this.updateSend(submission.clientMessageId, (send) => {

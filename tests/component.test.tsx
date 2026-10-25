@@ -743,6 +743,20 @@ describe('conversation surface', () => {
     expect(screen.getByRole('textbox', { name: 'Message to Research assistant' })).toHaveProperty('value', 'Uncertain text');
   });
 
+  it('explains an unconfirmed send when an unsupported target prevents safe retry', () => {
+    const sessionKey = 'unsupported-send-recovery';
+    const runtime = new FakeRuntime(sessionKey, { status: 'unsupported', sends: [{
+      sessionKey, deviceId: 'device', clientMessageId: 'unsupported-retry-id',
+      content: 'Check this message before retrying', submittedAt: '2026-10-25T09:00:00.000Z',
+      status: 'uncertain', reconciled: false, reason: 'retry-unavailable',
+    }] });
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+
+    expect(screen.getByText('This target stopped supporting safe retries. Delivery could not be confirmed; check the conversation before retrying.')).toBeTruthy();
+    expect(screen.getByText('Reconnect to a supported target before retrying.')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Retry message' })).toHaveProperty('disabled', true);
+  });
+
   it('places a retried local send at its authoritative history position and keeps its reading key through reconciliation', () => {
     const sessionKey = 'chronological-send';
     const submittedAt = '2026-10-23T09:00:00.000Z';

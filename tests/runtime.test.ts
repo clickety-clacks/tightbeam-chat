@@ -637,6 +637,67 @@ describe('framework-independent runtime', () => {
     runtime.dispose();
   });
 
+  it('paces repeated dropped sockets and settles when the next connection is unreachable', async () => {
+    const transport = new ControlledTransport();
+    transport.nextSend = async () => transport.submissions.length <= 2
+      ? { outcome: 'retryable', reason: 'socket closed before acknowledgement' }
+      : { outcome: 'unreachable', reason: 'Not connected to the server.' };
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await runtime.rebuild();
+    vi.useFakeTimers();
+    try {
+      const id = runtime.send('  same retry content  ')!;
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(transport.submissions).toHaveLength(1);
+      expect(runtime.getSnapshot().sends[0]).toMatchObject({ clientMessageId: id, status: 'pending' });
+
+      await vi.advanceTimersByTimeAsync(249);
+      expect(transport.submissions).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(transport.submissions).toHaveLength(2);
+      await vi.advanceTimersByTimeAsync(499);
+      expect(transport.submissions).toHaveLength(2);
+      await vi.advanceTimersByTimeAsync(1);
+
+      expect(runtime.getSnapshot().sends[0]).toMatchObject({
+        clientMessageId: id, content: '  same retry content  ', status: 'failed', reason: 'unreachable',
+      });
+      const attempts = transport.submissions.filter((submission) => submission.clientMessageId === id);
+      expect(attempts).toHaveLength(3);
+      expect(attempts[1]).toEqual(attempts[0]);
+      expect(attempts[2]).toEqual(attempts[0]);
+    } finally {
+      runtime.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it('settles a dropped send as uncertain if the target becomes unsupported before retry', async () => {
+    const transport = new ControlledTransport();
+    const firstSend = deferred<HumanSendResult>();
+    transport.nextSend = () => firstSend.promise;
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await runtime.rebuild();
+
+    const id = runtime.send('  ambiguous after target change  ')!;
+    const signals: unknown[] = [];
+    runtime.observeHostSend(id, (signal) => signals.push(signal));
+    transport.readOlder = async () => { throw new UnsupportedTargetError('target changed during send'); };
+    await runtime.loadOlder();
+    expect(runtime.getSnapshot().status).toBe('unsupported');
+
+    firstSend.resolve({ outcome: 'retryable', reason: 'socket closed before acknowledgement' });
+    await vi.waitFor(() => expect(runtime.getSnapshot().sends[0]).toMatchObject({
+      clientMessageId: id, content: '  ambiguous after target change  ',
+      status: 'uncertain', reason: 'retry-unavailable',
+    }));
+    expect(transport.submissions).toHaveLength(1);
+    expect(signals).toEqual([{ kind: 'uncertain', reason: 'ack-lost' }]);
+    expect(runtime.send('blocked while unsupported')).toBeNull();
+    runtime.dispose();
+  });
+
   it('keeps an in-flight send pending and accepts its late ack across live-stream doubt and rebuild', async () => {
     const transport = new ControlledTransport();
     const acknowledgement = deferred<HumanSendResult>();

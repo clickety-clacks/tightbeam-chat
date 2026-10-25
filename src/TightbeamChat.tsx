@@ -691,6 +691,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
         const time = localTimestamp(send.submittedAt);
         const hostManaged = send.hostSend !== undefined;
         const unreachable = send.reason === 'unreachable';
+        const retryUnavailable = send.reason === 'retry-unavailable';
         const retryAvailable = !hostManaged && ['failed', 'uncertain'].includes(send.status) && !send.reconciled;
         return <article ref={element => reading.registerRow(`local-${send.clientMessageId}`, element)} className="tb-chat-bubble tb-chat-bubble-human tb-chat-local" key={send.clientMessageId}
           data-record-key={`local-${send.clientMessageId}`} data-scroll-key={`local-${send.clientMessageId}`} aria-label={`Your message, ${send.status}`}>
@@ -703,6 +704,8 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
             {send.status === 'uncertain'
               ? hostManaged
                 ? 'Delivery could not be confirmed. Use the host composer to decide whether to retry.'
+                : retryUnavailable
+                  ? 'This target stopped supporting safe retries. Delivery could not be confirmed; check the conversation before retrying.'
                 : 'Delivery could not be confirmed. Retry after the connection is current.'
               : unreachable ? 'Reconnect, then check the conversation before retrying this message.'
               : hostManaged
@@ -712,7 +715,8 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
           {retryAvailable && <div className="tb-chat-send-actions">
             <button type="button" disabled={state.status !== 'ready'}
               onClick={() => void runtime.retrySend(send.clientMessageId)}>Retry message</button>
-            {state.status !== 'ready' && <span>Reconnect before retrying.</span>}
+            {state.status !== 'ready' && <span>{state.status === 'unsupported'
+              ? 'Reconnect to a supported target before retrying.' : 'Reconnect before retrying.'}</span>}
             <button type="button" onClick={() => composer.current?.restore(send.content)}>Restore text to the composer</button>
           </div>}
           <time className="tb-chat-time" dateTime={time.dateTime}>{time.text}</time>
