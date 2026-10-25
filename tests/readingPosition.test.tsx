@@ -18,7 +18,7 @@ class ReadingRuntime implements ChatRuntime {
   }
   loadOlder = async () => {};
   rebuild = async () => {};
-  send = () => null;
+  send: ChatRuntime['send'] = () => null;
   retrySend = async () => {};
   observeHostSend = () => () => {};
   refreshHostSend = async () => 'absent' as const;
