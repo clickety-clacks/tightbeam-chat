@@ -32,16 +32,18 @@ const message = (id: number): CanonicalMessage => ({ kind: 'message', id: `messa
 const initialRows = Array.from({ length: 20 }, (_, i) => message(i));
 let scrollTop = 0;
 let viewportHeight = 300;
+let lateLayoutGrowth = 0;
 let scrollTo: ReturnType<typeof vi.fn>;
 let reducedMotion = false;
 let animate: ReturnType<typeof vi.fn>;
 const resizeCallbacks = new Set<ResizeObserverCallback>();
 const rows = () => [...document.querySelectorAll<HTMLElement>('article[data-record-key]')];
-const scrollHeight = () => 32 + rows().length * 92 + Number.parseFloat(document.querySelector<HTMLElement>('.tb-chat-viewport')?.style.getPropertyValue('--tb-chat-anchor-space') || '0');
+const scrollHeight = () => 32 + rows().length * 92 + lateLayoutGrowth + Number.parseFloat(document.querySelector<HTMLElement>('.tb-chat-viewport')?.style.getPropertyValue('--tb-chat-anchor-space') || '0');
 const rect = (top: number, height: number) => ({ top, bottom: top + height, left: 0, right: 400, width: 400, height, x: 0, y: top, toJSON() {} });
 beforeEach(() => {
   scrollTop = 0;
   viewportHeight = 300;
+  lateLayoutGrowth = 0;
   reducedMotion = false;
   animate = vi.fn(() => ({ cancel: vi.fn(), onfinish: null }));
   Object.defineProperty(HTMLElement.prototype, 'animate', { configurable: true, value: animate });
@@ -535,6 +537,28 @@ describe('conversation reading position', () => {
     const { box } = setup();
 
     expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight);
+    expect(screen.queryByRole('button', { name: 'Scroll to latest messages' })).toBeNull();
+  });
+
+  it('stays at the latest message when initial content grows before its scroll event arrives', () => {
+    const runtime = new ReadingRuntime();
+    runtime.state = { ...runtime.state, status: 'loading', records: [] };
+    render(<TightbeamChat sessionKey="reading" adapter={{ open: () => runtime }} />);
+    const box = screen.getByRole('log');
+
+    scrollTo.mockClear();
+    act(() => runtime.publish({ status: 'ready', records: initialRows }));
+    const initialBottom = box.scrollHeight - box.clientHeight;
+    expect(box.scrollTop).toBe(initialBottom);
+
+    // A late layout change can land before the scroll event from the initial
+    // instant scroll. That event must not be interpreted as a reader leaving the tail.
+    lateLayoutGrowth = 1760;
+    fireEvent.scroll(box);
+
+    const settledBottom = box.scrollHeight - box.clientHeight;
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: settledBottom, behavior: 'instant' });
+    expect(box.scrollTop).toBe(settledBottom);
     expect(screen.queryByRole('button', { name: 'Scroll to latest messages' })).toBeNull();
   });
 

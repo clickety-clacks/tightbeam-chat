@@ -137,15 +137,26 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
     const box = viewport.current;
     if (!box) return;
     const resized = viewportResized(box);
-    if (animating.current && target.current !== undefined && Math.abs(box.scrollTop - target.current) < 1) {
+    const reachedTarget = target.current !== undefined && Math.abs(box.scrollTop - target.current) < 1;
+    if (reachedTarget) {
       animating.current = false;
+      target.current = undefined;
+    } else if (!animating.current) {
       target.current = undefined;
     }
     // Intermediate animation frames are not a user's decision to leave the tail.
     if (resized) {
       if (following.current) moveToLatest(false);
     } else if (!animating.current) {
-      following.current = distance(box) <= bottomThreshold;
+      const currentDistance = distance(box);
+      if (reachedTarget && following.current && currentDistance > bottomThreshold) {
+        // The scroll event for an instant or smooth programmatic move can be
+        // delivered after content grows. Keep the existing follow intent and
+        // catch up instead of treating that stale event as reader movement.
+        moveToLatest(false);
+      } else {
+        following.current = currentDistance <= bottomThreshold;
+      }
     }
     setShowLatest(!following.current);
     capture();
