@@ -1,4 +1,5 @@
 import type { ChatRuntime, HostSendSignal, RuntimeState } from './types';
+import { isSettingsCommand } from './settingsCommand';
 
 /** Public, fixed in-page names for host-composer protocol version 1. */
 export const HOST_DECLARATION_NAME = '__TIGHTBEAM_CHAT_HOST__';
@@ -9,11 +10,12 @@ export type HostComposerEvent =
   | { readonly event: 'ready'; readonly version: 1; readonly lifetimeId: string; readonly sessionKey: string;
       readonly gatewayOrigin: string; readonly agentDisplayName: string; readonly capabilities: { readonly text: true } }
   | { readonly event: 'unavailable'; readonly version: 1; readonly lifetimeId: string; readonly reason: string }
+  | { readonly event: 'overlay'; readonly version: 1; readonly lifetimeId: string; readonly open: boolean }
   | { readonly event: 'lifetime-ended'; readonly version: 1; readonly lifetimeId: string;
       readonly reason: 'target-changed' | 'identity-changed' | 'disposed' | 'unloading' }
   | { readonly event: 'rejected'; readonly lifetimeId: unknown; readonly correlationId: unknown;
       readonly reason: 'not-ready' | 'target-mismatch' | 'invalid-correlation' | 'empty' |
-        'attempt-in-flight' | 'already-delivered' | 'correlation-conflict' }
+        'attempt-in-flight' | 'already-delivered' | 'correlation-conflict' | 'local-command' }
   | { readonly event: 'accepted'; readonly lifetimeId: string; readonly correlationId: string; readonly attempt: number }
   | { readonly event: 'delivered'; readonly lifetimeId: string; readonly correlationId: string; readonly attempt: number }
   | { readonly event: 'failed'; readonly lifetimeId: string; readonly correlationId: string; readonly attempt: number;
@@ -41,6 +43,7 @@ export interface HostComposerSnapshot {
   readonly optedIn: boolean;
   readonly composerHidden: boolean;
   readonly ready: boolean;
+  readonly settingsRequestRevision: number;
 }
 
 interface Attempt {
@@ -62,7 +65,7 @@ interface Lifetime {
 }
 
 const emptySnapshot: HostComposerSnapshot = Object.freeze({
-  optedIn: false, composerHidden: false, ready: false,
+  optedIn: false, composerHidden: false, ready: false, settingsRequestRevision: 0,
 });
 const correlationPattern = /^c_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const declinedDeclarations = new WeakSet<object>();
@@ -119,6 +122,9 @@ export class HostComposerBridge {
   private current: Lifetime | undefined;
   private suspendedRuntime: ChatRuntime | undefined;
   private disposed = false;
+  private settingsRequestRevision = 0;
+  private overlayOpen = false;
+  private reportedOverlayOpen = false;
 
   private constructor(private readonly target: Window, private readonly onEvent: (event: HostComposerEvent) => void) {
     this.priorCommand = Object.getOwnPropertyDescriptor(target, HOST_COMMAND_NAME);
@@ -141,6 +147,7 @@ export class HostComposerBridge {
       optedIn: true,
       composerHidden: this.snapshot.composerHidden,
       ready: Boolean(this.current?.ready),
+      settingsRequestRevision: this.settingsRequestRevision,
     });
     for (const listener of this.listeners) listener();
   }
@@ -154,6 +161,7 @@ export class HostComposerBridge {
     if (this.current?.runtime === runtime) return;
     if (this.current) this.detach('disposed');
     this.suspendedRuntime = undefined;
+    this.reportedOverlayOpen = false;
     const lifetime: Lifetime = {
       runtime,
       lifetimeId: `l_${crypto.randomUUID()}`,
@@ -209,6 +217,13 @@ export class HostComposerBridge {
           gatewayOrigin, agentDisplayName: state.agentDisplayName ?? state.session?.displayName ?? '',
           capabilities: Object.freeze({ text: true }),
         });
+        if (this.overlayOpen) {
+          this.reportedOverlayOpen = true;
+          this.emit({ event: 'overlay', version: 1, lifetimeId: lifetime.lifetimeId, open: true });
+        } else if (this.reportedOverlayOpen === true) {
+          this.reportedOverlayOpen = false;
+          this.emit({ event: 'overlay', version: 1, lifetimeId: lifetime.lifetimeId, open: false });
+        }
         if (!this.snapshot.composerHidden) {
           this.snapshot = Object.freeze({ ...this.snapshot, composerHidden: true, ready: true });
           for (const listener of this.listeners) listener();
@@ -226,6 +241,14 @@ export class HostComposerBridge {
       reason: runtimeUnavailableReason(state) });
   }
 
+  setOverlayOpen(open: boolean): void {
+    this.overlayOpen = open;
+    const lifetime = this.current;
+    if (!lifetime?.ready || this.reportedOverlayOpen === open) return;
+    this.reportedOverlayOpen = open;
+    this.emit({ event: 'overlay', version: 1, lifetimeId: lifetime.lifetimeId, open });
+  }
+
   private gatewayOrigin(value: string | undefined): string | undefined {
     if (!value) return undefined;
     try {
@@ -236,11 +259,16 @@ export class HostComposerBridge {
 
   private receive(command: HostComposerCommand): void {
     if (this.disposed || !isObject(command) || command.type !== 'send') return;
-    const lifetime = this.current;
     const correlationId = command.correlationId;
     const reject = (reason: Extract<HostComposerEvent, { event: 'rejected' }>['reason']) => {
       this.emit({ event: 'rejected', lifetimeId: command.lifetimeId, correlationId, reason });
     };
+    if (isSettingsCommand(command.content)) {
+      this.settingsRequestRevision++;
+      this.publish();
+      return reject('local-command');
+    }
+    const lifetime = this.current;
     if (!lifetime?.ready || lifetime.runtime.getSnapshot().status !== 'ready') return reject('not-ready');
     if (command.lifetimeId !== lifetime.lifetimeId || command.sessionKey !== lifetime.sessionKey) return reject('target-mismatch');
     if (typeof correlationId !== 'string' || !correlationPattern.test(correlationId)) return reject('invalid-correlation');
