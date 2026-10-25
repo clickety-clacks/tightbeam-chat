@@ -46,6 +46,7 @@ class ControlledTransport implements ChatTransport {
   readSessionHook?: (call: number) => Promise<void> | void;
   nextSend?: (submission: HumanSubmission) => Promise<HumanSendResult>;
   submissions: HumanSubmission[] = [];
+  sendSignals: AbortSignal[] = [];
 
   currentIdentity = () => this.identity;
   inspectTarget = async () => this.observation;
@@ -82,8 +83,9 @@ class ControlledTransport implements ChatTransport {
     return this.page(this.rows.slice(Math.max(0, index - 3), index));
   };
   proveCoverage = () => this.coverage;
-  sendHuman = async (submission: HumanSubmission): Promise<HumanSendResult> => {
+  sendHuman = async (submission: HumanSubmission, signal: AbortSignal): Promise<HumanSendResult> => {
     this.submissions.push(submission);
+    this.sendSignals.push(signal);
     return this.nextSend ? this.nextSend(submission) : { outcome: 'accepted' };
   };
   emit(record: ConversationRecord) { this.callbacks?.onNotice({ operation: 'upsert', record }); }
@@ -577,13 +579,12 @@ describe('framework-independent runtime', () => {
     expect(state.sends).toEqual([
       expect.objectContaining({ clientMessageId: acceptedId, content: 'known accepted', status: 'accepted' }),
       expect.objectContaining({ clientMessageId: pendingId, content: '  exact pending text  ',
-        sessionKey, deviceId: 'device', status: 'uncertain' }),
+        sessionKey, deviceId: 'device', status: 'pending' }),
     ]);
     expect(runtime.send('blocked new send')).toBeNull();
     await runtime.retrySend(pendingId);
     pendingAck.resolve({ outcome: 'accepted' });
-    await settle();
-    expect(runtime.getSnapshot().sends[1].status).toBe('uncertain');
+    await vi.waitFor(() => expect(runtime.getSnapshot().sends[1].status).toBe('accepted'));
     expect(transport.submissions).toHaveLength(2);
     runtime.dispose();
   });
@@ -616,6 +617,170 @@ describe('framework-independent runtime', () => {
     expect(attempts).toHaveLength(2);
     expect(attempts[1]).toEqual(attempts[0]);
     runtime.dispose();
+  });
+
+  it('re-asks after a dropped send socket with the exact same ID and content', async () => {
+    const transport = new ControlledTransport();
+    transport.nextSend = async () => transport.submissions.length === 1
+      ? { outcome: 'retryable', reason: 'socket closed before acknowledgement' }
+      : { outcome: 'accepted' };
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await runtime.rebuild();
+
+    const id = runtime.send('  exact content  ')!;
+    await vi.waitFor(() => expect(runtime.getSnapshot().sends[0]?.status).toBe('accepted'));
+    const attempts = transport.submissions.filter((submission) => submission.clientMessageId === id);
+    expect(attempts).toHaveLength(2);
+    expect(attempts[1]).toEqual(attempts[0]);
+    expect(runtime.getSnapshot().sends[0]).toMatchObject({ clientMessageId: id,
+      content: '  exact content  ', status: 'accepted' });
+    runtime.dispose();
+  });
+
+  it('keeps re-asking after reconnect failure until the same submission is acknowledged', async () => {
+    const transport = new ControlledTransport();
+    transport.nextSend = async () => transport.submissions.length === 1
+      ? { outcome: 'retryable', reason: 'socket closed before acknowledgement' }
+      : transport.submissions.length === 2
+        ? { outcome: 'unreachable', reason: 'Not connected to the server.' }
+        : { outcome: 'accepted' };
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await runtime.rebuild();
+    vi.useFakeTimers();
+    try {
+      const id = 'c_018f1a62-7c73-4c7d-8c05-e53d5c542a07';
+      const signals: unknown[] = [];
+      runtime.observeHostSend(id, (signal) => signals.push(signal));
+      runtime.send('  same retry content  ', id, { lifetimeId: 'test-lifetime', attempt: 1 });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(transport.submissions).toHaveLength(1);
+      expect(runtime.getSnapshot().sends[0]).toMatchObject({ clientMessageId: id, status: 'pending' });
+
+      await vi.advanceTimersByTimeAsync(249);
+      expect(transport.submissions).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(transport.submissions).toHaveLength(2);
+      await vi.advanceTimersByTimeAsync(499);
+      expect(transport.submissions).toHaveLength(2);
+      expect(runtime.getSnapshot().sends[0]).toMatchObject({
+        clientMessageId: id, content: '  same retry content  ', status: 'pending',
+      });
+      expect(signals).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1);
+
+      await vi.waitFor(() => expect(runtime.getSnapshot().sends[0]).toMatchObject({
+        clientMessageId: id, content: '  same retry content  ', status: 'accepted',
+      }));
+      const attempts = transport.submissions.filter((submission) => submission.clientMessageId === id);
+      expect(attempts).toHaveLength(3);
+      expect(attempts[1]).toEqual(attempts[0]);
+      expect(attempts[2]).toEqual(attempts[0]);
+      expect(signals).toEqual([{ kind: 'accepted' }]);
+    } finally {
+      runtime.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it('settles a dropped send as uncertain if the target becomes unsupported before retry', async () => {
+    const transport = new ControlledTransport();
+    const firstSend = deferred<HumanSendResult>();
+    transport.nextSend = () => firstSend.promise;
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await runtime.rebuild();
+
+    const id = runtime.send('  ambiguous after target change  ')!;
+    const signals: unknown[] = [];
+    runtime.observeHostSend(id, (signal) => signals.push(signal));
+    transport.readOlder = async () => { throw new UnsupportedTargetError('target changed during send'); };
+    await runtime.loadOlder();
+    expect(runtime.getSnapshot().status).toBe('unsupported');
+
+    firstSend.resolve({ outcome: 'retryable', reason: 'socket closed before acknowledgement' });
+    await vi.waitFor(() => expect(runtime.getSnapshot().sends[0]).toMatchObject({
+      clientMessageId: id, content: '  ambiguous after target change  ',
+      status: 'uncertain', reason: 'retry-unavailable',
+    }));
+    expect(transport.submissions).toHaveLength(1);
+    expect(signals).toEqual([{ kind: 'uncertain', reason: 'ack-lost' }]);
+    expect(runtime.send('blocked while unsupported')).toBeNull();
+    runtime.dispose();
+  });
+
+  it('keeps an in-flight send pending and accepts its late ack across live-stream doubt and rebuild', async () => {
+    const transport = new ControlledTransport();
+    const acknowledgement = deferred<HumanSendResult>();
+    transport.nextSend = () => acknowledgement.promise;
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await runtime.rebuild();
+
+    const id = runtime.send('slow acknowledgement')!;
+    const sendSignal = transport.sendSignals[0];
+    expect(runtime.getSnapshot().sends[0]).toMatchObject({ clientMessageId: id, status: 'pending' });
+    transport.doubt();
+    expect(runtime.getSnapshot().status).toBe('stale');
+    expect(runtime.getSnapshot().sends[0]).toMatchObject({ status: 'pending' });
+    expect(sendSignal.aborted).toBe(false);
+
+    await runtime.rebuild();
+    expect(runtime.getSnapshot().status).toBe('ready');
+    expect(sendSignal.aborted).toBe(false);
+    acknowledgement.resolve({ outcome: 'accepted' });
+    await vi.waitFor(() => expect(runtime.getSnapshot().sends[0]).toMatchObject({ status: 'accepted' }));
+    expect(transport.submissions.filter((submission) => submission.clientMessageId === id)).toHaveLength(1);
+    runtime.dispose();
+  });
+
+  it('keeps an initial connection failure nonterminal and re-asks with the same submission when connected', async () => {
+    const transport = new ControlledTransport();
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await runtime.rebuild();
+
+    transport.nextSend = async () => ({ outcome: 'refused', reason: 'not allowed' });
+    const refused = runtime.send('refused')!;
+    await vi.waitFor(() => expect(runtime.getSnapshot().sends.find((send) => send.clientMessageId === refused))
+      .toMatchObject({ status: 'failed', reason: 'not allowed' }));
+    expect(transport.submissions.filter((submission) => submission.clientMessageId === refused)).toHaveLength(1);
+
+    const firstConnection = deferred<HumanSendResult>();
+    const reconnectAck = deferred<HumanSendResult>();
+    transport.nextSend = async () => {
+      const offlineAttempts = transport.submissions.filter((submission) => submission.content === 'offline').length;
+      return offlineAttempts === 1 ? firstConnection.promise : reconnectAck.promise;
+    };
+    const offline = runtime.send('offline')!;
+    const signals: unknown[] = [];
+    runtime.observeHostSend(offline, (signal) => signals.push(signal));
+    await vi.waitFor(() => expect(transport.submissions.filter((submission) => submission.clientMessageId === offline))
+      .toHaveLength(1));
+    vi.useFakeTimers();
+    try {
+      firstConnection.resolve({ outcome: 'unreachable', reason: 'Not connected to the server.' });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(runtime.getSnapshot().sends.find((send) => send.clientMessageId === offline))
+        .toMatchObject({ status: 'pending', reason: 'unreachable' });
+      expect(signals).toEqual([]);
+      const original = transport.submissions.find((submission) => submission.clientMessageId === offline)!;
+
+      await vi.advanceTimersByTimeAsync(249);
+      expect(transport.submissions.filter((submission) => submission.clientMessageId === offline)).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      const attempts = transport.submissions.filter((submission) => submission.clientMessageId === offline);
+      expect(attempts).toHaveLength(2);
+      expect(attempts[1]).toEqual(original);
+      expect(runtime.getSnapshot().sends.find((send) => send.clientMessageId === offline))
+        .toMatchObject({ status: 'pending', reason: undefined });
+
+      reconnectAck.resolve({ outcome: 'accepted' });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(runtime.getSnapshot().sends.find((send) => send.clientMessageId === offline))
+        .toMatchObject({ status: 'accepted' });
+      expect(signals).toEqual([{ kind: 'accepted' }]);
+    } finally {
+      runtime.dispose();
+      vi.useRealTimers();
+    }
   });
 
   it('rejects late work and clears old principal data after identity change', async () => {

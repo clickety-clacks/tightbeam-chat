@@ -23,13 +23,18 @@ export function browserHost(target: ChatTarget): Public019Host {
       let authenticated = false;
       let frameListener: ((frame: unknown) => void) | undefined;
       let closeListener: (() => void) | undefined;
-      const timer = setTimeout(() => fail(new Error('Chat connection timed out.')), 15000);
-      const cleanup = () => { clearTimeout(timer); signal.removeEventListener('abort', abort); };
+      let connectionTimer: ReturnType<typeof setTimeout> | undefined = setTimeout(
+        () => fail(new Error('Chat connection timed out.')), 15000);
+      const clearConnectionTimer = () => {
+        if (connectionTimer !== undefined) clearTimeout(connectionTimer);
+        connectionTimer = undefined;
+      };
+      const cleanup = () => { clearConnectionTimer(); signal.removeEventListener('abort', abort); };
       const fail = (error: Error) => { cleanup(); socket.close(); reject(error); };
       const abort = () => { cleanup(); socket.close(); if (!ready) reject(new Error('Connection aborted.')); };
       const complete = () => {
         ready = true;
-        clearTimeout(timer);
+        clearConnectionTimer();
         resolve({
           send: (frame) => socket.send(JSON.stringify(frame)),
           listen: (onFrame, onClose) => {
@@ -41,6 +46,11 @@ export function browserHost(target: ChatTarget): Public019Host {
         });
       };
       signal.addEventListener('abort', abort, { once: true });
+      socket.onopen = () => {
+        // For a human send, the connection may wait indefinitely for auth and
+        // sync frames. Only failure to open the socket is a connect timeout.
+        if (human) clearConnectionTimer();
+      };
       socket.onmessage = (event) => {
         try {
           const frame = JSON.parse(String(event.data));

@@ -171,12 +171,20 @@ export class HostComposerBridge {
   detach(reason: 'target-changed' | 'identity-changed' | 'disposed' | 'unloading'): void {
     const lifetime = this.current;
     if (!lifetime) return;
+    const outcomeCanChange = reason === 'target-changed' || reason === 'identity-changed';
     for (const attempt of [...lifetime.attempts.values()]) {
       if (attempt.settled) continue;
-      this.settle(lifetime, attempt, {
-        event: 'uncertain', lifetimeId: lifetime.lifetimeId, correlationId: attempt.correlationId,
-        attempt: attempt.number, reason: attempt.accepted ? 'accepted-unreconciled' : 'lifetime-ended',
-      });
+      if (outcomeCanChange) {
+        this.settle(lifetime, attempt, {
+          event: 'uncertain', lifetimeId: lifetime.lifetimeId, correlationId: attempt.correlationId,
+          attempt: attempt.number, reason: attempt.accepted ? 'accepted-unreconciled' : 'lifetime-ended',
+        });
+      } else {
+        attempt.settled = true;
+        attempt.stopObserving?.();
+        attempt.stopObserving = undefined;
+        lifetime.attempts.delete(attempt.correlationId);
+      }
     }
     lifetime.unsubscribe();
     this.current = undefined;
@@ -303,9 +311,9 @@ export class HostComposerBridge {
     if (result === 'found') {
       this.settle(lifetime, attempt, { event: 'delivered', lifetimeId: lifetime.lifetimeId,
         correlationId: attempt.correlationId, attempt: attempt.number });
-    } else if (result === 'absent') {
-      lifetime.runtime.markHostSendUncertain(attempt.correlationId, 'accepted-unreconciled');
     }
+    // The server acknowledgement is positive. A bounded history read can lag or
+    // omit the row, so keep the accepted attempt open until a canonical row arrives.
   }
 
   private settle(lifetime: Lifetime, attempt: Attempt, event: HostComposerEvent): void {

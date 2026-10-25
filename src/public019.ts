@@ -109,6 +109,7 @@ export interface Public019Config {
   build: number;
   sha: string;
   host: Public019Host;
+  /** Timeout for non-send responses such as Firehose subscription readiness. */
   responseTimeoutMs?: number;
   /** ChangeSocket normally emits a heartbeat every 15 seconds; default allows three intervals. */
   heartbeatTimeoutMs?: number;
@@ -516,7 +517,8 @@ export function createPublic019Transport(config: Public019Config): { transport: 
       try { channel = await config.host.openAuthenticatedHuman(signal); }
       catch (error) {
         if (error instanceof AuthorizationError) throw error;
-        return { outcome: 'uncertain', reason: error instanceof Error ? error.message : String(error) };
+        if (signal.aborted) return { outcome: 'uncertain', reason: 'Human send was interrupted before connecting.' };
+        return { outcome: 'unreachable', reason: 'Not connected to the server.' };
       }
       const connectedIdentity = config.host.currentIdentity();
       if (connectedIdentity.deviceId !== submittingIdentity.deviceId ||
@@ -527,11 +529,9 @@ export function createPublic019Transport(config: Public019Config): { transport: 
       return new Promise<HumanSendResult>((resolve) => {
         let settled = false;
         let stopListening = () => {};
-        let timer: ReturnType<typeof setTimeout> | undefined;
         const finish = (result: HumanSendResult) => {
           if (settled) return;
           settled = true;
-          if (timer) clearTimeout(timer);
           stopListening();
           signal.removeEventListener('abort', onAbort);
           channel.close();
@@ -546,15 +546,14 @@ export function createPublic019Transport(config: Public019Config): { transport: 
             else if (frame.type === 'error' && frame.messageId === submission.clientMessageId) {
               finish({ outcome: 'refused', reason: String(frame.code ?? 'refused') });
             }
-          } catch { finish({ outcome: 'uncertain', reason: 'Malformed human response.' }); }
-        }, () => finish({ outcome: 'uncertain', reason: 'Human socket closed before acknowledgement.' }));
+          } catch { finish({ outcome: 'retryable', reason: 'Malformed human response.' }); }
+        }, () => finish({ outcome: 'retryable', reason: 'Human socket closed before acknowledgement.' }));
         if (signal.aborted) onAbort();
         else if (!settled) {
-          timer = setTimeout(() => finish({ outcome: 'uncertain', reason: 'Human acknowledgement timed out.' }), timeoutMs);
           try {
             channel.send({ type: 'message', id: submission.clientMessageId,
               sessionKey: submission.sessionKey, content: submission.content });
-          } catch { finish({ outcome: 'uncertain', reason: 'Human send was interrupted.' }); }
+          } catch { finish({ outcome: 'retryable', reason: 'Human send connection closed before acknowledgement.' }); }
         }
       });
     },
