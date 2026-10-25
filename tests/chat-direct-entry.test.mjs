@@ -180,6 +180,9 @@ describe('private direct-entry Chat service bridge', () => {
       if (request.url === '/version') {
         response.writeHead(200, { 'content-type': 'application/json' });
         response.end(JSON.stringify({ version: '0.1.9', build: 2847, sha: 'b75b9bf5' }));
+      } else if (request.url.startsWith(`/api/sessions/${encodeURIComponent(LINKED_SESSION)}/tool-calls`)) {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ schemaVersion: 1, resource: 'tool calls', items: [], item: { id: 'tc_read' }, page: { hasMoreBefore: false } }));
       } else if (request.url === `/api/turns/12?asUser=${encodeURIComponent(PRINCIPAL)}`) {
         response.writeHead(200, { 'content-type': 'application/json' });
         response.end(JSON.stringify({ schemaVersion: 1, resource: 'turns', item: {
@@ -309,6 +312,21 @@ describe('private direct-entry Chat service bridge', () => {
     const wrongOrigin = await fetch(`${chatOrigin}/__chat/gateway/version`, { headers: { origin: 'https://elsewhere.example' } });
     expect(wrongOrigin.status).toBe(403);
     expect(seen).toHaveLength(8);
+    const toolQuery = 'limit=50&afterMessageSeqFromInclusive=9&afterMessageSeqToExclusive=20&before=opaque-cursor';
+    const toolBase = `${chatOrigin}/__chat/api/sessions/${encodeURIComponent(LINKED_SESSION)}/tool-calls`;
+    const toolPage = await fetch(`${toolBase}?gateway=${encodeURIComponent(gatewayOrigin)}&${toolQuery}`, { headers: { origin: chatOrigin } });
+    expect(toolPage.status).toBe(200);
+    expect((await toolPage.json()).resource).toBe('tool calls');
+    const toolDetail = await fetch(`${toolBase}/tc_read?gateway=${encodeURIComponent(gatewayOrigin)}`, { headers: { origin: chatOrigin } });
+    expect((await toolDetail.json()).item.id).toBe('tc_read');
+    expect(seen.slice(-2).map(row => row.url)).toEqual([
+      `/api/sessions/${encodeURIComponent(LINKED_SESSION)}/tool-calls?asUser=${encodeURIComponent(PRINCIPAL)}&${toolQuery}`,
+      `/api/sessions/${encodeURIComponent(LINKED_SESSION)}/tool-calls/tc_read?asUser=${encodeURIComponent(PRINCIPAL)}`,
+    ]);
+    expect(seen.slice(-2).every(row => row.authorization === `Bearer ${TOKEN}` && row.method === 'GET')).toBe(true);
+    const unlisted = await fetch(`${toolBase}?limit=50&unlisted=value`, { headers: { origin: chatOrigin } });
+    expect(unlisted.status).toBe(404);
+    expect(seen).toHaveLength(10);
   });
 
   it('composes the canonical selected-history route with the real decoder across an agent reset', async () => {

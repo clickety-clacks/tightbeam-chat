@@ -1,3 +1,4 @@
+import type { RecordIndex } from './recordIndex';
 /** The host decodes the elected backend's wire schema into these canonical records. */
 export interface CanonicalMessage {
   readonly kind: 'message';
@@ -60,11 +61,40 @@ export interface CanonicalTransition {
   readonly sessionKey: string;
   readonly seq: number;
   readonly rowVersion: number;
-  readonly transition: 'harness' | 'model' | 'restart';
+  readonly transition: 'harness' | 'model' | 'restart' | 'compaction' | 'unknown';
+  readonly content?: string;
   readonly from?: string;
   readonly to: string;
   readonly createdAt?: string;
   readonly raw: Readonly<Record<string, unknown>>;
+}
+
+/** Tool records use a separate sequence domain, anchored to transcript messages. */
+export interface ToolCallRecord {
+  readonly id: string;
+  readonly seq: number;
+  readonly sessionKey: string;
+  readonly turnSeq: number;
+  readonly afterMessageSeq: number;
+  readonly harnessToolCallId: string;
+  readonly title: string;
+  readonly kind: string;
+  readonly toolName: string | null;
+  readonly status: 'pending' | 'in_progress' | 'completed' | 'failed';
+  readonly rawInput: unknown;
+  readonly rawOutput: unknown;
+  readonly content: unknown;
+  readonly truncated: readonly { readonly field: 'rawInput' | 'rawOutput' | 'content'; readonly originalBytes: number }[];
+  readonly startedAt: number;
+  readonly endedAt: number | null;
+  readonly rowVersion: number;
+}
+
+export type ToolCallIndex = RecordIndex<RecordIndex<ToolCallRecord>>;
+
+export interface ToolCallRange {
+  readonly fromInclusive: number;
+  readonly toExclusive?: number;
 }
 
 export type ConversationRecord = CanonicalMessage | CanonicalTransition;
@@ -89,6 +119,7 @@ export interface SessionRecord {
 }
 
 export type ChangeNotice =
+  | { readonly operation: 'tool'; readonly tool: ToolCallRecord }
   | { readonly operation: 'upsert'; readonly record: ConversationRecord }
   | { readonly operation: 'delete'; readonly sessionKey: string; readonly id: string; readonly rowVersion: number }
   | { readonly operation: 'session'; readonly session: SessionRecord }
@@ -167,6 +198,10 @@ export interface ChatTransport {
   currentIdentity(): HostIdentity;
   inspectTarget(signal: AbortSignal): Promise<TargetObservation>;
   openChanges(sessionKey: string, callbacks: ChangeCallbacks, signal: AbortSignal): Promise<ChangeConnection>;
+  /** Separate category connection so toggling tools does not interrupt messages or sends. */
+  openToolChanges?(sessionKey: string, callbacks: ChangeCallbacks, signal: AbortSignal): Promise<ChangeConnection>;
+  /** Exhaust the page chain for this fixed message-anchor range. */
+  readToolCalls?(sessionKey: string, range: ToolCallRange, signal: AbortSignal): Promise<readonly ToolCallRecord[]>;
   readTail(sessionKey: string, signal: AbortSignal): Promise<ConversationPage>;
   readOlder(sessionKey: string, before: string, signal: AbortSignal): Promise<ConversationPage>;
   readSession(sessionKey: string, signal: AbortSignal): Promise<SessionRecord>;
@@ -215,6 +250,12 @@ export interface RuntimeState {
   /** Set only when the host principal/device no longer matches this runtime's identity. */
   readonly identityChanged?: boolean;
   readonly records: readonly ConversationRecord[];
+  readonly toolCallsEnabled?: boolean;
+  /** Optional array for custom hosts; the live runtime uses the persistent index. */
+  readonly toolCalls?: readonly ToolCallRecord[];
+  readonly toolCallIndex?: ToolCallIndex;
+  readonly toolCallsLoading?: boolean;
+  readonly toolCallsError?: string;
   readonly session?: SessionRecord;
   readonly provenance?: readonly TurnProvenance[];
   /** False until a typed turn record arrives on this connection generation. */
@@ -233,6 +274,8 @@ export interface ChatRuntime {
   getSnapshot(): RuntimeState;
   subscribe(listener: () => void): () => void;
   loadOlder(): Promise<void>;
+  setToolCallsEnabled?(enabled: boolean): void;
+  retryToolCalls?(): void;
   send(content: string, clientMessageId?: string, hostSend?: HostSendContext): string | null;
   retrySend(clientMessageId: string): Promise<void>;
   /** Subscribe before a host-correlated send so ack and reconciliation order is preserved. */
