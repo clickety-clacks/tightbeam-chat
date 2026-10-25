@@ -774,8 +774,6 @@ class SessionRuntime implements ChatRuntime {
       if (!this.transport.proveCoverage(session, page, captured)) {
         throw new UnsupportedTargetError('Canonical refresh lacks verified subscription coverage.');
       }
-      await this.olderTools(page);
-      if (!this.isCurrent(generation) || !this.checkIdentity()) return;
       for (const record of page.records) this.put(record);
       this.reconcilePendingHistory(page.hasOlder);
       const currentSession = !this.state.session || session.rowVersion > this.state.session.rowVersion
