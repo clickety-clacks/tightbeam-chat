@@ -4,6 +4,7 @@ import {
   UnsupportedTargetError,
   type CanonicalTurn,
   type ToolCallRecord,
+  type ToolCallIndex,
   type ToolCallRange,
   type ChangeConnection,
   type ChangeNotice,
@@ -25,6 +26,7 @@ import {
   type TurnProvenance,
 } from './types';
 import { createTurnProvenance } from './provenance';
+import { getIndex, putIndex, trimIndexBelow } from './recordIndex';
 
 const requiredCapabilities: readonly (keyof TargetCapabilities)[] = [
   'newestTail', 'stableOlderCursor', 'retainedHistoryAcrossResets',
@@ -88,6 +90,7 @@ class SessionRuntime implements ChatRuntime {
   private toolController: AbortController | undefined;
   private toolEpoch = 0;
   private readonly tools = new Map<string, ToolCallRecord>();
+  private toolIndex: ToolCallIndex | undefined;
   private connection: ChangeConnection | undefined;
   private controller: AbortController | undefined;
   private cursor: string | null = null;
@@ -110,7 +113,7 @@ class SessionRuntime implements ChatRuntime {
     this.state = Object.freeze({
       sessionKey, principalKey: this.identity.principalKey, generation: 0, status: 'loading', records: Object.freeze([]),
       toolCallsEnabled: transport.openToolChanges && transport.readToolCalls ? true : undefined,
-      toolCalls: Object.freeze([]),
+      toolCalls: Object.freeze([]), toolCallIndex: undefined,
       hasOlder: false, loadingOlder: false, sends: Object.freeze([]), targetLabel: profile.label,
       targetGateway: transport.targetGateway, provenance: noProvenance, provenanceAvailable: false,
     });
@@ -154,14 +157,17 @@ class SessionRuntime implements ChatRuntime {
   private putTool(call: ToolCallRecord): void {
     if (call.sessionKey !== this.sessionKey) return;
     const previous = this.tools.get(call.id);
-    if (!previous || call.rowVersion > previous.rowVersion) this.tools.set(call.id, call);
+    if (!previous || call.rowVersion > previous.rowVersion) {
+      this.tools.set(call.id, call);
+      const calls = putIndex(getIndex(this.toolIndex, call.afterMessageSeq), call.seq, call, call.startedAt);
+      this.toolIndex = putIndex(this.toolIndex, call.afterMessageSeq, calls, calls.maxTime);
+    }
   }
 
   private publishTools(): void {
     const floor = this.state.hasOlder ? this.state.records[0]?.seq ?? 0 : 0;
-    this.publish({ toolCalls: Object.freeze([...this.tools.values()]
-      .filter(call => call.afterMessageSeq >= floor)
-      .sort((a, b) => a.afterMessageSeq - b.afterMessageSeq || a.seq - b.seq)) });
+    const toolCallIndex = trimIndexBelow(this.toolIndex, floor);
+    if (toolCallIndex !== this.state.toolCallIndex) this.publish({ toolCallIndex });
   }
 
   private toolFailure(error: unknown): void {
@@ -180,7 +186,8 @@ class SessionRuntime implements ChatRuntime {
     this.toolController = controller;
     const current = () => this.isCurrent(generation) && epoch === this.toolEpoch && this.checkIdentity();
     this.tools.clear();
-    this.publish({ toolCalls: Object.freeze([]), toolCallsLoading: true, toolCallsError: undefined });
+    this.toolIndex = undefined;
+    this.publish({ toolCalls: Object.freeze([]), toolCallIndex: undefined, toolCallsLoading: true, toolCallsError: undefined });
     try {
       this.toolReadiness = this.transport.openToolChanges(this.sessionKey, {
         onNotice: notice => {
@@ -231,7 +238,8 @@ class SessionRuntime implements ChatRuntime {
         this.state.toolCallsEnabled === enabled) return;
     this.stopTools();
     this.tools.clear();
-    this.publish({ toolCallsEnabled: enabled, toolCalls: Object.freeze([]),
+    this.toolIndex = undefined;
+    this.publish({ toolCallsEnabled: enabled, toolCalls: Object.freeze([]), toolCallIndex: undefined,
       toolCallsLoading: false, toolCallsError: undefined });
     if (enabled) void this.startTools();
   };
@@ -276,7 +284,7 @@ class SessionRuntime implements ChatRuntime {
       generation: this.generation, status: 'unauthorized',
       identityChanged: true,
       statusDetail: 'Host principal or device changed. Open a new component lifetime.',
-      toolCalls: Object.freeze([]), toolCallsLoading: false, toolCallsError: undefined,
+      toolCalls: Object.freeze([]), toolCallIndex: undefined, toolCallsLoading: false, toolCallsError: undefined,
       records: Object.freeze([]), sends: Object.freeze([]), hasOlder: false,
       session: undefined, agentDisplayName: undefined, provenance: Object.freeze([]),
       activeTurn: undefined, historyError: undefined,
@@ -466,7 +474,7 @@ class SessionRuntime implements ChatRuntime {
     this.restoreDepth = 0;
     this.publish({
       generation: this.generation, status, statusDetail: reason,
-      toolCalls: Object.freeze([]), toolCallsLoading: false, toolCallsError: undefined,
+      toolCalls: Object.freeze([]), toolCallIndex: undefined, toolCallsLoading: false, toolCallsError: undefined,
       records: Object.freeze([]), sends, session: undefined,
       agentDisplayName: undefined, provenance: noProvenance, provenanceAvailable: false, activeTurn: undefined,
       hasOlder: false, loadingOlder: false, historyError: undefined,

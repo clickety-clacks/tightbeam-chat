@@ -1,10 +1,11 @@
+import { getIndex, putIndex } from '../src/recordIndex';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { TightbeamChat } from '../src/TightbeamChat';
 import type { RenderContext } from '../src/TightbeamChat';
 import { createTurnProvenance } from '../src/provenance';
 import type {
-  ToolCallRecord, CanonicalMessage, CanonicalTurn, ChatRuntime, ConversationRecord, LocalSend, RuntimeState,
+  ToolCallIndex, ToolCallRecord, CanonicalMessage, CanonicalTurn, ChatRuntime, ConversationRecord, LocalSend, RuntimeState,
   TightbeamAdapter, TurnProvenance,
 } from '../src/types';
 
@@ -841,6 +842,42 @@ describe('conversation surface', () => {
 });
 
 describe('tool-call and transition display', () => {
+  it('updates only indexed tool paths in a large history and preserves expanded rows during insertion', () => {
+    let inspected = 0;
+    let index: ToolCallIndex | undefined;
+    const tool = (seq: number): ToolCallRecord => ({ id: 'tc_' + seq, seq, sessionKey: 'indexed',
+      turnSeq: 1, afterMessageSeq: 1, harnessToolCallId: 'call-' + seq, title: 'Read source ' + seq,
+      kind: 'read', toolName: 'read_file', status: 'in_progress', rawInput: { path: 'file.ts' },
+      rawOutput: null, content: null, truncated: [], startedAt: seq, endedAt: null, rowVersion: 1 });
+    const insert = (call: ToolCallRecord) => {
+      const group = putIndex(getIndex(index, call.afterMessageSeq), call.seq, call, call.startedAt);
+      index = putIndex(index, call.afterMessageSeq, group, group.maxTime);
+    };
+    for (let seq = 1; seq <= 2000; seq++) {
+      const call = tool(seq);
+      insert({ ...call, get title() { inspected++; return call.title; } });
+    }
+    const human = row('indexed', 'human', 'Read source', { seq: 1, role: 'user', sender: 'user:person' });
+    const runtime = new FakeRuntime('indexed', { records: [human], toolCallsEnabled: true, toolCallIndex: index });
+    const view = render(<TightbeamChat sessionKey="indexed" adapter={adapterFor(runtime)} />);
+    const retained = view.container.querySelector('[data-record-key="tool-tc_1000"]')!;
+    const details = retained.querySelector('details')!;
+    details.open = true;
+    fireEvent(details, new Event('toggle'));
+    inspected = 0;
+    for (let seq = 1; seq <= 25; seq++) {
+      insert({ ...tool(seq), status: 'completed', rowVersion: 2, endedAt: 3000 });
+      act(() => runtime.update({ toolCallIndex: index }));
+      insert(tool(2000 + seq));
+      act(() => runtime.update({ toolCallIndex: index }));
+    }
+    expect(inspected).toBeLessThan(100);
+    expect(view.container.querySelector('[data-record-key="tool-tc_1000"]')).toBe(retained);
+    expect(details.open).toBe(true);
+    expect(view.container.querySelectorAll('.tb-chat-tool')).toHaveLength(2025);
+    expect(view.container.querySelector('[data-record-key="tool-tc_1"]')?.textContent).toContain('Completed');
+  });
+
   it('anchors tools between messages, expands input/results with truthful truncation, and keeps the draft while toggling', async () => {
     const call: ToolCallRecord = { id: 'tc_read', seq: 500, sessionKey: 'tools', turnSeq: 7, afterMessageSeq: 1,
       harnessToolCallId: 'read-1', title: 'Read the source file', kind: 'read', toolName: 'read_file',

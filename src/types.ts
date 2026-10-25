@@ -1,3 +1,4 @@
+import type { RecordIndex } from './recordIndex';
 /** The host decodes the elected backend's wire schema into these canonical records. */
 export interface CanonicalMessage {
   readonly kind: 'message';
@@ -88,6 +89,8 @@ export interface ToolCallRecord {
   readonly endedAt: number | null;
   readonly rowVersion: number;
 }
+
+export type ToolCallIndex = RecordIndex<RecordIndex<ToolCallRecord>>;
 
 export interface ToolCallRange {
   readonly fromInclusive: number;
@@ -244,7 +247,9 @@ export interface RuntimeState {
   readonly identityChanged?: boolean;
   readonly records: readonly ConversationRecord[];
   readonly toolCallsEnabled?: boolean;
+  /** Optional array for custom hosts; the live runtime uses the persistent index. */
   readonly toolCalls?: readonly ToolCallRecord[];
+  readonly toolCallIndex?: ToolCallIndex;
   readonly toolCallsLoading?: boolean;
   readonly toolCallsError?: string;
   readonly session?: SessionRecord;
