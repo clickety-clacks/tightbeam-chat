@@ -350,7 +350,7 @@ describe('conversation reading position', () => {
       expect(runtime.getSnapshot().status).toBe('error');
       expect(screen.queryByText('Message 20')).toBeNull();
       const reconnect = runtime.rebuild();
-      expect(connect).toHaveBeenCalledTimes(3);
+      await waitFor(() => expect(connect).toHaveBeenCalledTimes(3));
       expect(runtime.getSnapshot().status).toBe('stale');
       await act(async () => { releaseHistory(); await reconnect; });
       expect(runtime.getSnapshot().status).toBe('ready');

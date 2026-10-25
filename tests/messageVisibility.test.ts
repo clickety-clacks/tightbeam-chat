@@ -52,7 +52,7 @@ describe('principal-scoped message projection', () => {
       reply('other-reply', other.id, { turnSeq: 3 }), reply('missing-turn', agent.id),
       reply('different-turn', agent.id, { turnSeq: 4 }), reply('missing-parent')];
     expect(project(answers)).toHaveLength(6);
-    expect(project([human, agent, other, ...answers])).toEqual(['human', 'human-reply', 'missing-turn', 'different-turn', 'missing-parent']);
+    expect(project([human, agent, other, ...answers])).toEqual(['human', 'other', 'human-reply', 'missing-turn', 'different-turn', 'missing-parent']);
     const conflict = projectMessages([human, reply('answer', human.id, { turnSeq: 1, turnIncludesHuman: false })], 'person', 'person');
     expect(conflict.messages.map((row) => row.key)).toEqual(['human', 'answer']);
     expect(conflict.issues).toHaveLength(1);

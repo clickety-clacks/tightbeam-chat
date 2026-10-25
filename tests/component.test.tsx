@@ -453,7 +453,9 @@ describe('conversation surface', () => {
       expect(runtime.getSnapshot().records).toContain(reply);
 
       if (excluded && !visibleOlder) {
-        expect(topSpace()).toBe(0);
+        // The newly visible provisional row is removed when its nonhuman parent arrives.
+        // Compensating space preserves the reading anchor when scrollTop is clamped.
+        expect(topSpace()).toBeGreaterThan(0);
         // A later visible page can be read without reclassifying shown content.
         runtime.olderPages.push({ records: [human('earlier')], provenance: [], hasOlder: false });
         act(() => runtime.update({ hasOlder: true }));
@@ -524,7 +526,9 @@ describe('conversation surface', () => {
       expect(within(log).queryByText('Provisional reply 1')).toBeNull();
       expect(layout.offset(newest)).toBe(newestBefore);
       expect(layout.scrollTop).toBe(0);
-      expect(layout.anchorSpace).toBe(0);
+      // Removing the provisional rows above the reader needs compensation when
+      // the browser cannot use a negative scrollTop.
+      expect(layout.anchorSpace).toBeGreaterThan(0);
       expect(runtime.getSnapshot().records).toContain(replies[0]);
       expect(runtime.getSnapshot().hasOlder).toBe(false);
     } finally {
