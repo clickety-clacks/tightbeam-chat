@@ -3,7 +3,7 @@ import { forwardRef, memo, useCallback, useEffect, useId, useImperativeHandle, u
   type ReactNode, type RefObject, type TableHTMLAttributes } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import type { ChatRuntime, CanonicalMessage, ConversationRecord, LocalSend, RuntimeState, TightbeamAdapter, TurnProvenance } from './types';
+import type { ChatRuntime, CanonicalMessage, CanonicalTransition, ToolCallRecord, ConversationRecord, LocalSend, RuntimeState, TightbeamAdapter, TurnProvenance } from './types';
 import { projectMessages, type HumanMember } from './messageVisibility';
 import { useReadingPosition } from './useReadingPosition';
 import { getHostComposerSnapshot, HostComposerBridge, subscribeHostComposer } from './hostComposer';
@@ -40,6 +40,8 @@ interface Bubble {
 }
 
 type TimelineItem =
+  | { readonly kind: 'tool'; readonly call: ToolCallRecord }
+  | { readonly kind: 'transition'; readonly record: CanonicalTransition }
   | { readonly kind: 'bubble'; readonly bubble: Bubble; readonly scrollKey?: string }
   | { readonly kind: 'local'; readonly send: LocalSend; readonly canonical?: CanonicalMessage };
 
@@ -55,7 +57,9 @@ function canonicalSendIdentity(record: CanonicalMessage): string | undefined {
 }
 
 function itemTime(item: TimelineItem): number | undefined {
-  const value = item.kind === 'bubble' ? item.bubble.record.createdAt
+  if (item.kind === 'tool') return item.call.startedAt;
+  const value = item.kind === 'transition' ? item.record.createdAt
+    : item.kind === 'bubble' ? item.bubble.record.createdAt
     : item.canonical?.createdAt ?? item.send.submittedAt;
   if (!value) return undefined;
   const time = Date.parse(value);
@@ -64,7 +68,7 @@ function itemTime(item: TimelineItem): number | undefined {
 
 interface TimelineAnchor {
   readonly item: TimelineItem;
-  readonly record: CanonicalMessage;
+  readonly record: Pick<ConversationRecord, 'id' | 'seq'>;
   readonly order: number;
 }
 
@@ -92,7 +96,8 @@ function upperBoundByTime(items: readonly TimedTimelineAnchor[], time: number): 
 
 function composeTimeline(bubbles: readonly Bubble[], localSends: readonly LocalSend[],
   canonicalSends: ReadonlyMap<string, CanonicalMessage>,
-  sendsByIdentity: ReadonlyMap<string, LocalSend>): TimelineItem[] {
+  sendsByIdentity: ReadonlyMap<string, LocalSend>,
+  transitions: readonly CanonicalTransition[], tools: readonly ToolCallRecord[]): TimelineItem[] {
   const anchoredSendIdentities = new Set<string>();
   const anchors: TimelineAnchor[] = bubbles.map((bubble, order) => {
     const identity = bubble.derived ? undefined : canonicalSendIdentity(bubble.record);
@@ -101,8 +106,11 @@ function composeTimeline(bubbles: readonly Bubble[], localSends: readonly LocalS
     const item: TimelineItem = { kind: 'bubble', bubble, scrollKey: send ? `local-${send.clientMessageId}` : undefined };
     return { item, record: bubble.record, order };
   });
+  for (const record of transitions) anchors.push({ item: { kind: 'transition', record }, record, order: anchors.length });
+  for (const call of tools) anchors.push({ item: { kind: 'tool', call },
+    record: { id: call.id, seq: call.afterMessageSeq }, order: anchors.length });
   const unmatched: UnmatchedTimelineItem[] = [];
-  let order = bubbles.length;
+  let order = anchors.length;
   for (const send of localSends) {
     const canonical = canonicalSends.get(sendIdentity(send));
     const item: TimelineItem = { kind: 'local', send, canonical };
@@ -116,6 +124,8 @@ function composeTimeline(bubbles: readonly Bubble[], localSends: readonly LocalS
   }
 
   anchors.sort((left, right) => left.record.seq - right.record.seq ||
+    Number(left.item.kind === 'tool') - Number(right.item.kind === 'tool') ||
+    (left.item.kind === 'tool' && right.item.kind === 'tool' ? left.item.call.seq - right.item.call.seq : 0) ||
     left.record.id.localeCompare(right.record.id) ||
     Number(left.item.kind !== 'bubble') - Number(right.item.kind !== 'bubble') || left.order - right.order);
 
@@ -452,6 +462,38 @@ const Composer = forwardRef<ComposerHandle, {
   </form>;
 });
 
+const ToolCallRow = memo(function ToolCallRow({ call, registerRow }: {
+  call: ToolCallRecord;
+  registerRow: (key: string, element: HTMLElement | null) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const terminal = call.status === 'completed' || call.status === 'failed';
+  const status = call.status === 'in_progress' ? 'Running' : call.status === 'pending' ? 'Pending' : call.status === 'completed' ? 'Completed' : 'Failed';
+  const key = 'tool-' + call.id;
+  return <article ref={element => registerRow(key, element)} data-record-key={key} data-scroll-key={key}
+    className="tb-chat-tool" aria-label={'Tool call: ' + (call.toolName || call.kind) + ', ' + status}>
+    <div className="tb-chat-tool-heading"><strong>{call.toolName || call.kind}</strong><span>{status}</span></div>
+    {call.title && <p>{call.title}</p>}
+    <details onToggle={event => setExpanded(event.currentTarget.open)}>
+      <summary>Input and result</summary>
+      {expanded && <div>
+        {(['rawInput', 'rawOutput', 'content'] as const).map(field => {
+          const label = field === 'rawInput' ? 'Input' : field === 'rawOutput' ? 'Result' : 'Result content';
+          const truncated = call.truncated.find(entry => entry.field === field);
+          const value = call[field];
+          if (value === null && field === 'content') return null;
+          return <section key={field} aria-label={label}>
+            <h4>{label}</h4>
+            {truncated && <p>{label} truncated — original size {truncated.originalBytes} bytes.</p>}
+            {value === null ? <p>{field === 'rawInput' ? 'No input recorded.' : terminal ? 'No result recorded.' : 'Waiting for result…'}</p>
+              : <pre>{typeof value === 'string' ? value : JSON.stringify(value, null, 2)}</pre>}
+          </section>;
+        })}
+      </div>}
+    </details>
+  </article>;
+});
+
 function ChatBody({ runtime, renderMessage, className, hostBridge }: {
   runtime: ChatRuntime;
   renderMessage?: TightbeamChatProps['renderMessage'];
@@ -497,8 +539,10 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
   const localSends = useMemo(() => state.sends.filter((send) =>
     !visibleSendIdentities.has(sendIdentity(send))), [state.sends, visibleSendIdentities]);
   const timeline = useMemo(() => {
-    return composeTimeline(bubbles, localSends, canonicalSends, sendsByIdentity);
-  }, [bubbles, canonicalSends, localSends, sendsByIdentity]);
+    return composeTimeline(bubbles, localSends, canonicalSends, sendsByIdentity,
+      state.records.filter((record): record is CanonicalTransition => record.kind === 'transition'),
+      state.toolCallsEnabled ? state.toolCalls ?? [] : []);
+  }, [bubbles, canonicalSends, localSends, sendsByIdentity, state.records, state.toolCalls, state.toolCallsEnabled]);
   const previousTail = useRef<{ generation: number; ready: boolean; seq: number } | null>(null);
   // Canonical records are ordered by sequence. A high-water mark excludes old
   // pages and newly revealed filtered rows without scanning retained history.
@@ -672,6 +716,15 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
         {host.optedIn && state.status === 'error' &&
           <button type="button" onClick={() => void runtime.rebuild({ restart: true })}>Reconnect</button>}
       </div>}
+      {state.toolCallsEnabled !== undefined && <div className="tb-chat-tool-controls">
+        <button type="button" aria-pressed={state.toolCallsEnabled}
+          onClick={() => runtime.setToolCallsEnabled?.(!state.toolCallsEnabled)}>Tool calls</button>
+        {state.toolCallsEnabled && state.toolCallsLoading && <span role="status">Loading tool history…</span>}
+        {state.toolCallsEnabled && state.toolCallsError && <span role="status">
+          Tool history is not current: {state.toolCallsError}{' '}
+          <button type="button" onClick={() => runtime.retryToolCalls?.()}>Retry tool history</button>
+        </span>}
+      </div>}
       {state.loadingOlder && <div className="tb-chat-history-loading" role="status">Loading earlier messages…</div>}
       {state.historyError && <div className="tb-chat-history-error" role="alert">
         <span>Earlier messages could not be loaded: {state.historyError}</span>
@@ -681,6 +734,14 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
         Some message sources could not be interpreted. Conversation filtering is incomplete.
       </div>}
       {timeline.map((item) => {
+        if (item.kind === 'tool') return <ToolCallRow key={'tool-' + item.call.id} call={item.call} registerRow={reading.registerRow} />;
+        if (item.kind === 'transition') {
+          const record = item.record;
+          return <article key={record.id} ref={element => reading.registerRow(record.id, element)}
+            data-record-key={record.id} data-scroll-key={record.id} className="tb-chat-transition" aria-label="Session transition">
+            {record.content || [record.from, record.to].filter(Boolean).join(' → ')}
+          </article>;
+        }
         if (item.kind === 'bubble') {
           const { bubble } = item;
           return <RecordRow key={bubble.key} bubble={bubble} scrollKey={item.scrollKey}

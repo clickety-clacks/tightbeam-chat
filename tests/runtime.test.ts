@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createTightbeamAdapter } from '../src/runtime';
 import { AuthorizationError, UnsupportedTargetError } from '../src/types';
 import type {
-  CanonicalMessage, CanonicalTransition, CanonicalTurn, ChangeCallbacks, ChatTransport,
+  ToolCallRecord, ToolCallRange, CanonicalMessage, CanonicalTransition, CanonicalTurn, ChangeCallbacks, ChatTransport,
   ConversationPage, ConversationRecord, HostIdentity, HumanSendResult,
   HumanSubmission, SessionRecord, TargetObservation, TargetProfile,
 } from '../src/types';
@@ -647,5 +647,84 @@ describe('framework-independent runtime', () => {
     expect(runtime.getSnapshot().records).toHaveLength(0);
     expect(runtime.getSnapshot().sends).toHaveLength(0);
     runtime.dispose();
+  });
+});
+
+describe('optional tool history and live category', () => {
+  const call = (id: string, anchor: number, patch: Partial<ToolCallRecord> = {}): ToolCallRecord => ({
+    id, seq: anchor, sessionKey, turnSeq: 1, afterMessageSeq: anchor, harnessToolCallId: id,
+    title: 'Read source', kind: 'read', toolName: 'read_file', status: 'in_progress',
+    rawInput: {}, rawOutput: null, content: null, truncated: [], startedAt: 1000, endedAt: null, rowVersion: 1, ...patch,
+  });
+  class ToolsTransport extends ControlledTransport {
+    toolCallbacks?: ChangeCallbacks;
+    toolClosed = 0;
+    toolOpens = 0;
+    ranges: ToolCallRange[] = [];
+    calls = [call('tc_old', 3), call('tc_tail', 8)];
+    toolHook?: () => void;
+    toolError = false;
+    openToolChanges = async (_key: string, callbacks: ChangeCallbacks) => {
+      this.toolOpens++;
+      this.toolCallbacks = callbacks;
+      return { close: () => { this.toolClosed++; if (this.toolCallbacks === callbacks) this.toolCallbacks = undefined; } };
+    };
+    readToolCalls = async (_key: string, range: ToolCallRange) => {
+      expect(this.toolCallbacks).toBeDefined();
+      this.ranges.push(range);
+      const rows = this.calls.filter(call => call.afterMessageSeq >= range.fromInclusive &&
+        (range.toExclusive === undefined || call.afterMessageSeq < range.toExclusive));
+      this.toolHook?.();
+      if (this.toolError) throw new Error('Tool endpoint unavailable');
+      return rows;
+    };
+  }
+
+  it('subscribes before REST, merges terminal notices, pages by message anchors and catches up after toggling/rebuild', async () => {
+    const transport = new ToolsTransport();
+    transport.toolHook = () => transport.toolCallbacks?.onNotice({ operation: 'tool',
+      tool: call('tc_tail', 8, { status: 'completed', rowVersion: 2, endedAt: 2000, rawOutput: 'done' }) });
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await vi.waitFor(() => expect(runtime.getSnapshot().toolCallsLoading).toBe(false));
+    expect(runtime.getSnapshot().toolCallsEnabled).toBe(true);
+    expect(transport.ranges[0]).toEqual({ fromInclusive: 6 });
+    expect(runtime.getSnapshot().toolCalls).toMatchObject([{ id: 'tc_tail', status: 'completed' }]);
+    await runtime.loadOlder();
+    expect(transport.ranges[1]).toEqual({ fromInclusive: 3, toExclusive: 6 });
+    expect(runtime.getSnapshot().toolCalls?.map(call => call.id)).toEqual(['tc_old', 'tc_tail']);
+    const mainOpens = transport.readTailCalls;
+    runtime.setToolCallsEnabled!(false);
+    expect(transport.toolCallbacks).toBeUndefined();
+    expect(runtime.getSnapshot().toolCalls).toEqual([]);
+    expect(transport.closed).toBe(0);
+    transport.emit(message(9));
+    expect(runtime.getSnapshot().records.at(-1)?.id).toBe('m9');
+    transport.calls.push(call('tc_while_off', 9));
+    runtime.setToolCallsEnabled!(true);
+    await vi.waitFor(() => expect(runtime.getSnapshot().toolCallsLoading).toBe(false));
+    expect(runtime.getSnapshot().toolCalls?.at(-1)?.id).toBe('tc_while_off');
+    expect(transport.readTailCalls).toBe(mainOpens);
+    transport.rows.push(message(9));
+    await runtime.rebuild();
+    await vi.waitFor(() => expect(runtime.getSnapshot().toolCallsLoading).toBe(false));
+    expect(runtime.getSnapshot().toolCalls?.at(-1)?.id).toBe('tc_while_off');
+    expect(transport.toolOpens).toBe(3);
+    runtime.dispose();
+  });
+
+  it('keeps conversation available on tool failure and removes captions only through their own turn lifecycle', async () => {
+    const transport = new ToolsTransport();
+    transport.toolError = true;
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await vi.waitFor(() => expect(runtime.getSnapshot().toolCallsError).toContain('unavailable'));
+    expect(runtime.getSnapshot().status).toBe('ready');
+    transport.toolError = false;
+    runtime.retryToolCalls!();
+    await vi.waitFor(() => expect(runtime.getSnapshot().toolCallsError).toBeUndefined());
+    await vi.waitFor(() => expect(runtime.getSnapshot().toolCallsLoading).toBe(false));
+    transport.callbacks?.onNotice({ operation: 'turn', turn: { seq: 1, sessionKey, status: 'completed', origin: 'user:person', raw: {} } });
+    expect(runtime.getSnapshot().toolCalls?.[0].status).toBe('in_progress');
+    runtime.dispose();
+    expect(transport.toolCallbacks).toBeUndefined();
   });
 });

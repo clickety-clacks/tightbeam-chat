@@ -4,7 +4,7 @@ import { TightbeamChat } from '../src/TightbeamChat';
 import type { RenderContext } from '../src/TightbeamChat';
 import { createTurnProvenance } from '../src/provenance';
 import type {
-  CanonicalMessage, CanonicalTurn, ChatRuntime, ConversationRecord, LocalSend, RuntimeState,
+  ToolCallRecord, CanonicalMessage, CanonicalTurn, ChatRuntime, ConversationRecord, LocalSend, RuntimeState,
   TightbeamAdapter, TurnProvenance,
 } from '../src/types';
 
@@ -77,6 +77,7 @@ class FakeRuntime implements ChatRuntime {
   recordHostSendOutcome = () => {};
   markHostSendUncertain = () => {};
   rebuild = async (options?: { restart?: boolean }) => { this.rebuildCalls++; this.rebuildOptions.push(options); const snapshot = this.rebuildSnapshots.shift(); if (snapshot) this.update(snapshot); };
+  setToolCallsEnabled = (enabled: boolean) => this.update({ toolCallsEnabled: enabled });
   dispose = () => { this.disposed = true; this.listeners.clear(); };
 }
 
@@ -836,5 +837,42 @@ describe('conversation surface', () => {
     }
     expect(rows).toHaveLength(expected.length);
     for (let index = 0; index < expected.length; index++) expect(rows[index]).toContain(expected[index]);
+  });
+});
+
+describe('tool-call and transition display', () => {
+  it('anchors tools between messages, expands input/results with truthful truncation, and keeps the draft while toggling', async () => {
+    const call: ToolCallRecord = { id: 'tc_read', seq: 500, sessionKey: 'tools', turnSeq: 7, afterMessageSeq: 1,
+      harnessToolCallId: 'read-1', title: 'Read the source file', kind: 'read', toolName: 'read_file',
+      status: 'in_progress', rawInput: { path: 'source.ts' }, rawOutput: null, content: null,
+      truncated: [], startedAt: 1000, endedAt: null, rowVersion: 1 };
+    const human = row('tools', 'human', 'Please read the source', { role: 'user', sender: 'user:person', seq: 1 });
+    const reply = row('tools', 'reply', 'Read complete', { seq: 3, replyToMessageId: human.id });
+    const marker: ConversationRecord = { kind: 'transition', id: 'boundary', seq: 2, rowVersion: 1,
+      sessionKey: 'tools', transition: 'unknown', from: 'old', to: 'new', content: 'A new boundary kind', raw: {} };
+    const runtime = new FakeRuntime('tools', { records: [human, marker, reply], toolCallsEnabled: true, toolCalls: [call] });
+    const view = render(<TightbeamChat sessionKey="tools" adapter={adapterFor(runtime)} />);
+    expect([...view.container.querySelectorAll('article[data-record-key]')].map(node => node.getAttribute('data-record-key')))
+      .toEqual(['human', 'tool-tc_read', 'boundary', 'reply']);
+    expect(screen.getByText('A new boundary kind')).toBeTruthy();
+    expect(screen.queryByText('source.ts')).toBeNull();
+    const detail = view.container.querySelector('details')!;
+    detail.open = true;
+    fireEvent(detail, new Event('toggle'));
+    await screen.findByText(/source.ts/);
+    expect(screen.getByText('Waiting for result…')).toBeTruthy();
+    const editor = screen.getByRole('textbox');
+    fireEvent.change(editor, { target: { value: 'draft kept' } });
+    act(() => runtime.update({ toolCalls: [{ ...call, status: 'completed', rowVersion: 2,
+      rawOutput: '{"prefix":', truncated: [{ field: 'rawOutput', originalBytes: 20000 }], endedAt: 2000 }] }));
+    expect(screen.getByText('Completed')).toBeTruthy();
+    expect(screen.getByText('Result truncated — original size 20000 bytes.')).toBeTruthy();
+    expect(screen.getByText('{"prefix":')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Tool calls' }));
+    expect(screen.queryByText('Read the source file')).toBeNull();
+    expect(screen.getByText('A new boundary kind')).toBeTruthy();
+    expect((editor as HTMLTextAreaElement).value).toBe('draft kept');
+    fireEvent.click(screen.getByRole('button', { name: 'Tool calls' }));
+    expect(screen.getByText('Read the source file')).toBeTruthy();
   });
 });

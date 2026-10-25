@@ -3,6 +3,8 @@ import {
   InvalidCursorError,
   UnsupportedTargetError,
   type CanonicalTurn,
+  type ToolCallRecord,
+  type ToolCallRange,
   type ChangeConnection,
   type ChangeNotice,
   type ChatRuntime,
@@ -81,6 +83,10 @@ class SessionRuntime implements ChatRuntime {
   private readonly pendingReconciledIds = new Set<string>();
   private readonly hostSendObservers = new Map<string, Set<HostSendObserver>>();
   private readonly coverageReaders = new Set<ChangeNotice[]>();
+  private toolConnection: ChangeConnection | undefined;
+  private toolController: AbortController | undefined;
+  private toolEpoch = 0;
+  private readonly tools = new Map<string, ToolCallRecord>();
   private connection: ChangeConnection | undefined;
   private controller: AbortController | undefined;
   private cursor: string | null = null;
@@ -102,6 +108,8 @@ class SessionRuntime implements ChatRuntime {
     this.identity = transport.currentIdentity();
     this.state = Object.freeze({
       sessionKey, principalKey: this.identity.principalKey, generation: 0, status: 'loading', records: Object.freeze([]),
+      toolCallsEnabled: transport.openToolChanges && transport.readToolCalls ? true : undefined,
+      toolCalls: Object.freeze([]),
       hasOlder: false, loadingOlder: false, sends: Object.freeze([]), targetLabel: profile.label,
       targetGateway: transport.targetGateway, provenance: noProvenance, provenanceAvailable: false,
     });
@@ -133,6 +141,97 @@ class SessionRuntime implements ChatRuntime {
     for (const listener of this.listeners) listener();
   }
 
+  private stopTools(): void {
+    this.toolEpoch++;
+    this.toolController?.abort();
+    this.toolConnection?.close();
+    this.toolConnection = undefined;
+    this.toolController = undefined;
+  }
+
+  private putTool(call: ToolCallRecord): void {
+    if (call.sessionKey !== this.sessionKey) return;
+    const previous = this.tools.get(call.id);
+    if (!previous || call.rowVersion > previous.rowVersion) this.tools.set(call.id, call);
+  }
+
+  private publishTools(): void {
+    const floor = this.state.hasOlder ? this.state.records[0]?.seq ?? 0 : 0;
+    this.publish({ toolCalls: Object.freeze([...this.tools.values()]
+      .filter(call => call.afterMessageSeq >= floor)
+      .sort((a, b) => a.afterMessageSeq - b.afterMessageSeq || a.seq - b.seq)) });
+  }
+
+  private toolFailure(error: unknown): void {
+    this.stopTools();
+    this.publish({ toolCallsLoading: false, toolCallsError: errorText(error) });
+  }
+
+  /** Tools are optional to conversation availability, but never silently complete. */
+  private async startTools(): Promise<void> {
+    this.stopTools();
+    if (!this.state.toolCallsEnabled || !this.transport.openToolChanges || !this.transport.readToolCalls ||
+        this.state.status !== 'ready' || this.disposed) return;
+    const epoch = this.toolEpoch;
+    const generation = this.generation;
+    const controller = new AbortController();
+    this.toolController = controller;
+    const current = () => this.isCurrent(generation) && epoch === this.toolEpoch && this.checkIdentity();
+    this.tools.clear();
+    this.publish({ toolCalls: Object.freeze([]), toolCallsLoading: true, toolCallsError: undefined });
+    try {
+      const connection = await this.transport.openToolChanges(this.sessionKey, {
+        onNotice: notice => {
+          if (!current()) return;
+          if (notice.operation !== 'tool') {
+            this.toolFailure(new Error('Tool subscription needs a fresh history read.'));
+            return;
+          }
+          this.putTool(notice.tool);
+          if (!this.state.toolCallsLoading) this.publishTools();
+        },
+        onDoubt: reason => { if (current()) this.toolFailure(new Error(reason)); },
+      }, controller.signal);
+      if (!current()) { connection.close(); return; }
+      this.toolConnection = connection;
+      const range = { fromInclusive: this.state.records[0]?.seq ?? 0 };
+      const calls = await this.transport.readToolCalls(this.sessionKey, range, controller.signal);
+      if (!current()) return;
+      for (const call of calls) this.putTool(call);
+      this.publish({ toolCallsLoading: false });
+      this.publishTools();
+    } catch (error) {
+      if (current()) this.toolFailure(error);
+    }
+  }
+
+  private async olderTools(page: ConversationPage): Promise<void> {
+    if (!this.state.toolCallsEnabled || !this.transport.readToolCalls || !this.toolController ||
+        !page.records.length || this.state.toolCallsError) return;
+    const epoch = this.toolEpoch;
+    const range: ToolCallRange = { fromInclusive: page.records[0].seq,
+      toExclusive: page.records[page.records.length - 1].seq + 1 };
+    try {
+      const calls = await this.transport.readToolCalls(this.sessionKey, range, this.toolController.signal);
+      if (epoch !== this.toolEpoch || this.disposed) return;
+      for (const call of calls) this.putTool(call);
+    } catch (error) {
+      if (epoch === this.toolEpoch && !this.disposed) this.toolFailure(error);
+    }
+  }
+
+  setToolCallsEnabled = (enabled: boolean): void => {
+    if (this.disposed || !this.checkIdentity() || this.state.toolCallsEnabled === undefined ||
+        this.state.toolCallsEnabled === enabled) return;
+    this.stopTools();
+    this.tools.clear();
+    this.publish({ toolCallsEnabled: enabled, toolCalls: Object.freeze([]),
+      toolCallsLoading: false, toolCallsError: undefined });
+    if (enabled) void this.startTools();
+  };
+
+  retryToolCalls = (): void => { void this.startTools(); };
+
   private notifyHostSend(id: string, signal: HostSendSignal): void {
     for (const observer of [...(this.hostSendObservers.get(id) ?? [])]) observer(signal);
   }
@@ -158,6 +257,7 @@ class SessionRuntime implements ChatRuntime {
   private checkIdentity(): boolean {
     if (identityEquals(this.identity, this.transport.currentIdentity())) return true;
     this.generation++;
+    this.stopTools();
     this.controller?.abort();
     this.connection?.close();
     this.connection = undefined;
@@ -170,6 +270,7 @@ class SessionRuntime implements ChatRuntime {
       generation: this.generation, status: 'unauthorized',
       identityChanged: true,
       statusDetail: 'Host principal or device changed. Open a new component lifetime.',
+      toolCalls: Object.freeze([]), toolCallsLoading: false, toolCallsError: undefined,
       records: Object.freeze([]), sends: Object.freeze([]), hasOlder: false,
       session: undefined, agentDisplayName: undefined, provenance: Object.freeze([]),
       activeTurn: undefined, historyError: undefined,
@@ -272,6 +373,8 @@ class SessionRuntime implements ChatRuntime {
         if (!this.initializing) this.publish({ activeTurn: undefined });
         return false;
       }
+      case 'tool':
+        return false; // Only the separate optional category connection owns tool records.
       case 'ignore':
         return false;
       case 'observe':
@@ -311,6 +414,7 @@ class SessionRuntime implements ChatRuntime {
     if (!this.isCurrent(generation) || !this.checkIdentity()) return;
     this.markPendingUncertain(reason);
     this.generation++;
+    this.stopTools();
     this.controller?.abort();
     this.connection?.close();
     this.connection = undefined;
@@ -343,6 +447,7 @@ class SessionRuntime implements ChatRuntime {
     for (const send of this.state.sends) {
       if (send.status === 'pending') this.notifyHostSend(send.clientMessageId, { kind: 'uncertain', reason: 'ack-lost' });
     }
+    this.stopTools();
     this.controller?.abort();
     this.connection?.close();
     this.connection = undefined;
@@ -355,6 +460,7 @@ class SessionRuntime implements ChatRuntime {
     this.restoreDepth = 0;
     this.publish({
       generation: this.generation, status, statusDetail: reason,
+      toolCalls: Object.freeze([]), toolCallsLoading: false, toolCallsError: undefined,
       records: Object.freeze([]), sends, session: undefined,
       agentDisplayName: undefined, provenance: noProvenance, provenanceAvailable: false, activeTurn: undefined,
       hasOlder: false, loadingOlder: false, historyError: undefined,
@@ -388,6 +494,7 @@ class SessionRuntime implements ChatRuntime {
     this.generation++;
     const generation = this.generation;
     this.markPendingUncertain('Connection rebuilt before acknowledgement.');
+    this.stopTools();
     this.controller?.abort();
     this.connection?.close();
     this.connection = undefined;
@@ -497,6 +604,7 @@ class SessionRuntime implements ChatRuntime {
         provenance: noProvenance, provenanceAvailable: false, activeTurn: undefined,
         hasOlder, historyError: undefined,
       });
+      void this.startTools();
       for (const send of sends) {
         if (send.reconciled) this.notifyHostSend(send.clientMessageId, { kind: 'reconciled' });
       }
@@ -543,11 +651,14 @@ class SessionRuntime implements ChatRuntime {
       if (!this.isCurrent(generation) || !this.checkIdentity()) return;
       this.validatePage(page);
       if (page.hasOlder && page.oldestCursor === cursor) throw new InvalidCursorError('Older cursor did not advance.');
+      await this.olderTools(page);
+      if (!this.isCurrent(generation) || !this.checkIdentity()) return;
       for (const record of page.records) this.put(record);
       this.reconcilePendingHistory(page.hasOlder);
       this.cursor = page.oldestCursor;
       this.restoreDepth++;
       this.publish({ records: recordsFrom(this.rows), hasOlder: page.hasOlder, loadingOlder: false });
+      this.publishTools();
     } catch (error) {
       if (!this.isCurrent(generation) || signal.aborted) return;
       if (error instanceof AuthorizationError) {
@@ -663,6 +774,8 @@ class SessionRuntime implements ChatRuntime {
       if (!this.transport.proveCoverage(session, page, captured)) {
         throw new UnsupportedTargetError('Canonical refresh lacks verified subscription coverage.');
       }
+      await this.olderTools(page);
+      if (!this.isCurrent(generation) || !this.checkIdentity()) return;
       for (const record of page.records) this.put(record);
       this.reconcilePendingHistory(page.hasOlder);
       const currentSession = !this.state.session || session.rowVersion > this.state.session.rowVersion
@@ -747,6 +860,7 @@ class SessionRuntime implements ChatRuntime {
     this.disposed = true;
     this.generation++;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.stopTools();
     this.controller?.abort();
     this.connection?.close();
     for (const controller of this.sendControllers.values()) controller.abort();

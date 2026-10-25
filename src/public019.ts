@@ -4,6 +4,8 @@ import {
   UnsupportedTargetError,
   type ConversationRecord,
   type ChangeConnection,
+  type ChangeCallbacks,
+  type ToolCallRecord,
   type ChangeNotice,
   type CanonicalMessage,
   type CanonicalTurn,
@@ -172,13 +174,12 @@ export function decodePublic019Message(value: unknown, sessionKey: string): Conv
   if (row.messageType === 'marker') {
     const marker = record(row.marker);
     const kind = requiredString(marker, 'kind');
-    if (!['harness-switch', 'model-retune', 'session-restart'].includes(kind)) {
-      throw new UnsupportedTargetError('Unknown stored marker kind.');
-    }
     return Object.freeze({
       kind: 'transition', id: requiredString(row, 'id'), sessionKey,
       seq: positiveInteger(row, 'seq'), rowVersion: positiveInteger(row, 'rowVersion'),
-      transition: kind === 'harness-switch' ? 'harness' : kind === 'model-retune' ? 'model' : 'restart',
+      transition: kind === 'harness-switch' ? 'harness' : kind === 'model-retune' ? 'model'
+        : kind === 'session-restart' ? 'restart' : kind === 'context-compacted' ? 'compaction' : 'unknown',
+      content: typeof row.content === 'string' ? row.content : requiredString(row, 'content'),
       from: typeof marker.from === 'string' ? marker.from : requiredString(marker, 'from'),
       to: typeof marker.to === 'string' ? marker.to : requiredString(marker, 'to'),
       createdAt: messageTime(row), raw: Object.freeze({ ...row }),
@@ -239,6 +240,33 @@ export function decodePublic019Session(value: unknown, sessionKey: string): Sess
   });
 }
 
+/** REST and changes carry the same tool-call projection. */
+export function decodeToolCall(value: unknown, sessionKey: string): ToolCallRecord {
+  const row = record(value);
+  if (row.sessionKey !== sessionKey) throw new UnsupportedTargetError('Tool call belongs to a different session.');
+  const integer = (key: string): number => {
+    const value = row[key];
+    if (!Number.isSafeInteger(value) || (value as number) < 0) throw new UnsupportedTargetError('Invalid tool-call ' + key);
+    return value as number;
+  };
+  const status = row.status;
+  if (!['pending', 'in_progress', 'completed', 'failed'].includes(String(status))) throw new UnsupportedTargetError('Unknown tool-call status.');
+  if (typeof row.title !== 'string' || !Array.isArray(row.truncated)) throw new UnsupportedTargetError('Invalid tool-call projection.');
+  const truncated = row.truncated.map(value => {
+    const entry = record(value);
+    if (!['rawInput', 'rawOutput', 'content'].includes(String(entry.field))) throw new UnsupportedTargetError('Invalid truncation field.');
+    return Object.freeze({ field: entry.field as 'rawInput' | 'rawOutput' | 'content', originalBytes: positiveInteger(entry, 'originalBytes') });
+  });
+  return Object.freeze({ id: requiredString(row, 'id'), seq: positiveInteger(row, 'seq'), sessionKey,
+    turnSeq: positiveInteger(row, 'turnSeq'), afterMessageSeq: integer('afterMessageSeq'),
+    harnessToolCallId: requiredString(row, 'harnessToolCallId'), title: row.title, kind: requiredString(row, 'kind'),
+    toolName: optionalString(row, 'toolName') ?? null, status: status as ToolCallRecord['status'],
+    rawInput: row.rawInput ?? null, rawOutput: row.rawOutput ?? null, content: row.content ?? null,
+    truncated: Object.freeze(truncated), startedAt: integer('startedAt'),
+    endedAt: row.endedAt === null ? null : integer('endedAt'), rowVersion: positiveInteger(row, 'rowVersion'),
+  });
+}
+
 /** A source-backed notice decoder; unknown selected-session changes request a rebuild. */
 export function decodePublic019Notice(value: unknown, sessionKey: string): ChangeNotice {
   const frame = record(value);
@@ -247,8 +275,13 @@ export function decodePublic019Notice(value: unknown, sessionKey: string): Chang
   }
   const refs = record(frame.refs);
   if (refs.sessionKey !== sessionKey) throw new UnsupportedTargetError('Change frame has a different session reference.');
-  if (frame.class === 'message.created' && frame.resource === 'messages' && frame.op === 'upsert') {
+  if (((frame.class === 'message.created' && ['messages', 'transcript messages'].includes(String(frame.resource))) ||
+      (frame.class === 'transition.recorded' && frame.resource === 'transcript messages')) && frame.op === 'upsert') {
     return { operation: 'upsert', record: decodePublic019Message(frame.payload, sessionKey) };
+  }
+  if (['tool_call.started', 'tool_call.ended'].includes(frame.class) &&
+      frame.resource === 'tool calls' && frame.op === 'upsert') {
+    return { operation: 'tool', tool: decodeToolCall(frame.payload, sessionKey) };
   }
   if (typeof frame.class === 'string' && frame.class.startsWith('session.') &&
       frame.resource === 'sessions' && frame.op === 'upsert') {
@@ -332,6 +365,94 @@ export function createPublic019Transport(config: Public019Config): { transport: 
     return { records: body.items.map((item) => decodePublic019Message(item, sessionKey))
       .sort((a, b) => a.seq - b.seq), oldestCursor, hasOlder: page.hasMoreBefore, coverage: sessionKey };
   }
+
+  async function openChanges(sessionKey: string, callbacks: ChangeCallbacks, signal: AbortSignal, tools = false): Promise<ChangeConnection> {
+      const channel = await config.host.openAuthenticatedChanges(signal);
+      let closed = false;
+      let ready = false;
+      let lastSeq = 0;
+      let stopListening = () => {};
+      let readyTimer: ReturnType<typeof setTimeout> | undefined;
+      let heartbeatTimer: ReturnType<typeof setTimeout> | undefined;
+      const subscriptionId = (tools ? 'tools:' : 'chat:') + sessionKey;
+      const close = () => {
+        if (closed) return;
+        closed = true;
+        if (!tools) activeSessions.delete(sessionKey);
+        if (readyTimer) clearTimeout(readyTimer);
+        if (heartbeatTimer) clearTimeout(heartbeatTimer);
+        stopListening();
+        signal.removeEventListener('abort', onAbort);
+        channel.close();
+      };
+      let rejectReady: (reason: unknown) => void = () => {};
+      let resolveReady: () => void = () => {};
+      const readyPromise = new Promise<void>((resolve, reject) => { resolveReady = resolve; rejectReady = reject; });
+      const onAbort = () => { close(); rejectReady(new Error('Change subscription aborted.')); };
+      const doubt = (reason: string) => {
+        if (closed) return;
+        close();
+        callbacks.onDoubt(reason);
+      };
+      const watchHeartbeat = () => {
+        if (closed) return;
+        if (heartbeatTimer) clearTimeout(heartbeatTimer);
+        heartbeatTimer = setTimeout(() => doubt('Firehose heartbeat or change timed out.'), heartbeatTimeoutMs);
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+      stopListening = channel.listen((raw) => {
+        if (closed) return;
+        try {
+          const frame = record(raw);
+          if (!ready) {
+            if (frame.type === 'subscription_ready' && frame.subscriptionId === subscriptionId) {
+              ready = true;
+              if (!tools) activeSessions.add(sessionKey);
+              if (readyTimer) clearTimeout(readyTimer);
+              watchHeartbeat();
+              resolveReady();
+            } else if (frame.type === 'error' || frame.type === 'auth_result') {
+              throw new UnsupportedTargetError('Protocol-2 subscription was refused.');
+            }
+            return;
+          }
+          if (frame.type !== 'change' && frame.type !== 'heartbeat') {
+            doubt('Unexpected Firehose frame after subscription readiness.');
+            return;
+          }
+          if (!Number.isSafeInteger(frame.seq) || (frame.seq as number) < lastSeq ||
+              (frame.type === 'change' && frame.seq !== lastSeq + 1) ||
+              (frame.type === 'heartbeat' && frame.seq !== lastSeq)) {
+            doubt('Firehose sequence gap or regression.');
+            return;
+          }
+          lastSeq = frame.seq as number;
+          if (frame.type === 'change') {
+            if (frame.subscriptionId !== subscriptionId) throw new UnsupportedTargetError('Wrong Firehose subscription.');
+            callbacks.onNotice(decodePublic019Notice(frame, sessionKey));
+          }
+          watchHeartbeat();
+        } catch (error) {
+          if (!ready) { close(); rejectReady(error); }
+          else doubt(error instanceof Error ? error.message : String(error));
+        }
+      }, () => {
+        if (closed) return;
+        close();
+        if (ready) callbacks.onDoubt('Firehose disconnected.');
+        else rejectReady(new Error('Firehose closed before subscription readiness.'));
+      });
+      if (signal.aborted) onAbort();
+      else if (!closed) {
+        readyTimer = setTimeout(() => { close(); rejectReady(new Error('Firehose subscription readiness timed out.')); }, timeoutMs);
+        try {
+          channel.send({ type: 'subscribe', protocolVersion: 2, subscriptionId, filters: { sessionKey, classes: tools ? ['tool_call.']
+            : ['message.created', 'transition.', 'session.', 'turn.', 'wake.', ...observationalClasses] } });
+        } catch (error) { close(); rejectReady(error); }
+      }
+      await readyPromise;
+      return { close };
+    }
 
   const transport: ChatTransport = {
     currentIdentity: () => config.host.currentIdentity(),
@@ -417,91 +538,35 @@ export function createPublic019Transport(config: Public019Config): { transport: 
     // This is overlap coverage, not a server snapshot watermark or replay promise.
     proveCoverage: (session, page, buffered) => activeSessions.has(session.sessionKey) &&
       page.coverage === session.sessionKey && !buffered.some((notice) => notice.operation === 'unknown'),
-    async openChanges(sessionKey, callbacks, signal): Promise<ChangeConnection> {
-      const channel = await config.host.openAuthenticatedChanges(signal);
-      let closed = false;
-      let ready = false;
-      let lastSeq = 0;
-      let stopListening = () => {};
-      let readyTimer: ReturnType<typeof setTimeout> | undefined;
-      let heartbeatTimer: ReturnType<typeof setTimeout> | undefined;
-      const subscriptionId = `chat:${sessionKey}`;
-      const close = () => {
-        if (closed) return;
-        closed = true;
-        activeSessions.delete(sessionKey);
-        if (readyTimer) clearTimeout(readyTimer);
-        if (heartbeatTimer) clearTimeout(heartbeatTimer);
-        stopListening();
-        signal.removeEventListener('abort', onAbort);
-        channel.close();
-      };
-      let rejectReady: (reason: unknown) => void = () => {};
-      let resolveReady: () => void = () => {};
-      const readyPromise = new Promise<void>((resolve, reject) => { resolveReady = resolve; rejectReady = reject; });
-      const onAbort = () => { close(); rejectReady(new Error('Change subscription aborted.')); };
-      const doubt = (reason: string) => {
-        if (closed) return;
-        close();
-        callbacks.onDoubt(reason);
-      };
-      const watchHeartbeat = () => {
-        if (closed) return;
-        if (heartbeatTimer) clearTimeout(heartbeatTimer);
-        heartbeatTimer = setTimeout(() => doubt('Firehose heartbeat or change timed out.'), heartbeatTimeoutMs);
-      };
-      signal.addEventListener('abort', onAbort, { once: true });
-      stopListening = channel.listen((raw) => {
-        if (closed) return;
-        try {
-          const frame = record(raw);
-          if (!ready) {
-            if (frame.type === 'subscription_ready' && frame.subscriptionId === subscriptionId) {
-              ready = true;
-              activeSessions.add(sessionKey);
-              if (readyTimer) clearTimeout(readyTimer);
-              watchHeartbeat();
-              resolveReady();
-            } else if (frame.type === 'error' || frame.type === 'auth_result') {
-              throw new UnsupportedTargetError('Protocol-2 subscription was refused.');
-            }
-            return;
-          }
-          if (frame.type !== 'change' && frame.type !== 'heartbeat') {
-            doubt('Unexpected Firehose frame after subscription readiness.');
-            return;
-          }
-          if (!Number.isSafeInteger(frame.seq) || (frame.seq as number) < lastSeq ||
-              (frame.type === 'change' && frame.seq !== lastSeq + 1) ||
-              (frame.type === 'heartbeat' && frame.seq !== lastSeq)) {
-            doubt('Firehose sequence gap or regression.');
-            return;
-          }
-          lastSeq = frame.seq as number;
-          if (frame.type === 'change') {
-            if (frame.subscriptionId !== subscriptionId) throw new UnsupportedTargetError('Wrong Firehose subscription.');
-            callbacks.onNotice(decodePublic019Notice(frame, sessionKey));
-          }
-          watchHeartbeat();
-        } catch (error) {
-          if (!ready) { close(); rejectReady(error); }
-          else doubt(error instanceof Error ? error.message : String(error));
+    openChanges,
+    openToolChanges: (sessionKey, callbacks, signal) => openChanges(sessionKey, callbacks, signal, true),
+    async readToolCalls(sessionKey, range, signal) {
+      const filters = new URLSearchParams({ limit: '50', afterMessageSeqFromInclusive: String(range.fromInclusive) });
+      if (range.toExclusive !== undefined) filters.set('afterMessageSeqToExclusive', String(range.toExclusive));
+      const calls = new Map<string, ToolCallRecord>();
+      const cursors = new Set<string>();
+      while (true) {
+        const body = await get('/api/sessions/' + encodeURIComponent(sessionKey) + '/tool-calls?' + filters, signal);
+        if (body.schemaVersion !== 1 || body.resource !== 'tool calls' || !Array.isArray(body.items)) {
+          throw new Error('Unexpected tool-call collection envelope.');
         }
-      }, () => {
-        if (closed) return;
-        close();
-        if (ready) callbacks.onDoubt('Firehose disconnected.');
-        else rejectReady(new Error('Firehose closed before subscription readiness.'));
-      });
-      if (signal.aborted) onAbort();
-      else if (!closed) {
-        readyTimer = setTimeout(() => { close(); rejectReady(new Error('Firehose subscription readiness timed out.')); }, timeoutMs);
-        try {
-          channel.send({ type: 'subscribe', protocolVersion: 2, subscriptionId, filters: { sessionKey } });
-        } catch (error) { close(); rejectReady(error); }
+        for (const item of body.items) {
+          const call = decodeToolCall(item, sessionKey);
+          if (call.afterMessageSeq < range.fromInclusive ||
+              (range.toExclusive !== undefined && call.afterMessageSeq >= range.toExclusive)) {
+            throw new Error('Tool call falls outside the requested history slice.');
+          }
+          const previous = calls.get(call.id);
+          if (!previous || call.rowVersion > previous.rowVersion) calls.set(call.id, call);
+        }
+        const page = record(body.page);
+        if (page.hasMoreBefore === false) break;
+        const cursor = optionalString(page, 'oldestCursor');
+        if (page.hasMoreBefore !== true || !cursor || cursors.has(cursor)) throw new Error('Invalid tool-call page cursor.');
+        cursors.add(cursor);
+        filters.set('before', cursor);
       }
-      await readyPromise;
-      return { close };
+      return Object.freeze([...calls.values()].sort((a, b) => a.afterMessageSeq - b.afterMessageSeq || a.seq - b.seq));
     },
     async sendHuman(submission: HumanSubmission, signal: AbortSignal): Promise<HumanSendResult> {
       const submittingIdentity = config.host.currentIdentity();
