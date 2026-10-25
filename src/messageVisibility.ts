@@ -59,7 +59,7 @@ export function projectMessages(records: readonly ConversationRecord[], principa
     if (classification === 'human') {
       messages.push({ key: record.id, source: record, side: 'human', senderLabel: 'You', provenancePending: false });
     } else if (isVisibleHumanRow(record)) {
-      // A missing or different sender is not evidence that this user row is Mike's,
+      // A missing or different sender does not prove this row belongs to the viewer,
       // but it also is not a reason to omit the row from the conversation.
       messages.push({ key: record.id, source: record, side: 'human', senderLabel: 'User', provenancePending: false });
     } else if (classification === 'assistant') {

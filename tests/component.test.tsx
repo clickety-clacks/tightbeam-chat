@@ -341,6 +341,9 @@ describe('conversation surface', () => {
 
   it('keeps unmarked user rows and unresolved replies visible while older history loads', async () => {
     const sessionKey = 'unresolved-reply-parent';
+    const exactSenderHuman = row(sessionKey, 'exact-sender-human', 'A message with an exact principal sender', {
+      role: 'user', sender: 'user:person', messageType: 'chat',
+    });
     const nullSenderHuman = row(sessionKey, 'null-sender-human', 'A human message with a null sender', {
       role: 'user', messageType: 'chat', raw: { source: 'fixture', id: 'null-sender-human', sender: null },
     });
@@ -355,7 +358,7 @@ describe('conversation surface', () => {
       role: 'assistant', sender: 'assistant-service', messageType: 'assistant', replyToMessageId: 'older-agent-trigger', turnSeq: 50,
     });
     const runtime = new FakeRuntime(sessionKey, {
-      records: [nullSenderHuman, unknownSender, nullLinkReply, unloadedParentReply],
+      records: [exactSenderHuman, nullSenderHuman, unknownSender, nullLinkReply, unloadedParentReply],
       hasOlder: true,
     });
     runtime.olderPages = [{ records: [row(sessionKey, 'older-agent-trigger', 'An older agent wake', {
@@ -365,8 +368,12 @@ describe('conversation surface', () => {
     render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
     const log = screen.getByRole('log');
     expect(within(log).getByText('A human message with a null sender')).toBeTruthy();
-    expect(within(log).getByText('A human message with a null sender').closest('article')?.getAttribute('aria-label'))
-      .toBe('Message from User');
+    const unmarkedBubble = within(log).getByText('A human message with a null sender').closest('article')!;
+    expect(unmarkedBubble.getAttribute('aria-label')).toBe('Message from User');
+    expect(within(unmarkedBubble).getByText('User')).toBeTruthy();
+    const exactBubble = within(log).getByText('A message with an exact principal sender').closest('article')!;
+    expect(exactBubble.getAttribute('aria-label')).toBe('Message from You');
+    expect(within(exactBubble).getByText('You')).toBeTruthy();
     expect(within(log).getByText('An absent sender stays visible without identity proof')).toBeTruthy();
     expect(within(log).getByText('A reply without a parent link')).toBeTruthy();
     expect(within(log).getByText('A reply whose parent is not loaded')).toBeTruthy();

@@ -397,6 +397,7 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, re
   const custom = renderMessage?.(displayRecord, context);
   return <article ref={rowRef} className={`tb-chat-bubble tb-chat-bubble-${bubble.side}`} data-record-key={bubble.key} data-scroll-key={scrollKey}
     aria-label={`Message from ${bubble.sender || sourceLabel(bubble.side, agentName)}`}>
+    {bubble.side === 'human' && <span className="tb-chat-bubble-sender" aria-hidden="true">{bubble.sender}</span>}
     <div className="tb-chat-bubble-body">{custom === undefined ? context.defaultRender() : custom}</div>
     <time className="tb-chat-time" dateTime={time.dateTime}>{time.text}</time>
   </article>;
