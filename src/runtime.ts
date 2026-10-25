@@ -129,9 +129,9 @@ class SessionRuntime implements ChatRuntime {
     this.identity = transport.currentIdentity();
     this.state = Object.freeze({
       sessionKey, principalKey: this.identity.principalKey, generation: 0, status: 'loading', records: Object.freeze([]),
-      // The transcript is ready without optional tool history; the visible
-      // toggle starts its separate stream and history read only on request.
-      toolCallsEnabled: transport.openToolChanges && transport.readToolCalls ? false : undefined,
+      // Tool calls are visible by default when supported. The existing toggle
+      // stops both their optional stream and history reads while disabled.
+      toolCallsEnabled: transport.openToolChanges && transport.readToolCalls ? true : undefined,
       toolCalls: Object.freeze([]), toolCallIndex: undefined,
       hasOlder: false, loadingOlder: false, sends: Object.freeze([]), targetLabel: profile.label,
       targetGateway: transport.targetGateway, provenance: noProvenance, provenanceAvailable: false,

@@ -853,16 +853,13 @@ describe('optional tool history and live category', () => {
     };
   }
 
-  it('subscribes before REST, merges terminal notices, pages by message anchors and catches up after toggling/rebuild', async () => {
+  it('shows tool history by default, pages it by message anchors, and stops all tool reads while toggled off', async () => {
     const transport = new ToolsTransport();
     transport.toolHook = () => transport.toolCallbacks?.onNotice({ operation: 'tool',
       tool: call('tc_tail', 8, { status: 'completed', rowVersion: 2, endedAt: 2000, rawOutput: 'done' }) });
     const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
-    expect(runtime.getSnapshot().toolCallsEnabled).toBe(false);
-    expect(transport.toolOpens).toBe(0);
-    expect(transport.ranges).toEqual([]);
-    runtime.setToolCallsEnabled!(true);
+    await vi.waitFor(() => expect(transport.toolOpens).toBe(1));
     await vi.waitFor(() => expect(runtime.getSnapshot().toolCallsLoading).toBe(false));
     expect(runtime.getSnapshot().toolCallsEnabled).toBe(true);
     expect(transport.ranges[0]).toEqual({ fromInclusive: 6 });
@@ -870,23 +867,32 @@ describe('optional tool history and live category', () => {
     await runtime.loadOlder();
     expect(transport.ranges[1]).toEqual({ fromInclusive: 3, toExclusive: 6 });
     expect(visibleTools(runtime.getSnapshot()).map(call => call.id)).toEqual(['tc_old', 'tc_tail']);
-    const mainOpens = transport.readTailCalls;
     runtime.setToolCallsEnabled!(false);
     expect(transport.toolCallbacks).toBeUndefined();
+    expect(transport.toolClosed).toBe(1);
     expect(visibleTools(runtime.getSnapshot())).toEqual([]);
     expect(transport.closed).toBe(0);
     transport.emit(message(9));
     expect(runtime.getSnapshot().records.at(-1)?.id).toBe('m9');
     transport.calls.push(call('tc_while_off', 9));
+
+    const toolReadsBeforeDisabledRebuild = transport.ranges.length;
+    await runtime.rebuild();
+    expect(transport.toolOpens).toBe(1);
+    expect(transport.ranges).toHaveLength(toolReadsBeforeDisabledRebuild);
+    const mainReadsAfterDisabledRebuild = transport.readTailCalls;
+
     runtime.setToolCallsEnabled!(true);
     await vi.waitFor(() => expect(runtime.getSnapshot().toolCallsLoading).toBe(false));
     expect(visibleTools(runtime.getSnapshot()).at(-1)?.id).toBe('tc_while_off');
-    expect(transport.readTailCalls).toBe(mainOpens);
+    expect(transport.toolOpens).toBe(2);
+    expect(transport.readTailCalls).toBe(mainReadsAfterDisabledRebuild);
     transport.rows.push(message(9));
     await runtime.rebuild();
     await vi.waitFor(() => expect(runtime.getSnapshot().toolCallsLoading).toBe(false));
     expect(visibleTools(runtime.getSnapshot()).at(-1)?.id).toBe('tc_while_off');
     expect(transport.toolOpens).toBe(3);
+    expect(transport.readTailCalls).toBe(mainReadsAfterDisabledRebuild + 1);
     runtime.dispose();
   });
 

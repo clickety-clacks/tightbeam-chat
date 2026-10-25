@@ -55,7 +55,9 @@ function setup(heartbeatTimeoutMs?: number, observedVersion = version, configure
     currentIdentity: () => identity,
     fetch: async (path) => {
       paths.push(path);
-      if (path.includes('/tool-calls?')) return new Response('', { status: 404 });
+      if (path.includes('/tool-calls?')) return new Response(JSON.stringify({
+        schemaVersion: 1, resource: 'tool calls', items: [], page: { hasMoreBefore: false },
+      }), { status: 200 });
       const body = path.endsWith('/version') ? observedVersion : path.includes('/messages?')
         ? { schemaVersion: 1, resource: 'transcript messages', items: historyItems,
           page: { oldestCursor: 'older-cursor', hasMoreBefore: true } }
@@ -94,6 +96,9 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
     });
     turnEvent('running');
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+    await vi.waitFor(() => expect(candidate.paths.some(path => path.includes('/tool-calls?'))).toBe(true));
+    await vi.waitFor(() => expect(runtime.getSnapshot().toolCallsLoading).toBe(false));
+    expect(runtime.getSnapshot().toolCallsEnabled).toBe(true);
     expect(runtime.getSnapshot().principalKey).toBe('person-1');
     expect(runtime.getSnapshot().activeTurn).toMatchObject({ sourceKind: 'human', turn: { seq: 12, status: 'running' } });
     const history = runtime.getSnapshot().records;
@@ -161,11 +166,14 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
     expect(candidate.paths).toEqual(['https://host.example/version']);
     candidate.changes.emit({ type: 'subscription_ready', subscriptionId: `chat:${sessionKey}` });
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
-    expect(runtime.getSnapshot().toolCallsEnabled).toBe(false);
+    await vi.waitFor(() => expect(candidate.paths.some(path => path.includes('/tool-calls?'))).toBe(true));
+    await vi.waitFor(() => expect(runtime.getSnapshot().toolCallsLoading).toBe(false));
+    expect(runtime.getSnapshot().toolCallsEnabled).toBe(true);
     expect(candidate.paths).toEqual([
       'https://host.example/version',
       'https://host.example/api/sessions/s-public',
       'https://host.example/api/sessions/s-public/messages?limit=50&tail=true',
+      'https://host.example/api/sessions/s-public/tool-calls?limit=50&afterMessageSeqFromInclusive=9',
     ]);
     expect(runtime.getSnapshot().records.map((record) => record.id))
       .toEqual(['marker_before', 'm_1', 'marker_after']);
@@ -182,6 +190,8 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
     await vi.waitFor(() => expect(candidate.changes.sent).toHaveLength(1));
     candidate.changes.emit({ type: 'subscription_ready', subscriptionId: `chat:${sessionKey}` });
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+    await vi.waitFor(() => expect(candidate.paths.filter(path => path.includes('/tool-calls?'))).toHaveLength(1));
+    await vi.waitFor(() => expect(runtime.getSnapshot().toolCallsLoading).toBe(false));
     expect(candidate.paths.filter((path) => path.endsWith('/version'))).toHaveLength(1);
     expect(candidate.paths.filter((path) => path.includes('/messages?'))).toHaveLength(1);
 
@@ -190,11 +200,14 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
     expect(candidate.paths.filter((path) => path.endsWith('/version'))).toHaveLength(1);
     candidate.changes.emit({ type: 'subscription_ready', subscriptionId: `chat:${sessionKey}` });
     await recovery;
+    await vi.waitFor(() => expect(candidate.paths.filter(path => path.includes('/tool-calls?'))).toHaveLength(2));
+    await vi.waitFor(() => expect(runtime.getSnapshot().toolCallsLoading).toBe(false));
 
     expect(runtime.getSnapshot().status).toBe('ready');
     expect(candidate.paths.filter((path) => path.endsWith('/version'))).toHaveLength(1);
     expect(candidate.paths.filter((path) => path.endsWith('/api/sessions/s-public'))).toHaveLength(2);
     expect(candidate.paths.filter((path) => path.includes('/messages?'))).toHaveLength(2);
+    expect(candidate.paths.filter((path) => path.includes('/tool-calls?'))).toHaveLength(2);
     runtime.dispose();
   });
 
@@ -218,10 +231,13 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
     }]));
     candidate.changes.emit({ type: 'subscription_ready', subscriptionId: `chat:${sessionKey}` });
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+    await vi.waitFor(() => expect(candidate.paths.some(path => path.includes('/tool-calls?'))).toBe(true));
+    await vi.waitFor(() => expect(runtime.getSnapshot().toolCallsLoading).toBe(false));
     expect(candidate.paths).toEqual([
       'https://host.example/version',
       'https://host.example/api/sessions/s-public',
       'https://host.example/api/sessions/s-public/messages?limit=50&tail=true',
+      'https://host.example/api/sessions/s-public/tool-calls?limit=50&afterMessageSeqFromInclusive=9',
     ]);
     expect(runtime.getSnapshot().records.map((record) => record.id)).toEqual(['m_1']);
     expect(candidate.human.sent).toHaveLength(0);
@@ -248,6 +264,8 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
     }]));
     candidate.changes.emit({ type: 'subscription_ready', subscriptionId: `chat:${sessionKey}` });
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+    await vi.waitFor(() => expect(candidate.paths.some(path => path.includes('/tool-calls?'))).toBe(true));
+    await vi.waitFor(() => expect(runtime.getSnapshot().toolCallsLoading).toBe(false));
 
     expect(runtime.getSnapshot().records.map((record) => record.id)).toEqual([
       'human-message', 'agent-message', 'system-batch', 'system-marker',
@@ -259,6 +277,7 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
       'https://host.example/version',
       'https://host.example/api/sessions/s-public',
       'https://host.example/api/sessions/s-public/messages?limit=50&tail=true',
+      'https://host.example/api/sessions/s-public/tool-calls?limit=50&afterMessageSeqFromInclusive=9',
     ]);
     expect(candidate.changes.closed).toBe(false);
 
