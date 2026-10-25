@@ -164,6 +164,7 @@ describe('Nordic theme', () => {
   });
 
   it('uses glass for the composer and the approved treatments for pills, status, popup, and host composer', () => {
+    const { light, dark } = tokenBlocks(themeCss);
     const shell = rule(componentCss, '.tb-chat-input-shell');
     expect(shell).toContain('border: var(--tb-chat-input-border-width) solid var(--tb-chat-glass-edge)');
     expect(shell).toContain('background: var(--tb-chat-glass)');
