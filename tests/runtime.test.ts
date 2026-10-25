@@ -732,7 +732,7 @@ describe('framework-independent runtime', () => {
     runtime.dispose();
   });
 
-  it('shows a failed connection separately and does not re-ask a refused or unreachable send', async () => {
+  it('keeps an initial connection failure nonterminal and re-asks with the same submission when connected', async () => {
     const transport = new ControlledTransport();
     const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
     await runtime.rebuild();
@@ -743,12 +743,39 @@ describe('framework-independent runtime', () => {
       .toMatchObject({ status: 'failed', reason: 'not allowed' }));
     expect(transport.submissions.filter((submission) => submission.clientMessageId === refused)).toHaveLength(1);
 
-    transport.nextSend = async () => ({ outcome: 'unreachable', reason: 'Not connected to the server.' });
-    const offline = runtime.send('offline')!;
-    await vi.waitFor(() => expect(runtime.getSnapshot().sends.find((send) => send.clientMessageId === offline))
-      .toMatchObject({ status: 'failed', reason: 'unreachable' }));
-    expect(transport.submissions.filter((submission) => submission.clientMessageId === offline)).toHaveLength(1);
-    runtime.dispose();
+    const reconnectAck = deferred<HumanSendResult>();
+    transport.nextSend = async () => transport.submissions.filter((submission) => submission.content === 'offline').length === 1
+      ? { outcome: 'unreachable', reason: 'Not connected to the server.' }
+      : reconnectAck.promise;
+    vi.useFakeTimers();
+    try {
+      const offline = runtime.send('offline')!;
+      const signals: unknown[] = [];
+      runtime.observeHostSend(offline, (signal) => signals.push(signal));
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(runtime.getSnapshot().sends.find((send) => send.clientMessageId === offline))
+        .toMatchObject({ status: 'pending', reason: 'unreachable' });
+      expect(signals).toEqual([]);
+      const original = transport.submissions.find((submission) => submission.clientMessageId === offline)!;
+
+      await vi.advanceTimersByTimeAsync(249);
+      expect(transport.submissions.filter((submission) => submission.clientMessageId === offline)).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      const attempts = transport.submissions.filter((submission) => submission.clientMessageId === offline);
+      expect(attempts).toHaveLength(2);
+      expect(attempts[1]).toEqual(original);
+      expect(runtime.getSnapshot().sends.find((send) => send.clientMessageId === offline))
+        .toMatchObject({ status: 'pending', reason: undefined });
+
+      reconnectAck.resolve({ outcome: 'accepted' });
+      await vi.waitFor(() => expect(runtime.getSnapshot().sends.find((send) => send.clientMessageId === offline))
+        .toMatchObject({ status: 'accepted' }));
+      expect(signals).toEqual([{ kind: 'accepted' }]);
+    } finally {
+      runtime.dispose();
+      vi.useRealTimers();
+    }
   });
 
   it('rejects late work and clears old principal data after identity change', async () => {

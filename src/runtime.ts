@@ -587,7 +587,6 @@ class SessionRuntime implements ChatRuntime {
     try {
       let result: HumanSendResult;
       let retryDelayMs = humanSendRetryInitialDelayMs;
-      let mayHaveReachedGateway = false;
       while (true) {
         try {
           result = await this.transport.sendHuman(submission, controller.signal);
@@ -602,20 +601,22 @@ class SessionRuntime implements ChatRuntime {
           result = { outcome: 'accepted' };
           break;
         }
-        if (result.outcome === 'retryable') mayHaveReachedGateway = true;
-        const shouldReask = result.outcome === 'retryable' ||
-          (mayHaveReachedGateway && result.outcome === 'unreachable');
+        const shouldReask = result.outcome === 'retryable' || result.outcome === 'unreachable';
         if (!shouldReask) break;
-        // Once a send socket has dropped, the Gateway may already have accepted
-        // the post. Keep reconnecting and asking with the identical ID/content
-        // until its answer or canonical history settles the message. A capped
-        // backoff paces both dropped sockets and failed reconnects; it never
-        // ends a live acknowledgement wait or converts an ambiguous post into
-        // a final unreachable failure.
+        // A send socket may fail before posting or drop after the Gateway has
+        // accepted the post. Keep showing a nonterminal connection notice and
+        // re-ask with the identical ID/content until the server answers or
+        // canonical history settles it. A capped backoff paces reconnects; it
+        // never ends a live acknowledgement wait or turns disconnection into a
+        // final delivery failure.
         if (this.state.status === 'unauthorized') return;
         if (!this.profile.capabilities.humanSendDedupe || this.state.status === 'unsupported') {
           result = { outcome: 'uncertain', reason: 'retry-unavailable' };
           break;
+        }
+        if (result.outcome === 'unreachable') {
+          this.updateSend(submission.clientMessageId, (send) => send.reconciled ? send
+            : { ...send, status: 'pending', reason: 'unreachable' });
         }
         if (!await waitForHumanSendRetry(controller.signal, retryDelayMs)) return;
         if (controller.signal.aborted || !this.checkIdentity()) return;
@@ -631,6 +632,8 @@ class SessionRuntime implements ChatRuntime {
           result = { outcome: 'uncertain', reason: 'retry-unavailable' };
           break;
         }
+        this.updateSend(submission.clientMessageId, (send) => send.reconciled ? send
+          : { ...send, status: 'pending', reason: undefined });
         retryDelayMs = Math.min(retryDelayMs * 2, humanSendRetryMaxDelayMs);
       }
       if (!this.checkIdentity() || controller.signal.aborted) return;

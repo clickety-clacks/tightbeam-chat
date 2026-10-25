@@ -692,15 +692,16 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
         const hostManaged = send.hostSend !== undefined;
         const unreachable = send.reason === 'unreachable';
         const retryUnavailable = send.reason === 'retry-unavailable';
+        const reconnectingSend = send.status === 'pending' && unreachable;
         const retryAvailable = !hostManaged && ['failed', 'uncertain'].includes(send.status) && !send.reconciled;
         return <article ref={element => reading.registerRow(`local-${send.clientMessageId}`, element)} className="tb-chat-bubble tb-chat-bubble-human tb-chat-local" key={send.clientMessageId}
           data-record-key={`local-${send.clientMessageId}`} data-scroll-key={`local-${send.clientMessageId}`} aria-label={`Your message, ${send.status}`}>
           <div className="tb-chat-bubble-body">{markdownBody(send.content)}</div>
-          <p className="tb-chat-send-state" data-send-status={send.status}>{send.status === 'uncertain' ? 'Delivery is uncertain'
+          <p className="tb-chat-send-state" data-send-status={send.status} role={reconnectingSend ? 'status' : undefined}>{send.status === 'uncertain' ? 'Delivery is uncertain'
             : send.status === 'failed' ? unreachable ? 'Not connected to the server' : 'Message could not be sent'
-              : send.status === 'pending' ? 'Sending…'
+              : send.status === 'pending' ? reconnectingSend ? 'Not connected to the server; retrying…' : 'Sending…'
                 : hostManaged && !send.reconciled ? 'Accepted; checking conversation history' : 'Sent'}</p>
-          {send.reason && <p className="tb-chat-send-reason" role="alert">
+          {send.reason && !reconnectingSend && <p className="tb-chat-send-reason" role="alert">
             {send.status === 'uncertain'
               ? hostManaged
                 ? 'Delivery could not be confirmed. Use the host composer to decide whether to retry.'
