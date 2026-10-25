@@ -878,6 +878,31 @@ describe('tool-call and transition display', () => {
     expect(view.container.querySelector('[data-record-key="tool-tc_1"]')?.textContent).toContain('Completed');
   });
 
+  it('keeps an unmatched send at submission time among tools, then uses its canonical anchor with the same scroll key', () => {
+    let index: ToolCallIndex | undefined;
+    for (const [seq, startedAt] of [[201, 2000], [202, 4000]]) {
+      const call: ToolCallRecord = { id: 'tc_' + seq, seq, sessionKey: 'ordered-tools', turnSeq: 1,
+        afterMessageSeq: 10, harnessToolCallId: 'call-' + seq, title: 'Tool ' + seq, kind: 'read',
+        toolName: 'read_file', status: 'in_progress', rawInput: null, rawOutput: null, content: null,
+        truncated: [], startedAt, endedAt: null, rowVersion: 1 };
+      const group = putIndex(getIndex(index, 10), seq, call, startedAt);
+      index = putIndex(index, 10, group, group.maxTime);
+    }
+    const human = row('ordered-tools', 'human', 'First prompt', { seq: 10, role: 'user', sender: 'user:person', createdAt: new Date(1000).toISOString() });
+    const reply = row('ordered-tools', 'reply', 'Answer', { seq: 12, createdAt: new Date(5000).toISOString(), replyToMessageId: human.id });
+    const send: LocalSend = { sessionKey: 'ordered-tools', deviceId: 'device', clientMessageId: 'c_pending',
+      content: 'Follow-up', submittedAt: new Date(3000).toISOString(), status: 'pending', reconciled: false };
+    const runtime = new FakeRuntime('ordered-tools', { records: [human, reply], sends: [send], toolCallsEnabled: true, toolCallIndex: index });
+    const view = render(<TightbeamChat sessionKey="ordered-tools" adapter={adapterFor(runtime)} />);
+    const keys = () => [...view.container.querySelectorAll('article[data-scroll-key]')].map(node => node.getAttribute('data-scroll-key'));
+    expect(keys()).toEqual(['human', 'tool-tc_201', 'local-c_pending', 'tool-tc_202', 'reply']);
+    const canonical = row('ordered-tools', 'canonical-send', send.content, { seq: 11, role: 'user', sender: 'user:person',
+      createdAt: send.submittedAt, clientMessageId: send.clientMessageId, deviceId: send.deviceId });
+    act(() => runtime.update({ records: [human, canonical, reply], sends: [{ ...send, reconciled: true, status: 'accepted' }] }));
+    expect(keys()).toEqual(['human', 'tool-tc_201', 'tool-tc_202', 'local-c_pending', 'reply']);
+    expect(screen.getAllByText('Follow-up')).toHaveLength(1);
+  });
+
   it('anchors tools between messages, expands input/results with truthful truncation, and keeps the draft while toggling', async () => {
     const call: ToolCallRecord = { id: 'tc_read', seq: 500, sessionKey: 'tools', turnSeq: 7, afterMessageSeq: 1,
       harnessToolCallId: 'read-1', title: 'Read the source file', kind: 'read', toolName: 'read_file',
