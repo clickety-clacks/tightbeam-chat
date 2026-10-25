@@ -429,7 +429,8 @@ const Composer = forwardRef<ComposerHandle, {
   root: RefObject<HTMLElement | null>;
   suppressStatus: boolean;
   onSettings: () => void;
-}>(function Composer({ runtime, state, agentName, root, suppressStatus, onSettings }, ref) {
+  onSendAccepted: () => void;
+}>(function Composer({ runtime, state, agentName, root, suppressStatus, onSettings, onSendAccepted }, ref) {
   const [draft, setDraft] = useState('');
   const [statusOpen, setStatusOpen] = useState(false);
   const input = useRef<HTMLTextAreaElement>(null);
@@ -504,7 +505,10 @@ const Composer = forwardRef<ComposerHandle, {
       return;
     }
     if (state.status !== 'ready') return;
-    if (runtime.send(draft)) setDraft('');
+    if (runtime.send(draft)) {
+      setDraft('');
+      onSendAccepted();
+    }
   };
 
   return <form className="tb-chat-composer" onSubmit={submit} ref={shell}>
@@ -984,7 +988,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
       <span aria-hidden="true">↓</span> Latest messages
     </button>}
     {!host.composerHidden && <Composer ref={composer} runtime={runtime} state={state} agentName={agentName}
-      root={root} suppressStatus={host.optedIn} onSettings={openSettings} />}
+      root={root} suppressStatus={host.optedIn} onSettings={openSettings} onSendAccepted={reading.scrollToLatest} />}
     {overlay && <ReleaseNotesDialog overlay={overlay} entries={bundledNotes} onClose={closeOverlay}
       onOpenReleaseNotes={openReleaseNotes} onBack={backToSettings} />}
   </section>;

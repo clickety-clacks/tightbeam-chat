@@ -31,6 +31,7 @@ const message = (id: number): CanonicalMessage => ({ kind: 'message', id: `messa
   seq: id, rowVersion: 1, role: 'user', sender: 'user:person', content: `Message ${id}`, raw: {} });
 const initialRows = Array.from({ length: 20 }, (_, i) => message(i));
 let scrollTop = 0;
+let viewportHeight = 300;
 let scrollTo: ReturnType<typeof vi.fn>;
 let reducedMotion = false;
 let animate: ReturnType<typeof vi.fn>;
@@ -40,6 +41,7 @@ const scrollHeight = () => 32 + rows().length * 92 + Number.parseFloat(document.
 const rect = (top: number, height: number) => ({ top, bottom: top + height, left: 0, right: 400, width: 400, height, x: 0, y: top, toJSON() {} });
 beforeEach(() => {
   scrollTop = 0;
+  viewportHeight = 300;
   reducedMotion = false;
   animate = vi.fn(() => ({ cancel: vi.fn(), onfinish: null }));
   Object.defineProperty(HTMLElement.prototype, 'animate', { configurable: true, value: animate });
@@ -51,7 +53,7 @@ beforeEach(() => {
     unobserve() {}
   });
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
-    if (this.classList.contains('tb-chat-viewport')) return rect(0, 300);
+    if (this.classList.contains('tb-chat-viewport')) return rect(0, viewportHeight);
     const index = this.dataset.testPosition === undefined ? rows().indexOf(this) : Number(this.dataset.testPosition);
     if (index >= 0) return rect(16 + Number.parseFloat(document.querySelector<HTMLElement>('.tb-chat-viewport')?.style.getPropertyValue('--tb-chat-anchor-space') || '0') + index * 92 - scrollTop, 80);
     return rect(0, 50);
@@ -59,9 +61,11 @@ beforeEach(() => {
   vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function (this: HTMLElement) {
     return this.classList.contains('tb-chat-viewport') ? scrollHeight() : 40;
   });
-  vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(300);
+  vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(function (this: HTMLElement) {
+    return this.classList.contains('tb-chat-viewport') ? viewportHeight : 300;
+  });
   vi.spyOn(HTMLElement.prototype, 'scrollTop', 'get').mockImplementation(() => scrollTop);
-  vi.spyOn(HTMLElement.prototype, 'scrollTop', 'set').mockImplementation(value => { scrollTop = Math.max(0, Math.min(value, scrollHeight() - 300)); });
+  vi.spyOn(HTMLElement.prototype, 'scrollTop', 'set').mockImplementation(value => { scrollTop = Math.max(0, Math.min(value, scrollHeight() - viewportHeight)); });
   scrollTo = vi.fn(function (this: HTMLElement, options: ScrollToOptions) {
     // Keep smooth motion pending so intermediate scroll frames can be exercised.
     if (options.behavior !== 'smooth') this.scrollTop = options.top ?? 0;
@@ -83,6 +87,11 @@ function readAt(box: HTMLElement, position: number) {
   fireEvent.wheel(box, { deltaY: -100 });
   box.scrollTop = position;
   fireEvent.scroll(box);
+}
+function notifyResizeObservers() {
+  act(() => {
+    for (const callback of resizeCallbacks) callback([], {} as ResizeObserver);
+  });
 }
 
 describe('conversation reading position', () => {
@@ -460,6 +469,95 @@ describe('conversation reading position', () => {
     box.scrollTop = box.scrollHeight;
     fireEvent.scroll(box);
     expect(screen.queryByRole('button', { name: 'Scroll to latest messages' })).toBeNull();
+  });
+
+  it('keeps the latest message above the composer when the viewport shrinks after Latest messages', () => {
+    const { box } = setup();
+    readAt(box, 0);
+    const button = screen.getByRole('button', { name: 'Scroll to latest messages' });
+    fireEvent.click(button);
+    const oldBottom = box.scrollHeight - box.clientHeight;
+
+    // The smooth scroll reaches its old target as the iOS keyboard resizes the viewport.
+    box.scrollTop = oldBottom;
+    viewportHeight = 220;
+    fireEvent.scroll(box);
+
+    expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight);
+    expect(screen.queryByRole('button', { name: 'Scroll to latest messages' })).toBeNull();
+  });
+
+  it('keeps following after a hand-scroll to the bottom when the viewport shrinks', () => {
+    const { box } = setup();
+    readAt(box, box.scrollHeight - box.clientHeight);
+    expect(screen.queryByRole('button', { name: 'Scroll to latest messages' })).toBeNull();
+
+    viewportHeight = 220;
+    fireEvent.scroll(box);
+
+    expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight);
+    expect(screen.queryByRole('button', { name: 'Scroll to latest messages' })).toBeNull();
+  });
+
+  it('keeps following through a viewport resize observed before scroll events', () => {
+    const { box } = setup();
+    readAt(box, 0);
+    fireEvent.click(screen.getByRole('button', { name: 'Scroll to latest messages' }));
+    box.scrollTop = box.scrollHeight - box.clientHeight;
+    fireEvent.scroll(box);
+
+    viewportHeight = 220;
+    notifyResizeObservers();
+
+    expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight);
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: box.scrollHeight - box.clientHeight, behavior: 'instant' });
+    expect(screen.queryByRole('button', { name: 'Scroll to latest messages' })).toBeNull();
+  });
+
+  it('preserves an away reader position when the viewport resizes', () => {
+    const { box } = setup();
+    readAt(box, 600);
+
+    viewportHeight = 220;
+    notifyResizeObservers();
+
+    expect(box.scrollTop).toBe(600);
+    expect(screen.getByRole('button', { name: 'Scroll to latest messages' })).toBeTruthy();
+  });
+
+  it('opens and reloads a ready conversation at the newest message', () => {
+    const first = setup();
+    expect(first.box.scrollTop).toBe(first.box.scrollHeight - first.box.clientHeight);
+    readAt(first.box, 600);
+    expect(screen.getByRole('button', { name: 'Scroll to latest messages' })).toBeTruthy();
+
+    cleanup();
+    const { box } = setup();
+
+    expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight);
+    expect(screen.queryByRole('button', { name: 'Scroll to latest messages' })).toBeNull();
+  });
+
+  it('returns to the newest message after a successful send but leaves a rejected draft alone', () => {
+    const { runtime, box, input } = setup();
+    readAt(box, 600);
+    fireEvent.change(input, { target: { value: 'Send from an earlier message' } });
+    runtime.send = vi.fn(() => 'client-send');
+
+    fireEvent.submit(input.closest('form')!);
+
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: box.scrollHeight - box.clientHeight, behavior: 'smooth' });
+    expect(input.value).toBe('');
+
+    readAt(box, 600);
+    fireEvent.change(input, { target: { value: 'Keep when send is rejected' } });
+    runtime.send = vi.fn(() => null);
+    scrollTo.mockClear();
+
+    fireEvent.submit(input.closest('form')!);
+
+    expect(scrollTo).not.toHaveBeenCalled();
+    expect(input.value).toBe('Keep when send is rejected');
   });
 
   it('preserves the reader across refresh notices and filtering that replaces row keys above them', () => {
