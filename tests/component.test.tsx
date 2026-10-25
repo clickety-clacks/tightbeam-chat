@@ -169,6 +169,30 @@ function expectVisibilityMix(log: HTMLElement, prefix: string): void {
 }
 
 describe('conversation surface', () => {
+  it('renders late canonical rows in sequence order without dropping a human message', () => {
+    const sessionKey = 'out-of-order-conversation';
+    const first = row(sessionKey, 'first', 'First canonical message', {
+      seq: 10, role: 'user', sender: 'user:person', messageType: 'chat',
+    });
+    const middle = row(sessionKey, 'middle', 'Middle canonical message', {
+      seq: 20, role: 'user', sender: 'user:person', messageType: 'chat',
+    });
+    const last = row(sessionKey, 'last', 'Last canonical message', {
+      seq: 30, role: 'user', sender: 'user:person', messageType: 'chat',
+    });
+    const runtime = new FakeRuntime(sessionKey, { records: [last, middle] });
+    const view = render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+    const renderedKeys = () => Array.from(view.container.querySelectorAll<HTMLElement>(
+      '.tb-chat-message-content article[data-scroll-key]'), (article) => article.dataset.scrollKey);
+
+    expect(renderedKeys()).toEqual(['middle', 'last']);
+    // The earlier row arrives after rows with higher server sequence numbers.
+    act(() => runtime.update({ records: [last, first, middle] }));
+
+    expect(renderedKeys()).toEqual(['first', 'middle', 'last']);
+    expect(within(screen.getByRole('log')).getByText('First canonical message')).toBeTruthy();
+  });
+
   it('does not rebuild the transcript on a foreground return', () => {
     const sessionKey = 'background-resume-session';
     const runtime = new FakeRuntime(sessionKey);

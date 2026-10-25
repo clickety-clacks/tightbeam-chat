@@ -98,8 +98,6 @@ class SessionRuntime implements ChatRuntime {
   private readonly identity: HostIdentity;
   private readonly rows = new Map<string, ConversationRecord>();
   private readonly tombstones = new Map<string, number>();
-  // Notices for rows below the loaded slice can race an older-page read.
-  private readonly pendingHistoryUpserts = new Map<string, ConversationRecord>();
   private readonly sendControllers = new Map<string, AbortController>();
   private readonly pendingReconciledIds = new Set<string>();
   private readonly hostSendObservers = new Map<string, Set<HostSendObserver>>();
@@ -298,7 +296,6 @@ class SessionRuntime implements ChatRuntime {
     this.sendControllers.clear();
     this.rows.clear();
     this.tombstones.clear();
-    this.pendingHistoryUpserts.clear();
     this.publish({
       generation: this.generation, status: 'unauthorized',
       identityChanged: true,
@@ -323,12 +320,9 @@ class SessionRuntime implements ChatRuntime {
   }
 
   private put(pageRecord: ConversationRecord): void {
-    const pending = this.pendingHistoryUpserts.get(pageRecord.id);
-    this.pendingHistoryUpserts.delete(pageRecord.id);
-    const incoming = pending ? mergeRecord(pageRecord, pending) : pageRecord;
-    if (incoming.sessionKey !== this.sessionKey) return;
-    if ((this.tombstones.get(incoming.id) ?? -1) >= incoming.rowVersion) return;
-    const record = mergeRecord(this.rows.get(incoming.id), incoming);
+    if (pageRecord.sessionKey !== this.sessionKey) return;
+    if ((this.tombstones.get(pageRecord.id) ?? -1) >= pageRecord.rowVersion) return;
+    const record = mergeRecord(this.rows.get(pageRecord.id), pageRecord);
     this.rows.set(record.id, record);
     if (record.kind === 'message' && record.clientMessageId && record.deviceId === this.identity.deviceId) {
       if (this.initializing) {
@@ -347,30 +341,11 @@ class SessionRuntime implements ChatRuntime {
     }
   }
 
-  private reconcilePendingHistory(hasOlder: boolean): void {
-    const oldest = [...this.rows.values()].sort(compareRecords)[0];
-    for (const record of this.pendingHistoryUpserts.values()) {
-      // A page may have been captured before a newly inserted row appeared.
-      if (!hasOlder || (oldest && compareRecords(record, oldest) >= 0)) this.put(record);
-    }
-  }
-
   private apply(notice: ChangeNotice): boolean {
     switch (notice.operation) {
       case 'upsert': {
         const record = notice.record;
         if (record.sessionKey !== this.sessionKey) return false;
-        const oldest = [...this.rows.values()].sort(compareRecords)[0];
-        // A notice below the loaded slice cannot create a disconnected history island.
-        if (oldest && compareRecords(record, oldest) < 0 && !this.rows.has(record.id)) {
-          if (!this.initializing && !this.state.hasOlder) {
-            this.put(record);
-            return true;
-          }
-          const prior = this.pendingHistoryUpserts.get(record.id);
-          this.pendingHistoryUpserts.set(record.id, mergeRecord(prior, record));
-          return false;
-        }
         this.put(record);
         return true;
       }
@@ -378,9 +353,6 @@ class SessionRuntime implements ChatRuntime {
         if (notice.sessionKey !== this.sessionKey) return false;
         const prior = this.tombstones.get(notice.id) ?? -1;
         if (notice.rowVersion > prior) this.tombstones.set(notice.id, notice.rowVersion);
-        if ((this.pendingHistoryUpserts.get(notice.id)?.rowVersion ?? -1) <= notice.rowVersion) {
-          this.pendingHistoryUpserts.delete(notice.id);
-        }
         const row = this.rows.get(notice.id);
         if (row && notice.rowVersion >= row.rowVersion) this.rows.delete(notice.id);
         return true;
@@ -465,7 +437,6 @@ class SessionRuntime implements ChatRuntime {
     }
     this.rows.clear();
     this.tombstones.clear();
-    this.pendingHistoryUpserts.clear();
     this.cursor = null;
     this.restoreDepth = 0;
     this.publish({
@@ -513,7 +484,6 @@ class SessionRuntime implements ChatRuntime {
     this.bufferedSession = undefined;
     this.turns.clear();
     this.pendingReconciledIds.clear();
-    this.pendingHistoryUpserts.clear();
     this.initializing = true;
     this.publish({
       generation, status: this.state.records.length ? 'stale' : 'loading',
@@ -572,7 +542,6 @@ class SessionRuntime implements ChatRuntime {
       this.cursor = cursor;
       this.restoreDepth = restored;
       for (const record of candidate.values()) this.put(record);
-      this.reconcilePendingHistory(hasOlder);
 
       const prefix: ChangeNotice[] = [];
       while (true) {
@@ -652,7 +621,6 @@ class SessionRuntime implements ChatRuntime {
       await this.olderTools(page);
       if (!this.isCurrent(generation) || !this.checkIdentity()) return;
       for (const record of page.records) this.put(record);
-      this.reconcilePendingHistory(page.hasOlder);
       this.cursor = page.oldestCursor;
       this.restoreDepth++;
       this.publish({ records: recordsFrom(this.rows), hasOlder: page.hasOlder, loadingOlder: false });
@@ -827,7 +795,6 @@ class SessionRuntime implements ChatRuntime {
         throw new UnsupportedTargetError('Canonical refresh lacks verified subscription coverage.');
       }
       for (const record of page.records) this.put(record);
-      this.reconcilePendingHistory(page.hasOlder);
       const currentSession = !this.state.session || session.rowVersion > this.state.session.rowVersion
         ? session : this.state.session;
       this.publish({ records: recordsFrom(this.rows), session: currentSession,

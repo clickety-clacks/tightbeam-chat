@@ -496,8 +496,10 @@ describe('framework-independent runtime', () => {
     vi.useRealTimers();
   });
 
-  it('keeps a versioned notice for an older row while its stale page is in flight', async () => {
+  it('keeps out-of-order live rows visible in sequence order while older history loads', async () => {
     const transport = new ControlledTransport();
+    transport.rows = [message(10), message(20), switchAt(30, 'harness'), message(40), message(50),
+      switchAt(60, 'model'), message(70), message(80)];
     const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
     await runtime.rebuild();
     const gate = deferred<void>();
@@ -509,22 +511,36 @@ describe('framework-independent runtime', () => {
     };
     const loading = runtime.loadOlder();
     await vi.waitFor(() => expect(transport.readOlderCalls).toBe(1));
-    const changed = message(5, { rowVersion: 2, content: 'updated during page read' });
-    const inserted = message(5.5, { content: 'inserted during page read' });
-    transport.rows = [...transport.rows.map((record) => record.id === changed.id ? changed : record), inserted]
+    const changed = message(50, { rowVersion: 2, content: 'updated during page read' });
+    const inserted = message(55, { id: 'late-human', role: 'user', sender: 'user:person',
+      content: 'Human row received after a later row' });
+    const insertedRevision = { ...inserted, rowVersion: 2, content: 'Latest human row revision' };
+    transport.rows = [...transport.rows.map((record) => record.id === changed.id ? changed : record), insertedRevision]
       .sort((a, b) => a.seq - b.seq);
-    transport.emit(changed);
-    transport.emit(inserted);
-    const appended = message(9, { content: 'appended during page read' });
+    const appended = message(90, { content: 'appended during page read' });
     transport.rows.push(appended);
     transport.emit(appended);
+    transport.emit(changed);
+    transport.emit(insertedRevision);
+    // A delayed lower rowVersion must not replace the latest canonical row.
+    transport.emit(inserted);
+    const inFlightRows = runtime.getSnapshot().records;
+    expect(inFlightRows.map((record) => record.id)).toEqual(['m50', 'late-human', 't60', 'm70', 'm80', 'm90']);
+    expect(inFlightRows.filter((record) => record.id === 'late-human')).toHaveLength(1);
+    expect(inFlightRows.find((record) => record.id === 'late-human')).toMatchObject({
+      rowVersion: 2, content: 'Latest human row revision',
+    });
     transport.reset();
     gate.resolve();
     await loading;
-    expect((runtime.getSnapshot().records.find((record) => record.id === 'm5') as CanonicalMessage).content)
+    expect((runtime.getSnapshot().records.find((record) => record.id === 'm50') as CanonicalMessage).content)
       .toBe('updated during page read');
-    expect(runtime.getSnapshot().records.some((record) => record.id === 'm5.5')).toBe(true);
-    expect(runtime.getSnapshot().records.some((record) => record.id === 'm9')).toBe(true);
+    const settledRows = runtime.getSnapshot().records;
+    expect(settledRows.map((record) => record.id)).toEqual(['t30', 'm40', 'm50', 'late-human', 't60', 'm70', 'm80', 'm90']);
+    expect(settledRows.filter((record) => record.id === 'late-human')).toHaveLength(1);
+    expect(settledRows.find((record) => record.id === 'late-human')).toMatchObject({
+      rowVersion: 2, content: 'Latest human row revision',
+    });
     expect(runtime.getSnapshot().session?.activity).toBe('reset');
     runtime.dispose();
   });
