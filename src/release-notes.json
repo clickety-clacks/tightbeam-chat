@@ -5,6 +5,10 @@
       {
         "title": "Transcript notices",
         "description": "Connection and history updates now appear as quiet, bulleted captions alongside your conversation."
+      },
+      {
+        "title": "Latest messages",
+        "description": "The newest message stays in view when the keyboard or composer changes size, and after you send a message."
       }
     ]
   },
