@@ -690,12 +690,13 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
         const { send } = item;
         const time = localTimestamp(send.submittedAt);
         const hostManaged = send.hostSend !== undefined;
+        const unreachable = send.reason === 'unreachable';
         const retryAvailable = !hostManaged && ['failed', 'uncertain'].includes(send.status) && !send.reconciled;
         return <article ref={element => reading.registerRow(`local-${send.clientMessageId}`, element)} className="tb-chat-bubble tb-chat-bubble-human tb-chat-local" key={send.clientMessageId}
           data-record-key={`local-${send.clientMessageId}`} data-scroll-key={`local-${send.clientMessageId}`} aria-label={`Your message, ${send.status}`}>
           <div className="tb-chat-bubble-body">{markdownBody(send.content)}</div>
           <p className="tb-chat-send-state" data-send-status={send.status}>{send.status === 'uncertain' ? 'Delivery is uncertain'
-            : send.status === 'failed' ? 'Message could not be sent'
+            : send.status === 'failed' ? unreachable ? 'Not connected to the server' : 'Message could not be sent'
               : send.status === 'pending' ? 'Sending…'
                 : hostManaged && !send.reconciled ? 'Accepted; checking conversation history' : 'Sent'}</p>
           {send.reason && <p className="tb-chat-send-reason" role="alert">
@@ -703,6 +704,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
               ? hostManaged
                 ? 'Delivery could not be confirmed. Use the host composer to decide whether to retry.'
                 : 'Delivery could not be confirmed. Retry after the connection is current.'
+              : unreachable ? 'Reconnect, then check the conversation before retrying this message.'
               : hostManaged
                 ? 'This message was refused. Any retry or text editing belongs in the host composer.'
                 : 'The message could not be sent. Retry it or restore the text to the composer.'}

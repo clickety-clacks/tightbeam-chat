@@ -716,7 +716,7 @@ describe('conversation surface', () => {
     expect(composer).toHaveProperty('value', 'keep this draft');
   });
 
-  it('keeps failed and uncertain submissions in their own bubbles with retry and restore actions', () => {
+  it('keeps failed, unreachable and uncertain submissions readable with retry and restore actions', () => {
     const sessionKey = 'send-recovery';
     const runtime = new FakeRuntime(sessionKey, { sends: [
       { sessionKey, deviceId: 'device', clientMessageId: 'failed-id', content: 'Failed text',
@@ -725,10 +725,16 @@ describe('conversation surface', () => {
       { sessionKey, deviceId: 'device', clientMessageId: 'uncertain-id', content: 'Uncertain text',
         submittedAt: '2026-10-20T09:06:00.000Z', status: 'uncertain', reconciled: false,
         reason: 'private session detail' },
+      { sessionKey, deviceId: 'device', clientMessageId: 'unreachable-id', content: 'Offline text',
+        submittedAt: '2026-10-20T09:07:00.000Z', status: 'failed', reconciled: false,
+        reason: 'unreachable' },
     ] });
     render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
     expect(screen.getByText('Failed text')).toBeTruthy();
     expect(screen.getByText('Uncertain text')).toBeTruthy();
+    expect(screen.getByText('Offline text')).toBeTruthy();
+    expect(screen.getByText('Not connected to the server')).toBeTruthy();
+    expect(screen.getByText('Reconnect, then check the conversation before retrying this message.')).toBeTruthy();
     expect(screen.getAllByRole('alert').every((alert) => !alert.textContent?.includes('private'))).toBe(true);
     expect(screen.queryByText(/private target detail|private session detail/)).toBeNull();
     fireEvent.click(screen.getAllByRole('button', { name: 'Retry message' })[0]);

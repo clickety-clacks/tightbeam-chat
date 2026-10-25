@@ -142,6 +142,10 @@ export interface HostSendContext {
 export type HumanSendResult =
   | { readonly outcome: 'accepted' }
   | { readonly outcome: 'refused'; readonly reason: string }
+  /** The authenticated send socket ended before its response; repeat the exact submission. */
+  | { readonly outcome: 'retryable'; readonly reason: string }
+  /** No authenticated send connection could be established. */
+  | { readonly outcome: 'unreachable'; readonly reason: string }
   | { readonly outcome: 'uncertain'; readonly reason: string };
 
 export interface ChangeConnection {
@@ -178,7 +182,7 @@ export interface ChatTransport {
   readonly targetGateway?: string;
   /** Establishes the elected target's snapshot/notice coverage rule. */
   proveCoverage(session: SessionRecord, page: ConversationPage, buffered: readonly ChangeNotice[]): boolean;
-  /** Separate authenticated human /ws post, resolved by correlated ack/refusal/uncertainty. */
+  /** Separate authenticated human /ws post, resolved by ack/refusal, retry after a dropped socket, or uncertainty. */
   sendHuman(submission: HumanSubmission, signal: AbortSignal): Promise<HumanSendResult>;
 }
 

@@ -69,7 +69,7 @@ function setup(heartbeatTimeoutMs?: number, observedVersion = version, configure
     baseUrl: 'https://host.example', build: configuredVersion.build, sha: configuredVersion.sha, host,
     responseTimeoutMs: 1000, heartbeatTimeoutMs,
   });
-  return { transport, profile, paths, changes, human };
+  return { transport, profile, paths, changes, human, host };
 }
 
 describe('public 0.1.9 released wire mapping and capability gates', () => {
@@ -679,7 +679,7 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
     } finally { vi.useRealTimers(); }
   });
 
-  it('sends human /ws frames with the same client ID and distinguishes ack, refusal, uncertainty', async () => {
+  it('sends human /ws frames with the same client ID and distinguishes ack, refusal and dropped sockets', async () => {
     const accepted = setup();
     const submission = { sessionKey, deviceId: 'device-1', clientMessageId: 'c_1', content: 'hello' };
     const first = accepted.transport.sendHuman(submission, new AbortController().signal);
@@ -699,7 +699,38 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
     const third = uncertain.transport.sendHuman(submission, new AbortController().signal);
     await vi.waitFor(() => expect(uncertain.human.sent).toHaveLength(1));
     uncertain.human.disconnect();
-    expect(await third).toMatchObject({ outcome: 'uncertain' });
+    expect(await third).toMatchObject({ outcome: 'retryable' });
+  });
+
+  it('keeps waiting for a human acknowledgement beyond the general response timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      const candidate = setup();
+      const submission = { sessionKey, deviceId: 'device-1', clientMessageId: 'c_late', content: 'slow acknowledgement' };
+      const pending = candidate.transport.sendHuman(submission, new AbortController().signal);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(candidate.human.sent).toEqual([{ type: 'message', id: 'c_late', sessionKey, content: 'slow acknowledgement' }]);
+      let settled = false;
+      void pending.then(() => { settled = true; });
+
+      await vi.advanceTimersByTimeAsync(16_000);
+      expect(settled).toBe(false);
+      expect(candidate.human.sent).toHaveLength(1);
+      candidate.human.emit({ type: 'ack', id: 'c_late' });
+      await expect(pending).resolves.toEqual({ outcome: 'accepted' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reports a human socket that cannot be opened as unreachable before posting', async () => {
+    const candidate = setup();
+    candidate.host.openAuthenticatedHuman = async () => { throw new Error('socket unavailable'); };
+    await expect(candidate.transport.sendHuman({ sessionKey, deviceId: 'device-1',
+      clientMessageId: 'c_offline', content: 'offline message' }, new AbortController().signal))
+      .resolves.toEqual({ outcome: 'unreachable', reason: 'Not connected to the server.' });
+    expect(candidate.human.sent).toHaveLength(0);
   });
 
   it('does not post when the host principal changes while opening the human socket', async () => {

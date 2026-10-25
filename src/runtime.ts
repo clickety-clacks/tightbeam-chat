@@ -13,6 +13,7 @@ import {
   type HostSendObserver,
   type HostSendContext,
   type HostSendSignal,
+  type HumanSendResult,
   type HumanSubmission,
   type LocalSend,
   type RuntimeState,
@@ -295,21 +296,8 @@ class SessionRuntime implements ChatRuntime {
     if (this.apply(notice)) this.publish({ records: recordsFrom(this.rows) });
   }
 
-  private markPendingUncertain(reason: string): void {
-    const sends = this.state.sends.map((send) =>
-      send.status === 'pending' ? { ...send, status: 'uncertain' as const, reason } : send,
-    );
-    for (const send of this.state.sends) {
-      if (send.status === 'pending') this.notifyHostSend(send.clientMessageId, { kind: 'uncertain', reason: 'ack-lost' });
-    }
-    for (const controller of this.sendControllers.values()) controller.abort();
-    this.sendControllers.clear();
-    this.publish({ sends: Object.freeze(sends) });
-  }
-
   private doubt(reason: string, generation: number): void {
     if (!this.isCurrent(generation) || !this.checkIdentity()) return;
-    this.markPendingUncertain(reason);
     this.generation++;
     this.controller?.abort();
     this.connection?.close();
@@ -334,20 +322,14 @@ class SessionRuntime implements ChatRuntime {
     this.generation++;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = undefined;
-    const sends = status === 'unsupported'
-      ? Object.freeze(this.state.sends.map((send) => send.status === 'pending'
-        ? { ...send, status: 'uncertain' as const,
-          reason: 'Target became unsupported before acknowledgement; send outcome is unknown.' }
-        : send))
-      : Object.freeze([]);
-    for (const send of this.state.sends) {
-      if (send.status === 'pending') this.notifyHostSend(send.clientMessageId, { kind: 'uncertain', reason: 'ack-lost' });
-    }
+    const sends = status === 'unauthorized' ? Object.freeze([]) : this.state.sends;
     this.controller?.abort();
     this.connection?.close();
     this.connection = undefined;
-    for (const controller of this.sendControllers.values()) controller.abort();
-    this.sendControllers.clear();
+    if (status === 'unauthorized') {
+      for (const controller of this.sendControllers.values()) controller.abort();
+      this.sendControllers.clear();
+    }
     this.rows.clear();
     this.tombstones.clear();
     this.pendingHistoryUpserts.clear();
@@ -387,7 +369,6 @@ class SessionRuntime implements ChatRuntime {
     const priorDepth = this.restoreDepth;
     this.generation++;
     const generation = this.generation;
-    this.markPendingUncertain('Connection rebuilt before acknowledgement.');
     this.controller?.abort();
     this.connection?.close();
     this.connection = undefined;
@@ -583,27 +564,51 @@ class SessionRuntime implements ChatRuntime {
   };
 
   private async post(submission: HumanSubmission): Promise<void> {
-    const generation = this.generation;
     const controller = new AbortController();
     this.sendControllers.set(submission.clientMessageId, controller);
     try {
-      const result = await this.transport.sendHuman(submission, controller.signal);
-      if (!this.isCurrent(generation) || !this.checkIdentity()) return;
+      let result: HumanSendResult;
+      while (true) {
+        try {
+          result = await this.transport.sendHuman(submission, controller.signal);
+        } catch (error) {
+          if (error instanceof AuthorizationError) throw error;
+          result = { outcome: 'unreachable', reason: 'Not connected to the server.' };
+        }
+        if (controller.signal.aborted || !this.checkIdentity()) return;
+        const current = this.state.sends.find((send) => send.clientMessageId === submission.clientMessageId);
+        if (!current) return;
+        if (current.reconciled) {
+          result = { outcome: 'accepted' };
+          break;
+        }
+        if (result.outcome !== 'retryable') break;
+        // A live-update reconnect is separate from the human socket. Keep asking
+        // the selected Gateway with the identical ID/content after each drop.
+        if (!this.profile.capabilities.humanSendDedupe ||
+            this.state.status === 'unsupported' || this.state.status === 'unauthorized') return;
+      }
+      if (!this.checkIdentity() || controller.signal.aborted) return;
       this.updateSend(submission.clientMessageId, (send) => {
         if (send.reconciled) return send;
         return result.outcome === 'accepted'
           ? { ...send, status: 'accepted', reason: undefined }
           : result.outcome === 'refused'
             ? { ...send, status: 'failed', reason: result.reason }
-            : { ...send, status: 'uncertain', reason: result.reason };
+            : result.outcome === 'unreachable'
+              ? { ...send, status: 'failed', reason: 'unreachable' }
+              : { ...send, status: 'uncertain', reason: result.reason };
       });
       if (result.outcome === 'accepted') this.notifyHostSend(submission.clientMessageId, { kind: 'accepted' });
       else if (result.outcome === 'refused') this.notifyHostSend(submission.clientMessageId, {
         kind: 'failed', reason: 'refused', detail: result.reason,
       });
+      else if (result.outcome === 'unreachable') this.notifyHostSend(submission.clientMessageId, {
+        kind: 'failed', reason: 'retry-unavailable', detail: 'Not connected to the server.',
+      });
       else this.notifyHostSend(submission.clientMessageId, { kind: 'uncertain', reason: 'ack-lost' });
     } catch (error) {
-      if (this.isCurrent(generation) && !controller.signal.aborted) {
+      if (!controller.signal.aborted && this.checkIdentity()) {
         if (error instanceof AuthorizationError) {
           this.notifyHostSend(submission.clientMessageId, {
             kind: 'failed', reason: 'refused', detail: 'unauthorized',

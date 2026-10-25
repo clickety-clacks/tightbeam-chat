@@ -226,6 +226,27 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     expect(transport.submissions).toHaveLength(1);
   });
 
+  it('keeps an acknowledged host send free of a warning while canonical history catches up', async () => {
+    const events: HostComposerEvent[] = [];
+    const transport = new HostComposerTransport();
+    installDeclaration(events);
+    const { runtimes } = openChat(transport, 'conversation-a');
+    const ready = await waitForReady(events, 'conversation-a');
+    act(() => commandEntry()({ type: 'send', lifetimeId: ready.lifetimeId,
+      sessionKey: ready.sessionKey, correlationId: correlation, content: 'acknowledged message' }));
+
+    await waitFor(() => expect(events.some((event) => event.event === 'accepted' &&
+      event.correlationId === correlation)).toBe(true));
+    expect(events.some((event) => event.event === 'uncertain' && event.correlationId === correlation)).toBe(false);
+    expect(events.some((event) => event.event === 'delivered' && event.correlationId === correlation)).toBe(false);
+
+    const canonical = transport.addCanonical(transport.submissions[0]);
+    act(() => transport.callbacks.get('conversation-a')?.onNotice({ operation: 'upsert', record: canonical }));
+    await waitFor(() => expect(events.some((event) => event.event === 'delivered' &&
+      event.correlationId === correlation)).toBe(true));
+    expect(runtimes[0].getSnapshot().sends[0]).toMatchObject({ status: 'accepted', reconciled: true });
+  });
+
   it('keeps bridge snapshots constant-size after many settled sends and still rejects delivered correlations', async () => {
     const events: HostComposerEvent[] = [];
     const delivered = new Set<string>();
@@ -460,12 +481,18 @@ describe('versioned host composer seam on the real adapter and surface', () => {
   it('ends and re-handshakes its page lifetime after a cached page hide/show', async () => {
     const events: HostComposerEvent[] = [];
     const transport = new HostComposerTransport();
+    const pending = deferred<HumanSendResult>();
+    transport.nextSend = () => pending.promise;
     installDeclaration(events);
     openChat(transport, 'conversation-a');
     const first = await waitForReady(events, 'conversation-a');
 
+    act(() => commandEntry()({ type: 'send', lifetimeId: first.lifetimeId,
+      sessionKey: first.sessionKey, correlationId: correlation, content: 'still in flight' }));
+    await waitFor(() => expect(transport.submissions).toHaveLength(1));
     act(() => window.dispatchEvent(new Event('pagehide')));
     expect(events.at(-1)).toMatchObject({ event: 'lifetime-ended', lifetimeId: first.lifetimeId, reason: 'unloading' });
+    expect(events.some((event) => event.event === 'uncertain' && event.correlationId === correlation)).toBe(false);
     act(() => window.dispatchEvent(new Event('pageshow')));
     await waitFor(() => expect(events.filter((event) => event.event === 'ready')).toHaveLength(2));
     const nextReady = events.filter((event): event is Extract<HostComposerEvent, { event: 'ready' }> => event.event === 'ready').at(-1)!;
@@ -474,7 +501,7 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     expect(screen.queryByRole('textbox', { name: /Message to Agent conversation-a/ })).toBeNull();
   });
 
-  it('re-handshakes after reload and treats a retained-correlation retry as attempt one', async () => {
+  it('re-handshakes after reload without warning only because the old page ended', async () => {
     const events: HostComposerEvent[] = [];
     const transport = new HostComposerTransport();
     const pending = deferred<HumanSendResult>();
@@ -486,7 +513,8 @@ describe('versioned host composer seam on the real adapter and surface', () => {
       sessionKey: firstReady.sessionKey, correlationId: correlation, content: 'retained draft' }));
     transport.addCanonical(transport.submissions[0]);
     firstView.unmount();
-    expect(events.some((event) => event.event === 'uncertain' && event.reason === 'lifetime-ended')).toBe(true);
+    expect(events.some((event) => event.event === 'uncertain' && event.reason === 'lifetime-ended')).toBe(false);
+    expect(events.some((event) => event.event === 'lifetime-ended' && event.reason === 'disposed')).toBe(true);
 
     const secondView = openChat(transport, 'conversation-a');
     const secondPageStart = events.findIndex((event) => event.event === 'lifetime-ended') + 1;

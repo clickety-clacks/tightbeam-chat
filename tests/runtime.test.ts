@@ -46,6 +46,7 @@ class ControlledTransport implements ChatTransport {
   readSessionHook?: (call: number) => Promise<void> | void;
   nextSend?: (submission: HumanSubmission) => Promise<HumanSendResult>;
   submissions: HumanSubmission[] = [];
+  sendSignals: AbortSignal[] = [];
 
   currentIdentity = () => this.identity;
   inspectTarget = async () => this.observation;
@@ -82,8 +83,9 @@ class ControlledTransport implements ChatTransport {
     return this.page(this.rows.slice(Math.max(0, index - 3), index));
   };
   proveCoverage = () => this.coverage;
-  sendHuman = async (submission: HumanSubmission): Promise<HumanSendResult> => {
+  sendHuman = async (submission: HumanSubmission, signal: AbortSignal): Promise<HumanSendResult> => {
     this.submissions.push(submission);
+    this.sendSignals.push(signal);
     return this.nextSend ? this.nextSend(submission) : { outcome: 'accepted' };
   };
   emit(record: ConversationRecord) { this.callbacks?.onNotice({ operation: 'upsert', record }); }
@@ -577,13 +579,12 @@ describe('framework-independent runtime', () => {
     expect(state.sends).toEqual([
       expect.objectContaining({ clientMessageId: acceptedId, content: 'known accepted', status: 'accepted' }),
       expect.objectContaining({ clientMessageId: pendingId, content: '  exact pending text  ',
-        sessionKey, deviceId: 'device', status: 'uncertain' }),
+        sessionKey, deviceId: 'device', status: 'pending' }),
     ]);
     expect(runtime.send('blocked new send')).toBeNull();
     await runtime.retrySend(pendingId);
     pendingAck.resolve({ outcome: 'accepted' });
-    await settle();
-    expect(runtime.getSnapshot().sends[1].status).toBe('uncertain');
+    await vi.waitFor(() => expect(runtime.getSnapshot().sends[1].status).toBe('accepted'));
     expect(transport.submissions).toHaveLength(2);
     runtime.dispose();
   });
@@ -615,6 +616,67 @@ describe('framework-independent runtime', () => {
     const attempts = transport.submissions.filter((submission) => submission.clientMessageId === uncertain);
     expect(attempts).toHaveLength(2);
     expect(attempts[1]).toEqual(attempts[0]);
+    runtime.dispose();
+  });
+
+  it('re-asks after a dropped send socket with the exact same ID and content', async () => {
+    const transport = new ControlledTransport();
+    transport.nextSend = async () => transport.submissions.length === 1
+      ? { outcome: 'retryable', reason: 'socket closed before acknowledgement' }
+      : { outcome: 'accepted' };
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await runtime.rebuild();
+
+    const id = runtime.send('  exact content  ')!;
+    await vi.waitFor(() => expect(runtime.getSnapshot().sends[0]?.status).toBe('accepted'));
+    const attempts = transport.submissions.filter((submission) => submission.clientMessageId === id);
+    expect(attempts).toHaveLength(2);
+    expect(attempts[1]).toEqual(attempts[0]);
+    expect(runtime.getSnapshot().sends[0]).toMatchObject({ clientMessageId: id,
+      content: '  exact content  ', status: 'accepted' });
+    runtime.dispose();
+  });
+
+  it('keeps an in-flight send pending and accepts its late ack across live-stream doubt and rebuild', async () => {
+    const transport = new ControlledTransport();
+    const acknowledgement = deferred<HumanSendResult>();
+    transport.nextSend = () => acknowledgement.promise;
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await runtime.rebuild();
+
+    const id = runtime.send('slow acknowledgement')!;
+    const sendSignal = transport.sendSignals[0];
+    expect(runtime.getSnapshot().sends[0]).toMatchObject({ clientMessageId: id, status: 'pending' });
+    transport.doubt();
+    expect(runtime.getSnapshot().status).toBe('stale');
+    expect(runtime.getSnapshot().sends[0]).toMatchObject({ status: 'pending' });
+    expect(sendSignal.aborted).toBe(false);
+
+    await runtime.rebuild();
+    expect(runtime.getSnapshot().status).toBe('ready');
+    expect(sendSignal.aborted).toBe(false);
+    acknowledgement.resolve({ outcome: 'accepted' });
+    await vi.waitFor(() => expect(runtime.getSnapshot().sends[0]).toMatchObject({ status: 'accepted' }));
+    expect(transport.submissions.filter((submission) => submission.clientMessageId === id)).toHaveLength(1);
+    runtime.dispose();
+  });
+
+  it('shows a failed connection separately and does not re-ask a refused or unreachable send', async () => {
+    const transport = new ControlledTransport();
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await runtime.rebuild();
+
+    transport.nextSend = async () => ({ outcome: 'refused', reason: 'not allowed' });
+    const refused = runtime.send('refused')!;
+    await vi.waitFor(() => expect(runtime.getSnapshot().sends.find((send) => send.clientMessageId === refused))
+      .toMatchObject({ status: 'failed', reason: 'not allowed' }));
+    expect(transport.submissions.filter((submission) => submission.clientMessageId === refused)).toHaveLength(1);
+
+    transport.nextSend = async () => ({ outcome: 'unreachable', reason: 'Not connected to the server.' });
+    const offline = runtime.send('offline')!;
+    await vi.waitFor(() => expect(runtime.getSnapshot().sends.find((send) => send.clientMessageId === offline))
+      .toMatchObject({ status: 'failed', reason: 'unreachable' }));
+    expect(transport.submissions.filter((submission) => submission.clientMessageId === offline)).toHaveLength(1);
     runtime.dispose();
   });
 
