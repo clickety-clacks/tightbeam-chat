@@ -7,7 +7,6 @@ import {
   type ChangeCallbacks,
   type ToolCallRecord,
   type ChangeNotice,
-  type CanonicalMessage,
   type CanonicalTurn,
   type ChatTransport,
   type ConversationPage,
@@ -68,20 +67,6 @@ function sourceBackedCapabilities(build: number): TargetCapabilities | undefined
   if (build >= PUBLIC_019_BUILD_2887) return capabilities2887;
   return undefined;
 }
-
-// These released Firehose classes report actions, not canonical row changes.
-const observationalClasses = new Set([
-  'verb.accepted', 'verb.denied', 'rail.denied', 'lifecycle.boot',
-  'lifecycle.clean_shutdown', 'lifecycle.dirty_exit', 'lifecycle.takeover',
-  'prod.fired', 'lifecycle.terminal_credential_opened',
-  'lifecycle.terminal_credential_suppression_activated',
-  'lifecycle.terminal_credential_redirect_observed',
-  'lifecycle.terminal_credential_recovery_claimed',
-  'lifecycle.terminal_credential_recovery_outcome',
-  'lifecycle.terminal_credential_resolved',
-  // Lifecycle bookkeeping, not a user-visible transcript transition.
-  'lifecycle.harness_failed_park_reconciled',
-]);
 
 /** A fresh, host-authenticated socket. The host owns credentials and the auth handshake. */
 export interface Public019Channel {
@@ -276,8 +261,8 @@ export function decodePublic019Notice(value: unknown, sessionKey: string): Chang
   }
   const refs = record(frame.refs);
   if (refs.sessionKey !== sessionKey) throw new UnsupportedTargetError('Change frame has a different session reference.');
-  if (((frame.class === 'message.created' && ['messages', 'transcript messages'].includes(String(frame.resource))) ||
-      (frame.class === 'transition.recorded' && frame.resource === 'transcript messages')) && frame.op === 'upsert') {
+  if (frame.class === 'message.created' && ['messages', 'transcript messages'].includes(String(frame.resource)) &&
+      frame.op === 'upsert') {
     return { operation: 'upsert', record: decodePublic019Message(frame.payload, sessionKey) };
   }
   if (['tool_call.started', 'tool_call.ended'].includes(frame.class) &&
@@ -289,17 +274,9 @@ export function decodePublic019Notice(value: unknown, sessionKey: string): Chang
     return { operation: 'session', session: decodePublic019Session(frame.payload, sessionKey) };
   }
   // The payload seq identifies the turn; the outer seq orders this subscription.
-  if (['turn.queued', 'turn.started', 'turn.ended'].includes(frame.class) &&
+  if (['turn.started', 'turn.ended'].includes(frame.class) &&
       frame.resource === 'turns' && frame.op === 'upsert') {
     return { operation: 'turn', turn: decodePublic019Turn(frame.payload, sessionKey) };
-  }
-  if (['wake.scheduled', 'wake.fired', 'wake.canceled'].includes(frame.class) &&
-      frame.resource === 'wakes' && frame.op === 'upsert') {
-    return { operation: 'observe', sessionKey, resource: frame.class };
-  }
-  if (observationalClasses.has(frame.class) && frame.op === 'observe' &&
-      (frame.resource === undefined || frame.resource === null)) {
-    return { operation: 'ignore', sessionKey, resource: frame.class };
   }
   return { operation: 'unknown', sessionKey, resource: frame.class };
 }
@@ -344,15 +321,9 @@ export function createPublic019Transport(config: Public019Config): { transport: 
     return record(await response.json());
   }
 
-  async function getOptional(path: string, signal: AbortSignal): Promise<Record<string, unknown> | null> {
-    const response = await config.host.fetch(`${baseUrl}${path}`, { method: 'GET', signal, cache: 'no-store' });
-    if (response.status === 401 || response.status === 403) throw new AuthorizationError('Human REST principal is not authorized.');
-    if (response.status === 404) return null;
-    if (!response.ok) throw new Error(`Tightbeam REST request failed with HTTP ${response.status}.`);
-    return record(await response.json());
-  }
-
   const activeSessions = new Set<string>();
+  let targetObservation: TargetObservation | undefined;
+  let targetObservationRequest: Promise<TargetObservation> | undefined;
   async function readPage(sessionKey: string, query: string, signal: AbortSignal): Promise<ConversationPage> {
     const body = await get(`/api/sessions/${encodeURIComponent(sessionKey)}/messages?limit=50&${query}`, signal);
     if (body.schemaVersion !== 1 || body.resource !== 'transcript messages' || !Array.isArray(body.items)) {
@@ -448,7 +419,7 @@ export function createPublic019Transport(config: Public019Config): { transport: 
         readyTimer = setTimeout(() => { close(); rejectReady(new Error('Firehose subscription readiness timed out.')); }, timeoutMs);
         try {
           channel.send({ type: 'subscribe', protocolVersion: 2, subscriptionId, filters: { sessionKey, classes: tools ? ['tool_call.']
-            : ['message.created', 'transition.', 'session.', 'turn.', 'wake.', ...observationalClasses] } });
+            : ['message.created', 'session.', 'turn.started', 'turn.ended'] } });
         } catch (error) { close(); rejectReady(error); }
       }
       await readyPromise;
@@ -459,16 +430,29 @@ export function createPublic019Transport(config: Public019Config): { transport: 
     currentIdentity: () => config.host.currentIdentity(),
     targetGateway: config.targetGateway,
     async inspectTarget(signal): Promise<TargetObservation> {
-      // The host selects the Gateway route: native embeddings use /version,
-      // while the private Chat server exposes it through /gateway/version.
-      // The Chat bundle manifest is separate and never determines the target profile.
-      const version = await get(gatewayVersionPath, signal);
-      const observed = identity(String(version.version), Number(version.build), String(version.sha));
-      // /version.protocolVersion identifies the Gateway API line. Firehose
-      // subscription negotiation remains an independent protocol-2 exchange.
-      return { identity: observed,
-        capabilities: supportedCapabilities && observed === expectedIdentity && version.protocolVersion === 1
-          ? supportedCapabilities : unsupportedCapabilities };
+      if (targetObservation) return targetObservation;
+      // The selected Gateway identity is stable for this transport/page
+      // lifetime. Reconnects still rebuild session history, but do not repeat
+      // the unrelated version lookup each time continuity is restored.
+      const pending = targetObservationRequest ??= (async () => {
+        // Native embeddings use /version; the private Chat server exposes it
+        // through /gateway/version. The Chat bundle manifest is not the target.
+        const version = await get(gatewayVersionPath, signal);
+        const observed = identity(String(version.version), Number(version.build), String(version.sha));
+        // /version.protocolVersion identifies the Gateway API line. Firehose
+        // subscription negotiation remains an independent protocol-2 exchange.
+        return { identity: observed,
+          capabilities: supportedCapabilities && observed === expectedIdentity && version.protocolVersion === 1
+            ? supportedCapabilities : unsupportedCapabilities };
+      })();
+      try {
+        const observed = await pending;
+        targetObservation = observed;
+        return observed;
+      } catch (error) {
+        if (targetObservationRequest === pending) targetObservationRequest = undefined;
+        throw error;
+      }
     },
     async readSession(sessionKey, signal) {
       const body = await get(`/api/sessions/${encodeURIComponent(sessionKey)}`, signal);
@@ -476,61 +460,6 @@ export function createPublic019Transport(config: Public019Config): { transport: 
         throw new UnsupportedTargetError('Unexpected sessions detail envelope.');
       }
       return decodePublic019Session(body.item, sessionKey);
-    },
-    async readTurn(sessionKey, seq, signal) {
-      const body = await getOptional(`/api/turns/${seq}`, signal);
-      if (!body) return null;
-      if (body.schemaVersion !== 1 || body.resource !== 'turns') {
-        throw new UnsupportedTargetError('Unexpected turn detail envelope.');
-      }
-      return decodePublic019Turn(body.item, sessionKey);
-    },
-    async readMessage(sessionKey, messageId, signal): Promise<CanonicalMessage | null> {
-      const body = await getOptional(
-        `/api/sessions/${encodeURIComponent(sessionKey)}/messages/${encodeURIComponent(messageId)}`,
-        signal,
-      );
-      if (!body) return null;
-      if (body.schemaVersion !== 1 || body.resource !== 'transcript messages') {
-        throw new UnsupportedTargetError('Unexpected trigger-message detail envelope.');
-      }
-      const trigger = decodePublic019Message(body.item, sessionKey);
-      return trigger.kind === 'message' ? trigger : null;
-    },
-    async readRecentTurns(sessionKey, signal) {
-      const body = await get(`/api/sessions/${encodeURIComponent(sessionKey)}/turns?limit=50&tail=true`, signal);
-      if (body.schemaVersion !== 1 || body.resource !== 'turns' || !Array.isArray(body.items)) {
-        throw new UnsupportedTargetError('Unexpected turn collection envelope.');
-      }
-      return Object.freeze(body.items.map((item) => decodePublic019Turn(item, sessionKey)));
-    },
-    async resolveOriginDisplayName(origin, signal) {
-      if (origin.startsWith('session:')) {
-        const sessionKey = origin.slice('session:'.length);
-        if (!sessionKey) return undefined;
-        const body = await getOptional(`/api/sessions/${encodeURIComponent(sessionKey)}`, signal);
-        if (!body) return undefined;
-        if (body.schemaVersion !== 1 || body.resource !== 'sessions') {
-          throw new UnsupportedTargetError('Unexpected origin-session detail envelope.');
-        }
-        return decodePublic019Session(body.item, sessionKey).displayName;
-      }
-      if (!origin.startsWith('agent:')) return undefined;
-      const roleName = origin.slice('agent:'.length);
-      if (!roleName) return undefined;
-      const role = await getOptional(`/api/roles/${encodeURIComponent(roleName)}`, signal);
-      if (!role) return undefined;
-      if (role.schemaVersion !== 1 || role.resource !== 'roles') {
-        throw new UnsupportedTargetError('Unexpected origin-role detail envelope.');
-      }
-      const boundSessionKey = optionalString(record(role.item), 'boundSessionKey');
-      if (!boundSessionKey) return undefined;
-      const session = await getOptional(`/api/sessions/${encodeURIComponent(boundSessionKey)}`, signal);
-      if (!session) return undefined;
-      if (session.schemaVersion !== 1 || session.resource !== 'sessions') {
-        throw new UnsupportedTargetError('Unexpected origin-session detail envelope.');
-      }
-      return decodePublic019Session(session.item, boundSessionKey).displayName;
     },
     readTail: (sessionKey, signal) => readPage(sessionKey, 'tail=true', signal),
     readOlder: (sessionKey, before, signal) => readPage(sessionKey, `before=${encodeURIComponent(before)}`, signal),

@@ -124,8 +124,7 @@ export type ChangeNotice =
   | { readonly operation: 'delete'; readonly sessionKey: string; readonly id: string; readonly rowVersion: number }
   | { readonly operation: 'session'; readonly session: SessionRecord }
   | { readonly operation: 'turn'; readonly turn: CanonicalTurn }
-  | { readonly operation: 'ignore'; readonly sessionKey: string; readonly resource: string }
-  | { readonly operation: 'observe' | 'unknown'; readonly sessionKey: string; readonly resource: string };
+  | { readonly operation: 'unknown'; readonly sessionKey: string; readonly resource: string };
 
 export interface HostIdentity {
   /** Non-secret stable principal reference, supplied by the embedding host. */
@@ -205,14 +204,6 @@ export interface ChatTransport {
   readTail(sessionKey: string, signal: AbortSignal): Promise<ConversationPage>;
   readOlder(sessionKey: string, before: string, signal: AbortSignal): Promise<ConversationPage>;
   readSession(sessionKey: string, signal: AbortSignal): Promise<SessionRecord>;
-  /** Exact turn lookup used only after a message supplies a turn index. */
-  readTurn(sessionKey: string, seq: number, signal: AbortSignal): Promise<CanonicalTurn | null>;
-  /** Source message lookup; the returned row is always checked against sessionKey. */
-  readMessage(sessionKey: string, messageId: string, signal: AbortSignal): Promise<CanonicalMessage | null>;
-  /** Bounded newest turn page used to determine current activity. */
-  readRecentTurns(sessionKey: string, signal: AbortSignal): Promise<readonly CanonicalTurn[]>;
-  /** Resolves an agent/session origin to its display name without reading its transcript. */
-  resolveOriginDisplayName(origin: string, signal: AbortSignal): Promise<string | undefined>;
   /** Exact non-secret Gateway origin selected by the host, when the transport knows it. */
   readonly targetGateway?: string;
   /** Establishes the elected target's snapshot/notice coverage rule. */

@@ -41,7 +41,6 @@ class ControlledTransport implements ChatTransport {
   readSessionCalls = 0;
   closed = 0;
   coverage = true;
-  recentTurns: CanonicalTurn[] = [];
   readyGate?: ReturnType<typeof deferred<void>>;
   tailHook?: () => void;
   readSessionHook?: (call: number) => Promise<void> | void;
@@ -61,11 +60,6 @@ class ControlledTransport implements ChatTransport {
     await this.readSessionHook?.(this.readSessionCalls);
     return { sessionKey, rowVersion: 1, displayName: 'Fixture agent', raw: { clearedThroughSeq: 7 }, activity: 'idle' };
   };
-  readTurn = async (_key: string, _seq: number): Promise<CanonicalTurn | null> => null;
-  readMessage = async (_key: string, id: string): Promise<CanonicalMessage | null> =>
-    this.rows.find((row): row is CanonicalMessage => row.kind === 'message' && row.id === id) ?? null;
-  readRecentTurns = async (): Promise<readonly CanonicalTurn[]> => this.recentTurns;
-  resolveOriginDisplayName = async () => undefined;
   private page(rows: ConversationRecord[]): ConversationPage {
     return { records: rows, oldestCursor: rows.length ? rows[0].id : null,
       hasOlder: rows.length ? this.rows.findIndex((row) => row.id === rows[0].id) > 0 : false,
@@ -144,7 +138,6 @@ describe('framework-independent runtime', () => {
       const active: CanonicalTurn = { seq: 90, sessionKey, status: 'running', messageId: 'carrier',
         origin: 'process:notifications', triggerSource: 'batch', batchMemberCount: 1, raw: { rowVersion: 1 } };
       const emitTurn = () => transport.callbacks?.onNotice({ operation: 'turn', turn: active });
-      const reads = [vi.spyOn(transport, 'readTurn'), vi.spyOn(transport, 'readMessage'), vi.spyOn(transport, 'readRecentTurns')];
       if (arrival === 'buffered rebuild') transport.tailHook = () => { emitTurn(); transport.emit(enriched); };
       const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
       await runtime.rebuild();
@@ -171,15 +164,12 @@ describe('framework-independent runtime', () => {
       transport.emit({ ...enriched, turnSeq: 91 });
       expect(stored().turnSeq).toBe(90);
       expect(stored().content).toBe(original.content);
-      expect(reads.every(read => read.mock.calls.length === 0)).toBe(true);
       runtime.dispose();
     });
 
   it('keeps live activity through paging, rebuilds it from the new subscription, and ignores the old generation', async () => {
     const transport = new ControlledTransport();
     transport.rows[7] = message(8, { role: 'user', sender: 'user:person', turnSeq: 90 });
-    const reads = [vi.spyOn(transport, 'readTurn'), vi.spyOn(transport, 'readMessage'), vi.spyOn(transport, 'readRecentTurns'),
-      vi.spyOn(transport, 'resolveOriginDisplayName')];
     const active: CanonicalTurn = { seq: 90, sessionKey, status: 'running', messageId: 'm8',
       origin: 'user:someone-else', triggerSource: 'mike', raw: { rowVersion: 1 } };
     transport.tailHook = () => transport.callbacks?.onNotice({ operation: 'turn', turn: active });
@@ -207,7 +197,6 @@ describe('framework-independent runtime', () => {
     // An older buffered seed must not resurrect a completed turn.
     transport.callbacks?.onNotice({ operation: 'turn', turn: active });
     expect(runtime.getSnapshot().activeTurn).toBeUndefined();
-    expect(reads.every(read => read.mock.calls.length === 0)).toBe(true);
     runtime.dispose();
   });
 
@@ -283,18 +272,11 @@ describe('framework-independent runtime', () => {
     } finally { runtime.dispose(); }
   });
 
-  it('keeps filtering on message records and performs no turn or trigger lookups', async () => {
+  it('opens a transcript with only selected-session metadata and paged history reads', async () => {
     const transport = new ControlledTransport();
     const trigger = message(1, { role: 'user', sender: 'user:person', content: 'Earlier source prompt' });
     const reply = message(4, { turnSeq: 44, replyToMessageId: trigger.id, messageType: 'assistant', content: 'Selected agent reply' });
-    const active: CanonicalTurn = { seq: 44, sessionKey, status: 'running', messageId: trigger.id,
-      origin: 'user:person', raw: { seq: 44 } };
     transport.rows = [trigger, message(2), message(3), reply];
-    transport.recentTurns = [active];
-    const readRecentTurns = vi.spyOn(transport, 'readRecentTurns');
-    const readTurn = vi.spyOn(transport, 'readTurn');
-    const readMessage = vi.spyOn(transport, 'readMessage');
-    const resolveOriginDisplayName = vi.spyOn(transport, 'resolveOriginDisplayName');
 
     const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
@@ -302,40 +284,32 @@ describe('framework-independent runtime', () => {
     expect(runtime.getSnapshot().provenance).toEqual([]);
     expect(runtime.getSnapshot().provenanceAvailable).toBe(false);
     expect(runtime.getSnapshot().activeTurn).toBeUndefined();
-    expect(readRecentTurns).not.toHaveBeenCalled();
-    expect(readTurn).not.toHaveBeenCalled();
-    expect(readMessage).not.toHaveBeenCalled();
-    expect(resolveOriginDisplayName).not.toHaveBeenCalled();
+    expect(transport.readSessionCalls).toBe(1);
+    expect(transport.readTailCalls).toBe(1);
+    expect(transport.readOlderCalls).toBe(0);
     runtime.dispose();
   });
 
-  it('keeps history and sends available without optional turn reads', async () => {
+  it('keeps history and sending available without turn detail endpoints', async () => {
     const transport = new ControlledTransport();
     transport.rows = [message(7, { role: 'user', content: 'Can you help?' }),
       message(8, { content: 'The answer remains visible.', turnSeq: 44 })];
-    transport.readRecentTurns = async () => { throw new AuthorizationError('Recent turns are not authorized.'); };
-    transport.readTurn = async () => { throw new AuthorizationError('Exact turn detail is not authorized.'); };
-    const readRecentTurns = vi.spyOn(transport, 'readRecentTurns');
-    const readTurn = vi.spyOn(transport, 'readTurn');
-    const readMessage = vi.spyOn(transport, 'readMessage');
     const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
 
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
     expect(runtime.getSnapshot().records.map((record) => record.id)).toEqual(['m7', 'm8']);
     expect(runtime.getSnapshot().provenanceAvailable).toBe(false);
     expect(runtime.getSnapshot().activeTurn).toBeUndefined();
-    expect(readRecentTurns).not.toHaveBeenCalled();
-    expect(readTurn).not.toHaveBeenCalled();
-    expect(readMessage).not.toHaveBeenCalled();
+    expect(transport.readSessionCalls).toBe(1);
+    expect(transport.readTailCalls).toBe(1);
 
     const live = message(9, { content: 'A live reply also appears.' });
     transport.rows.push(live);
     transport.emit(live);
     await vi.waitFor(() => expect(runtime.getSnapshot().records.at(-1)?.id).toBe('m9'));
     expect(runtime.getSnapshot().status).toBe('ready');
-    expect(readRecentTurns).not.toHaveBeenCalled();
-    expect(readTurn).not.toHaveBeenCalled();
-    expect(readMessage).not.toHaveBeenCalled();
+    expect(transport.readSessionCalls).toBe(1);
+    expect(transport.readTailCalls).toBe(1);
 
     const clientMessageId = runtime.send('Still available');
     expect(clientMessageId).toBeTruthy();
@@ -392,7 +366,7 @@ describe('framework-independent runtime', () => {
     const transport = new ControlledTransport();
     const appended = message(9, { role: 'user', sender: undefined, content: 'An unmarked user row' });
     transport.tailHook = () => {
-      transport.callbacks?.onNotice({ operation: 'observe', sessionKey, resource: 'wake.fired' });
+      transport.callbacks?.onNotice({ operation: 'unknown', sessionKey, resource: 'wake.fired' });
       transport.callbacks?.onNotice({ operation: 'unknown', sessionKey, resource: 'future.event' });
       transport.emit(appended);
     };
@@ -411,7 +385,7 @@ describe('framework-independent runtime', () => {
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
     const reads = transport.readTailCalls;
     const closes = transport.closed;
-    transport.callbacks?.onNotice({ operation: 'observe', sessionKey, resource: 'wake.scheduled' });
+    transport.callbacks?.onNotice({ operation: 'unknown', sessionKey, resource: 'wake.scheduled' });
     transport.callbacks?.onNotice({ operation: 'unknown', sessionKey, resource: 'future.event' });
     expect(runtime.getSnapshot().status).toBe('ready');
     expect(transport.readTailCalls).toBe(reads);
@@ -879,11 +853,13 @@ describe('optional tool history and live category', () => {
     };
   }
 
-  it('subscribes before REST, merges terminal notices, pages by message anchors and catches up after toggling/rebuild', async () => {
+  it('shows tool history by default, pages it by message anchors, and stops all tool reads while toggled off', async () => {
     const transport = new ToolsTransport();
     transport.toolHook = () => transport.toolCallbacks?.onNotice({ operation: 'tool',
       tool: call('tc_tail', 8, { status: 'completed', rowVersion: 2, endedAt: 2000, rawOutput: 'done' }) });
     const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+    await vi.waitFor(() => expect(transport.toolOpens).toBe(1));
     await vi.waitFor(() => expect(runtime.getSnapshot().toolCallsLoading).toBe(false));
     expect(runtime.getSnapshot().toolCallsEnabled).toBe(true);
     expect(transport.ranges[0]).toEqual({ fromInclusive: 6 });
@@ -891,23 +867,32 @@ describe('optional tool history and live category', () => {
     await runtime.loadOlder();
     expect(transport.ranges[1]).toEqual({ fromInclusive: 3, toExclusive: 6 });
     expect(visibleTools(runtime.getSnapshot()).map(call => call.id)).toEqual(['tc_old', 'tc_tail']);
-    const mainOpens = transport.readTailCalls;
     runtime.setToolCallsEnabled!(false);
     expect(transport.toolCallbacks).toBeUndefined();
+    expect(transport.toolClosed).toBe(1);
     expect(visibleTools(runtime.getSnapshot())).toEqual([]);
     expect(transport.closed).toBe(0);
     transport.emit(message(9));
     expect(runtime.getSnapshot().records.at(-1)?.id).toBe('m9');
     transport.calls.push(call('tc_while_off', 9));
+
+    const toolReadsBeforeDisabledRebuild = transport.ranges.length;
+    await runtime.rebuild();
+    expect(transport.toolOpens).toBe(1);
+    expect(transport.ranges).toHaveLength(toolReadsBeforeDisabledRebuild);
+    const mainReadsAfterDisabledRebuild = transport.readTailCalls;
+
     runtime.setToolCallsEnabled!(true);
     await vi.waitFor(() => expect(runtime.getSnapshot().toolCallsLoading).toBe(false));
     expect(visibleTools(runtime.getSnapshot()).at(-1)?.id).toBe('tc_while_off');
-    expect(transport.readTailCalls).toBe(mainOpens);
+    expect(transport.toolOpens).toBe(2);
+    expect(transport.readTailCalls).toBe(mainReadsAfterDisabledRebuild);
     transport.rows.push(message(9));
     await runtime.rebuild();
     await vi.waitFor(() => expect(runtime.getSnapshot().toolCallsLoading).toBe(false));
     expect(visibleTools(runtime.getSnapshot()).at(-1)?.id).toBe('tc_while_off');
     expect(transport.toolOpens).toBe(3);
+    expect(transport.readTailCalls).toBe(mainReadsAfterDisabledRebuild + 1);
     runtime.dispose();
   });
 
@@ -915,6 +900,8 @@ describe('optional tool history and live category', () => {
     const transport = new ToolsTransport();
     transport.toolReadyGate = deferred<void>();
     const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+    runtime.setToolCallsEnabled!(true);
     await vi.waitFor(() => expect(transport.toolOpens).toBe(1));
     const older = runtime.loadOlder();
     expect(transport.ranges).toEqual([]);
@@ -934,6 +921,8 @@ describe('optional tool history and live category', () => {
         get afterMessageSeq() { inspected++; return 8; } };
     });
     const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+    runtime.setToolCallsEnabled!(true);
     await vi.waitFor(() => expect(runtime.getSnapshot().toolCallsLoading).toBe(false));
     inspected = 0;
     for (let index = 0; index < 100; index++) {
@@ -953,6 +942,8 @@ describe('optional tool history and live category', () => {
     const transport = new ToolsTransport();
     transport.toolError = true;
     const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+    runtime.setToolCallsEnabled!(true);
     await vi.waitFor(() => expect(runtime.getSnapshot().toolCallsError).toContain('unavailable'));
     expect(runtime.getSnapshot().status).toBe('ready');
     transport.toolError = false;

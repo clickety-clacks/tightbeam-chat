@@ -81,16 +81,6 @@ export class LocalFixtureTransport implements ChatTransport {
     model: 'example model', harness: 'example harness', activity: 'Fixture idle',
     raw: { fixture: true, clearedThroughSeq: 90 },
   });
-  readTurn = async (selected: string, seq: number): Promise<CanonicalTurn | null> =>
-    selected === sessionKey ? this.turns.get(seq) ?? null : null;
-  readMessage = async (selected: string, messageId: string): Promise<CanonicalMessage | null> => {
-    if (selected !== sessionKey) return null;
-    return this.rows.find((row): row is CanonicalMessage => row.kind === 'message' && row.id === messageId) ?? null;
-  };
-  readRecentTurns = async (selected: string): Promise<readonly CanonicalTurn[]> => selected === sessionKey
-    ? [...this.turns.values()].sort((a, b) => a.seq - b.seq).slice(-50) : [];
-  resolveOriginDisplayName = async (origin: string) => origin.startsWith('agent:') || origin.startsWith('session:')
-    ? 'Example agent' : undefined;
   private page(records: ConversationRecord[]): ConversationPage {
     return {
       records, oldestCursor: records.length ? `before:${records[0].id}` : null,
