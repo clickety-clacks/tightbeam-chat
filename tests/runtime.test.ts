@@ -743,17 +743,21 @@ describe('framework-independent runtime', () => {
       .toMatchObject({ status: 'failed', reason: 'not allowed' }));
     expect(transport.submissions.filter((submission) => submission.clientMessageId === refused)).toHaveLength(1);
 
+    const firstConnection = deferred<HumanSendResult>();
     const reconnectAck = deferred<HumanSendResult>();
-    transport.nextSend = async () => transport.submissions.filter((submission) => submission.content === 'offline').length === 1
-      ? { outcome: 'unreachable', reason: 'Not connected to the server.' }
-      : reconnectAck.promise;
+    transport.nextSend = async () => {
+      const offlineAttempts = transport.submissions.filter((submission) => submission.content === 'offline').length;
+      return offlineAttempts === 1 ? firstConnection.promise : reconnectAck.promise;
+    };
+    const offline = runtime.send('offline')!;
+    const signals: unknown[] = [];
+    runtime.observeHostSend(offline, (signal) => signals.push(signal));
+    await vi.waitFor(() => expect(transport.submissions.filter((submission) => submission.clientMessageId === offline))
+      .toHaveLength(1));
     vi.useFakeTimers();
     try {
-      const offline = runtime.send('offline')!;
-      const signals: unknown[] = [];
-      runtime.observeHostSend(offline, (signal) => signals.push(signal));
-      await Promise.resolve();
-      await Promise.resolve();
+      firstConnection.resolve({ outcome: 'unreachable', reason: 'Not connected to the server.' });
+      await vi.advanceTimersByTimeAsync(0);
       expect(runtime.getSnapshot().sends.find((send) => send.clientMessageId === offline))
         .toMatchObject({ status: 'pending', reason: 'unreachable' });
       expect(signals).toEqual([]);
@@ -769,8 +773,9 @@ describe('framework-independent runtime', () => {
         .toMatchObject({ status: 'pending', reason: undefined });
 
       reconnectAck.resolve({ outcome: 'accepted' });
-      await vi.waitFor(() => expect(runtime.getSnapshot().sends.find((send) => send.clientMessageId === offline))
-        .toMatchObject({ status: 'accepted' }));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(runtime.getSnapshot().sends.find((send) => send.clientMessageId === offline))
+        .toMatchObject({ status: 'accepted' });
       expect(signals).toEqual([{ kind: 'accepted' }]);
     } finally {
       runtime.dispose();
