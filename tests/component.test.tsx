@@ -717,8 +717,9 @@ describe('conversation surface', () => {
       act(() => runtime.update({ activeTurn: active, provenanceAvailable: true }));
     };
     show({ triggerSource: 'mike' });
-    expect(screen.getByRole('status', { name: 'Active turn: Replying to you' })).toBeTruthy();
-    expect(screen.getByRole('status', { name: 'Active turn: Replying to you' }).classList.contains('tb-chat-caption-neutral')).toBe(true);
+    const activeCaption = screen.getByRole('status', { name: 'Active turn: Replying to you' });
+    expect(activeCaption.classList.contains('tb-chat-caption-neutral')).toBe(true);
+    expect(activeCaption.querySelector('[aria-hidden="true"]')?.textContent).toBe('●');
     show({ triggerSource: 'mike', messageId: 'unloaded' }, []);
     expect(screen.queryByRole('status', { name: 'Active turn: Replying to you' })).toBeNull();
     show({ triggerSource: 'batch', batchMemberCount: 2 });

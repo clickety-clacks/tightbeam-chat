@@ -195,7 +195,9 @@ describe('Nordic theme', () => {
     expect(caption).toContain('box-shadow: none');
     expect(rule(componentCss, '.tb-chat-caption::before')).toContain("content: '•'");
     expect(rule(componentCss, '.tb-chat-caption-neutral')).toContain('color: var(--tb-chat-muted)');
-    expect(rule(componentCss, '.tb-chat-active-caption::before')).toContain('color: var(--tb-chat-ok)');
+    expect(rule(componentCss, '.tb-chat-active-caption::before')).toContain('content: none');
+    expect(rule(componentCss, '.tb-chat-active-caption > .tb-chat-caption-body > span[aria-hidden="true"]'))
+      .toContain('color: var(--tb-chat-ok)');
     expect(rule(componentCss, '.tb-chat-caption-caution')).toContain('var(--tb-chat-caution) 94%');
     expect(rule(componentCss, '.tb-chat-caption-danger')).toContain('var(--tb-chat-danger) 94%');
     for (const tokens of [light, dark]) {
