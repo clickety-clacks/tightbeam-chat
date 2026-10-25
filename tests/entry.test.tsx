@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { HostPage } from '../examples/HostPage';
 
 const defaultTarget = {
@@ -71,7 +73,11 @@ describe('direct browser entry', () => {
     expect(alert.textContent).toContain('selected target was not changed');
     expect(screen.queryByText('https://other.example')).toBeNull();
     expect(screen.queryByText('agent:other/chat')).toBeNull();
-    expect(screen.getByRole('link', { name: 'Open the configured conversation' }).getAttribute('href')).toBe('/');
+    const recoveryLink = screen.getByRole('link', { name: 'Open the configured conversation' });
+    expect(recoveryLink.getAttribute('href')).toBe('/');
+    expect(recoveryLink.closest('main.chat-entry-state')).not.toBeNull();
+    const siteStyles = readFileSync(resolve(process.cwd(), 'examples/site.css'), 'utf8');
+    expect(siteStyles).toMatch(/\.chat-entry-state\s+a\s*\{[^}]*color:\s*var\(--tb-chat-fjord\)/);
     const request = new URL(String(fetchSpy.mock.calls[0][0]));
     expect(request.searchParams.get('gateway')).toBe('https://other.example');
     expect(screen.queryByText(defaultTarget.sessionKey)).toBeNull();

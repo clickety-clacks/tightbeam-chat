@@ -5,3 +5,4 @@ html, body, #root { width: 100%; height: 100%; min-height: 0; margin: 0; }
 body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
 #root { height: 100dvh; min-height: 0; }
 .chat-entry-state { display: grid; place-content: center; min-height: 100%; padding: 1.5rem; text-align: center; color: var(--tb-chat-muted); }
+.chat-entry-state a { color: var(--tb-chat-fjord); }
