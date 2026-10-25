@@ -82,6 +82,39 @@ class FakeRuntime implements ChatRuntime {
 
 function adapterFor(runtime: FakeRuntime): TightbeamAdapter { return { open: () => runtime }; }
 
+function installViewportLayout(viewport: HTMLElement) {
+  const content = viewport.querySelector<HTMLElement>('.tb-chat-message-content')!;
+  const rowHeight = 92;
+  let scrollTop = 0;
+  const anchorSpace = () => Number.parseFloat(viewport.style.getPropertyValue('--tb-chat-anchor-space')) || 0;
+  const scrollHeight = () => 32 + content.children.length * rowHeight + anchorSpace() + 200;
+  Object.defineProperties(viewport, {
+    clientHeight: { configurable: true, get: () => 180 },
+    scrollHeight: { configurable: true, get: scrollHeight },
+    scrollTop: {
+      configurable: true, get: () => scrollTop,
+      set: (value: number) => { scrollTop = Math.max(0, Math.min(value, scrollHeight() - 180)); },
+    },
+  });
+  Object.defineProperty(viewport, 'scrollTo', { configurable: true, value: (options: ScrollToOptions) => {
+    viewport.scrollTop = options.top ?? 0;
+  } });
+  const originalBounds = HTMLElement.prototype.getBoundingClientRect;
+  const bounds = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+    if (this === viewport) return new DOMRect(0, 100, 320, 180);
+    const index = [...content.children].indexOf(this);
+    if (index >= 0) return new DOMRect(0, 116 + anchorSpace() + index * rowHeight - scrollTop, 320, 80);
+    return originalBounds.call(this);
+  });
+  return {
+    offset(element: HTMLElement) { return element.getBoundingClientRect().top - viewport.getBoundingClientRect().top; },
+    get scrollTop() { return scrollTop; },
+    get anchorSpace() { return anchorSpace(); },
+    setScrollTop(value: number) { viewport.scrollTop = value; },
+    restore() { bounds.mockRestore(); },
+  };
+}
+
 function visibilityMix(sessionKey: string, prefix: string): readonly CanonicalMessage[] {
   const human = row(sessionKey, `${prefix}-human`, `Human exchange ${prefix}`, {
     role: 'user', sender: 'user:person', turnSeq: 1, messageType: 'chat',
@@ -420,6 +453,112 @@ describe('conversation surface', () => {
       }
     } finally {
       bounds.mockRestore();
+    }
+  });
+
+  it('holds the transcript position when older provenance filters a long visible reply block', async () => {
+    const sessionKey = 'history-reclassification';
+    const parents = Array.from({ length: 14 }, (_, index) => row(
+      sessionKey, `agent-parent-${index + 1}`, `Hidden activity ${index + 1}`,
+      { seq: index + 1, turnSeq: index + 1, role: 'user', sender: 'agent:external', messageType: 'agent' },
+    ));
+    const replies = parents.map((parent, index) => row(
+      sessionKey, `provisional-reply-${index + 1}`, `Provisional reply ${index + 1}`,
+      { seq: 30 + index, turnSeq: index + 1, sender: 'assistant-service', messageType: 'assistant', replyToMessageId: parent.id },
+    ));
+    const reading = row(sessionKey, 'reading', 'Human message at the end of filtered history', {
+      seq: 80, role: 'user', sender: 'user:person', messageType: 'chat', turnSeq: 80,
+    });
+    const following = row(sessionKey, 'following', 'Human message following filtered history', {
+      seq: 90, role: 'user', sender: 'user:person', messageType: 'chat', turnSeq: 90,
+    });
+    const latest = row(sessionKey, 'latest', 'Latest human message', {
+      seq: 100, role: 'user', sender: 'user:person', messageType: 'chat', turnSeq: 100,
+    });
+    const runtime = new FakeRuntime(sessionKey, { records: [...replies, reading, following, latest] });
+    const page = { records: parents, provenance: [] as TurnProvenance[], hasOlder: false };
+    let releasePage!: () => void;
+    const pageGate = new Promise<void>(resolve => { releasePage = resolve; });
+    let pageComplete: Promise<void> | undefined;
+    runtime.loadOlder = () => {
+      runtime.loadOlderCalls++;
+      pageComplete = (async () => {
+        runtime.update({ loadingOlder: true });
+        await pageGate;
+        runtime.update({ records: [...page.records, ...runtime.getSnapshot().records], hasOlder: page.hasOlder, loadingOlder: false });
+      })();
+      return pageComplete;
+    };
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+    const log = screen.getByRole('log');
+    const layout = installViewportLayout(log);
+    const newest = within(log).getByText('Latest human message').closest('article')!;
+    expect(within(log).getByText('Provisional reply 1')).toBeTruthy();
+    layout.setScrollTop(0);
+    const newestBefore = layout.offset(newest);
+
+    try {
+      fireEvent.wheel(log, { deltaY: -100 });
+      fireEvent.scroll(log);
+      act(() => runtime.update({ hasOlder: true }));
+      await waitFor(() => expect(runtime.loadOlderCalls).toBe(1));
+      await waitFor(() => expect(runtime.getSnapshot().loadingOlder).toBe(true));
+
+      await act(async () => {
+        releasePage();
+        await pageComplete;
+      });
+      await waitFor(() => expect(runtime.getSnapshot().loadingOlder).toBe(false));
+
+      expect(within(log).queryByText('Provisional reply 1')).toBeNull();
+      expect(layout.offset(newest)).toBe(newestBefore);
+      expect(layout.scrollTop).toBe(0);
+      expect(layout.anchorSpace).toBeGreaterThan(1000);
+      expect(runtime.getSnapshot().records).toContain(replies[0]);
+      expect(runtime.getSnapshot().hasOlder).toBe(false);
+    } finally {
+      releasePage();
+      layout.restore();
+    }
+  });
+
+  it('keeps the reader anchored when a truthful provenance alert appears', async () => {
+    const sessionKey = 'alert-anchor';
+    const parent = row(sessionKey, 'human-parent', 'Human request', {
+      seq: 10, turnSeq: 7, role: 'user', sender: 'user:person', messageType: 'chat',
+    });
+    const reply = row(sessionKey, 'conflicting-reply', 'Reply with conflicting provenance', {
+      seq: 20, turnSeq: 7, sender: 'assistant-service', messageType: 'assistant', replyToMessageId: parent.id,
+      turnIncludesHuman: false,
+    });
+    const reading = row(sessionKey, 'alert-reading', 'Message being read', {
+      seq: 30, role: 'user', sender: 'user:person', messageType: 'chat', turnSeq: 30,
+    });
+    const following = row(sessionKey, 'alert-following', 'Message after reading', {
+      seq: 40, role: 'user', sender: 'user:person', messageType: 'chat', turnSeq: 40,
+    });
+    const runtime = new FakeRuntime(sessionKey, { records: [reply, reading, following] });
+    runtime.olderPages = [{ records: [parent], provenance: [], hasOlder: false }];
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+    const log = screen.getByRole('log');
+    const layout = installViewportLayout(log);
+    const anchor = within(log).getByText('Message being read').closest('article')!;
+    layout.setScrollTop(10);
+    const anchorBefore = layout.offset(anchor);
+
+    try {
+      fireEvent.wheel(log, { deltaY: -100 });
+      fireEvent.scroll(log);
+      act(() => runtime.update({ hasOlder: true }));
+      fireEvent.scroll(log);
+      await waitFor(() => expect(runtime.getSnapshot().records).toContain(parent));
+
+      expect(within(log).getByText('Some message sources could not be interpreted. Conversation filtering is incomplete.'))
+        .toBeTruthy();
+      expect(within(log).getByText('Reply with conflicting provenance')).toBeTruthy();
+      expect(layout.offset(anchor)).toBe(anchorBefore);
+    } finally {
+      layout.restore();
     }
   });
 
