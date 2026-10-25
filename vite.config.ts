@@ -7,9 +7,9 @@ const chatReleaseVersion = process.env.GITHUB_REF_TYPE === 'tag' &&
   process.env.GITHUB_REF === `refs/tags/${releaseTag}` && /^v\d+\.\d+\.\d+$/.test(releaseTag)
   ? releaseTag : null;
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
   plugins: [react()],
-  define: { __CHAT_RELEASE_VERSION__: JSON.stringify(chatReleaseVersion) },
+  define: { __CHAT_RELEASE_VERSION__: JSON.stringify(command === 'build' ? chatReleaseVersion : null) },
   build: {
     lib: {
       entry: resolve(import.meta.dirname, 'src/index.ts'),
@@ -20,4 +20,4 @@ export default defineConfig({
     rollupOptions: { external: ['react', 'react-dom', 'react/jsx-runtime'] },
   },
   test: { environment: 'jsdom' },
-});
+}));
