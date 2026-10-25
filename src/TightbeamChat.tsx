@@ -944,22 +944,28 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
       {state.loadingOlder && <div className="tb-chat-history-loading tb-chat-caption tb-chat-caption-neutral" role="status">Loading earlier messages…</div>}
       <div className="tb-chat-message-content" ref={reading.content}>
       {notice && <div className={`tb-chat-notice tb-chat-caption tb-chat-caption-${noticeTone} tb-chat-notice-${state.status}`} role={state.status === 'loading' ? 'status' : 'alert'}>
-        <span>{notice}</span>
-        {host.optedIn && state.status === 'error' &&
-          <button type="button" onClick={() => void runtime.rebuild({ restart: true })}>Reconnect</button>}
+        <span className="tb-chat-caption-body">
+          <span>{notice}</span>
+          {host.optedIn && state.status === 'error' &&
+            <button type="button" onClick={() => void runtime.rebuild({ restart: true })}>Reconnect</button>}
+        </span>
       </div>}
       {state.toolCallsEnabled !== undefined && <div className="tb-chat-tool-controls">
         <button type="button" aria-pressed={state.toolCallsEnabled}
           onClick={() => runtime.setToolCallsEnabled?.(!state.toolCallsEnabled)}>Tool calls</button>
         {state.toolCallsEnabled && state.toolCallsLoading && <span className="tb-chat-caption tb-chat-caption-neutral" role="status">Loading tool history…</span>}
         {state.toolCallsEnabled && state.toolCallsError && <span className="tb-chat-caption tb-chat-caption-danger" role="status">
-          Tool history is not current: {state.toolCallsError}{' '}
-          <button type="button" onClick={() => runtime.retryToolCalls?.()}>Retry tool history</button>
+          <span className="tb-chat-caption-body">
+            <span>Tool history is not current: {state.toolCallsError}{' '}</span>
+            <button type="button" onClick={() => runtime.retryToolCalls?.()}>Retry tool history</button>
+          </span>
         </span>}
       </div>}
       {state.historyError && <div className="tb-chat-history-error tb-chat-caption tb-chat-caption-danger" role="alert">
-        <span>Earlier messages could not be loaded: {state.historyError}</span>
-        <button type="button" onClick={loadOlder}>Retry loading messages</button>
+        <span className="tb-chat-caption-body">
+          <span>Earlier messages could not be loaded: {state.historyError}</span>
+          <button type="button" onClick={loadOlder}>Retry loading messages</button>
+        </span>
       </div>}
       {projection.issues.length > 0 && <div className="tb-chat-history-error tb-chat-caption tb-chat-caption-danger" role="alert">
         Some message sources could not be interpreted. Conversation filtering is incomplete.
@@ -967,7 +973,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
       <IndexedTimeline messages={transcript.index} tools={tools} pending={pending.index} render={renderItem} />
       {pending.tail.map(renderItem)}
       {caption && <div className="tb-chat-active-caption tb-chat-caption tb-chat-caption-neutral" role="status" aria-label={`Active turn: ${caption.text}`}>
-        <span aria-hidden="true">{caption.icon}</span><span>{caption.text}</span>
+        <span className="tb-chat-caption-body"><span aria-hidden="true">{caption.icon}</span><span>{caption.text}</span></span>
       </div>}
       {state.status === 'ready' && state.records.length === 0 && localSends.length === 0 && !state.hasOlder &&
         <p className="tb-chat-empty">No messages yet.</p>}

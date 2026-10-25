@@ -171,6 +171,15 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
 .tb-chat-caption-neutral { color: var(--tb-chat-muted); }
 .tb-chat-caption-caution { color: color-mix(in srgb, var(--tb-chat-caution) 94%, var(--tb-chat-background)); }
 .tb-chat-caption-danger { color: color-mix(in srgb, var(--tb-chat-danger) 94%, var(--tb-chat-background)); }
+.tb-chat-caption-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 .45rem;
+  min-width: 0;
+}
+.tb-chat-caption-body > span { min-width: 0; }
 .tb-chat-caption button {
   display: inline-flex;
   flex: 0 0 auto;
@@ -189,8 +198,6 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
 }
 .tb-chat-caption button:disabled { background: transparent; color: var(--tb-chat-muted); }
 .tb-chat-caption button:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
-.tb-chat-notice { flex-wrap: wrap; align-items: center; gap: 0 .45rem; }
-.tb-chat-notice > span { min-width: 0; }
 .tb-chat-history-loading {
   position: absolute;
   z-index: 3;
@@ -201,8 +208,6 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
   max-width: none;
   pointer-events: none;
 }
-.tb-chat-history-error { flex-wrap: wrap; align-items: center; gap: 0 .45rem; }
-.tb-chat-history-error > span { min-width: 0; }
 .tb-chat-empty {
   align-self: center;
   max-width: min(100%, 48rem);
@@ -387,8 +392,8 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
 }
 
 .tb-chat-tool-controls { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin: .5rem 0; font-size: .85rem; }
-.tb-chat-tool-controls button { font: inherit; color: inherit; background: transparent; border: 1px solid currentColor; border-radius: .75rem; padding: .3rem .65rem; cursor: pointer; }
-.tb-chat-tool-controls button[aria-pressed="true"] { font-weight: 700; }
+.tb-chat-tool-controls > button { font: inherit; color: inherit; background: transparent; border: 1px solid currentColor; border-radius: .75rem; padding: .3rem .65rem; cursor: pointer; }
+.tb-chat-tool-controls > button[aria-pressed="true"] { font-weight: 700; }
 .tb-chat-tool { box-sizing: border-box; width: 100%; margin: .6rem 0; padding: .75rem; border: 1px solid color-mix(in srgb, currentColor 20%, transparent); border-radius: .75rem; }
 .tb-chat-transition { white-space: pre-wrap; }
 .tb-chat-tool-heading { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .5rem; }

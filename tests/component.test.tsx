@@ -800,7 +800,9 @@ describe('conversation surface', () => {
     const status = view.container.querySelector<HTMLElement>('.tb-chat-tool-controls > .tb-chat-caption-danger');
     expect(status?.getAttribute('role')).toBe('status');
     expect(status?.textContent).toBe('Tool history is not current: Connection unavailable Retry tool history');
-    expect(within(status!).getByRole('button', { name: 'Retry tool history' })).toBeTruthy();
+    const retry = within(status!).getByRole('button', { name: 'Retry tool history' });
+    expect(retry).toBeTruthy();
+    expect(retry.closest('.tb-chat-caption-body')).toBeTruthy();
   });
 
   it('renders and copies canonical human member rows without exposing a carrier or sibling', () => {
