@@ -618,6 +618,39 @@ describe('framework-independent runtime', () => {
     runtime.dispose();
   });
 
+  it('reconciles a host retry from canonical history when session details are unavailable', async () => {
+    const transport = new ControlledTransport();
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+    expect(runtime.getSnapshot().session).toMatchObject({
+      sessionKey, displayName: 'Fixture agent',
+    });
+
+    const clientMessageId = 'c_018f1a62-7c73-4c7d-8c05-e53d5c542a07';
+    const content = 'A host-composed prompt';
+    transport.rows.push(message(9, {
+      role: 'user', sender: 'user:person', deviceId: transport.identity.deviceId,
+      clientMessageId, content,
+    }));
+    transport.readSession = async () => {
+      throw new Error('Session details are temporarily unavailable.');
+    };
+
+    const outcomes: string[] = [];
+    runtime.observeHostSend(clientMessageId, signal => outcomes.push(signal.kind));
+    runtime.retryHostSend(clientMessageId, content, { lifetimeId: 'host-page', attempt: 1 });
+
+    await vi.waitFor(() => expect(runtime.getSnapshot().sends[0]).toMatchObject({
+      clientMessageId, content, status: 'accepted', reconciled: true,
+    }));
+    expect(outcomes).toContain('reconciled');
+    expect(runtime.getSnapshot().records.some(record => record.kind === 'message' &&
+      record.sessionKey === sessionKey && record.deviceId === transport.identity.deviceId &&
+      record.clientMessageId === clientMessageId)).toBe(true);
+    expect(transport.submissions).toHaveLength(0);
+    runtime.dispose();
+  });
+
   it('re-asks after a dropped send socket with the exact same ID and content', async () => {
     const transport = new ControlledTransport();
     transport.nextSend = async () => transport.submissions.length === 1

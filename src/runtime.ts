@@ -784,21 +784,22 @@ class SessionRuntime implements ChatRuntime {
     const captured: ChangeNotice[] = [];
     this.coverageReaders.add(captured);
     try {
-      const [session, page] = await Promise.all([
-        this.transport.readSession(this.sessionKey, signal),
-        this.transport.readTail(this.sessionKey, signal),
-      ]);
+      const page = await this.transport.readTail(this.sessionKey, signal);
       if (!this.isCurrent(generation) || !this.checkIdentity() || signal.aborted) return 'unavailable';
-      if (session.sessionKey !== this.sessionKey) throw new UnsupportedTargetError('Session refresh returned another selection.');
+      // The ready runtime owns the latest session snapshot through initialization
+      // and versioned session notices. Host-send reconciliation needs only the
+      // canonical tail rows, so do not make this per-send refresh depend on a
+      // second session-detail request.
+      const session = this.state.session;
+      if (!session || session.sessionKey !== this.sessionKey) {
+        throw new UnsupportedTargetError('Ready session snapshot is unavailable for canonical refresh.');
+      }
       this.validatePage(page);
       if (!this.transport.proveCoverage(session, page, captured)) {
         throw new UnsupportedTargetError('Canonical refresh lacks verified subscription coverage.');
       }
       for (const record of page.records) this.put(record);
-      const currentSession = !this.state.session || session.rowVersion > this.state.session.rowVersion
-        ? session : this.state.session;
-      this.publish({ records: recordsFrom(this.rows), session: currentSession,
-        agentDisplayName: currentSession.displayName });
+      this.publish({ records: recordsFrom(this.rows) });
       const found = [...this.rows.values()].some((record) => record.kind === 'message' &&
         record.sessionKey === this.sessionKey && record.deviceId === this.identity.deviceId &&
         record.clientMessageId === clientMessageId);
