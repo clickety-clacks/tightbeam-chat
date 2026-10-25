@@ -487,17 +487,17 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
     overlayRef.current = next;
     setOverlay(next);
   }, []);
-  const recordWhat'sNewSeen = useCallback(() => {
+  const recordWhatsNewSeen = useCallback(() => {
     if (!CHAT_RELEASE_VERSION || typeof window === 'undefined') return;
     try { recordSeenReleaseVersion(window.localStorage, CHAT_RELEASE_VERSION); } catch { /* Storage may be unavailable. */ }
   }, []);
   const openSettings = useCallback(() => {
     const current = overlayRef.current;
     if (current?.kind === 'settings') return;
-    if (current?.kind === 'whats-new') recordWhat'sNewSeen();
+    if (current?.kind === 'whats-new') recordWhatsNewSeen();
     composer.current?.closeStatusPopup();
     setOverlayState({ kind: 'settings', page: 'home' });
-  }, [recordWhat'sNewSeen, setOverlayState]);
+  }, [recordWhatsNewSeen, setOverlayState]);
   const openReleaseNotes = useCallback(() => {
     const current = overlayRef.current;
     if (current?.kind === 'settings' && current.page === 'home') {
@@ -511,9 +511,9 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
     }
   }, [setOverlayState]);
   const closeOverlay = useCallback(() => {
-    if (overlayRef.current?.kind === 'whats-new') recordWhat'sNewSeen();
+    if (overlayRef.current?.kind === 'whats-new') recordWhatsNewSeen();
     setOverlayState(null);
-  }, [recordWhat'sNewSeen, setOverlayState]);
+  }, [recordWhatsNewSeen, setOverlayState]);
   const bundledNotes = useMemo(() => releaseNotesForBuild(CHAT_RELEASE_VERSION, RELEASE_NOTES), []);
   const lastPointerInChat = useRef(false);
   const keyboardActions = useRef({ optedIn: host.optedIn, composerHidden: host.composerHidden, scrollBy: reading.scrollBy });
