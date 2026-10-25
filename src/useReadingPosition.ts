@@ -11,6 +11,7 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
   const following = useRef(true);
   const animating = useRef(false);
   const target = useRef<number | undefined>(undefined);
+  const viewportHeight = useRef<number | undefined>(undefined);
   const anchors = useRef<Anchor[]>([]);
   const registeredRows = useRef(new Map<string, HTMLElement>());
   const registerRow = useCallback((key: string, element: HTMLElement | null) => {
@@ -23,10 +24,12 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
   latestReady.current = ready;
 
   const distance = (box: HTMLElement) => Math.max(0, box.scrollHeight - box.clientHeight - box.scrollTop);
+  const viewportResized = (box: HTMLElement) => viewportHeight.current !== undefined && viewportHeight.current !== box.clientHeight;
   const capture = () => {
     const box = viewport.current;
     const children = content.current?.children;
     if (!box || !children) return;
+    if (box.clientHeight > 0) viewportHeight.current = box.clientHeight;
     readingTop.current = box.scrollTop;
     anchors.current = [];
     if (following.current) return;
@@ -89,12 +92,13 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
   const updateLayout = () => {
     const box = viewport.current;
     if (!box) return;
+    const resized = viewportResized(box);
     if (!initialized.current) {
       if (!latestReady.current) return;
       initialized.current = true;
       moveToLatest(false);
     } else if (following.current) {
-      moveToLatest(true);
+      moveToLatest(!resized);
     } else {
       // Content changes should preserve the reader's current anchor rather
       // than compete with a still-running manual smooth scroll.
@@ -132,12 +136,28 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
   const onScroll = () => {
     const box = viewport.current;
     if (!box) return;
-    if (animating.current && target.current !== undefined && Math.abs(box.scrollTop - target.current) < 1) {
+    const resized = viewportResized(box);
+    const reachedTarget = target.current !== undefined && Math.abs(box.scrollTop - target.current) < 1;
+    if (reachedTarget) {
       animating.current = false;
+      target.current = undefined;
+    } else if (!animating.current) {
       target.current = undefined;
     }
     // Intermediate animation frames are not a user's decision to leave the tail.
-    if (!animating.current) following.current = distance(box) <= bottomThreshold;
+    if (resized) {
+      if (following.current) moveToLatest(false);
+    } else if (!animating.current) {
+      const currentDistance = distance(box);
+      if (reachedTarget && following.current && currentDistance > bottomThreshold) {
+        // The scroll event for an instant or smooth programmatic move can be
+        // delivered after content grows. Keep the existing follow intent and
+        // catch up instead of treating that stale event as reader movement.
+        moveToLatest(false);
+      } else {
+        following.current = currentDistance <= bottomThreshold;
+      }
+    }
     setShowLatest(!following.current);
     capture();
   };
@@ -145,10 +165,15 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
   const interrupt = () => {
     const box = viewport.current;
     if (!box) return;
+    const resized = viewportResized(box);
     if (animating.current) box.scrollTo({ top: box.scrollTop, behavior: 'instant' });
     animating.current = false;
     target.current = undefined;
-    following.current = distance(box) <= bottomThreshold;
+    if (resized) {
+      if (following.current) moveToLatest(false);
+    } else {
+      following.current = distance(box) <= bottomThreshold;
+    }
     capture();
   };
   const holdPosition = () => {
