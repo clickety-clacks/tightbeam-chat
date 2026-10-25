@@ -169,7 +169,7 @@ function expectVisibilityMix(log: HTMLElement, prefix: string): void {
 }
 
 describe('conversation surface', () => {
-  it('starts a fresh attempt on each foreground return, including failed recovery, unless the target is locked', () => {
+  it('does not rebuild the transcript on a foreground return', () => {
     const sessionKey = 'background-resume-session';
     const runtime = new FakeRuntime(sessionKey);
     const original = Object.getOwnPropertyDescriptor(document, 'visibilityState');
@@ -186,15 +186,15 @@ describe('conversation surface', () => {
         changeVisibility('hidden');
         changeVisibility('visible');
       }
-      expect(runtime.rebuildOptions).toEqual(Array(4).fill({ restart: true }));
+      expect(runtime.rebuildOptions).toEqual([]);
       changeVisibility('visible');
-      expect(runtime.rebuildCalls).toBe(4);
+      expect(runtime.rebuildCalls).toBe(0);
       for (const status of ['unsupported', 'unauthorized'] as const) {
         runtime.state = { ...runtime.state, status };
         changeVisibility('hidden');
         changeVisibility('visible');
       }
-      expect(runtime.rebuildCalls).toBe(4);
+      expect(runtime.rebuildCalls).toBe(0);
     } finally {
       if (original) Object.defineProperty(document, 'visibilityState', original);
       else Reflect.deleteProperty(document, 'visibilityState');
@@ -204,7 +204,10 @@ describe('conversation surface', () => {
   it('filters with message provenance and renders safe Markdown without exposing batch wrappers', async () => {
     const sessionKey = 'conversation-a';
     const human = row(sessionKey, 'human-trigger', 'Could you explain this?', { role: 'user', sender: 'user:person', turnSeq: 1 });
-    const unprovenHuman = row(sessionKey, 'unproven-human', 'Role alone must not prove this exchange', { role: 'user' });
+    const unprovenHuman = row(sessionKey, 'unproven-human', 'A user row with no sender stays visible', { role: 'user' });
+    const mismatchedHuman = row(sessionKey, 'mismatched-human', 'A differently marked user row stays visible', {
+      role: 'user', sender: 'user:another-person', messageType: 'chat',
+    });
     const answer = row(sessionKey, 'selected-answer', [
       '## A **useful** answer', '', '- first item', '- second item', '',
       '[Reference](https://example.com)', '', '`inline code`', '',
@@ -239,7 +242,7 @@ describe('conversation surface', () => {
       sender: 'assistant-service', turnSeq: 3, turnIncludesHuman: true, messageType: 'assistant', replyToMessageId: batch.id,
     });
     const runtime = new FakeRuntime(sessionKey, {
-      records: [human, answer, otherTrigger, otherAnswer, batch, row(sessionKey, 'batch-member', 'Batch question from the person', { role: 'user', sender: 'user:person', turnSeq: 3 }), batchAnswer, unprovenHuman, substrateMarker],
+      records: [human, answer, otherTrigger, otherAnswer, batch, row(sessionKey, 'batch-member', 'Batch question from the person', { role: 'user', sender: 'user:person', turnSeq: 3 }), batchAnswer, unprovenHuman, mismatchedHuman, substrateMarker],
       provenanceAvailable: false,
     });
     render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
@@ -263,7 +266,10 @@ describe('conversation surface', () => {
     expect(within(log).queryByText('A system event marker')).toBeNull();
     expect(within(log).queryByText('An agent sent a wake')).toBeNull();
     expect(within(log).queryByText('Must remain hidden')).toBeNull();
-    expect(within(log).queryByText('Role alone must not prove this exchange')).toBeNull();
+    const unmarkedBubble = within(log).getByText('A user row with no sender stays visible').closest('article');
+    expect(unmarkedBubble?.getAttribute('aria-label')).toBe('Message from User');
+    const mismatchedBubble = within(log).getByText('A differently marked user row stays visible').closest('article');
+    expect(mismatchedBubble?.getAttribute('aria-label')).toBe('Message from User');
     expect(document.querySelector('script, img')).toBeNull();
     expect(within(log).queryByRole('status', { name: /Active turn:/ })).toBeNull();
     expect(screen.queryByRole('button', { name: /copy/i })).toBeNull();
@@ -300,7 +306,9 @@ describe('conversation surface', () => {
     expect(within(log).queryByText('An unproven assistant reply')).toBeNull();
     expect(within(log).getByText('A selected reply without a provable trigger')).toBeTruthy();
     expect(within(log).getByText('A selected reply without a parent link')).toBeTruthy();
-    expect(within(log).queryByText('An unproven user row')).toBeNull();
+    expect(within(log).getByText('An unproven user row')).toBeTruthy();
+    expect(within(log).getByText('An unproven user row').closest('article')?.getAttribute('aria-label'))
+      .toBe('Message from User');
 
     act(() => runtime.update({ hasOlder: true }));
     await waitFor(() => expect(within(log).getByText('Human exchange older-page')).toBeTruthy());
@@ -319,6 +327,7 @@ describe('conversation surface', () => {
     await act(async () => runtime.rebuild());
     expect(runtime.rebuildCalls).toBe(1);
     expectVisibilityMix(log, 'reconnect');
+    expect(within(log).getByText('An unproven user row')).toBeTruthy();
     expect(within(log).getByText('Human exchange first-page')).toBeTruthy();
     expect(within(log).getByText('Human exchange older-page')).toBeTruthy();
     expect(within(log).getByText('Human exchange live-update')).toBeTruthy();
@@ -330,12 +339,15 @@ describe('conversation surface', () => {
     ]));
   });
 
-  it('holds unloaded-parent replies while preserving null-linked replies', async () => {
+  it('keeps unmarked user rows and unresolved replies visible while older history loads', async () => {
     const sessionKey = 'unresolved-reply-parent';
+    const exactSenderHuman = row(sessionKey, 'exact-sender-human', 'A message with an exact principal sender', {
+      role: 'user', sender: 'user:person', messageType: 'chat',
+    });
     const nullSenderHuman = row(sessionKey, 'null-sender-human', 'A human message with a null sender', {
       role: 'user', messageType: 'chat', raw: { source: 'fixture', id: 'null-sender-human', sender: null },
     });
-    const unknownSender = row(sessionKey, 'unknown-sender', 'An absent sender is not proven human by metadata alone', {
+    const unknownSender = row(sessionKey, 'unknown-sender', 'An absent sender stays visible without identity proof', {
       role: 'user', messageType: 'chat',
       clientMessageId: 'client-unknown', deviceId: 'unknown-device',
     });
@@ -346,7 +358,7 @@ describe('conversation surface', () => {
       role: 'assistant', sender: 'assistant-service', messageType: 'assistant', replyToMessageId: 'older-agent-trigger', turnSeq: 50,
     });
     const runtime = new FakeRuntime(sessionKey, {
-      records: [nullSenderHuman, unknownSender, nullLinkReply, unloadedParentReply],
+      records: [exactSenderHuman, nullSenderHuman, unknownSender, nullLinkReply, unloadedParentReply],
       hasOlder: true,
     });
     runtime.olderPages = [{ records: [row(sessionKey, 'older-agent-trigger', 'An older agent wake', {
@@ -355,23 +367,31 @@ describe('conversation surface', () => {
 
     render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
     const log = screen.getByRole('log');
-    expect(within(log).queryByText('A human message with a null sender')).toBeNull();
-    expect(within(log).queryByText('An absent sender is not proven human by metadata alone')).toBeNull();
+    expect(within(log).getByText('A human message with a null sender')).toBeTruthy();
+    const unmarkedBubble = within(log).getByText('A human message with a null sender').closest('article')!;
+    expect(unmarkedBubble.getAttribute('aria-label')).toBe('Message from User');
+    expect(within(unmarkedBubble).getByText('User')).toBeTruthy();
+    const exactBubble = within(log).getByText('A message with an exact principal sender').closest('article')!;
+    expect(exactBubble.getAttribute('aria-label')).toBe('Message from You');
+    expect(within(exactBubble).getByText('You')).toBeTruthy();
+    expect(within(log).getByText('An absent sender stays visible without identity proof')).toBeTruthy();
     expect(within(log).getByText('A reply without a parent link')).toBeTruthy();
-    expect(within(log).queryByText('A reply whose parent is not loaded')).toBeNull();
+    expect(within(log).getByText('A reply whose parent is not loaded')).toBeTruthy();
 
     await waitFor(() => expect(runtime.getSnapshot().hasOlder).toBe(false));
     expect(runtime.loadOlderCalls).toBe(1);
     expect(within(log).queryByText('An older agent wake')).toBeNull();
     expect(within(log).queryByText('A reply whose parent is not loaded')).toBeNull();
+    expect(within(log).getByText('A human message with a null sender')).toBeTruthy();
+    expect(within(log).getByText('An absent sender stays visible without identity proof')).toBeTruthy();
     expect(within(log).getByText('A reply without a parent link')).toBeTruthy();
     expect(runtime.getSnapshot().records.map((record) => record.id)).toContain('unloaded-parent-reply');
   });
 
   it.each([
     { scenario: 'the anchored reply survives its human parent loading', excluded: false, visibleOlder: false },
-    { scenario: 'the anchored reply is excluded alongside visible older history', excluded: true, visibleOlder: true },
-    { scenario: 'a hidden-only page excludes the anchored reply at the top', excluded: true, visibleOlder: false },
+    { scenario: 'an agent reply is classified after its parent loads alongside visible history', excluded: true, visibleOlder: true },
+    { scenario: 'an agent reply is classified after its parent loads on a hidden-only page', excluded: true, visibleOlder: false },
   ])('preserves the reading viewport when $scenario', async ({ excluded, visibleOlder }) => {
     const sessionKey = 'reading-anchor';
     const parent = row(sessionKey, 'parent', 'The previously unloaded trigger', {
@@ -398,7 +418,7 @@ describe('conversation surface', () => {
     const log = screen.getByRole('log');
     const reading = within(log).getByText('Human message reading').closest('article')!;
     const following = within(log).getByText('Human message following').closest('article')!;
-    expect(within(log).queryByText('The first visible reply')).toBeNull();
+    expect(within(log).getByText('The first visible reply')).toBeTruthy();
 
     // jsdom has no layout: model normal stacked rows, padding, and the browser's
     // scroll range. In particular, a negative scrollTop cannot preserve a row.
@@ -440,7 +460,9 @@ describe('conversation surface', () => {
       expect(runtime.getSnapshot().records).toContain(reply);
 
       if (excluded && !visibleOlder) {
-        expect(topSpace()).toBe(0);
+        // The newly visible provisional row is removed when its nonhuman parent arrives.
+        // Compensating space preserves the reading anchor when scrollTop is clamped.
+        expect(topSpace()).toBeGreaterThan(0);
         // A later visible page can be read without reclassifying shown content.
         runtime.olderPages.push({ records: [human('earlier')], provenance: [], hasOlder: false });
         act(() => runtime.update({ hasOlder: true }));
@@ -455,7 +477,7 @@ describe('conversation surface', () => {
     }
   });
 
-  it('withholds unresolved replies until an older page settles their provenance', async () => {
+  it('shows unresolved replies immediately and preserves the reading anchor as older provenance settles', async () => {
     const sessionKey = 'history-reclassification';
     const parents = Array.from({ length: 14 }, (_, index) => row(
       sessionKey, `agent-parent-${index + 1}`, `Hidden activity ${index + 1}`,
@@ -492,7 +514,7 @@ describe('conversation surface', () => {
     const log = screen.getByRole('log');
     const layout = installViewportLayout(log);
     const newest = within(log).getByText('Latest human message').closest('article')!;
-    expect(within(log).queryByText('Provisional reply 1')).toBeNull();
+    expect(within(log).getByText('Provisional reply 1')).toBeTruthy();
     layout.setScrollTop(0);
     const newestBefore = layout.offset(newest);
 
@@ -511,7 +533,9 @@ describe('conversation surface', () => {
       expect(within(log).queryByText('Provisional reply 1')).toBeNull();
       expect(layout.offset(newest)).toBe(newestBefore);
       expect(layout.scrollTop).toBe(0);
-      expect(layout.anchorSpace).toBe(0);
+      // Removing the provisional rows above the reader needs compensation when
+      // the browser cannot use a negative scrollTop.
+      expect(layout.anchorSpace).toBeGreaterThan(0);
       expect(runtime.getSnapshot().records).toContain(replies[0]);
       expect(runtime.getSnapshot().hasOlder).toBe(false);
     } finally {
@@ -1043,7 +1067,7 @@ describe('conversation surface', () => {
     const sessionKey = 'chronological-send';
     const submittedAt = '2026-10-23T09:00:00.000Z';
     const prompt = row(sessionKey, 'retried-prompt', 'Original prompt', {
-      seq: 3, role: 'user', sender: 'user:person', createdAt: submittedAt, clientMessageId: 'retry-id', deviceId: 'device',
+      seq: 3, role: 'user', sender: undefined, createdAt: submittedAt, clientMessageId: 'retry-id', deviceId: 'device',
     });
     const laterPrompt = row(sessionKey, 'later-prompt', 'Later question', {
       seq: 8, role: 'user', sender: 'user:person', createdAt: '2026-10-23T09:05:00.000Z',
@@ -1067,8 +1091,9 @@ describe('conversation surface', () => {
     expect(order().findIndex((text) => text.includes('Later question')))
       .toBeLessThan(order().findIndex((text) => text.includes('Later reply')));
     expect(screen.getAllByText('Original prompt')).toHaveLength(1);
-    expect(messageRows().find((element) => element.textContent?.includes('Original prompt'))?.dataset.scrollKey)
-      .toBe('local-retry-id');
+    const originalRow = messageRows().find((element) => element.textContent?.includes('Original prompt'));
+    expect(originalRow?.dataset.scrollKey).toBe('local-retry-id');
+    expect(originalRow?.getAttribute('aria-label')).toBe('Message from User');
 
     const originalTurn = provenance(1, sessionKey, prompt.id, 'user:person', prompt);
     act(() => {

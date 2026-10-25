@@ -268,7 +268,7 @@ export function decodeToolCall(value: unknown, sessionKey: string): ToolCallReco
   });
 }
 
-/** A source-backed notice decoder; unknown selected-session changes request a rebuild. */
+/** A source-backed notice decoder; unrecognized frames remain sequenced observations. */
 export function decodePublic019Notice(value: unknown, sessionKey: string): ChangeNotice {
   const frame = record(value);
   if (frame.type !== 'change' || frame.schemaVersion !== 2 || typeof frame.class !== 'string') {
@@ -537,8 +537,8 @@ export function createPublic019Transport(config: Public019Config): { transport: 
     // Hub.subscribe completes before subscription_ready. Runtime subscribes first,
     // then reads retained append-only rows and unions buffered versioned notices.
     // This is overlap coverage, not a server snapshot watermark or replay promise.
-    proveCoverage: (session, page, buffered) => activeSessions.has(session.sessionKey) &&
-      page.coverage === session.sessionKey && !buffered.some((notice) => notice.operation === 'unknown'),
+    proveCoverage: (session, page) => activeSessions.has(session.sessionKey) &&
+      page.coverage === session.sessionKey,
     openChanges,
     openToolChanges: (sessionKey, callbacks, signal) => openChanges(sessionKey, callbacks, signal, true),
     async readToolCalls(sessionKey, range, signal) {

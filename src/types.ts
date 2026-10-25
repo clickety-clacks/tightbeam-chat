@@ -289,7 +289,7 @@ export interface ChatRuntime {
     outcome: 'delivered' | 'failed' | 'uncertain'): void;
   /** Reflect an accepted attempt that reached a caught-up snapshot without its row. */
   markHostSendUncertain(clientMessageId: string, reason: 'accepted-unreconciled'): void;
-  /** Restart bypasses an in-flight attempt, for foreground return or manual recovery. */
+  /** Restart bypasses an in-flight attempt for explicit manual recovery. */
   rebuild(options?: { restart?: boolean }): Promise<void>;
   dispose(): void;
 }

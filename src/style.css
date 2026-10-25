@@ -89,6 +89,7 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
   -webkit-user-select: text;
 }
 .tb-chat-bubble-human { align-self: flex-end; background: var(--tb-chat-human-surface); }
+.tb-chat-bubble-sender { display: block; margin-bottom: .25rem; color: var(--tb-chat-muted); font-size: .72rem; font-weight: 600; line-height: 1.2; }
 .tb-chat-bubble-agent { align-self: flex-start; }
 .tb-chat-local { border-color: var(--tb-chat-border); }
 .tb-chat-bubble-body { min-width: 0; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }

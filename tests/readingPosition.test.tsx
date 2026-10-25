@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { TightbeamChat, type TightbeamChatProps } from '../src/TightbeamChat';
 import { useReadingPosition } from '../src/useReadingPosition';
 import { createTightbeamAdapter } from '../src/runtime';
@@ -296,7 +296,7 @@ describe('conversation reading position', () => {
     act(() => runtime.publish({ records: [...initialRows, { ...carrier, rowVersion: 2 }, { ...message(21), content: 'A new human message' }] }));
     expect(animate).toHaveBeenCalledTimes(1);
   });
-  it('catches up after a failed connection on foreground return without losing the reader or draft', async () => {
+  it('preserves the reader and draft through reconnect without rebuilding on a foreground return', async () => {
     const profile: TargetProfile = { identity: 'fixture:recovery', label: 'Recovery', capabilities: {
       newestTail: true, stableOlderCursor: true, retainedHistoryAcrossResets: true,
       orderedTransitions: true, snapshotCoverage: true, versionedNotices: true,
@@ -346,10 +346,13 @@ describe('conversation reading position', () => {
       historyGate = new Promise<void>(resolve => { releaseHistory = resolve; });
       visibility = 'visible';
       await act(async () => { fireEvent(document, new Event('visibilitychange')); });
-      expect(connect).toHaveBeenCalledTimes(3);
-      expect(runtime.getSnapshot().status).toBe('stale');
+      expect(connect).toHaveBeenCalledTimes(2);
+      expect(runtime.getSnapshot().status).toBe('error');
       expect(screen.queryByText('Message 20')).toBeNull();
-      await act(async () => { releaseHistory(); await runtime.rebuild(); });
+      const reconnect = runtime.rebuild();
+      await waitFor(() => expect(connect).toHaveBeenCalledTimes(3));
+      expect(runtime.getSnapshot().status).toBe('stale');
+      await act(async () => { releaseHistory(); await reconnect; });
       expect(runtime.getSnapshot().status).toBe('ready');
       expect(screen.getByText('Message 20')).toBeTruthy();
       expect(anchor.getBoundingClientRect().top).toBe(offset);

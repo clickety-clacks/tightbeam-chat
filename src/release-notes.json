@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.30",
+    "items": [
+      {
+        "title": "Message visibility",
+        "description": "Human messages remain visible even when sender information is incomplete, with labels distinguishing messages identified as yours."
+      }
+    ]
+  },
+  {
     "version": "v0.1.29",
     "items": [
       {

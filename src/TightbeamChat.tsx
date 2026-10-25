@@ -397,6 +397,7 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, re
   const custom = renderMessage?.(displayRecord, context);
   return <article ref={rowRef} className={`tb-chat-bubble tb-chat-bubble-${bubble.side}`} data-record-key={bubble.key} data-scroll-key={scrollKey}
     aria-label={`Message from ${bubble.sender || sourceLabel(bubble.side, agentName)}`}>
+    {bubble.side === 'human' && <span className="tb-chat-bubble-sender" aria-hidden="true">{bubble.sender}</span>}
     <div className="tb-chat-bubble-body">{custom === undefined ? context.defaultRender() : custom}</div>
     <time className="tb-chat-time" dateTime={time.dateTime}>{time.text}</time>
   </article>;
@@ -654,16 +655,12 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
   const agentName = state.agentDisplayName ?? '';
   const projection = useMemo(() => projectMessages(state.records, state.principalKey, state.session?.raw.ownerUserId),
     [state.records, state.principalKey, state.session?.raw.ownerUserId]);
-  // A provisional reply could be reclassified when its older parent arrives.
-  // Keep it out of the live transcript until older history is exhausted or
-  // the projection has enough evidence to settle its visibility.
   const bubbles: Bubble[] = useMemo(() => projection.messages
-    .filter(message => !state.hasOlder || !message.provenancePending)
     .map((message) => ({
       key: message.key, record: message.source, side: message.side,
-      sender: sourceLabel(message.side, agentName), derived: Boolean(message.member),
+      sender: message.senderLabel ?? sourceLabel(message.side, agentName), derived: Boolean(message.member),
       displayContent: message.member?.content, member: message.member,
-    })), [projection, agentName, state.hasOlder]);
+    })), [projection, agentName]);
   const caption = state.provenanceAvailable === false ? undefined : activeCaption(state.activeTurn);
   const visibleSendIdentities = useMemo(() => new Set(bubbles.flatMap((bubble) => {
     const identity = bubble.derived ? undefined : canonicalSendIdentity(bubble.record);
@@ -789,26 +786,6 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
       document.removeEventListener('keydown', onKeyDown, true);
     };
   }, []);
-
-  useEffect(() => {
-    let wasHidden = document.visibilityState === 'hidden';
-    const refreshAfterBackground = () => {
-      if (document.visibilityState === 'hidden') {
-        wasHidden = true;
-        return;
-      }
-      if (document.visibilityState !== 'visible' || !wasHidden) return;
-      wasHidden = false;
-      const status = runtime.getSnapshot().status;
-      if (status !== 'unauthorized' && status !== 'unsupported') {
-        // Foreground return is a fresh attempt, independent of background timers
-        // and any connection or read still pending from before suspension.
-        void runtime.rebuild({ restart: true });
-      }
-    };
-    document.addEventListener('visibilitychange', refreshAfterBackground);
-    return () => document.removeEventListener('visibilitychange', refreshAfterBackground);
-  }, [runtime]);
 
   useEffect(() => {
     const element = root.current;
