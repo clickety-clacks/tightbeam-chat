@@ -155,7 +155,23 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
 .tb-chat-notice { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: .5rem; }
 .tb-chat-notice-unauthorized, .tb-chat-notice-unsupported, .tb-chat-notice-error,
 .tb-chat-history-error { color: var(--tb-chat-danger); }
-.tb-chat-history-loading { font-size: .86rem; }
+.tb-chat-history-loading {
+  position: absolute;
+  z-index: 3;
+  top: .25rem;
+  left: 50%;
+  transform: translateX(-50%);
+  margin: 0;
+  padding: .12rem .5rem;
+  border: 1px solid var(--tb-chat-border);
+  border-radius: 999px;
+  background: var(--tb-chat-background);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--tb-chat-shadow) 12%, transparent);
+  font-size: .78rem;
+  line-height: 1.2;
+  white-space: nowrap;
+  pointer-events: none;
+}
 .tb-chat-history-error { display: grid; justify-items: center; gap: .4rem; }
 .tb-chat-empty { margin: auto; }
 .tb-chat-active-caption {

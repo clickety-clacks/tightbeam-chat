@@ -82,6 +82,39 @@ class FakeRuntime implements ChatRuntime {
 
 function adapterFor(runtime: FakeRuntime): TightbeamAdapter { return { open: () => runtime }; }
 
+function installViewportLayout(viewport: HTMLElement) {
+  const content = viewport.querySelector<HTMLElement>('.tb-chat-message-content')!;
+  const rowHeight = 92;
+  let scrollTop = 0;
+  const anchorSpace = () => Number.parseFloat(viewport.style.getPropertyValue('--tb-chat-anchor-space')) || 0;
+  const scrollHeight = () => 32 + content.children.length * rowHeight + anchorSpace() + 200;
+  Object.defineProperties(viewport, {
+    clientHeight: { configurable: true, get: () => 180 },
+    scrollHeight: { configurable: true, get: scrollHeight },
+    scrollTop: {
+      configurable: true, get: () => scrollTop,
+      set: (value: number) => { scrollTop = Math.max(0, Math.min(value, scrollHeight() - 180)); },
+    },
+  });
+  Object.defineProperty(viewport, 'scrollTo', { configurable: true, value: (options: ScrollToOptions) => {
+    viewport.scrollTop = options.top ?? 0;
+  } });
+  const originalBounds = HTMLElement.prototype.getBoundingClientRect;
+  const bounds = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+    if (this === viewport) return new DOMRect(0, 100, 320, 180);
+    const index = [...content.children].indexOf(this);
+    if (index >= 0) return new DOMRect(0, 116 + anchorSpace() + index * rowHeight - scrollTop, 320, 80);
+    return originalBounds.call(this);
+  });
+  return {
+    offset(element: HTMLElement) { return element.getBoundingClientRect().top - viewport.getBoundingClientRect().top; },
+    get scrollTop() { return scrollTop; },
+    get anchorSpace() { return anchorSpace(); },
+    setScrollTop(value: number) { viewport.scrollTop = value; },
+    restore() { bounds.mockRestore(); },
+  };
+}
+
 function visibilityMix(sessionKey: string, prefix: string): readonly CanonicalMessage[] {
   const human = row(sessionKey, `${prefix}-human`, `Human exchange ${prefix}`, {
     role: 'user', sender: 'user:person', turnSeq: 1, messageType: 'chat',
@@ -295,7 +328,7 @@ describe('conversation surface', () => {
     ]));
   });
 
-  it('keeps null-linked and unloaded-parent replies until loaded fields prove exclusion', async () => {
+  it('holds unloaded-parent replies while preserving null-linked replies', async () => {
     const sessionKey = 'unresolved-reply-parent';
     const nullSenderHuman = row(sessionKey, 'null-sender-human', 'A human message with a null sender', {
       role: 'user', messageType: 'chat', raw: { source: 'fixture', id: 'null-sender-human', sender: null },
@@ -312,6 +345,7 @@ describe('conversation surface', () => {
     });
     const runtime = new FakeRuntime(sessionKey, {
       records: [nullSenderHuman, unknownSender, nullLinkReply, unloadedParentReply],
+      hasOlder: true,
     });
     runtime.olderPages = [{ records: [row(sessionKey, 'older-agent-trigger', 'An older agent wake', {
       role: 'user', sender: 'agent:external', messageType: 'agent', turnSeq: 50,
@@ -322,12 +356,13 @@ describe('conversation surface', () => {
     expect(within(log).queryByText('A human message with a null sender')).toBeNull();
     expect(within(log).queryByText('An absent sender is not proven human by metadata alone')).toBeNull();
     expect(within(log).getByText('A reply without a parent link')).toBeTruthy();
-    expect(within(log).getByText('A reply whose parent is not loaded')).toBeTruthy();
+    expect(within(log).queryByText('A reply whose parent is not loaded')).toBeNull();
 
-    act(() => runtime.update({ hasOlder: true }));
-    await waitFor(() => expect(runtime.loadOlderCalls).toBe(1));
+    await waitFor(() => expect(runtime.getSnapshot().hasOlder).toBe(false));
+    expect(runtime.loadOlderCalls).toBe(1);
     expect(within(log).queryByText('An older agent wake')).toBeNull();
     expect(within(log).queryByText('A reply whose parent is not loaded')).toBeNull();
+    expect(within(log).getByText('A reply without a parent link')).toBeTruthy();
     expect(runtime.getSnapshot().records.map((record) => record.id)).toContain('unloaded-parent-reply');
   });
 
@@ -351,6 +386,7 @@ describe('conversation surface', () => {
     const runtime = new FakeRuntime(sessionKey, {
       records: [reply, human('reading'), human('following'), human('newest')],
       provenanceAvailable: false,
+      hasOlder: true,
     });
     runtime.olderPages.push({
       records: [...(visibleOlder ? [human('older-a'), human('older-b'), human('older-c')] : []), parent],
@@ -360,7 +396,7 @@ describe('conversation surface', () => {
     const log = screen.getByRole('log');
     const reading = within(log).getByText('Human message reading').closest('article')!;
     const following = within(log).getByText('Human message following').closest('article')!;
-    const firstReply = within(log).getByText('The first visible reply').closest('article')!;
+    expect(within(log).queryByText('The first visible reply')).toBeNull();
 
     // jsdom has no layout: model normal stacked rows, padding, and the browser's
     // scroll range. In particular, a negative scrollTop cannot preserve a row.
@@ -390,26 +426,20 @@ describe('conversation surface', () => {
       fireEvent.scroll(log);
       const readingBefore = viewportOffset(reading);
       const followingBefore = viewportOffset(following);
-      const replyBefore = viewportOffset(firstReply);
-      expect(replyBefore).toBeLessThan(0);
-      expect(firstReply.getBoundingClientRect().bottom).toBeGreaterThan(log.getBoundingClientRect().top);
-
-      act(() => runtime.update({ hasOlder: true }));
-      fireEvent.scroll(log);
       await waitFor(() => {
         expect(runtime.getSnapshot().records).toContain(parent);
         expect(runtime.getSnapshot().loadingOlder).toBe(false);
-        expect(firstReply.isConnected).toBe(!excluded);
       });
+      if (!excluded) expect(within(log).getByText('The first visible reply')).toBeTruthy();
+      else expect(within(log).queryByText('The first visible reply')).toBeNull();
       expect(viewportOffset(reading)).toBe(readingBefore);
       expect(viewportOffset(following)).toBe(followingBefore);
-      if (!excluded) expect(viewportOffset(firstReply)).toBe(replyBefore);
       expect(log.scrollTop).toBeGreaterThanOrEqual(0);
       expect(runtime.getSnapshot().records).toContain(reply);
 
       if (excluded && !visibleOlder) {
-        expect(topSpace()).toBeGreaterThan(0);
-        // A later visible page replaces the retained space without another jump.
+        expect(topSpace()).toBe(0);
+        // A later visible page can be read without reclassifying shown content.
         runtime.olderPages.push({ records: [human('earlier')], provenance: [], hasOlder: false });
         act(() => runtime.update({ hasOlder: true }));
         fireEvent.scroll(log);
@@ -420,6 +450,109 @@ describe('conversation surface', () => {
       }
     } finally {
       bounds.mockRestore();
+    }
+  });
+
+  it('withholds unresolved replies until an older page settles their provenance', async () => {
+    const sessionKey = 'history-reclassification';
+    const parents = Array.from({ length: 14 }, (_, index) => row(
+      sessionKey, `agent-parent-${index + 1}`, `Hidden activity ${index + 1}`,
+      { seq: index + 1, turnSeq: index + 1, role: 'user', sender: 'agent:external', messageType: 'agent' },
+    ));
+    const replies = parents.map((parent, index) => row(
+      sessionKey, `provisional-reply-${index + 1}`, `Provisional reply ${index + 1}`,
+      { seq: 30 + index, turnSeq: index + 1, sender: 'assistant-service', messageType: 'assistant', replyToMessageId: parent.id },
+    ));
+    const reading = row(sessionKey, 'reading', 'Human message at the end of filtered history', {
+      seq: 80, role: 'user', sender: 'user:person', messageType: 'chat', turnSeq: 80,
+    });
+    const following = row(sessionKey, 'following', 'Human message following filtered history', {
+      seq: 90, role: 'user', sender: 'user:person', messageType: 'chat', turnSeq: 90,
+    });
+    const latest = row(sessionKey, 'latest', 'Latest human message', {
+      seq: 100, role: 'user', sender: 'user:person', messageType: 'chat', turnSeq: 100,
+    });
+    const runtime = new FakeRuntime(sessionKey, { records: [...replies, reading, following, latest], hasOlder: true });
+    const page = { records: parents, provenance: [] as TurnProvenance[], hasOlder: false };
+    let releasePage!: () => void;
+    const pageGate = new Promise<void>(resolve => { releasePage = resolve; });
+    let pageComplete: Promise<void> | undefined;
+    runtime.loadOlder = () => {
+      runtime.loadOlderCalls++;
+      pageComplete = (async () => {
+        runtime.update({ loadingOlder: true });
+        await pageGate;
+        runtime.update({ records: [...page.records, ...runtime.getSnapshot().records], hasOlder: page.hasOlder, loadingOlder: false });
+      })();
+      return pageComplete;
+    };
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+    const log = screen.getByRole('log');
+    const layout = installViewportLayout(log);
+    const newest = within(log).getByText('Latest human message').closest('article')!;
+    expect(within(log).queryByText('Provisional reply 1')).toBeNull();
+    layout.setScrollTop(0);
+    const newestBefore = layout.offset(newest);
+
+    try {
+      fireEvent.wheel(log, { deltaY: -100 });
+      fireEvent.scroll(log);
+      await waitFor(() => expect(runtime.loadOlderCalls).toBe(1));
+      await waitFor(() => expect(runtime.getSnapshot().loadingOlder).toBe(true));
+
+      await act(async () => {
+        releasePage();
+        await pageComplete;
+      });
+      await waitFor(() => expect(runtime.getSnapshot().loadingOlder).toBe(false));
+
+      expect(within(log).queryByText('Provisional reply 1')).toBeNull();
+      expect(layout.offset(newest)).toBe(newestBefore);
+      expect(layout.scrollTop).toBe(0);
+      expect(layout.anchorSpace).toBe(0);
+      expect(runtime.getSnapshot().records).toContain(replies[0]);
+      expect(runtime.getSnapshot().hasOlder).toBe(false);
+    } finally {
+      releasePage();
+      layout.restore();
+    }
+  });
+
+  it('keeps the reader anchored when a truthful provenance alert appears', async () => {
+    const sessionKey = 'alert-anchor';
+    const parent = row(sessionKey, 'human-parent', 'Human request', {
+      seq: 10, turnSeq: 7, role: 'user', sender: 'user:person', messageType: 'chat',
+    });
+    const reply = row(sessionKey, 'conflicting-reply', 'Reply with conflicting provenance', {
+      seq: 20, turnSeq: 7, sender: 'assistant-service', messageType: 'assistant', replyToMessageId: parent.id,
+      turnIncludesHuman: false,
+    });
+    const reading = row(sessionKey, 'alert-reading', 'Message being read', {
+      seq: 30, role: 'user', sender: 'user:person', messageType: 'chat', turnSeq: 30,
+    });
+    const following = row(sessionKey, 'alert-following', 'Message after reading', {
+      seq: 40, role: 'user', sender: 'user:person', messageType: 'chat', turnSeq: 40,
+    });
+    const runtime = new FakeRuntime(sessionKey, { records: [reply, reading, following], hasOlder: true });
+    runtime.olderPages = [{ records: [parent], provenance: [], hasOlder: false }];
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+    const log = screen.getByRole('log');
+    const layout = installViewportLayout(log);
+    const anchor = within(log).getByText('Message being read').closest('article')!;
+    layout.setScrollTop(10);
+    const anchorBefore = layout.offset(anchor);
+
+    try {
+      fireEvent.wheel(log, { deltaY: -100 });
+      fireEvent.scroll(log);
+      await waitFor(() => expect(runtime.getSnapshot().records).toContain(parent));
+
+      expect(within(log).getByText('Some message sources could not be interpreted. Conversation filtering is incomplete.'))
+        .toBeTruthy();
+      expect(within(log).getByText('Reply with conflicting provenance')).toBeTruthy();
+      expect(layout.offset(anchor)).toBe(anchorBefore);
+    } finally {
+      layout.restore();
     }
   });
 
@@ -595,6 +728,43 @@ describe('conversation surface', () => {
     await waitFor(() => expect(runtime.loadOlderCalls).toBe(2));
     expect(screen.queryByText('Not a human conversation')).toBeNull();
     expect(screen.queryByRole('button', { name: /load earlier/i })).toBeNull();
+  });
+
+  it('stops paging when the remaining history contains only hidden rows and reaches its start', async () => {
+    const sessionKey = 'history-start';
+    const hiddenFirst = row(sessionKey, 'hidden-first', 'Earlier activity', {
+      role: 'user', sender: 'agent:other', messageType: 'agent', turnSeq: 1,
+    });
+    const hiddenSecond = row(sessionKey, 'hidden-second', 'Earlier reply', {
+      sender: 'assistant-service', messageType: 'assistant', turnSeq: 1, replyToMessageId: hiddenFirst.id,
+    });
+    const older = row(sessionKey, 'older-activity', 'Oldest activity', {
+      role: 'user', sender: 'agent:other', messageType: 'agent', turnSeq: 2,
+    });
+    const runtime = new FakeRuntime(sessionKey, { hasOlder: true });
+    runtime.olderPages = [
+      { records: [hiddenFirst, hiddenSecond], provenance: [], hasOlder: true },
+      { records: [older], provenance: [], hasOlder: false },
+    ];
+
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+    await waitFor(() => expect(runtime.getSnapshot().hasOlder).toBe(false));
+    expect(runtime.loadOlderCalls).toBe(2);
+    expect(screen.queryByText('Earlier activity')).toBeNull();
+    expect(screen.queryByText('Earlier reply')).toBeNull();
+    expect(screen.queryByText('Oldest activity')).toBeNull();
+  });
+
+  it('keeps the older-page status outside the scrollable message layout', () => {
+    const runtime = new FakeRuntime('loading-status', { loadingOlder: true });
+    render(<TightbeamChat sessionKey="loading-status" adapter={adapterFor(runtime)} />);
+
+    const viewport = screen.getByRole('log');
+    const status = viewport.querySelector<HTMLElement>('.tb-chat-history-loading');
+    expect(status?.getAttribute('role')).toBe('status');
+    expect(status?.textContent).toBe('Loading earlier messages…');
+    expect(status?.parentElement).toBe(viewport);
+    expect(viewport.querySelector('.tb-chat-message-content')?.contains(status)).toBe(false);
   });
 
   it('renders and copies canonical human member rows without exposing a carrier or sibling', () => {

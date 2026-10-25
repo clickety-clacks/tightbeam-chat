@@ -36,6 +36,8 @@ export interface VisibleMessage {
   readonly key: string;
   readonly source: CanonicalMessage;
   readonly side: 'human' | 'agent';
+  /** Included by the projection, but awaiting relation/turn evidence before UI rendering. */
+  readonly provenancePending: boolean;
   readonly member?: HumanMember;
 }
 
@@ -48,7 +50,7 @@ export function projectMessages(records: readonly ConversationRecord[], principa
   for (const record of byId.values()) {
     const classification = classifyMessage(record, principalKey);
     if (classification === 'human') {
-      messages.push({ key: record.id, source: record, side: 'human' });
+      messages.push({ key: record.id, source: record, side: 'human', provenancePending: false });
     } else if (classification === 'assistant') {
       const parent = record.replyToMessageId ? byId.get(record.replyToMessageId) : undefined;
       // Both rows must participate in the same typed generating turn. A loaded
@@ -60,8 +62,11 @@ export function projectMessages(records: readonly ConversationRecord[], principa
       const flag = scopedHumanFlag(record, principalKey, ownerUserId);
       if (direct === true && flag === false) issues.push('Reply classification conflicts with its human parent');
       const includesHuman = direct === true ? true : flag ?? direct;
+      const provenancePending = includesHuman === undefined && !!record.replyToMessageId && !parent;
       // An incomplete relation remains unknown; it is not exclusion evidence.
-      if (includesHuman !== false) messages.push({ key: record.id, source: record, side: 'agent' });
+      if (includesHuman !== false) messages.push({
+        key: record.id, source: record, side: 'agent', provenancePending,
+      });
     }
   }
   return { messages, issues: Object.freeze([...new Set(issues)]) };

@@ -473,11 +473,16 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
   const agentName = state.agentDisplayName ?? '';
   const projection = useMemo(() => projectMessages(state.records, state.principalKey, state.session?.raw.ownerUserId),
     [state.records, state.principalKey, state.session?.raw.ownerUserId]);
-  const bubbles: Bubble[] = useMemo(() => projection.messages.map((message) => ({
-    key: message.key, record: message.source, side: message.side,
-    sender: sourceLabel(message.side, agentName), derived: Boolean(message.member),
-    displayContent: message.member?.content, member: message.member,
-  })), [projection, agentName]);
+  // A provisional reply could be reclassified when its older parent arrives.
+  // Keep it out of the live transcript until older history is exhausted or
+  // the projection has enough evidence to settle its visibility.
+  const bubbles: Bubble[] = useMemo(() => projection.messages
+    .filter(message => !state.hasOlder || !message.provenancePending)
+    .map((message) => ({
+      key: message.key, record: message.source, side: message.side,
+      sender: sourceLabel(message.side, agentName), derived: Boolean(message.member),
+      displayContent: message.member?.content, member: message.member,
+    })), [projection, agentName, state.hasOlder]);
   const caption = state.provenanceAvailable === false ? undefined : activeCaption(state.activeTurn);
   const visibleSendIdentities = useMemo(() => new Set(bubbles.flatMap((bubble) => {
     const identity = bubble.derived ? undefined : canonicalSendIdentity(bubble.record);
@@ -666,13 +671,13 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
       onWheel={reading.interrupt} onTouchStart={reading.interrupt} onPointerDown={reading.interrupt}
       onKeyDown={(event) => { if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) reading.interrupt(); }}
       aria-label={`${agentName || 'Conversation'} messages`} aria-live="polite" aria-relevant="additions text">
+      {state.loadingOlder && <div className="tb-chat-history-loading" role="status">Loading earlier messages…</div>}
       <div className="tb-chat-message-content" ref={reading.content}>
       {notice && <div className={`tb-chat-notice tb-chat-notice-${state.status}`} role={state.status === 'loading' ? 'status' : 'alert'}>
         <span>{notice}</span>
         {host.optedIn && state.status === 'error' &&
           <button type="button" onClick={() => void runtime.rebuild({ restart: true })}>Reconnect</button>}
       </div>}
-      {state.loadingOlder && <div className="tb-chat-history-loading" role="status">Loading earlier messages…</div>}
       {state.historyError && <div className="tb-chat-history-error" role="alert">
         <span>Earlier messages could not be loaded: {state.historyError}</span>
         <button type="button" onClick={loadOlder}>Retry loading messages</button>

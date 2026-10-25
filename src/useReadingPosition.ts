@@ -31,6 +31,7 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
     anchors.current = [];
     if (following.current) return;
     const bounds = box.getBoundingClientRect();
+    const remembered = new Set<string>();
     // Direct children are vertically ordered. Locate the viewport without
     // enumerating history, then retain visible rows and one neighbor each side.
     let low = 0;
@@ -41,9 +42,11 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
       else high = middle;
     }
     const remember = (row: HTMLElement, top: number) => {
-      if (row.dataset.scrollKey !== undefined) anchors.current.push({
-        key: row.dataset.scrollKey, top: top - bounds.top + box.scrollTop,
-      });
+      const key = row.dataset.scrollKey;
+      if (key !== undefined && !remembered.has(key)) {
+        remembered.add(key);
+        anchors.current.push({ key, top: top - bounds.top + box.scrollTop });
+      }
     };
     for (let i = low; i < children.length; i++) {
       const row = children[i] as HTMLElement;
@@ -54,6 +57,14 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
     if (low > 0) {
       const previous = children[low - 1] as HTMLElement;
       remember(previous, previous.getBoundingClientRect().top);
+    }
+    // If filtering removes every row around the reader, retain a distant
+    // survivor so its old position can keep the transcript from collapsing.
+    for (let i = children.length - 1; i >= 0; i--) {
+      const lastRow = children[i] as HTMLElement;
+      if (lastRow.dataset.scrollKey === undefined) continue;
+      remember(lastRow, lastRow.getBoundingClientRect().top);
+      break;
     }
   };
 
