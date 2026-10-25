@@ -63,8 +63,7 @@ class HostComposerTransport implements ChatTransport {
     (this.records.get(sessionKey) ?? []).find((record): record is CanonicalMessage => record.kind === 'message' && record.id === messageId) ?? null;
   readRecentTurns = async (): Promise<readonly CanonicalTurn[]> => [];
   resolveOriginDisplayName = async (): Promise<string | undefined> => undefined;
-  proveCoverage = (session: SessionRecord, page: ConversationPage, buffered: readonly ChangeNotice[]) => page.coverage === session.sessionKey &&
-    !buffered.some((notice) => notice.operation === 'unknown');
+  proveCoverage = (session: SessionRecord, page: ConversationPage, _buffered: readonly ChangeNotice[]) => page.coverage === session.sessionKey;
   sendHuman = async (submission: HumanSubmission): Promise<HumanSendResult> => {
     this.submissions.push(submission);
     return this.nextSend ? this.nextSend(submission) : { outcome: 'accepted' };

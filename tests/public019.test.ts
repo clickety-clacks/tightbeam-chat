@@ -294,6 +294,9 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
       'https://host.example/api/sessions/s-public/messages?limit=50&tail=true',
     ]);
     expect(candidate.transport.proveCoverage({ sessionKey, rowVersion: 4, displayName: 'Fixture agent', raw: {} }, page, [])).toBe(true);
+    expect(candidate.transport.proveCoverage({ sessionKey, rowVersion: 4, displayName: 'Fixture agent', raw: {} }, page, [
+      { operation: 'unknown', sessionKey, resource: 'future.event' },
+    ])).toBe(true);
 
     connection.close();
     expect(candidate.transport.proveCoverage({ sessionKey, rowVersion: 4, displayName: 'Fixture agent', raw: {} }, page, [])).toBe(false);
@@ -444,7 +447,7 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
     runtime.dispose();
   });
 
-  it('refetches when an unknown selected-session notice arrives during history reconciliation', async () => {
+  it('keeps history ready when unknown and wake observations arrive during the tail read', async () => {
     const historyItems: unknown[] = [item];
     const base = setup(undefined, version, version, historyItems);
     let releaseTail!: () => void;
@@ -466,19 +469,23 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
     await vi.waitFor(() => expect(readingTail).toBe(true));
     base.changes.emit({ type: 'change', schemaVersion: 2, subscriptionId: 'chat:s-public', seq: 1,
       class: 'unrecognized.state', resource: 'turns', op: 'upsert', refs: { sessionKey }, payload: {} });
-    historyItems.push({ ...item, id: 'm_2', seq: 10, rowVersion: 10, content: 'Recovered from the fresh tail' });
+    const live = { ...item, id: 'm_2', seq: 10, rowVersion: 10, content: 'Received during the tail read' };
+    historyItems.push(live);
+    base.changes.emit({ type: 'change', schemaVersion: 2, subscriptionId: 'chat:s-public', seq: 2,
+      class: 'wake.fired', resource: 'wakes', op: 'upsert', refs: { sessionKey }, payload: {} });
+    base.changes.emit({ type: 'change', schemaVersion: 2, subscriptionId: 'chat:s-public', seq: 3,
+      class: 'message.created', resource: 'messages', op: 'upsert', refs: { sessionKey, messageId: live.id }, payload: live });
     releaseTail();
-    await vi.waitFor(() => expect(base.changes.sent).toHaveLength(2), { timeout: 3000 });
-    base.changes.emit({ type: 'subscription_ready', subscriptionId: 'chat:s-public' });
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
-    expect(tailReads).toBe(2);
+    expect(tailReads).toBe(1);
     expect(runtime.getSnapshot().records.map((record) => record.id)).toEqual(['m_1', 'm_2']);
-    expect(runtime.getSnapshot().records[1]).toMatchObject({ kind: 'message', content: 'Recovered from the fresh tail' });
+    expect(runtime.getSnapshot().records[1]).toMatchObject({ kind: 'message', content: 'Received during the tail read' });
     expect(runtime.getSnapshot().session?.sessionKey).toBe(sessionKey);
+    expect(base.changes.sent).toHaveLength(1);
     runtime.dispose();
   });
 
-  it('refetches and returns to ready after an unknown selected-session own-record notice', async () => {
+  it('accounts for unknown selected-session events without rebuilding and keeps later events live', async () => {
     const historyItems: unknown[] = [item];
     const base = setup(undefined, version, version, historyItems);
     const runtime = createTightbeamAdapter(base.transport, base.profile).open(sessionKey);
@@ -486,17 +493,16 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
     base.changes.emit({ type: 'subscription_ready', subscriptionId: 'chat:s-public' });
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
 
-    historyItems.push({ ...item, id: 'm_2', seq: 10, rowVersion: 10, content: 'Visible after recovery' });
+    const live = { ...item, id: 'm_2', seq: 10, rowVersion: 10, content: 'Visible on the same subscription' };
     base.changes.emit({ type: 'change', schemaVersion: 2, subscriptionId: 'chat:s-public', seq: 1,
       class: 'attest.filed', resource: 'attests', op: 'upsert', refs: { sessionKey }, payload: {} });
-    expect(runtime.getSnapshot().status).toBe('stale');
-
-    await vi.waitFor(() => expect(base.changes.sent).toHaveLength(2), { timeout: 3000 });
-    base.changes.emit({ type: 'subscription_ready', subscriptionId: 'chat:s-public' });
-    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
-    expect(base.paths.filter((path) => path.includes('/messages?'))).toHaveLength(2);
+    base.changes.emit({ type: 'change', schemaVersion: 2, subscriptionId: 'chat:s-public', seq: 2,
+      class: 'message.created', resource: 'messages', op: 'upsert', refs: { sessionKey, messageId: live.id }, payload: live });
+    expect(runtime.getSnapshot().status).toBe('ready');
+    expect(base.paths.filter((path) => path.includes('/messages?'))).toHaveLength(1);
     expect(runtime.getSnapshot().records.map((record) => record.id)).toEqual(['m_1', 'm_2']);
-    expect(runtime.getSnapshot().records[1]).toMatchObject({ kind: 'message', content: 'Visible after recovery' });
+    expect(runtime.getSnapshot().records[1]).toMatchObject({ kind: 'message', content: 'Visible on the same subscription' });
+    expect(base.changes.sent).toHaveLength(1);
     runtime.dispose();
   });
 

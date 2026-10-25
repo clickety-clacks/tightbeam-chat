@@ -36,9 +36,16 @@ export interface VisibleMessage {
   readonly key: string;
   readonly source: CanonicalMessage;
   readonly side: 'human' | 'agent';
+  /** User rows without exact principal proof remain visible without claiming ownership. */
+  readonly senderLabel?: 'You' | 'User';
   /** Included by the projection, but awaiting relation/turn evidence before UI rendering. */
   readonly provenancePending: boolean;
   readonly member?: HumanMember;
+}
+
+function isVisibleHumanRow(record: CanonicalMessage): boolean {
+  return record.role === 'user' && record.isBatchCarrier !== true &&
+    !nonhumanTypes.has(record.messageType ?? '') && !nonhumanSender.test(record.sender ?? '');
 }
 
 export function projectMessages(records: readonly ConversationRecord[], principalKey?: string, ownerUserId?: unknown): {
@@ -50,7 +57,11 @@ export function projectMessages(records: readonly ConversationRecord[], principa
   for (const record of byId.values()) {
     const classification = classifyMessage(record, principalKey);
     if (classification === 'human') {
-      messages.push({ key: record.id, source: record, side: 'human', provenancePending: false });
+      messages.push({ key: record.id, source: record, side: 'human', senderLabel: 'You', provenancePending: false });
+    } else if (isVisibleHumanRow(record)) {
+      // A missing or different sender is not evidence that this user row is Mike's,
+      // but it also is not a reason to omit the row from the conversation.
+      messages.push({ key: record.id, source: record, side: 'human', senderLabel: 'User', provenancePending: false });
     } else if (classification === 'assistant') {
       const parent = record.replyToMessageId ? byId.get(record.replyToMessageId) : undefined;
       // Both rows must participate in the same typed generating turn. A loaded

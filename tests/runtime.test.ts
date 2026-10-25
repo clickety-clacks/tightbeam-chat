@@ -388,32 +388,40 @@ describe('framework-independent runtime', () => {
     runtime.dispose();
   });
 
-  it('includes a marker row emitted during the startup session refetch before first ready publication', async () => {
+  it('ignores ordinary and unknown startup observations without refetching or losing buffered rows', async () => {
     const transport = new ControlledTransport();
-    const refresh = deferred<void>();
-    const marker = switchAt(9, 'harness');
-    transport.readSessionHook = async (call) => {
-      if (call === 2) await refresh.promise;
-    };
+    const appended = message(9, { role: 'user', sender: undefined, content: 'An unmarked user row' });
     transport.tailHook = () => {
-      transport.callbacks?.onNotice({ operation: 'observe', sessionKey, resource: 'turn.started' });
+      transport.callbacks?.onNotice({ operation: 'observe', sessionKey, resource: 'wake.fired' });
+      transport.callbacks?.onNotice({ operation: 'unknown', sessionKey, resource: 'future.event' });
+      transport.emit(appended);
     };
     const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
-    const readyRecords: ConversationRecord[][] = [];
-    runtime.subscribe(() => {
-      const snapshot = runtime.getSnapshot();
-      if (snapshot.status === 'ready') readyRecords.push([...snapshot.records]);
-    });
-
-    await vi.waitFor(() => expect(transport.readSessionCalls).toBe(2));
-    transport.rows.push(marker);
-    transport.emit(marker);
-    refresh.resolve();
-
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
-    expect(readyRecords[0].filter((row) => row.id === marker.id)).toHaveLength(1);
-    expect(readyRecords[0].at(-1)).toMatchObject({ id: marker.id, kind: 'transition', transition: 'harness' });
-    expect(runtime.getSnapshot().records.filter((row) => row.id === marker.id)).toHaveLength(1);
+    expect(transport.readSessionCalls).toBe(1);
+    expect(transport.readTailCalls).toBe(1);
+    expect(runtime.getSnapshot().records.filter((row) => row.id === appended.id)).toHaveLength(1);
+    expect(runtime.getSnapshot().status).toBe('ready');
+    runtime.dispose();
+  });
+
+  it('ignores ordinary and unknown ready-state events without interrupting continuity or future messages', async () => {
+    const transport = new ControlledTransport();
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+    const reads = transport.readTailCalls;
+    const closes = transport.closed;
+    transport.callbacks?.onNotice({ operation: 'observe', sessionKey, resource: 'wake.scheduled' });
+    transport.callbacks?.onNotice({ operation: 'unknown', sessionKey, resource: 'future.event' });
+    expect(runtime.getSnapshot().status).toBe('ready');
+    expect(transport.readTailCalls).toBe(reads);
+    expect(transport.closed).toBe(closes);
+
+    const appended = message(9, { content: 'Still connected' });
+    transport.rows.push(appended);
+    transport.emit(appended);
+    expect(runtime.getSnapshot().records.at(-1)?.id).toBe(appended.id);
+    expect(runtime.getSnapshot().status).toBe('ready');
     runtime.dispose();
   });
 

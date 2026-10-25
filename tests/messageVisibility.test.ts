@@ -13,14 +13,19 @@ const project = (rows: CanonicalMessage[], principal = 'person', owner: string |
   projectMessages(rows, principal, owner).messages.map((row) => row.key);
 
 describe('principal-scoped message projection', () => {
-  it('requires exact principal and user role, independently of channel and send correlation', () => {
+  it('keeps user rows visible while marking only an exact principal match', () => {
     const rows = [message('cli'), message('other-device', { deviceId: 'other', clientMessageId: 'client' }),
       message('other-user', { sender: 'user:someone-else' }), message('prefix', { sender: 'user:person-extra' }),
       message('missing', { sender: undefined, deviceId: 'device', clientMessageId: 'client', raw: { sender: null } }),
       message('wrong-role', { role: 'system' }), message('channel', { raw: { channel: 'terminal' } })];
-    expect(project(rows)).toEqual(['cli', 'other-device', 'channel']);
-    expect(project(rows, 'someone-else')).toEqual(['other-user']);
-    expect(projectMessages(rows).messages).toEqual([]);
+    expect(project(rows)).toEqual(['cli', 'other-device', 'other-user', 'prefix', 'missing', 'channel']);
+    const forPerson = projectMessages(rows, 'person').messages;
+    expect(forPerson.map(row => row.key)).toEqual(['cli', 'other-device', 'other-user', 'prefix', 'missing', 'channel']);
+    expect(forPerson.map(row => row.senderLabel)).toEqual(['You', 'You', 'User', 'User', 'User', 'You']);
+    const forOther = projectMessages(rows, 'someone-else').messages;
+    expect(forOther.map(row => row.key)).toEqual(['cli', 'other-device', 'other-user', 'prefix', 'missing', 'channel']);
+    expect(forOther.find(row => row.key === 'other-user')?.senderLabel).toBe('You');
+    expect(forOther.find(row => row.key === 'cli')?.senderLabel).toBe('User');
   });
 
   it('preserves canonical batch members and uses owner-scoped reply flags without parsing carrier text', () => {
@@ -36,7 +41,7 @@ describe('principal-scoped message projection', () => {
     expect(JSON.stringify(rows)).toBe(saved);
     expect(projectMessages(rows, 'person', 'person').messages.slice(0, 2).map((row) => row.side)).toEqual(['human', 'human']);
     // A session-owner flag cannot classify a different authenticated principal.
-    expect(project(rows, 'visitor')).toEqual(['mixed-answer', 'nonhuman-answer', 'incomplete-batch']);
+    expect(project(rows, 'visitor')).toEqual(['member-one', 'member-two', 'mixed-answer', 'nonhuman-answer', 'incomplete-batch']);
   });
 
   it('requires the complete direct turn relation and reclassifies when older parents arrive', () => {

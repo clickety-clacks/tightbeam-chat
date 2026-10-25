@@ -409,14 +409,10 @@ class SessionRuntime implements ChatRuntime {
       case 'tool':
         return false; // Only the separate optional category connection owns tool records.
       case 'ignore':
-        return false;
       case 'observe':
-        if (notice.sessionKey === this.sessionKey) this.doubt(`State notice ${notice.resource} requires a fresh snapshot.`, this.generation);
-        return false;
       case 'unknown':
-        if (notice.sessionKey === this.sessionKey) {
-          this.doubt(`Unknown selected-session notice ${notice.resource} requires a fresh snapshot.`, this.generation);
-        }
+        // These frames still advance the transport sequence, but they do not
+        // change the selected transcript or justify replacing its snapshot.
         return false;
     }
   }
@@ -571,9 +567,6 @@ class SessionRuntime implements ChatRuntime {
         restored++;
       }
 
-      // Refetch complete session state for observations before choosing the finite
-      // publication cut. Rows emitted while a refresh is in flight belong to the
-      // same candidate, rather than appearing only after the first ready snapshot.
       this.rows.clear();
       this.tombstones.clear();
       this.cursor = cursor;
@@ -585,17 +578,9 @@ class SessionRuntime implements ChatRuntime {
       while (true) {
         const next = this.buffered.splice(0);
         prefix.push(...next);
-        const refreshSession = next.some((notice) => notice.operation === 'observe');
         for (const notice of next) {
-          if (notice.operation !== 'observe') this.apply(notice);
+          this.apply(notice);
           if (!this.isCurrent(generation)) return;
-        }
-        if (refreshSession) {
-          session = await this.transport.readSession(this.sessionKey, controller.signal);
-          if (!this.isCurrent(generation) || !this.checkIdentity()) return;
-          if (session.sessionKey !== this.sessionKey) {
-            throw new UnsupportedTargetError('Session refresh returned another selection.');
-          }
         }
         if (!this.transport.proveCoverage(session, tail, prefix)) {
           throw new UnsupportedTargetError('Snapshot and buffered notices lack verified coverage.');
