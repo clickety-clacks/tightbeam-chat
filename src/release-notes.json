@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.29",
+    "items": [
+      {
+        "title": "Transcript notices",
+        "description": "Connection and history updates now appear as quiet, bulleted captions alongside your conversation."
+      }
+    ]
+  },
+  {
     "version": "v0.1.28",
     "items": [
       {

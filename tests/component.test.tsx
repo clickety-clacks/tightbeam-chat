@@ -551,6 +551,7 @@ describe('conversation surface', () => {
 
       expect(within(log).getByText('Some message sources could not be interpreted. Conversation filtering is incomplete.'))
         .toBeTruthy();
+      expect(within(log).getByRole('alert').classList.contains('tb-chat-caption-danger')).toBe(true);
       expect(within(log).getByText('Reply with conflicting provenance')).toBeTruthy();
       expect(layout.offset(anchor)).toBe(anchorBefore);
     } finally {
@@ -609,6 +610,8 @@ describe('conversation surface', () => {
     expect(screen.getByText('A new question')).toBeTruthy();
     expect(screen.getByText('A new answer')).toBeTruthy();
     expect(screen.getByText('Reconnecting; the conversation may be out of date.')).toBeTruthy();
+    expect(screen.getByText('Reconnecting; the conversation may be out of date.')
+      .closest('.tb-chat-caption')?.classList.contains('tb-chat-caption-caution')).toBe(true);
     expect(screen.queryByText(/selected-session|gateway\.example/)).toBeNull();
     expect(composer.disabled).toBe(false);
     expect(composer.value).toBe('keep this draft');
@@ -645,6 +648,7 @@ describe('conversation surface', () => {
       for (const listener of runtime.listeners) listener();
     });
     expect(screen.getByText('Disconnected. Open connection details to reconnect.')).toBeTruthy();
+    expect(screen.getByRole('alert').classList.contains('tb-chat-caption-danger')).toBe(true);
     expect(screen.queryByText(/exact-session/)).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Connection status: Disconnected. Show details' }));
     const disconnected = screen.getByRole('dialog', { name: 'Connection details' });
@@ -666,6 +670,7 @@ describe('conversation surface', () => {
     };
     show({ triggerSource: 'mike' });
     expect(screen.getByRole('status', { name: 'Active turn: Replying to you' })).toBeTruthy();
+    expect(screen.getByRole('status', { name: 'Active turn: Replying to you' }).classList.contains('tb-chat-caption-neutral')).toBe(true);
     show({ triggerSource: 'mike', messageId: 'unloaded' }, []);
     expect(screen.queryByRole('status', { name: 'Active turn: Replying to you' })).toBeNull();
     show({ triggerSource: 'batch', batchMemberCount: 2 });
@@ -764,9 +769,38 @@ describe('conversation surface', () => {
     const viewport = screen.getByRole('log');
     const status = viewport.querySelector<HTMLElement>('.tb-chat-history-loading');
     expect(status?.getAttribute('role')).toBe('status');
+    expect(status?.classList.contains('tb-chat-caption-neutral')).toBe(true);
     expect(status?.textContent).toBe('Loading earlier messages…');
     expect(status?.parentElement).toBe(viewport);
     expect(viewport.querySelector('.tb-chat-message-content')?.contains(status)).toBe(false);
+  });
+
+  it('keeps Retry loading messages on the history error caption', async () => {
+    const runtime = new FakeRuntime('history-retry', { hasOlder: true, historyError: 'The request failed' });
+    runtime.olderPages = [{ records: [], provenance: [], hasOlder: false }];
+    render(<TightbeamChat sessionKey="history-retry" adapter={adapterFor(runtime)} />);
+
+    const alert = screen.getByRole('alert');
+    expect(alert.classList.contains('tb-chat-caption-danger')).toBe(true);
+    fireEvent.click(within(alert).getByRole('button', { name: 'Retry loading messages' }));
+    await waitFor(() => expect(runtime.loadOlderCalls).toBe(1));
+  });
+
+  it('renders tool history updates as captions without restyling the toggle', () => {
+    const runtime = new FakeRuntime('tool-history-caption', { toolCallsEnabled: true, toolCallsLoading: true });
+    const view = render(<TightbeamChat sessionKey="tool-history-caption" adapter={adapterFor(runtime)} />);
+
+    const toggle = screen.getByRole('button', { name: 'Tool calls' });
+    expect(toggle.classList.contains('tb-chat-caption')).toBe(false);
+    const loading = screen.getByText('Loading tool history…');
+    expect(loading.getAttribute('role')).toBe('status');
+    expect(loading.classList.contains('tb-chat-caption-neutral')).toBe(true);
+
+    act(() => runtime.update({ toolCallsLoading: false, toolCallsError: 'Connection unavailable' }));
+    const status = view.container.querySelector<HTMLElement>('.tb-chat-tool-controls > .tb-chat-caption-danger');
+    expect(status?.getAttribute('role')).toBe('status');
+    expect(status?.textContent).toBe('Tool history is not current: Connection unavailable Retry tool history');
+    expect(within(status!).getByRole('button', { name: 'Retry tool history' })).toBeTruthy();
   });
 
   it('renders and copies canonical human member rows without exposing a carrier or sibling', () => {
@@ -1139,6 +1173,7 @@ describe('tool-call and transition display', () => {
     expect(view.container.querySelector('[data-record-key="tool-tc_1000"]')).toBe(retained);
     expect(details.open).toBe(true);
     expect(view.container.querySelectorAll('.tb-chat-tool')).toHaveLength(2025);
+    expect(view.container.querySelector('.tb-chat-tool')?.classList.contains('tb-chat-caption')).toBe(false);
     expect(view.container.querySelector('[data-record-key="tool-tc_1"]')?.textContent).toContain('Completed');
   });
 
@@ -1181,6 +1216,7 @@ describe('tool-call and transition display', () => {
     expect([...view.container.querySelectorAll('article[data-record-key]')].map(node => node.getAttribute('data-record-key')))
       .toEqual(['human', 'tool-tc_read', 'boundary', 'reply']);
     expect(screen.getByText('A new boundary kind')).toBeTruthy();
+    expect(screen.getByText('A new boundary kind').closest('.tb-chat-transition')?.classList.contains('tb-chat-caption-neutral')).toBe(true);
     expect(screen.queryByText('source.ts')).toBeNull();
     const detail = view.container.querySelector('details')!;
     detail.open = true;

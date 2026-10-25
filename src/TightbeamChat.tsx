@@ -879,13 +879,16 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
           ? 'Disconnected. Reconnect to refresh the conversation.'
           : 'Disconnected. Open connection details to reconnect.')
           : statusName;
+  const noticeTone = state.status === 'stale' ? 'caution'
+    : state.status === 'error' || state.status === 'unauthorized' || state.status === 'unsupported' ? 'danger'
+      : 'neutral';
 
   const renderItem = useCallback((item: TimelineItem) => {
         if (item.kind === 'tool') return <ToolCallRow key={'tool-' + item.call.id} call={item.call} registerRow={reading.registerRow} />;
         if (item.kind === 'transition') {
           const record = item.record;
           return <article key={record.id} ref={element => reading.registerRow(record.id, element)}
-            data-record-key={record.id} data-scroll-key={record.id} className="tb-chat-transition" aria-label="Session transition">
+            data-record-key={record.id} data-scroll-key={record.id} className="tb-chat-transition tb-chat-caption tb-chat-caption-neutral" aria-label="Session transition">
             {record.content || [record.from, record.to].filter(Boolean).join(' → ')}
           </article>;
         }
@@ -938,9 +941,9 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
       onWheel={reading.interrupt} onTouchStart={reading.interrupt} onPointerDown={reading.interrupt}
       onKeyDown={(event) => { if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) reading.interrupt(); }}
       aria-label={`${agentName || 'Conversation'} messages`} aria-live="polite" aria-relevant="additions text">
-      {state.loadingOlder && <div className="tb-chat-history-loading" role="status">Loading earlier messages…</div>}
+      {state.loadingOlder && <div className="tb-chat-history-loading tb-chat-caption tb-chat-caption-neutral" role="status">Loading earlier messages…</div>}
       <div className="tb-chat-message-content" ref={reading.content}>
-      {notice && <div className={`tb-chat-notice tb-chat-notice-${state.status}`} role={state.status === 'loading' ? 'status' : 'alert'}>
+      {notice && <div className={`tb-chat-notice tb-chat-caption tb-chat-caption-${noticeTone} tb-chat-notice-${state.status}`} role={state.status === 'loading' ? 'status' : 'alert'}>
         <span>{notice}</span>
         {host.optedIn && state.status === 'error' &&
           <button type="button" onClick={() => void runtime.rebuild({ restart: true })}>Reconnect</button>}
@@ -948,22 +951,22 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
       {state.toolCallsEnabled !== undefined && <div className="tb-chat-tool-controls">
         <button type="button" aria-pressed={state.toolCallsEnabled}
           onClick={() => runtime.setToolCallsEnabled?.(!state.toolCallsEnabled)}>Tool calls</button>
-        {state.toolCallsEnabled && state.toolCallsLoading && <span role="status">Loading tool history…</span>}
-        {state.toolCallsEnabled && state.toolCallsError && <span role="status">
+        {state.toolCallsEnabled && state.toolCallsLoading && <span className="tb-chat-caption tb-chat-caption-neutral" role="status">Loading tool history…</span>}
+        {state.toolCallsEnabled && state.toolCallsError && <span className="tb-chat-caption tb-chat-caption-danger" role="status">
           Tool history is not current: {state.toolCallsError}{' '}
           <button type="button" onClick={() => runtime.retryToolCalls?.()}>Retry tool history</button>
         </span>}
       </div>}
-      {state.historyError && <div className="tb-chat-history-error" role="alert">
+      {state.historyError && <div className="tb-chat-history-error tb-chat-caption tb-chat-caption-danger" role="alert">
         <span>Earlier messages could not be loaded: {state.historyError}</span>
         <button type="button" onClick={loadOlder}>Retry loading messages</button>
       </div>}
-      {projection.issues.length > 0 && <div className="tb-chat-history-error" role="alert">
+      {projection.issues.length > 0 && <div className="tb-chat-history-error tb-chat-caption tb-chat-caption-danger" role="alert">
         Some message sources could not be interpreted. Conversation filtering is incomplete.
       </div>}
       <IndexedTimeline messages={transcript.index} tools={tools} pending={pending.index} render={renderItem} />
       {pending.tail.map(renderItem)}
-      {caption && <div className="tb-chat-active-caption" role="status" aria-label={`Active turn: ${caption.text}`}>
+      {caption && <div className="tb-chat-active-caption tb-chat-caption tb-chat-caption-neutral" role="status" aria-label={`Active turn: ${caption.text}`}>
         <span aria-hidden="true">{caption.icon}</span><span>{caption.text}</span>
       </div>}
       {state.status === 'ready' && state.records.length === 0 && localSends.length === 0 && !state.hasOlder &&
@@ -1011,7 +1014,9 @@ export function TightbeamChat({ sessionKey, adapter, identityKey, renderMessage,
     };
   }, [adapter, sessionKey, key]);
   if (!opened || opened.key !== key || opened.adapter !== adapter) {
-    return <section className={`tb-chat ${className || ''}`} aria-label="Conversation" role="status">Connecting…</section>;
+    return <section className={`tb-chat ${className || ''}`} aria-label="Conversation" role="status">
+      <span className="tb-chat-initial-caption tb-chat-caption tb-chat-caption-neutral">Connecting…</span>
+    </section>;
   }
   return <ChatBody key={key} runtime={opened.runtime} renderMessage={renderMessage}
     className={className} hostBridge={hostBridge} />;
