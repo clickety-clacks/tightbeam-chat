@@ -7,7 +7,8 @@ import {
 const notes: readonly ReleaseNotesEntry[] = [
   { version: 'v0.1.25', items: [{ title: 'Older', description: 'An earlier change.' }] },
   { version: 'v0.1.26', items: [{ title: 'Middle', description: 'A middle change.' }] },
-  { version: 'v0.1.27', items: [{ title: 'Current', description: 'A current change.' }] },
+  { version: 'v0.1.27', items: [{ title: 'Previous', description: 'A previous change.' }] },
+  { version: 'v0.1.28', items: [{ title: 'Current', description: 'A current change.' }] },
 ];
 
 function memoryStorage(initial?: Record<string, string>) {
@@ -25,16 +26,16 @@ describe('release notes versions and browser record', () => {
     expect(releaseNotesForBuild('v0.1.26', notes).map((entry) => entry.version))
       .toEqual(['v0.1.26', 'v0.1.25']);
     expect(releaseNotesForBuild(null, notes).map((entry) => entry.version))
-      .toEqual(['v0.1.27', 'v0.1.26', 'v0.1.25']);
+      .toEqual(['v0.1.28', 'v0.1.27', 'v0.1.26', 'v0.1.25']);
   });
 
   it('shows only the current release for a first visit and all skipped releases newest first', () => {
-    expect(unseenReleaseNotes(memoryStorage(), 'v0.1.27', notes)?.map((entry) => entry.version))
-      .toEqual(['v0.1.27']);
+    expect(unseenReleaseNotes(memoryStorage(), 'v0.1.28', notes)?.map((entry) => entry.version))
+      .toEqual(['v0.1.28']);
     const seenOlder = memoryStorage({ [SEEN_RELEASE_VERSION_KEY]: 'v0.1.24' });
-    expect(unseenReleaseNotes(seenOlder, 'v0.1.27', notes)?.map((entry) => entry.version))
-      .toEqual(['v0.1.27', 'v0.1.26', 'v0.1.25']);
-    expect(unseenReleaseNotes(memoryStorage({ [SEEN_RELEASE_VERSION_KEY]: 'v0.1.27' }), 'v0.1.26', notes))
+    expect(unseenReleaseNotes(seenOlder, 'v0.1.28', notes)?.map((entry) => entry.version))
+      .toEqual(['v0.1.28', 'v0.1.27', 'v0.1.26', 'v0.1.25']);
+    expect(unseenReleaseNotes(memoryStorage({ [SEEN_RELEASE_VERSION_KEY]: 'v0.1.28' }), 'v0.1.27', notes))
       .toEqual([]);
     expect(unseenReleaseNotes(memoryStorage(), null, notes)).toBeNull();
   });
@@ -42,11 +43,11 @@ describe('release notes versions and browser record', () => {
   it('fails closed when browser storage cannot be read or written and preserves a higher seen version', () => {
     const unreadable = { ...memoryStorage(), getItem: () => { throw new Error('blocked'); } };
     const unwritable = { ...memoryStorage(), setItem: () => { throw new Error('blocked'); } };
-    expect(unseenReleaseNotes(unreadable, 'v0.1.27', notes)).toBeNull();
-    expect(unseenReleaseNotes(unwritable, 'v0.1.27', notes)).toBeNull();
+    expect(unseenReleaseNotes(unreadable, 'v0.1.28', notes)).toBeNull();
+    expect(unseenReleaseNotes(unwritable, 'v0.1.28', notes)).toBeNull();
 
-    const storage = memoryStorage({ [SEEN_RELEASE_VERSION_KEY]: 'v0.1.28' });
-    expect(recordSeenReleaseVersion(storage, 'v0.1.27')).toBe(true);
+    const storage = memoryStorage({ [SEEN_RELEASE_VERSION_KEY]: 'v0.1.29' });
+    expect(recordSeenReleaseVersion(storage, 'v0.1.28')).toBe(true);
     expect(storage.getItem(SEEN_RELEASE_VERSION_KEY)).toBe('v0.1.28');
   });
 });

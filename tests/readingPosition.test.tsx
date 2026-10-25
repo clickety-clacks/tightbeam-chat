@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { TightbeamChat } from '../src/TightbeamChat';
+import { TightbeamChat, type TightbeamChatProps } from '../src/TightbeamChat';
 import { useReadingPosition } from '../src/useReadingPosition';
 import { createTightbeamAdapter } from '../src/runtime';
 import { AuthorizationError, type ChatTransport, type TargetProfile } from '../src/types';
-import type { CanonicalMessage, ChatRuntime, RuntimeState } from '../src/types';
+import type { CanonicalMessage, ChatRuntime, ConversationRecord, RuntimeState } from '../src/types';
 
 class ReadingRuntime implements ChatRuntime {
   listeners = new Set<() => void>();
@@ -72,10 +72,10 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); resizeCallbacks.clear(); });
 
-function setup(records = initialRows) {
+function setup(records = initialRows, renderMessage?: TightbeamChatProps['renderMessage']) {
   const runtime = new ReadingRuntime();
   runtime.state = { ...runtime.state, records };
-  render(<TightbeamChat sessionKey="reading" adapter={{ open: () => runtime }} />);
+  render(<TightbeamChat sessionKey="reading" adapter={{ open: () => runtime }} renderMessage={renderMessage} />);
   scrollTo.mockClear();
   return { runtime, box: screen.getByRole('log'), input: screen.getByRole('textbox') as HTMLTextAreaElement };
 }
@@ -379,6 +379,7 @@ describe('conversation reading position', () => {
   });
 
   it.each([40, 2000])('bounds anchor work across message, status and send updates with %i loaded rows', count => {
+    const renderMessage = vi.fn((record: ConversationRecord) => record.kind === 'message' ? record.content : undefined);
     const measure = vi.mocked(HTMLElement.prototype.getBoundingClientRect);
     measure.mockImplementation(function (this: HTMLElement) {
       if (this.classList.contains('tb-chat-viewport')) return rect(0, 300);
@@ -386,23 +387,25 @@ describe('conversation reading position', () => {
       if (id?.startsWith('message-')) return rect(16 + Number(id.slice(8)) * 92 - scrollTop, 80);
       return rect(-scrollTop, 0);
     });
-    const { runtime, box } = setup(Array.from({ length: count }, (_, i) => message(i)));
+    const { runtime, box } = setup(Array.from({ length: count }, (_, i) => message(i)), renderMessage);
     readAt(box, 1000);
     const anchor = screen.getByText('Message 11').closest('article')!;
     const offset = anchor.getBoundingClientRect().top;
     const query = vi.spyOn(box, 'querySelectorAll');
     for (let i = 0; i < 4; i++) {
-      for (const patch of [
-        { status: i % 2 ? 'ready' as const : 'stale' as const },
-        { sends: [] },
-        { records: [...runtime.state.records, message(count + i)] },
+      for (const { patch, newMessageRows } of [
+        { patch: { status: i % 2 ? 'ready' as const : 'stale' as const }, newMessageRows: 0 },
+        { patch: { sends: [] }, newMessageRows: 0 },
+        { patch: { records: [...runtime.state.records, message(count + i)] }, newMessageRows: 1 },
       ]) {
+        const rendersBeforeUpdate = renderMessage.mock.calls.length;
         measure.mockClear();
         act(() => runtime.publish(patch));
         // Binary search plus visible rows, not one measurement per loaded row.
         expect(measure.mock.calls.length).toBeLessThan(35);
         expect(query).not.toHaveBeenCalled();
         expect(anchor.getBoundingClientRect().top).toBe(offset);
+        expect(renderMessage.mock.calls.length).toBe(rendersBeforeUpdate + newMessageRows);
       }
     }
   });

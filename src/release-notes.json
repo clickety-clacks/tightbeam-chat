@@ -1,14 +1,23 @@
 [
   {
-    "version": "v0.1.27",
+    "version": "v0.1.28",
     "items": [
       {
         "title": "What's new",
-        "description": "Chat now shows what changed after an update, once per version."
+        "description": "Chat now shows a one-time summary after an update, including releases you skipped."
       },
       {
         "title": "Release notes",
-        "description": "Send /settings to open Settings and read what changed in this and earlier releases."
+        "description": "Type /settings to open Settings and browse notes for this and earlier releases."
+      }
+    ]
+  },
+  {
+    "version": "v0.1.27",
+    "items": [
+      {
+        "title": "Tool activity",
+        "description": "See tool calls and session transitions in the conversation. Open a tool call to view its input and result."
       }
     ]
   }

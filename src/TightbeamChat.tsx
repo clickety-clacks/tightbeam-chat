@@ -400,6 +400,19 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, re
     <div className="tb-chat-bubble-body">{custom === undefined ? context.defaultRender() : custom}</div>
     <time className="tb-chat-time" dateTime={time.dateTime}>{time.text}</time>
   </article>;
+}, (previous, next) => {
+  const before = previous.bubble;
+  const after = next.bubble;
+  const sameMember = before.member === after.member || Boolean(before.member && after.member &&
+    before.member.index === after.member.index && before.member.sourceId === after.member.sourceId &&
+    before.member.sender === after.member.sender && before.member.content === after.member.content);
+  // Projection rebuilds wrappers when history changes. Keep unchanged canonical
+  // rows memoized so appending to a long transcript doesn't re-render every body.
+  return before.key === after.key && before.record === after.record && before.side === after.side &&
+    before.sender === after.sender && before.displayContent === after.displayContent &&
+    before.derived === after.derived && sameMember && previous.renderMessage === next.renderMessage &&
+    previous.agentName === next.agentName && previous.registerRow === next.registerRow &&
+    previous.scrollKey === next.scrollKey && previous.arriving === next.arriving;
 });
 
 interface ComposerHandle {
