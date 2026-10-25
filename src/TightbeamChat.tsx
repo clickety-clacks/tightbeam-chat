@@ -666,13 +666,13 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
       onWheel={reading.interrupt} onTouchStart={reading.interrupt} onPointerDown={reading.interrupt}
       onKeyDown={(event) => { if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) reading.interrupt(); }}
       aria-label={`${agentName || 'Conversation'} messages`} aria-live="polite" aria-relevant="additions text">
+      {state.loadingOlder && <div className="tb-chat-history-loading" role="status">Loading earlier messages…</div>}
       <div className="tb-chat-message-content" ref={reading.content}>
       {notice && <div className={`tb-chat-notice tb-chat-notice-${state.status}`} role={state.status === 'loading' ? 'status' : 'alert'}>
         <span>{notice}</span>
         {host.optedIn && state.status === 'error' &&
           <button type="button" onClick={() => void runtime.rebuild({ restart: true })}>Reconnect</button>}
       </div>}
-      {state.loadingOlder && <div className="tb-chat-history-loading" role="status">Loading earlier messages…</div>}
       {state.historyError && <div className="tb-chat-history-error" role="alert">
         <span>Earlier messages could not be loaded: {state.historyError}</span>
         <button type="button" onClick={loadOlder}>Retry loading messages</button>

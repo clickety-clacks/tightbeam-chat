@@ -597,6 +597,43 @@ describe('conversation surface', () => {
     expect(screen.queryByRole('button', { name: /load earlier/i })).toBeNull();
   });
 
+  it('stops paging when the remaining history contains only hidden rows and reaches its start', async () => {
+    const sessionKey = 'history-start';
+    const hiddenFirst = row(sessionKey, 'hidden-first', 'Earlier activity', {
+      role: 'user', sender: 'agent:other', messageType: 'agent', turnSeq: 1,
+    });
+    const hiddenSecond = row(sessionKey, 'hidden-second', 'Earlier reply', {
+      sender: 'assistant-service', messageType: 'assistant', turnSeq: 1, replyToMessageId: hiddenFirst.id,
+    });
+    const older = row(sessionKey, 'older-activity', 'Oldest activity', {
+      role: 'user', sender: 'agent:other', messageType: 'agent', turnSeq: 2,
+    });
+    const runtime = new FakeRuntime(sessionKey, { hasOlder: true });
+    runtime.olderPages = [
+      { records: [hiddenFirst, hiddenSecond], provenance: [], hasOlder: true },
+      { records: [older], provenance: [], hasOlder: false },
+    ];
+
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+    await waitFor(() => expect(runtime.getSnapshot().hasOlder).toBe(false));
+    expect(runtime.loadOlderCalls).toBe(2);
+    expect(screen.queryByText('Earlier activity')).toBeNull();
+    expect(screen.queryByText('Earlier reply')).toBeNull();
+    expect(screen.queryByText('Oldest activity')).toBeNull();
+  });
+
+  it('keeps the older-page status outside the scrollable message layout', () => {
+    const runtime = new FakeRuntime('loading-status', { loadingOlder: true });
+    render(<TightbeamChat sessionKey="loading-status" adapter={adapterFor(runtime)} />);
+
+    const viewport = screen.getByRole('log');
+    const status = viewport.querySelector<HTMLElement>('.tb-chat-history-loading');
+    expect(status?.getAttribute('role')).toBe('status');
+    expect(status?.textContent).toBe('Loading earlier messages…');
+    expect(status?.parentElement).toBe(viewport);
+    expect(viewport.querySelector('.tb-chat-message-content')?.contains(status)).toBe(false);
+  });
+
   it('renders and copies canonical human member rows without exposing a carrier or sibling', () => {
     const sessionKey = 'member-rendering';
     const carrier = row(sessionKey, 'carrier', 'Hidden wrapper and nonhuman content', {
