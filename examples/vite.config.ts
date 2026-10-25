@@ -6,6 +6,11 @@ import https from 'node:https';
 import type { TLSSocket } from 'node:tls';
 import { parseGatewayBridgeTarget, sameOriginBridgeOrigin } from './entry';
 
+const releaseTag = process.env.GITHUB_REF_NAME ?? '';
+const chatReleaseVersion = process.env.GITHUB_REF_TYPE === 'tag' &&
+  process.env.GITHUB_REF === `refs/tags/${releaseTag}` && /^v\d+\.\d+\.\d+$/.test(releaseTag)
+  ? releaseTag : null;
+
 // Development-only same-origin bridge. Never expose this server to a network.
 function gatewayBridge(): Plugin {
   return {
@@ -74,6 +79,7 @@ function gatewayBridge(): Plugin {
 }
 
 export default defineConfig({ root: resolve(import.meta.dirname), plugins: [react(), gatewayBridge()],
+  define: { __CHAT_RELEASE_VERSION__: JSON.stringify(chatReleaseVersion) },
   server: { host: '127.0.0.1', port: 5173, strictPort: true },
   build: { rollupOptions: { input: {
     main: resolve(import.meta.dirname, 'index.html'),

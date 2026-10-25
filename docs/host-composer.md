@@ -43,6 +43,7 @@ Chat sends these lifetime events:
 ```ts
 { event: 'declined', reason: 'unsupported-version' | 'malformed-declaration' }
 { event: 'unavailable', version: 1, lifetimeId, reason }
+{ event: 'overlay', version: 1, lifetimeId, open }
 { event: 'lifetime-ended', version: 1, lifetimeId,
   reason: 'target-changed' | 'identity-changed' | 'disposed' | 'unloading' }
 ```
@@ -73,6 +74,8 @@ window.__TIGHTBEAM_CHAT_COMMAND__({
 
 Chat numbers attempts per `(lifetimeId, correlationId)`, beginning at 1. A retry is accepted only after the previous attempt settled `failed` or `uncertain`; its content must match the first attempt byte for byte. A new page lifetime starts numbering at 1 again. On page reload, a host-held correlation may be retried after fresh readiness. After app restart, if the correlation was lost, a retained draft is sent only on a new user action with a new correlation and no retry flag. It may produce a second canonical row; the host presents it as a new user-initiated send.
 
+Chat recognizes a Settings command when the text, after trimming leading and trailing whitespace, is exactly `/settings` with the same letter case. It opens Settings without posting a message and answers with `rejected` using reason `local-command`. This check runs before readiness, target, correlation and send-attempt checks, and it records no attempt. Other slash-prefixed text is sent unchanged.
+
 Each attempt event carries `lifetimeId`, `correlationId`, and `attempt`:
 
 ```ts
@@ -83,7 +86,7 @@ Each attempt event carries `lifetimeId`, `correlationId`, and `attempt`:
 { event: 'uncertain', lifetimeId, correlationId, attempt,
   reason: 'ack-lost' | 'accepted-unreconciled' | 'lifetime-ended' }
 { event: 'rejected', lifetimeId, correlationId,
-  reason: 'not-ready' | 'target-mismatch' | 'invalid-correlation' | 'empty' |
+  reason: 'local-command' | 'not-ready' | 'target-mismatch' | 'invalid-correlation' | 'empty' |
     'attempt-in-flight' | 'already-delivered' | 'correlation-conflict' }
 ```
 
@@ -104,6 +107,7 @@ The host follows these rules:
 5. After `declined`, no response, or an older Chat version, let Chat's HTML composer serve.
 6. Never automatically submit a new host attempt. Chat may internally re-ask the identical submission after a dropped human-send socket when Gateway deduplication is supported.
 7. Pass no keyboard geometry. Resize the Chat view when the native keyboard or safe area changes; Chat retains the newest or reader position. Keep the host's existing landscape side-inset variables unchanged.
+8. On `overlay` with `open: true`, give the keyboard to the Chat page so the focused dialog receives Escape. On `overlay` with `open: false`, return focus to the host composer. Chat emits this event only for a ready lifetime and sends `open: true` immediately after `ready` if a dialog is already open. Switching between Chat dialogs does not emit a close between them.
 
 The host injects the declaration only into the main frame of the configured private Chat origin and ignores events from any other frame or origin. The seam is top-level and in-page only; Chat accepts no `postMessage` or other cross-window commands. No credentials cross the seam. Existing Chat server origin checks protect the browser service and do not cover this interface. V1 adds no signatures, nonces, replay mechanism or separate origin-verification layer.
 

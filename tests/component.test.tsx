@@ -814,7 +814,7 @@ describe('conversation surface', () => {
       .toBe(true);
   });
 
-  it('keeps submitted whitespace intact and locks the composer only for unsupported or unauthorized states', () => {
+  it('keeps submitted whitespace intact and allows local Settings while normal sends are locked', () => {
     const runtime = new FakeRuntime('send-session');
     render(<TightbeamChat sessionKey="send-session" adapter={adapterFor(runtime)} />);
     const composer = screen.getByRole('textbox', { name: 'Message to Research assistant' });
@@ -827,7 +827,80 @@ describe('conversation surface', () => {
       runtime.state = { ...runtime.state, status: 'unauthorized' };
       for (const listener of runtime.listeners) listener();
     });
-    expect(composer).toHaveProperty('disabled', true);
+    expect(composer).toHaveProperty('disabled', false);
+    expect(screen.getByRole('button', { name: 'Send message' })).toHaveProperty('disabled', true);
+  });
+
+  it('opens Settings from the composer while disconnected, clears the draft and restores focus on close', async () => {
+    const runtime = new FakeRuntime('local-settings', { status: 'stale' });
+    render(<TightbeamChat sessionKey="local-settings" adapter={adapterFor(runtime)} />);
+    const composer = screen.getByRole('textbox', { name: 'Message to Research assistant' }) as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: '  /settings\n' } });
+
+    expect(screen.getByRole('button', { name: 'Send message' })).toHaveProperty('disabled', false);
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+
+    expect(runtime.sent).toEqual([]);
+    expect(composer.value).toBe('');
+    expect(await screen.findByRole('dialog', { name: 'Settings' })).toBeTruthy();
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Close Settings' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Release notes' }));
+    expect(screen.getByRole('dialog', { name: 'Release notes' })).toBeTruthy();
+    expect(screen.getByText('v0.1.27')).toBeTruthy();
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(document.activeElement).toBe(composer);
+  });
+
+  it('opens Settings from Return without sending a message', async () => {
+    const runtime = new FakeRuntime('return-settings');
+    render(<TightbeamChat sessionKey="return-settings" adapter={adapterFor(runtime)} />);
+    const composer = screen.getByRole('textbox', { name: 'Message to Research assistant' });
+    fireEvent.change(composer, { target: { value: '/settings' } });
+
+    expect(fireEvent.keyDown(composer, { key: 'Enter' })).toBe(false);
+    expect(runtime.sent).toEqual([]);
+    expect(await screen.findByRole('dialog', { name: 'Settings' })).toBeTruthy();
+  });
+
+  it.each(['/Settings', '/settings now', '/compact', 'settings'])('sends %s unchanged', (text) => {
+    const runtime = new FakeRuntime('other-slash');
+    render(<TightbeamChat sessionKey="other-slash" adapter={adapterFor(runtime)} />);
+    const composer = screen.getByRole('textbox', { name: 'Message to Research assistant' });
+    fireEvent.change(composer, { target: { value: text } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+
+    expect(runtime.sent).toEqual([text]);
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('keeps a reader anchor in place while Settings opens and closes', async () => {
+    const sessionKey = 'settings-reader-anchor';
+    const question = row(sessionKey, 'reader-anchor', 'Reader anchor', {
+      role: 'user', sender: 'user:person', turnSeq: 1, messageType: 'chat',
+    });
+    const runtime = new FakeRuntime(sessionKey, {
+      records: [question], provenance: [provenance(1, sessionKey, question.id, 'user:person', question)],
+    });
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+    await screen.findByText('Reader anchor');
+    const viewport = screen.getByRole('log');
+    const layout = installViewportLayout(viewport);
+    try {
+      const anchor = screen.getByText('Reader anchor').closest('article')!;
+      layout.setScrollTop(70);
+      const before = layout.offset(anchor);
+      const composer = screen.getByRole('textbox', { name: 'Message to Research assistant' });
+      fireEvent.change(composer, { target: { value: '/settings' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Close Settings' }));
+
+      expect(layout.offset(anchor)).toBe(before);
+      expect(layout.scrollTop).toBe(70);
+    } finally {
+      layout.restore();
+    }
   });
 
   it('sends plain Return through the existing button path and keeps composer focus', () => {
