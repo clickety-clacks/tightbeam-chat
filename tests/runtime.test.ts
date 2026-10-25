@@ -660,6 +660,8 @@ describe('optional tool history and live category', () => {
     toolCallbacks?: ChangeCallbacks;
     toolClosed = 0;
     toolOpens = 0;
+    toolReady = false;
+    toolReadyGate?: ReturnType<typeof deferred<void>>;
     ranges: ToolCallRange[] = [];
     calls = [call('tc_old', 3), call('tc_tail', 8)];
     toolHook?: () => void;
@@ -667,10 +669,13 @@ describe('optional tool history and live category', () => {
     openToolChanges = async (_key: string, callbacks: ChangeCallbacks) => {
       this.toolOpens++;
       this.toolCallbacks = callbacks;
+      if (this.toolReadyGate) await this.toolReadyGate.promise;
+      this.toolReady = true;
       return { close: () => { this.toolClosed++; if (this.toolCallbacks === callbacks) this.toolCallbacks = undefined; } };
     };
     readToolCalls = async (_key: string, range: ToolCallRange) => {
       expect(this.toolCallbacks).toBeDefined();
+      expect(this.toolReady).toBe(true);
       this.ranges.push(range);
       const rows = this.calls.filter(call => call.afterMessageSeq >= range.fromInclusive &&
         (range.toExclusive === undefined || call.afterMessageSeq < range.toExclusive));
@@ -709,6 +714,20 @@ describe('optional tool history and live category', () => {
     await vi.waitFor(() => expect(runtime.getSnapshot().toolCallsLoading).toBe(false));
     expect(runtime.getSnapshot().toolCalls?.at(-1)?.id).toBe('tc_while_off');
     expect(transport.toolOpens).toBe(3);
+    runtime.dispose();
+  });
+
+  it('waits for tool subscription readiness before reading an older slice', async () => {
+    const transport = new ToolsTransport();
+    transport.toolReadyGate = deferred<void>();
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await vi.waitFor(() => expect(transport.toolOpens).toBe(1));
+    const older = runtime.loadOlder();
+    expect(transport.ranges).toEqual([]);
+    transport.toolReadyGate.resolve();
+    await older;
+    await vi.waitFor(() => expect(runtime.getSnapshot().toolCallsLoading).toBe(false));
+    expect(runtime.getSnapshot().toolCalls?.map(call => call.id)).toEqual(['tc_old', 'tc_tail']);
     runtime.dispose();
   });
 

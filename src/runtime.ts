@@ -84,6 +84,7 @@ class SessionRuntime implements ChatRuntime {
   private readonly hostSendObservers = new Map<string, Set<HostSendObserver>>();
   private readonly coverageReaders = new Set<ChangeNotice[]>();
   private toolConnection: ChangeConnection | undefined;
+  private toolReadiness: Promise<ChangeConnection> | undefined;
   private toolController: AbortController | undefined;
   private toolEpoch = 0;
   private readonly tools = new Map<string, ToolCallRecord>();
@@ -146,6 +147,7 @@ class SessionRuntime implements ChatRuntime {
     this.toolController?.abort();
     this.toolConnection?.close();
     this.toolConnection = undefined;
+    this.toolReadiness = undefined;
     this.toolController = undefined;
   }
 
@@ -180,7 +182,7 @@ class SessionRuntime implements ChatRuntime {
     this.tools.clear();
     this.publish({ toolCalls: Object.freeze([]), toolCallsLoading: true, toolCallsError: undefined });
     try {
-      const connection = await this.transport.openToolChanges(this.sessionKey, {
+      this.toolReadiness = this.transport.openToolChanges(this.sessionKey, {
         onNotice: notice => {
           if (!current()) return;
           if (notice.operation !== 'tool') {
@@ -192,6 +194,7 @@ class SessionRuntime implements ChatRuntime {
         },
         onDoubt: reason => { if (current()) this.toolFailure(new Error(reason)); },
       }, controller.signal);
+      const connection = await this.toolReadiness;
       if (!current()) { connection.close(); return; }
       this.toolConnection = connection;
       const range = { fromInclusive: this.state.records[0]?.seq ?? 0 };
@@ -212,7 +215,10 @@ class SessionRuntime implements ChatRuntime {
     const range: ToolCallRange = { fromInclusive: page.records[0].seq,
       toExclusive: page.records[page.records.length - 1].seq + 1 };
     try {
-      const calls = await this.transport.readToolCalls(this.sessionKey, range, this.toolController.signal);
+      const controller = this.toolController;
+      await this.toolReadiness;
+      if (epoch !== this.toolEpoch || this.disposed) return;
+      const calls = await this.transport.readToolCalls(this.sessionKey, range, controller.signal);
       if (epoch !== this.toolEpoch || this.disposed) return;
       for (const call of calls) this.putTool(call);
     } catch (error) {

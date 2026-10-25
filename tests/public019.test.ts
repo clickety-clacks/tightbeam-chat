@@ -55,6 +55,7 @@ function setup(heartbeatTimeoutMs?: number, observedVersion = version, configure
     currentIdentity: () => identity,
     fetch: async (path) => {
       paths.push(path);
+      if (path.includes('/tool-calls?')) return new Response('', { status: 404 });
       if (recentTurnsForbidden && path.includes('/turns?')) return new Response('', { status: 403 });
       const body = path.endsWith('/version') ? observedVersion : path.includes('/messages?')
         ? { schemaVersion: 1, resource: 'transcript messages', items: historyItems,
@@ -171,6 +172,7 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
       'https://host.example/version',
       'https://host.example/api/sessions/s-public',
       'https://host.example/api/sessions/s-public/messages?limit=50&tail=true',
+      'https://host.example/api/sessions/s-public/tool-calls?limit=50&afterMessageSeqFromInclusive=8',
     ]);
     expect(runtime.getSnapshot().records.map((record) => record.id))
       .toEqual(['marker_before', 'm_1', 'marker_after']);
@@ -206,6 +208,7 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
       'https://host.example/version',
       'https://host.example/api/sessions/s-public',
       'https://host.example/api/sessions/s-public/messages?limit=50&tail=true',
+      'https://host.example/api/sessions/s-public/tool-calls?limit=50&afterMessageSeqFromInclusive=9',
     ]);
     expect(runtime.getSnapshot().records.map((record) => record.id)).toEqual(['m_1']);
     expect(candidate.human.sent).toHaveLength(0);
@@ -356,6 +359,8 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
           await tailGate;
           body = { schemaVersion: 1, resource: 'transcript messages', items: [item],
             page: { oldestCursor: null, hasMoreBefore: false } };
+        } else if (path.includes('/tool-calls?')) {
+          body = { schemaVersion: 1, resource: 'tool calls', items: [], page: { hasMoreBefore: false } };
         } else if (path.includes('/turns?')) {
           body = { schemaVersion: 1, resource: 'turns', items: [],
             page: { oldestCursor: null, hasMoreBefore: false } };
