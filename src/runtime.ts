@@ -587,6 +587,7 @@ class SessionRuntime implements ChatRuntime {
     try {
       let result: HumanSendResult;
       let retryDelayMs = humanSendRetryInitialDelayMs;
+      let mayHaveReachedGateway = false;
       while (true) {
         try {
           result = await this.transport.sendHuman(submission, controller.signal);
@@ -601,11 +602,16 @@ class SessionRuntime implements ChatRuntime {
           result = { outcome: 'accepted' };
           break;
         }
-        if (result.outcome !== 'retryable') break;
-        // A live-update reconnect is separate from the human socket. Keep asking
-        // the selected Gateway with the identical ID/content after each drop.
-        // A small capped backoff paces repeated socket drops without giving up
-        // while waiting for any individual acknowledgement.
+        if (result.outcome === 'retryable') mayHaveReachedGateway = true;
+        const shouldReask = result.outcome === 'retryable' ||
+          (mayHaveReachedGateway && result.outcome === 'unreachable');
+        if (!shouldReask) break;
+        // Once a send socket has dropped, the Gateway may already have accepted
+        // the post. Keep reconnecting and asking with the identical ID/content
+        // until its answer or canonical history settles the message. A capped
+        // backoff paces both dropped sockets and failed reconnects; it never
+        // ends a live acknowledgement wait or converts an ambiguous post into
+        // a final unreachable failure.
         if (this.state.status === 'unauthorized') return;
         if (!this.profile.capabilities.humanSendDedupe || this.state.status === 'unsupported') {
           result = { outcome: 'uncertain', reason: 'retry-unavailable' };

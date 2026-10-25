@@ -1,8 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   gatewayBridgeUrl, parseGatewayBridgeTarget, resolveEntrySelection,
   sameOriginBridgeOrigin,
 } from '../examples/entry';
+import { browserHost } from '../examples/browserHost';
 
 const configured = {
   gateway: 'https://default.example:8443',
@@ -10,6 +11,28 @@ const configured = {
   principalKey: 'example-user',
   deviceId: 'chat_abc123',
 };
+
+class FakeWebSocket {
+  static instances: FakeWebSocket[] = [];
+  onopen: ((event: Event) => void) | null = null;
+  onmessage: ((event: MessageEvent) => void) | null = null;
+  onerror: ((event: Event) => void) | null = null;
+  onclose: ((event: CloseEvent) => void) | null = null;
+  readonly sent: string[] = [];
+  closed = false;
+
+  constructor(readonly url: string) { FakeWebSocket.instances.push(this); }
+  open() { this.onopen?.(new Event('open')); }
+  frame(value: unknown) { this.onmessage?.({ data: JSON.stringify(value) } as MessageEvent); }
+  send(data: string) { this.sent.push(data); }
+  close() { this.closed = true; }
+}
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+  FakeWebSocket.instances = [];
+});
 
 describe('Chat entry selection', () => {
   it('uses the configured target at the root and shows valid linked selections without normalization loss', () => {
@@ -100,5 +123,46 @@ describe('private browser entry and same-origin gateway bridge', () => {
     expect(sameOriginBridgeOrigin('http://chat.private.example', 'https://chat.private.example/')).toBe(false);
     expect(sameOriginBridgeOrigin('https://other.example', 'https://chat.private.example/')).toBe(false);
     expect(sameOriginBridgeOrigin('not an origin', 'https://chat.private.example/')).toBe(false);
+  });
+
+  it('does not time out a human socket after it opens while auth and sync answers are delayed', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('WebSocket', FakeWebSocket as unknown as typeof WebSocket);
+    const host = browserHost({ ...configured, gateway: 'https://gateway.example' });
+    const opening = host.openAuthenticatedHuman(new AbortController().signal);
+    let settled = false;
+    void opening.then(() => { settled = true; });
+    const socket = FakeWebSocket.instances[0]!;
+
+    socket.open();
+    await vi.advanceTimersByTimeAsync(16_000);
+    expect(settled).toBe(false);
+    expect(socket.closed).toBe(false);
+
+    socket.frame({ type: 'auth_result', success: true, userId: configured.principalKey,
+      sessionId: `conn_${configured.deviceId}`, sessionKeys: [configured.sessionKey] });
+    await vi.advanceTimersByTimeAsync(16_000);
+    expect(settled).toBe(false);
+
+    socket.frame({ type: 'sync_complete' });
+    const channel = await opening;
+    expect(settled).toBe(true);
+    channel.send({ type: 'message', id: 'c_send', sessionKey: configured.sessionKey, content: 'hello' });
+    expect(socket.sent).toEqual([JSON.stringify({ type: 'message', id: 'c_send',
+      sessionKey: configured.sessionKey, content: 'hello' })]);
+    channel.close();
+  });
+
+  it('reports a human socket that never opens as unreachable through a connection timeout', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('WebSocket', FakeWebSocket as unknown as typeof WebSocket);
+    const host = browserHost({ ...configured, gateway: 'https://gateway.example' });
+    const opening = host.openAuthenticatedHuman(new AbortController().signal);
+    const rejected = expect(opening).rejects.toThrow('Chat connection timed out.');
+    const socket = FakeWebSocket.instances[0]!;
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    await rejected;
+    expect(socket.closed).toBe(true);
   });
 });

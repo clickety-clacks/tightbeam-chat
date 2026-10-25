@@ -637,16 +637,21 @@ describe('framework-independent runtime', () => {
     runtime.dispose();
   });
 
-  it('paces repeated dropped sockets and settles when the next connection is unreachable', async () => {
+  it('keeps re-asking after reconnect failure until the same submission is acknowledged', async () => {
     const transport = new ControlledTransport();
-    transport.nextSend = async () => transport.submissions.length <= 2
+    transport.nextSend = async () => transport.submissions.length === 1
       ? { outcome: 'retryable', reason: 'socket closed before acknowledgement' }
-      : { outcome: 'unreachable', reason: 'Not connected to the server.' };
+      : transport.submissions.length === 2
+        ? { outcome: 'unreachable', reason: 'Not connected to the server.' }
+        : { outcome: 'accepted' };
     const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
     await runtime.rebuild();
     vi.useFakeTimers();
     try {
-      const id = runtime.send('  same retry content  ')!;
+      const id = 'c_018f1a62-7c73-4c7d-8c05-e53d5c542a07';
+      const signals: unknown[] = [];
+      runtime.observeHostSend(id, (signal) => signals.push(signal));
+      runtime.send('  same retry content  ', id, { lifetimeId: 'test-lifetime', attempt: 1 });
       await Promise.resolve();
       await Promise.resolve();
       expect(transport.submissions).toHaveLength(1);
@@ -658,15 +663,20 @@ describe('framework-independent runtime', () => {
       expect(transport.submissions).toHaveLength(2);
       await vi.advanceTimersByTimeAsync(499);
       expect(transport.submissions).toHaveLength(2);
+      expect(runtime.getSnapshot().sends[0]).toMatchObject({
+        clientMessageId: id, content: '  same retry content  ', status: 'pending',
+      });
+      expect(signals).toEqual([]);
       await vi.advanceTimersByTimeAsync(1);
 
-      expect(runtime.getSnapshot().sends[0]).toMatchObject({
-        clientMessageId: id, content: '  same retry content  ', status: 'failed', reason: 'unreachable',
-      });
+      await vi.waitFor(() => expect(runtime.getSnapshot().sends[0]).toMatchObject({
+        clientMessageId: id, content: '  same retry content  ', status: 'accepted',
+      }));
       const attempts = transport.submissions.filter((submission) => submission.clientMessageId === id);
       expect(attempts).toHaveLength(3);
       expect(attempts[1]).toEqual(attempts[0]);
       expect(attempts[2]).toEqual(attempts[0]);
+      expect(signals).toEqual([{ kind: 'accepted' }]);
     } finally {
       runtime.dispose();
       vi.useRealTimers();
