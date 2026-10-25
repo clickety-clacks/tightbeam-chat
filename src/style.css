@@ -285,3 +285,14 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
 @media (max-width: 540px) {
   .tb-chat-bubble { max-width: 92%; padding-inline: .85rem; }
 }
+
+.tb-chat-tool-controls { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin: .5rem 0; font-size: .85rem; }
+.tb-chat-tool-controls button { font: inherit; color: inherit; background: transparent; border: 1px solid currentColor; border-radius: .75rem; padding: .3rem .65rem; cursor: pointer; }
+.tb-chat-tool-controls button[aria-pressed="true"] { font-weight: 700; }
+.tb-chat-tool, .tb-chat-transition { box-sizing: border-box; width: 100%; margin: .6rem 0; padding: .75rem; border: 1px solid color-mix(in srgb, currentColor 20%, transparent); border-radius: .75rem; }
+.tb-chat-transition { text-align: center; font-size: .85rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+.tb-chat-tool-heading { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .5rem; }
+.tb-chat-tool p { margin: .4rem 0; overflow-wrap: anywhere; }
+.tb-chat-tool summary { cursor: pointer; }
+.tb-chat-tool h4 { margin: .5rem 0; }
+.tb-chat-tool pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 20rem; overflow: auto; margin: .5rem 0; }

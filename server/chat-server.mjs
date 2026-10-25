@@ -196,6 +196,29 @@ function parseServiceHttpTarget(rawUrl, runtime) {
       };
     }
 
+    const toolDetail = /^\/__chat\/api\/sessions\/([^/]+)\/tool-calls\/([^/]+)$/.exec(request.pathname);
+    const toolSession = toolDetail && decodeSessionPath(toolDetail[1]);
+    const toolId = toolDetail && decodeSessionPath(toolDetail[2]);
+    if (toolSession && toolId && routeParams.length === 0) {
+      return { kind: 'detail', gatewayOrigin, sessionKey: toolSession,
+        path: `/api/sessions/${encodeURIComponent(toolSession)}/tool-calls/${encodeURIComponent(toolId)}?asUser=${encodeURIComponent(runtime.principalKey)}` };
+    }
+    const tools = /^\/__chat\/api\/sessions\/([^/]+)\/tool-calls$/.exec(request.pathname);
+    const toolsSession = tools && decodeSessionPath(tools[1]);
+    if (toolsSession) {
+      const allowed = new Set(['limit', 'before', 'afterMessageSeqFromInclusive', 'afterMessageSeqToExclusive']);
+      if (new Set(routeParams.map(([name]) => name)).size !== routeParams.length ||
+          routeParams.some(([name]) => !allowed.has(name))) return undefined;
+      for (const [name, value] of routeParams) {
+        if (name === 'before') { if (!value) return undefined; continue; }
+        if (!/^[0-9]+$/.test(value) || !Number.isSafeInteger(Number(value))) return undefined;
+        if (name === 'limit' && (Number(value) < 1 || Number(value) > 500)) return undefined;
+      }
+      const query = new URLSearchParams([['asUser', runtime.principalKey], ...routeParams]);
+      return { kind: 'transcript', gatewayOrigin, sessionKey: toolsSession,
+        path: `/api/sessions/${encodeURIComponent(toolsSession)}/tool-calls?${query}` };
+    }
+
     const trigger = /^\/__chat\/api\/sessions\/([^/]+)\/messages\/([^/]+)$/.exec(request.pathname);
     const triggerSession = trigger && decodeSessionPath(trigger[1]);
     const triggerMessage = trigger && decodeSessionPath(trigger[2]);

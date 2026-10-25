@@ -5,7 +5,7 @@ import {
   PUBLIC_019_SOURCE_2857, PUBLIC_019_BUILD_2857, PUBLIC_019_GATEWAY_SHA_2857,
   PUBLIC_019_SOURCE_2887, PUBLIC_019_BUILD_2887, PUBLIC_019_GATEWAY_SHA_2887,
   PUBLIC_019_SOURCE_2908, PUBLIC_019_BUILD_2908, PUBLIC_019_GATEWAY_SHA_2908,
-  createPublic019Transport, decodePublic019Message, decodePublic019Turn,
+  createPublic019Transport, decodePublic019Message, decodePublic019Turn, decodeToolCall,
   decodePublic019Notice, type Public019Channel, type Public019Host,
 } from '../src/public019';
 import { AuthorizationError, UnsupportedTargetError } from '../src/types';
@@ -28,9 +28,14 @@ const session = { sessionKey, rowVersion: 4, displayName: 'Example agent', model
 class Channel implements Public019Channel {
   sent: Readonly<Record<string, unknown>>[] = [];
   closed = false;
+  autoReady = false;
+  get listening() { return this.frame !== undefined; }
   private frame?: (value: unknown) => void;
   private disconnected?: () => void;
-  send(frame: Readonly<Record<string, unknown>>) { this.sent.push(frame); }
+  send(frame: Readonly<Record<string, unknown>>) {
+    this.sent.push(frame);
+    if (this.autoReady) queueMicrotask(() => this.emit({ type: 'subscription_ready', subscriptionId: frame.subscriptionId }));
+  }
   listen(onFrame: (frame: unknown) => void, onClose: () => void) {
     this.frame = onFrame;
     this.disconnected = onClose;
@@ -50,6 +55,7 @@ function setup(heartbeatTimeoutMs?: number, observedVersion = version, configure
     currentIdentity: () => identity,
     fetch: async (path) => {
       paths.push(path);
+      if (path.includes('/tool-calls?')) return new Response('', { status: 404 });
       if (recentTurnsForbidden && path.includes('/turns?')) return new Response('', { status: 403 });
       const body = path.endsWith('/version') ? observedVersion : path.includes('/messages?')
         ? { schemaVersion: 1, resource: 'transcript messages', items: historyItems,
@@ -62,7 +68,12 @@ function setup(heartbeatTimeoutMs?: number, observedVersion = version, configure
         : { schemaVersion: 1, resource: 'sessions', item: session };
       return new Response(JSON.stringify(body), { status: 200 });
     },
-    openAuthenticatedChanges: async () => changes,
+    openAuthenticatedChanges: async () => {
+      if (!changes.listening) return changes;
+      const tools = new Channel();
+      tools.autoReady = true;
+      return tools;
+    },
     openAuthenticatedHuman: async () => human,
   };
   const { transport, profile } = createPublic019Transport({
@@ -152,7 +163,7 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
     const runtime = createTightbeamAdapter(candidate.transport, candidate.profile).open(sessionKey);
     await vi.waitFor(() => expect(candidate.changes.sent).toEqual([{
       type: 'subscribe', protocolVersion: 2, subscriptionId: `chat:${sessionKey}`,
-      filters: { sessionKey },
+      filters: expect.objectContaining({ sessionKey, classes: expect.arrayContaining(['message.created', 'transition.', 'turn.']) }),
     }]));
     expect(candidate.paths).toEqual(['https://host.example/version']);
     candidate.changes.emit({ type: 'subscription_ready', subscriptionId: `chat:${sessionKey}` });
@@ -161,6 +172,7 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
       'https://host.example/version',
       'https://host.example/api/sessions/s-public',
       'https://host.example/api/sessions/s-public/messages?limit=50&tail=true',
+      'https://host.example/api/sessions/s-public/tool-calls?limit=50&afterMessageSeqFromInclusive=8',
     ]);
     expect(runtime.getSnapshot().records.map((record) => record.id))
       .toEqual(['marker_before', 'm_1', 'marker_after']);
@@ -188,7 +200,7 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
     const runtime = createTightbeamAdapter(candidate.transport, candidate.profile).open(sessionKey);
     await vi.waitFor(() => expect(candidate.changes.sent).toEqual([{
       type: 'subscribe', protocolVersion: 2, subscriptionId: `chat:${sessionKey}`,
-      filters: { sessionKey },
+      filters: expect.objectContaining({ sessionKey, classes: expect.arrayContaining(['message.created', 'transition.', 'turn.']) }),
     }]));
     candidate.changes.emit({ type: 'subscription_ready', subscriptionId: `chat:${sessionKey}` });
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
@@ -196,6 +208,7 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
       'https://host.example/version',
       'https://host.example/api/sessions/s-public',
       'https://host.example/api/sessions/s-public/messages?limit=50&tail=true',
+      'https://host.example/api/sessions/s-public/tool-calls?limit=50&afterMessageSeqFromInclusive=9',
     ]);
     expect(runtime.getSnapshot().records.map((record) => record.id)).toEqual(['m_1']);
     expect(candidate.human.sent).toHaveLength(0);
@@ -218,7 +231,7 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
 
     await vi.waitFor(() => expect(candidate.changes.sent).toEqual([{
       type: 'subscribe', protocolVersion: 2, subscriptionId: `chat:${sessionKey}`,
-      filters: { sessionKey },
+      filters: expect.objectContaining({ sessionKey, classes: expect.arrayContaining(['message.created', 'transition.', 'turn.']) }),
     }]));
     candidate.changes.emit({ type: 'subscription_ready', subscriptionId: `chat:${sessionKey}` });
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
@@ -271,7 +284,7 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
     }, signal);
     await vi.waitFor(() => expect(candidate.changes.sent).toEqual([{
       type: 'subscribe', protocolVersion: 2, subscriptionId: `chat:${sessionKey}`,
-      filters: { sessionKey },
+      filters: expect.objectContaining({ sessionKey, classes: expect.arrayContaining(['message.created', 'transition.', 'turn.']) }),
     }]));
     candidate.changes.emit({ type: 'subscription_ready', subscriptionId: `chat:${sessionKey}` });
     const connection = await pending;
@@ -346,6 +359,8 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
           await tailGate;
           body = { schemaVersion: 1, resource: 'transcript messages', items: [item],
             page: { oldestCursor: null, hasMoreBefore: false } };
+        } else if (path.includes('/tool-calls?')) {
+          body = { schemaVersion: 1, resource: 'tool calls', items: [], page: { hasMoreBefore: false } };
         } else if (path.includes('/turns?')) {
           body = { schemaVersion: 1, resource: 'turns', items: [],
             page: { oldestCursor: null, hasMoreBefore: false } };
@@ -358,7 +373,12 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
         }
         return new Response(JSON.stringify(body), { status: 200 });
       },
-      openAuthenticatedChanges: async () => changes,
+      openAuthenticatedChanges: async () => {
+      if (!changes.listening) return changes;
+      const tools = new Channel();
+      tools.autoReady = true;
+      return tools;
+    },
       openAuthenticatedHuman: async () => human,
     };
     const { transport, profile } = createPublic019Transport({ baseUrl: 'https://host.example',
@@ -566,9 +586,9 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
         marker: { kind, from: 'old', to: 'new' } }, sessionKey)).toMatchObject({ kind: 'transition', transition, from: 'old', to: 'new' });
     }
     expect(() => decodePublic019Message({ ...item, messageType: 'marker' }, sessionKey)).toThrow(UnsupportedTargetError);
-    expect(() => decodePublic019Message({ ...item, messageType: 'marker',
-      marker: { kind: 'harness_failed_park_reconciled', from: 'parked', to: 'reconciled' } }, sessionKey))
-      .toThrow('Unknown stored marker kind.');
+    expect(decodePublic019Message({ ...item, messageType: 'marker',
+      marker: { kind: 'future-boundary', from: 'old', to: 'new' } }, sessionKey))
+      .toMatchObject({ kind: 'transition', transition: 'unknown', content: item.content });
   });
 
   it('decodes protocol-2 selected-session notices and refuses fabricated marker data', () => {
@@ -617,7 +637,7 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
     }, new AbortController().signal);
     await vi.waitFor(() => expect(changes.sent).toHaveLength(1));
     expect(changes.sent[0]).toEqual({ type: 'subscribe', protocolVersion: 2,
-      subscriptionId: 'chat:s-public', filters: { sessionKey } });
+      subscriptionId: 'chat:s-public', filters: expect.objectContaining({ sessionKey, classes: expect.arrayContaining(['message.created', 'transition.', 'turn.']) }) });
     changes.emit({ type: 'subscription_ready', subscriptionId: 'chat:s-public' });
     const connection = await pending;
     changes.emit({ type: 'change', schemaVersion: 2, subscriptionId: 'chat:s-public', seq: 1,
@@ -767,5 +787,57 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
       .rejects.toBe(rejection);
     expect(sendSpy).not.toHaveBeenCalled();
     sendSpy.mockRestore();
+  });
+});
+
+describe('tool-call contract and transition category', () => {
+  const call = { id: 'tc_first', seq: 2, sessionKey, turnSeq: 3, afterMessageSeq: 9,
+    harnessToolCallId: 'invocation-1', title: 'Read source', kind: 'read', toolName: 'read_file',
+    status: 'in_progress', rawInput: { path: 'source.ts' }, rawOutput: null, content: null,
+    truncated: [], startedAt: 1000, endedAt: null, rowVersion: 1 };
+
+  it('decodes live and retained projections including unknown transition text and truncated prefixes', () => {
+    const terminal = { ...call, status: 'completed', rowVersion: 2, endedAt: 2000,
+      rawOutput: '{"partial":', truncated: [{ field: 'rawOutput', originalBytes: 20000 }] };
+    expect(decodeToolCall(terminal, sessionKey)).toEqual(terminal);
+    expect(decodePublic019Notice({ type: 'change', schemaVersion: 2, class: 'tool_call.ended',
+      resource: 'tool calls', op: 'upsert', refs: { sessionKey, toolCallId: call.id }, payload: terminal }, sessionKey))
+      .toEqual({ operation: 'tool', tool: terminal });
+    const marker = { ...item, messageType: 'marker', marker: { kind: 'context-compacted', from: 'large', to: 'compact' } };
+    expect(decodePublic019Notice({ type: 'change', schemaVersion: 2, class: 'transition.recorded',
+      resource: 'transcript messages', op: 'upsert', refs: { sessionKey }, payload: marker }, sessionKey))
+      .toMatchObject({ operation: 'upsert', record: { transition: 'compaction', content: item.content } });
+  });
+
+  it('exhausts fixed-range tool pages and keeps tool subscriptions separate from transcript classes', async () => {
+    const paths: URL[] = [];
+    const channels: Channel[] = [];
+    const host: Public019Host = {
+      currentIdentity: () => identity,
+      fetch: async path => {
+        const url = new URL(path); paths.push(url);
+        const older = url.searchParams.has('before');
+        return new Response(JSON.stringify({ schemaVersion: 1, resource: 'tool calls',
+          items: [{ ...call, id: older ? 'tc_older' : 'tc_newer', seq: older ? 1 : 2 }],
+          page: { oldestCursor: older ? 'end' : 'opaque-next', hasMoreBefore: !older } }));
+      },
+      openAuthenticatedChanges: async () => { const channel = new Channel(); channel.autoReady = true; channels.push(channel); return channel; },
+      openAuthenticatedHuman: async () => new Channel(),
+    };
+    const { transport } = createPublic019Transport({ baseUrl: 'https://host.example', build: version.build, sha: version.sha, host });
+    const controller = new AbortController();
+    const callbacks = { onNotice: vi.fn(), onDoubt: vi.fn() };
+    const main = await transport.openChanges(sessionKey, callbacks, controller.signal);
+    const tools = await transport.openToolChanges!(sessionKey, callbacks, controller.signal);
+    expect((channels[0].sent[0].filters as { classes: string[] }).classes).not.toContain('tool_call.');
+    expect(channels[1].sent[0].filters).toEqual({ sessionKey, classes: ['tool_call.'] });
+    const rows = await transport.readToolCalls!(sessionKey, { fromInclusive: 8, toExclusive: 10 }, controller.signal);
+    expect(rows.map(row => row.id)).toEqual(['tc_older', 'tc_newer']);
+    expect(paths.map(url => [url.searchParams.get('afterMessageSeqFromInclusive'), url.searchParams.get('afterMessageSeqToExclusive')]))
+      .toEqual([['8', '10'], ['8', '10']]);
+    expect(paths[1].searchParams.get('before')).toBe('opaque-next');
+    tools.close();
+    expect(channels[0].closed).toBe(false);
+    main.close();
   });
 });
