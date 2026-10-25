@@ -1,4 +1,6 @@
 import { execFileSync } from 'node:child_process';
+import fs from 'node:fs/promises';
+import { hasUserFacingNotesForTag } from './chat-release-notes.mjs';
 
 const tag = process.env.GITHUB_REF_NAME ?? '';
 const sourceCommit = process.env.GITHUB_SHA ?? '';
@@ -20,6 +22,18 @@ try {
 }
 if (taggedCommit !== sourceCommit) {
   process.stderr.write('The release tag and workflow source commit differ.\n');
+  process.exit(1);
+}
+
+let releaseNotes;
+try {
+  releaseNotes = JSON.parse(await fs.readFile(new URL('../src/release-notes.json', import.meta.url), 'utf8'));
+} catch {
+  process.stderr.write('Chat release notes are missing or invalid.\n');
+  process.exit(1);
+}
+if (!hasUserFacingNotesForTag(releaseNotes, tag)) {
+  process.stderr.write('This Chat version needs user-facing release notes before release staging.\n');
   process.exit(1);
 }
 

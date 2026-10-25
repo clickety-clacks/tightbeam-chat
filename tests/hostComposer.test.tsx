@@ -273,7 +273,7 @@ describe('versioned host composer seam on the real adapter and surface', () => {
 
     try {
       const ready = await waitForReady(events, 'conversation-a');
-      const snapshotKeys = ['composerHidden', 'optedIn', 'ready'];
+      const snapshotKeys = ['composerHidden', 'optedIn', 'ready', 'settingsRequestRevision'];
       expect(Object.keys(bridge.getSnapshot()).sort()).toEqual(snapshotKeys);
       const ids: string[] = [];
       for (let index = 0; index < 64; index++) {
@@ -431,6 +431,43 @@ describe('versioned host composer seam on the real adapter and surface', () => {
       correlationId: correlation, content: ' \n ' }));
     expect(events.at(-1)).toMatchObject({ event: 'rejected', reason: 'empty' });
     expect(transport.submissions).toHaveLength(0);
+  });
+
+  it('handles a local Settings command before readiness and announces overlay focus after ready', async () => {
+    const events: HostComposerEvent[] = [];
+    const transport = new HostComposerTransport();
+    const gate = deferred<void>();
+    transport.readyGate = gate;
+    installDeclaration(events);
+    const { runtimes } = openChat(transport, 'local-settings');
+    await screen.findByRole('textbox');
+    const command = commandEntry();
+
+    act(() => command({ type: 'send', lifetimeId: 'before-ready', sessionKey: 'local-settings',
+      correlationId: correlation, content: ' \n/settings\t' }));
+    expect(events.at(-1)).toMatchObject({ event: 'rejected', lifetimeId: 'before-ready',
+      correlationId: correlation, reason: 'local-command' });
+    expect(await screen.findByRole('dialog', { name: 'Settings' })).toBeTruthy();
+    expect(runtimes[0].getSnapshot().sends).toEqual([]);
+    expect(transport.submissions).toHaveLength(0);
+
+    await act(async () => { gate.resolve(); });
+    const ready = await waitForReady(events, 'local-settings');
+    await waitFor(() => expect(events.some((event) => event.event === 'overlay' &&
+      event.lifetimeId === ready.lifetimeId && event.open)).toBe(true));
+    const readyIndex = events.findIndex((event) => event.event === 'ready' && event.lifetimeId === ready.lifetimeId);
+    const overlayOpenIndex = events.findIndex((event) => event.event === 'overlay' && event.lifetimeId === ready.lifetimeId && event.open);
+    expect(overlayOpenIndex).toBeGreaterThan(readyIndex);
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => expect(events.some((event) => event.event === 'overlay' &&
+      event.lifetimeId === ready.lifetimeId && !event.open)).toBe(true));
+    act(() => command({ type: 'send', lifetimeId: ready.lifetimeId, sessionKey: ready.sessionKey,
+      correlationId: correlation, content: '/compact' }));
+    await waitFor(() => expect(transport.submissions).toHaveLength(1));
+    expect(transport.submissions[0]).toMatchObject({ clientMessageId: correlation, content: '/compact' });
+    expect(events.some((event) => event.event === 'rejected' && event.correlationId === correlation &&
+      event.reason === 'correlation-conflict')).toBe(false);
   });
 
   it('ends the old lifetime before announcing a newly selected session', async () => {

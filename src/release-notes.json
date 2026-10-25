@@ -1,0 +1,15 @@
+[
+  {
+    "version": "v0.1.27",
+    "items": [
+      {
+        "title": "What's new",
+        "description": "Chat now shows what changed after an update, once per version."
+      },
+      {
+        "title": "Release notes",
+        "description": "Send /settings to open Settings and read what changed in this and earlier releases."
+      }
+    ]
+  }
+]

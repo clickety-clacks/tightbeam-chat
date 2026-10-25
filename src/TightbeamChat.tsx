@@ -8,6 +8,9 @@ import { projectMessages, type HumanMember } from './messageVisibility';
 import { useReadingPosition } from './useReadingPosition';
 import { firstAfterTime, getIndex, putIndex, type RecordIndex } from './recordIndex';
 import { getHostComposerSnapshot, HostComposerBridge, subscribeHostComposer } from './hostComposer';
+import { ReleaseNotesDialog, type ChatOverlay } from './ReleaseNotesDialog';
+import { CHAT_RELEASE_VERSION, RELEASE_NOTES, recordSeenReleaseVersion, releaseNotesForBuild, unseenReleaseNotes } from './releaseNotes';
+import { isSettingsCommand } from './settingsCommand';
 import './style.css';
 
 export interface RenderContext {
@@ -403,6 +406,7 @@ interface ComposerHandle {
   restore(content: string): void;
   contains(target: EventTarget | null): boolean;
   focusAtEnd(): boolean;
+  closeStatusPopup(): void;
 }
 
 const Composer = forwardRef<ComposerHandle, {
@@ -411,7 +415,8 @@ const Composer = forwardRef<ComposerHandle, {
   agentName: string;
   root: RefObject<HTMLElement | null>;
   suppressStatus: boolean;
-}>(function Composer({ runtime, state, agentName, root, suppressStatus }, ref) {
+  onSettings: () => void;
+}>(function Composer({ runtime, state, agentName, root, suppressStatus, onSettings }, ref) {
   const [draft, setDraft] = useState('');
   const [statusOpen, setStatusOpen] = useState(false);
   const input = useRef<HTMLTextAreaElement>(null);
@@ -420,7 +425,6 @@ const Composer = forwardRef<ComposerHandle, {
   const sendControl = useRef<HTMLButtonElement>(null);
   const shell = useRef<HTMLFormElement>(null);
   const titleId = useId();
-  const composerLocked = state.status === 'unsupported' || state.status === 'unauthorized';
   const statusName = statusText(state);
   const statusId = `${titleId}-status-details`;
 
@@ -435,6 +439,7 @@ const Composer = forwardRef<ComposerHandle, {
       element.setSelectionRange(end, end);
       return document.activeElement === element;
     },
+    closeStatusPopup: () => setStatusOpen(false),
   }), []);
 
   const closeStatusPopup = () => {
@@ -479,6 +484,13 @@ const Composer = forwardRef<ComposerHandle, {
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!draft.trim()) return;
+    if (isSettingsCommand(draft)) {
+      setDraft('');
+      setStatusOpen(false);
+      onSettings();
+      return;
+    }
+    if (state.status !== 'ready') return;
     if (runtime.send(draft)) setDraft('');
   };
 
@@ -506,7 +518,7 @@ const Composer = forwardRef<ComposerHandle, {
           event.preventDefault();
           sendControl.current?.click();
         }}
-        rows={1} disabled={composerLocked}
+        rows={1}
         aria-label={`Message to ${agentName || 'the selected agent'}`} placeholder={agentName}
         autoComplete="off" spellCheck />
       {!suppressStatus && <button ref={statusControl} type="button" className="tb-chat-status-control" aria-label={`Connection status: ${statusName}. Show details`}
@@ -528,7 +540,7 @@ const Composer = forwardRef<ComposerHandle, {
         {state.status === 'error' && <button type="button" onClick={() => void runtime.rebuild({ restart: true })}>Reconnect</button>}
       </div>}
       <button ref={sendControl} type="submit" className="tb-chat-send-button" aria-label="Send message"
-        disabled={state.status !== 'ready' || !draft.trim()}>
+        disabled={!draft.trim() || (state.status !== 'ready' && !isSettingsCommand(draft))}>
         <span className="tb-chat-send-button-disc" aria-hidden="true" />
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5m0 0L6 11m6-6 6 6" /></svg>
       </button>
@@ -583,6 +595,42 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
   const { viewport } = reading;
   const root = useRef<HTMLElement>(null);
   const composer = useRef<ComposerHandle>(null);
+  const [overlay, setOverlay] = useState<ChatOverlay | null>(null);
+  const overlayRef = useRef<ChatOverlay | null>(null);
+  const handledSettingsRevision = useRef(0);
+  const overlayWasOpen = useRef(false);
+  const setOverlayState = useCallback((next: ChatOverlay | null) => {
+    overlayRef.current = next;
+    setOverlay(next);
+  }, []);
+  const recordWhatsNewSeen = useCallback(() => {
+    if (!CHAT_RELEASE_VERSION || typeof window === 'undefined') return;
+    try { recordSeenReleaseVersion(window.localStorage, CHAT_RELEASE_VERSION); } catch { /* Storage may be unavailable. */ }
+  }, []);
+  const openSettings = useCallback(() => {
+    const current = overlayRef.current;
+    if (current?.kind === 'settings') return;
+    if (current?.kind === 'whats-new') recordWhatsNewSeen();
+    composer.current?.closeStatusPopup();
+    setOverlayState({ kind: 'settings', page: 'home' });
+  }, [recordWhatsNewSeen, setOverlayState]);
+  const openReleaseNotes = useCallback(() => {
+    const current = overlayRef.current;
+    if (current?.kind === 'settings' && current.page === 'home') {
+      setOverlayState({ kind: 'settings', page: 'release-notes' });
+    }
+  }, [setOverlayState]);
+  const backToSettings = useCallback(() => {
+    const current = overlayRef.current;
+    if (current?.kind === 'settings' && current.page === 'release-notes') {
+      setOverlayState({ kind: 'settings', page: 'home' });
+    }
+  }, [setOverlayState]);
+  const closeOverlay = useCallback(() => {
+    if (overlayRef.current?.kind === 'whats-new') recordWhatsNewSeen();
+    setOverlayState(null);
+  }, [recordWhatsNewSeen, setOverlayState]);
+  const bundledNotes = useMemo(() => releaseNotesForBuild(CHAT_RELEASE_VERSION, RELEASE_NOTES), []);
   const lastPointerInChat = useRef(false);
   const keyboardActions = useRef({ optedIn: host.optedIn, composerHidden: host.composerHidden, scrollBy: reading.scrollBy });
   keyboardActions.current = { optedIn: host.optedIn, composerHidden: host.composerHidden, scrollBy: reading.scrollBy };
@@ -648,6 +696,28 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
       seq: Math.max(previousTail.current?.seq ?? -1, tailSeq) };
   }, [state.generation, state.status, tailSeq]);
   const statusName = statusText(state);
+
+  useEffect(() => {
+    if (host.settingsRequestRevision <= handledSettingsRevision.current) return;
+    handledSettingsRevision.current = host.settingsRequestRevision;
+    openSettings();
+  }, [host.settingsRequestRevision, openSettings]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || overlayRef.current) return;
+    try {
+      const entries = unseenReleaseNotes(window.localStorage, CHAT_RELEASE_VERSION, RELEASE_NOTES);
+      if (entries?.length) setOverlayState({ kind: 'whats-new', entries });
+    } catch { /* Storage may be unavailable. */ }
+  }, [setOverlayState]);
+
+  useLayoutEffect(() => {
+    const isOpen = overlay !== null;
+    if (isOpen) composer.current?.closeStatusPopup();
+    if (!isOpen && overlayWasOpen.current && !host.composerHidden) composer.current?.focusAtEnd();
+    overlayWasOpen.current = isOpen;
+    hostBridge?.setOverlayOpen(isOpen);
+  }, [overlay, host.composerHidden, host.ready, hostBridge]);
 
   useEffect(() => {
     if (!agentName) return;
@@ -892,7 +962,9 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
       <span aria-hidden="true">↓</span> Latest messages
     </button>}
     {!host.composerHidden && <Composer ref={composer} runtime={runtime} state={state} agentName={agentName}
-      root={root} suppressStatus={host.optedIn} />}
+      root={root} suppressStatus={host.optedIn} onSettings={openSettings} />}
+    {overlay && <ReleaseNotesDialog overlay={overlay} entries={bundledNotes} onClose={closeOverlay}
+      onOpenReleaseNotes={openReleaseNotes} onBack={backToSettings} />}
   </section>;
 }
 
