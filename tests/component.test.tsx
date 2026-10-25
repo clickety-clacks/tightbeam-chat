@@ -328,7 +328,7 @@ describe('conversation surface', () => {
     ]));
   });
 
-  it('keeps null-linked and unloaded-parent replies until loaded fields prove exclusion', async () => {
+  it('holds unloaded-parent replies while preserving null-linked replies', async () => {
     const sessionKey = 'unresolved-reply-parent';
     const nullSenderHuman = row(sessionKey, 'null-sender-human', 'A human message with a null sender', {
       role: 'user', messageType: 'chat', raw: { source: 'fixture', id: 'null-sender-human', sender: null },
@@ -345,6 +345,7 @@ describe('conversation surface', () => {
     });
     const runtime = new FakeRuntime(sessionKey, {
       records: [nullSenderHuman, unknownSender, nullLinkReply, unloadedParentReply],
+      hasOlder: true,
     });
     runtime.olderPages = [{ records: [row(sessionKey, 'older-agent-trigger', 'An older agent wake', {
       role: 'user', sender: 'agent:external', messageType: 'agent', turnSeq: 50,
@@ -355,12 +356,13 @@ describe('conversation surface', () => {
     expect(within(log).queryByText('A human message with a null sender')).toBeNull();
     expect(within(log).queryByText('An absent sender is not proven human by metadata alone')).toBeNull();
     expect(within(log).getByText('A reply without a parent link')).toBeTruthy();
-    expect(within(log).getByText('A reply whose parent is not loaded')).toBeTruthy();
+    expect(within(log).queryByText('A reply whose parent is not loaded')).toBeNull();
 
-    act(() => runtime.update({ hasOlder: true }));
-    await waitFor(() => expect(runtime.loadOlderCalls).toBe(1));
+    await waitFor(() => expect(runtime.getSnapshot().hasOlder).toBe(false));
+    expect(runtime.loadOlderCalls).toBe(1);
     expect(within(log).queryByText('An older agent wake')).toBeNull();
     expect(within(log).queryByText('A reply whose parent is not loaded')).toBeNull();
+    expect(within(log).getByText('A reply without a parent link')).toBeTruthy();
     expect(runtime.getSnapshot().records.map((record) => record.id)).toContain('unloaded-parent-reply');
   });
 
@@ -384,6 +386,7 @@ describe('conversation surface', () => {
     const runtime = new FakeRuntime(sessionKey, {
       records: [reply, human('reading'), human('following'), human('newest')],
       provenanceAvailable: false,
+      hasOlder: true,
     });
     runtime.olderPages.push({
       records: [...(visibleOlder ? [human('older-a'), human('older-b'), human('older-c')] : []), parent],
@@ -393,7 +396,7 @@ describe('conversation surface', () => {
     const log = screen.getByRole('log');
     const reading = within(log).getByText('Human message reading').closest('article')!;
     const following = within(log).getByText('Human message following').closest('article')!;
-    const firstReply = within(log).getByText('The first visible reply').closest('article')!;
+    expect(within(log).queryByText('The first visible reply')).toBeNull();
 
     // jsdom has no layout: model normal stacked rows, padding, and the browser's
     // scroll range. In particular, a negative scrollTop cannot preserve a row.
@@ -423,26 +426,20 @@ describe('conversation surface', () => {
       fireEvent.scroll(log);
       const readingBefore = viewportOffset(reading);
       const followingBefore = viewportOffset(following);
-      const replyBefore = viewportOffset(firstReply);
-      expect(replyBefore).toBeLessThan(0);
-      expect(firstReply.getBoundingClientRect().bottom).toBeGreaterThan(log.getBoundingClientRect().top);
-
-      act(() => runtime.update({ hasOlder: true }));
-      fireEvent.scroll(log);
       await waitFor(() => {
         expect(runtime.getSnapshot().records).toContain(parent);
         expect(runtime.getSnapshot().loadingOlder).toBe(false);
-        expect(firstReply.isConnected).toBe(!excluded);
       });
+      if (!excluded) expect(within(log).getByText('The first visible reply')).toBeTruthy();
+      else expect(within(log).queryByText('The first visible reply')).toBeNull();
       expect(viewportOffset(reading)).toBe(readingBefore);
       expect(viewportOffset(following)).toBe(followingBefore);
-      if (!excluded) expect(viewportOffset(firstReply)).toBe(replyBefore);
       expect(log.scrollTop).toBeGreaterThanOrEqual(0);
       expect(runtime.getSnapshot().records).toContain(reply);
 
       if (excluded && !visibleOlder) {
-        expect(topSpace()).toBeGreaterThan(0);
-        // A later visible page replaces the retained space without another jump.
+        expect(topSpace()).toBe(0);
+        // A later visible page can be read without reclassifying shown content.
         runtime.olderPages.push({ records: [human('earlier')], provenance: [], hasOlder: false });
         act(() => runtime.update({ hasOlder: true }));
         fireEvent.scroll(log);
@@ -456,7 +453,7 @@ describe('conversation surface', () => {
     }
   });
 
-  it('holds the transcript position when older provenance filters a long visible reply block', async () => {
+  it('withholds unresolved replies until an older page settles their provenance', async () => {
     const sessionKey = 'history-reclassification';
     const parents = Array.from({ length: 14 }, (_, index) => row(
       sessionKey, `agent-parent-${index + 1}`, `Hidden activity ${index + 1}`,
@@ -475,7 +472,7 @@ describe('conversation surface', () => {
     const latest = row(sessionKey, 'latest', 'Latest human message', {
       seq: 100, role: 'user', sender: 'user:person', messageType: 'chat', turnSeq: 100,
     });
-    const runtime = new FakeRuntime(sessionKey, { records: [...replies, reading, following, latest] });
+    const runtime = new FakeRuntime(sessionKey, { records: [...replies, reading, following, latest], hasOlder: true });
     const page = { records: parents, provenance: [] as TurnProvenance[], hasOlder: false };
     let releasePage!: () => void;
     const pageGate = new Promise<void>(resolve => { releasePage = resolve; });
@@ -493,14 +490,13 @@ describe('conversation surface', () => {
     const log = screen.getByRole('log');
     const layout = installViewportLayout(log);
     const newest = within(log).getByText('Latest human message').closest('article')!;
-    expect(within(log).getByText('Provisional reply 1')).toBeTruthy();
+    expect(within(log).queryByText('Provisional reply 1')).toBeNull();
     layout.setScrollTop(0);
     const newestBefore = layout.offset(newest);
 
     try {
       fireEvent.wheel(log, { deltaY: -100 });
       fireEvent.scroll(log);
-      act(() => runtime.update({ hasOlder: true }));
       await waitFor(() => expect(runtime.loadOlderCalls).toBe(1));
       await waitFor(() => expect(runtime.getSnapshot().loadingOlder).toBe(true));
 
@@ -513,7 +509,7 @@ describe('conversation surface', () => {
       expect(within(log).queryByText('Provisional reply 1')).toBeNull();
       expect(layout.offset(newest)).toBe(newestBefore);
       expect(layout.scrollTop).toBe(0);
-      expect(layout.anchorSpace).toBeGreaterThan(1000);
+      expect(layout.anchorSpace).toBe(0);
       expect(runtime.getSnapshot().records).toContain(replies[0]);
       expect(runtime.getSnapshot().hasOlder).toBe(false);
     } finally {
@@ -537,7 +533,7 @@ describe('conversation surface', () => {
     const following = row(sessionKey, 'alert-following', 'Message after reading', {
       seq: 40, role: 'user', sender: 'user:person', messageType: 'chat', turnSeq: 40,
     });
-    const runtime = new FakeRuntime(sessionKey, { records: [reply, reading, following] });
+    const runtime = new FakeRuntime(sessionKey, { records: [reply, reading, following], hasOlder: true });
     runtime.olderPages = [{ records: [parent], provenance: [], hasOlder: false }];
     render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
     const log = screen.getByRole('log');
@@ -548,8 +544,6 @@ describe('conversation surface', () => {
 
     try {
       fireEvent.wheel(log, { deltaY: -100 });
-      fireEvent.scroll(log);
-      act(() => runtime.update({ hasOlder: true }));
       fireEvent.scroll(log);
       await waitFor(() => expect(runtime.getSnapshot().records).toContain(parent));
 

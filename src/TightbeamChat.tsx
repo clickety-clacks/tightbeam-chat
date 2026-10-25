@@ -473,11 +473,16 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
   const agentName = state.agentDisplayName ?? '';
   const projection = useMemo(() => projectMessages(state.records, state.principalKey, state.session?.raw.ownerUserId),
     [state.records, state.principalKey, state.session?.raw.ownerUserId]);
-  const bubbles: Bubble[] = useMemo(() => projection.messages.map((message) => ({
-    key: message.key, record: message.source, side: message.side,
-    sender: sourceLabel(message.side, agentName), derived: Boolean(message.member),
-    displayContent: message.member?.content, member: message.member,
-  })), [projection, agentName]);
+  // A provisional reply could be reclassified when its older parent arrives.
+  // Keep it out of the live transcript until older history is exhausted or
+  // the projection has enough evidence to settle its visibility.
+  const bubbles: Bubble[] = useMemo(() => projection.messages
+    .filter(message => !state.hasOlder || !message.provenancePending)
+    .map((message) => ({
+      key: message.key, record: message.source, side: message.side,
+      sender: sourceLabel(message.side, agentName), derived: Boolean(message.member),
+      displayContent: message.member?.content, member: message.member,
+    })), [projection, agentName, state.hasOlder]);
   const caption = state.provenanceAvailable === false ? undefined : activeCaption(state.activeTurn);
   const visibleSendIdentities = useMemo(() => new Set(bubbles.flatMap((bubble) => {
     const identity = bubble.derived ? undefined : canonicalSendIdentity(bubble.record);

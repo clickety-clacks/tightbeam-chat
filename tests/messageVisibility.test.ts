@@ -51,6 +51,10 @@ describe('principal-scoped message projection', () => {
     const conflict = projectMessages([human, reply('answer', human.id, { turnSeq: 1, turnIncludesHuman: false })], 'person', 'person');
     expect(conflict.messages.map((row) => row.key)).toEqual(['human', 'answer']);
     expect(conflict.issues).toHaveLength(1);
+    const pending = projectMessages([reply('pending', 'not-loaded', { turnSeq: 11 })], 'person', 'person');
+    expect(pending.messages[0].provenancePending).toBe(true);
+    expect(projectMessages([reply('unlinked')], 'person', 'person').messages[0].provenancePending).toBe(false);
+    expect(conflict.messages.find(row => row.key === 'answer')?.provenancePending).toBe(false);
   });
 
   it('does not turn arbitrary origins, wake text, incomplete flags, or assistant markers into human proof', () => {
