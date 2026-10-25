@@ -29,7 +29,7 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
     const box = viewport.current;
     const children = content.current?.children;
     if (!box || !children) return;
-    viewportHeight.current = box.clientHeight;
+    if (box.clientHeight > 0) viewportHeight.current = box.clientHeight;
     readingTop.current = box.scrollTop;
     anchors.current = [];
     if (following.current) return;
