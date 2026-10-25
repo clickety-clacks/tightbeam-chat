@@ -393,10 +393,12 @@ describe('conversation reading position', () => {
     const offset = anchor.getBoundingClientRect().top;
     const query = vi.spyOn(box, 'querySelectorAll');
     for (let i = 0; i < 4; i++) {
-      for (const { patch, newMessageRows } of [
-        { patch: { status: i % 2 ? 'ready' as const : 'stale' as const }, newMessageRows: 0 },
-        { patch: { sends: [] }, newMessageRows: 0 },
-        { patch: { records: [...runtime.state.records, message(count + i)] }, newMessageRows: 1 },
+      for (const { patch, expectedRenderedRows } of [
+        { patch: { status: i % 2 ? 'ready' as const : 'stale' as const },
+          expectedRenderedRows: i >= 2 && i % 2 === 0 ? [`message-${count + i - 1}`] : [] },
+        { patch: { sends: [] }, expectedRenderedRows: [] },
+        { patch: { records: [...runtime.state.records, message(count + i)] },
+          expectedRenderedRows: [`message-${count + i}`] },
       ]) {
         const rendersBeforeUpdate = renderMessage.mock.calls.length;
         measure.mockClear();
@@ -405,7 +407,8 @@ describe('conversation reading position', () => {
         expect(measure.mock.calls.length).toBeLessThan(35);
         expect(query).not.toHaveBeenCalled();
         expect(anchor.getBoundingClientRect().top).toBe(offset);
-        expect(renderMessage.mock.calls.length).toBe(rendersBeforeUpdate + newMessageRows);
+        expect(renderMessage.mock.calls.slice(rendersBeforeUpdate).map(([record]) => record.id))
+          .toEqual(expectedRenderedRows);
       }
     }
   });

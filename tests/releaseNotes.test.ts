@@ -48,6 +48,6 @@ describe('release notes versions and browser record', () => {
 
     const storage = memoryStorage({ [SEEN_RELEASE_VERSION_KEY]: 'v0.1.29' });
     expect(recordSeenReleaseVersion(storage, 'v0.1.28')).toBe(true);
-    expect(storage.getItem(SEEN_RELEASE_VERSION_KEY)).toBe('v0.1.28');
+    expect(storage.getItem(SEEN_RELEASE_VERSION_KEY)).toBe('v0.1.29');
   });
 });
