@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { TightbeamChat, type TightbeamChatProps } from '../src/TightbeamChat';
 import { useReadingPosition } from '../src/useReadingPosition';
 import { createTightbeamAdapter } from '../src/runtime';
 import { type ChatTransport, type TargetProfile } from '../src/types';
 import type { CanonicalMessage, ChatRuntime, ConversationRecord, RuntimeState } from '../src/types';
-import styleSource from '../src/style.css?raw';
 
 class ReadingRuntime implements ChatRuntime {
   listeners = new Set<() => void>();
@@ -39,6 +40,7 @@ let reducedMotion = false;
 let animate: ReturnType<typeof vi.fn>;
 const resizeCallbacks = new Set<ResizeObserverCallback>();
 const rows = () => [...document.querySelectorAll<HTMLElement>('article[data-record-key]')];
+const styleSource = readFileSync(resolve(process.cwd(), 'src/style.css'), 'utf8');
 const keyboardInset = () => Number.parseFloat(document.querySelector<HTMLElement>('.tb-chat')?.style.getPropertyValue('--tb-chat-keyboard-inset') || '0') || 0;
 const followsKeyboardInset = styleSource.includes('max-height: calc(100% - var(--tb-chat-keyboard-inset, 0px));');
 const renderedViewportHeight = () => {
