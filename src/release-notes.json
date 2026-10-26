@@ -4,7 +4,7 @@
     "items": [
       {
         "title": "Conversation loading",
-        "description": "Conversations open after routine server updates without needing a matching Chat release. Chat loads the selected session directly and reports errors from the operation that failed."
+        "description": "Chat no longer refuses to load based on Gateway version or build metadata. It loads the selected session directly, so routine Gateway releases do not require a matching Chat update."
       }
     ]
   },
