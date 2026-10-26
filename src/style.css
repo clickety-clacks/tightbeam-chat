@@ -39,6 +39,8 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
+  /* Follow the visible viewport each keyboard frame so the latest message moves with it. */
+  max-height: calc(100% - var(--tb-chat-keyboard-inset, 0px));
   padding: calc(clamp(1rem, 3.5vw, 2rem) + var(--tb-chat-anchor-space, 0px)) clamp(.85rem, 4vw, 2.2rem)
     calc(var(--tb-chat-composer-height, 5rem) + 3rem + env(safe-area-inset-bottom));
   overscroll-behavior: contain;
