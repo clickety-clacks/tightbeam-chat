@@ -5,7 +5,7 @@ import { useReadingPosition } from '../src/useReadingPosition';
 import { createTightbeamAdapter } from '../src/runtime';
 import { type ChatTransport, type TargetProfile } from '../src/types';
 import type { CanonicalMessage, ChatRuntime, ConversationRecord, RuntimeState } from '../src/types';
-import '../src/style.css';
+import styleSource from '../src/style.css?raw';
 
 class ReadingRuntime implements ChatRuntime {
   listeners = new Set<() => void>();
@@ -40,10 +40,9 @@ let animate: ReturnType<typeof vi.fn>;
 const resizeCallbacks = new Set<ResizeObserverCallback>();
 const rows = () => [...document.querySelectorAll<HTMLElement>('article[data-record-key]')];
 const keyboardInset = () => Number.parseFloat(document.querySelector<HTMLElement>('.tb-chat')?.style.getPropertyValue('--tb-chat-keyboard-inset') || '0') || 0;
+const followsKeyboardInset = styleSource.includes('max-height: calc(100% - var(--tb-chat-keyboard-inset, 0px));');
 const renderedViewportHeight = () => {
-  const viewport = document.querySelector<HTMLElement>('.tb-chat-viewport');
-  const followsKeyboard = viewport && getComputedStyle(viewport).maxHeight.includes('--tb-chat-keyboard-inset');
-  return Math.max(0, viewportHeight - (followsKeyboard ? keyboardInset() : 0));
+  return Math.max(0, viewportHeight - (followsKeyboardInset ? keyboardInset() : 0));
 };
 const scrollHeight = () => 32 + rows().length * 92 + lateLayoutGrowth + Number.parseFloat(document.querySelector<HTMLElement>('.tb-chat-viewport')?.style.getPropertyValue('--tb-chat-anchor-space') || '0');
 const rect = (top: number, height: number) => ({ top, bottom: top + height, left: 0, right: 400, width: 400, height, x: 0, y: top, toJSON() {} });
@@ -553,7 +552,7 @@ describe('conversation reading position', () => {
   it('tracks the visible viewport through keyboard motion while following the latest message', () => {
     const visualViewport = installVisualViewport(300);
     const { box } = setup();
-    expect(getComputedStyle(box).maxHeight).toContain('var(--tb-chat-keyboard-inset, 0px)');
+    expect(styleSource).toContain('max-height: calc(100% - var(--tb-chat-keyboard-inset, 0px));');
     expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight);
 
     for (const height of [270, 240, 210, 180]) {
