@@ -206,6 +206,8 @@ export interface ChatTransport {
   readTail(sessionKey: string, signal: AbortSignal): Promise<ConversationPage>;
   readOlder(sessionKey: string, before: string, signal: AbortSignal): Promise<ConversationPage>;
   readSession(sessionKey: string, signal: AbortSignal): Promise<SessionRecord>;
+  /** Optional bounded activity snapshot for opening or returning during an active turn. */
+  readRecentTurns?(sessionKey: string, signal: AbortSignal): Promise<readonly CanonicalTurn[]>;
   /** Exact non-secret Gateway origin selected by the host, when the transport knows it. */
   readonly targetGateway?: string;
   /** Establishes the elected target's snapshot/notice coverage rule. */
@@ -259,9 +261,11 @@ export interface RuntimeState {
   readonly toolCallsError?: string;
   readonly session?: SessionRecord;
   readonly provenance?: readonly TurnProvenance[];
-  /** False until a typed turn record arrives on this connection generation. */
+  /** False until typed turn data is observed or retrieved for this runtime. */
   readonly provenanceAvailable?: boolean;
   readonly activeTurn?: TurnProvenance;
+  /** A local caption-only failure; it never makes conversation or sending unavailable. */
+  readonly activeTurnError?: string;
   readonly targetGateway?: string;
   readonly agentDisplayName?: string;
   readonly hasOlder: boolean;

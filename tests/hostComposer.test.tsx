@@ -4,7 +4,7 @@ import { TightbeamChat } from '../src/TightbeamChat';
 import { createTightbeamAdapter } from '../src/runtime';
 import { HOST_COMMAND_NAME, HOST_DECLARATION_NAME, HostComposerBridge, type HostComposerCommandEntry, type HostComposerEvent } from '../src/hostComposer';
 import type {
-  CanonicalMessage, ChangeCallbacks, ChangeNotice, ChatRuntime, ChatTransport,
+  CanonicalMessage, CanonicalTurn, ChangeCallbacks, ChangeNotice, ChatRuntime, ChatTransport,
   ConversationPage, ConversationRecord, HostIdentity, HumanSendResult, HumanSubmission,
   SessionRecord, TargetCapabilities, TargetObservation, TargetProfile, TightbeamAdapter,
 } from '../src/types';
@@ -28,6 +28,7 @@ function deferred<T>() {
 class HostComposerTransport implements ChatTransport {
   readonly submissions: HumanSubmission[] = [];
   readonly records = new Map<string, ConversationRecord[]>();
+  recentTurns: CanonicalTurn[] = [];
   readonly callbacks = new Map<string, ChangeCallbacks>();
   readonly closed = new Set<string>();
   readonly targetGateway = 'https://gateway.example:8443';
@@ -61,6 +62,8 @@ class HostComposerTransport implements ChatTransport {
     const rows = this.records.get(sessionKey) ?? [];
     return { records: rows.slice(-50), oldestCursor: rows[0]?.id ?? null, hasOlder: false, coverage: sessionKey };
   };
+  readRecentTurns = async (sessionKey: string): Promise<readonly CanonicalTurn[]> =>
+    this.recentTurns.filter(turn => turn.sessionKey === sessionKey);
   readOlder = async (_sessionKey: string, _before: string): Promise<ConversationPage> => ({
     records: [], oldestCursor: null, hasOlder: false, coverage: _sessionKey,
   });
@@ -80,6 +83,14 @@ class HostComposerTransport implements ChatTransport {
     rows.push(record);
     this.records.set(submission.sessionKey, rows);
     return record;
+  }
+
+  emit(record: ConversationRecord): void {
+    this.callbacks.get(record.sessionKey)?.onNotice({ operation: 'upsert', record });
+  }
+
+  emitTurn(turn: CanonicalTurn): void {
+    this.callbacks.get(turn.sessionKey)?.onNotice({ operation: 'turn', turn });
   }
 }
 
@@ -516,12 +527,69 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     await waitFor(() => expect(transport.submissions).toHaveLength(1));
     await waitFor(() => expect(events.some((event) => event.event === 'delivered' &&
       event.lifetimeId === first.lifetimeId && event.correlationId === correlation)).toBe(true));
+    await screen.findByText('send while live updates reconnect');
     expect(events.some((event) => event.event === 'unavailable' && event.lifetimeId === first.lifetimeId)).toBe(false);
     expect(runtimes[0].getSnapshot().status).toBe('ready');
+
+    const reply: CanonicalMessage = { kind: 'message', id: 'live-agent-reply', sessionKey: 'conversation-a',
+      seq: 2, rowVersion: 1, role: 'assistant', sender: 'agent:fixture',
+      content: 'The reply arrived without reloading.', raw: {} };
+    act(() => transport.emit(reply));
+    await screen.findByText(reply.content);
 
     await act(async () => { await runtimes[0].rebuild({ restart: true }); });
     expect(events.filter((event) => event.event === 'ready')).toHaveLength(1);
     expect(readyEvent(events, 'conversation-a')?.lifetimeId).toBe(first.lifetimeId);
+  });
+
+  it('keeps the built-in composer live through reconnect and renders the human and agent rows without reload', async () => {
+    const transport = new HostComposerTransport();
+    transport.nextSend = async (submission) => {
+      transport.addCanonical(submission);
+      return { outcome: 'accepted' };
+    };
+    const { runtimes } = openChat(transport, 'conversation-a');
+    await screen.findByRole('textbox', { name: /Message to Agent conversation-a/ });
+    await waitFor(() => expect(runtimes[0].getSnapshot().status).toBe('ready'));
+
+    act(() => transport.callbacks.get('conversation-a')?.onDoubt('Firehose closed with code 4008'));
+    const textbox = screen.getByRole('textbox', { name: /Message to Agent conversation-a/ });
+    fireEvent.change(textbox, { target: { value: 'Send while live updates reconnect' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+
+    await waitFor(() => expect(transport.submissions).toHaveLength(1));
+    await screen.findByText('Send while live updates reconnect');
+    await waitFor(() => expect(runtimes[0].getSnapshot().sends[0]?.status).toBe('accepted'));
+    expect(runtimes[0].getSnapshot().status).toBe('ready');
+
+    const reply: CanonicalMessage = { kind: 'message', id: 'no-reload-reply', sessionKey: 'conversation-a',
+      seq: 2, rowVersion: 1, role: 'assistant', sender: 'agent:fixture',
+      content: 'This reply also arrived live.', raw: {} };
+    act(() => transport.emit(reply));
+    await screen.findByText(reply.content);
+    expect(runtimes).toHaveLength(1);
+  });
+
+  it('shows a turn already running on open, keeps its caption through reconnect, and clears it at completion', async () => {
+    const events: HostComposerEvent[] = [];
+    const transport = new HostComposerTransport();
+    const active: CanonicalTurn = { seq: 7, sessionKey: 'conversation-a', status: 'running',
+      messageId: 'human-trigger', origin: 'user:person', triggerSource: 'mike', raw: { rowVersion: 1 } };
+    transport.recentTurns = [active];
+    installDeclaration(events);
+    const { runtimes } = openChat(transport, 'conversation-a');
+    const caption = await screen.findByRole('status', { name: 'Active turn: Replying to you' });
+    const runtime = runtimes[0];
+
+    act(() => transport.callbacks.get('conversation-a')?.onDoubt('live connection closed'));
+    expect(screen.getByRole('status', { name: 'Active turn: Replying to you' })).toBe(caption);
+    await act(async () => { await runtime.rebuild({ restart: true }); });
+    expect(screen.getByRole('status', { name: 'Active turn: Replying to you' })).toBeTruthy();
+
+    act(() => transport.emitTurn({ ...active, status: 'completed', raw: { rowVersion: 2 } }));
+    await waitFor(() => expect(screen.queryByRole('status', { name: 'Active turn: Replying to you' })).toBeNull());
+    expect(events.filter((event) => event.event === 'ready')).toHaveLength(1);
+    runtime.dispose();
   });
 
   it('ends and re-handshakes its page lifetime after a cached page hide/show', async () => {

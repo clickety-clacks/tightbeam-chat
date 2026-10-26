@@ -90,6 +90,7 @@ class SessionRuntime implements ChatRuntime {
   private readonly turns = new Map<number, CanonicalTurn>();
   private readonly listeners = new Set<() => void>();
   private readonly identity: HostIdentity;
+  private turnRevision = 0;
   private readonly rows = new Map<string, ConversationRecord>();
   private readonly tombstones = new Map<string, number>();
   private readonly sendControllers = new Map<string, AbortController>();
@@ -177,6 +178,44 @@ class SessionRuntime implements ChatRuntime {
       this.tools.set(call.id, call);
       const calls = putIndex(getIndex(this.toolIndex, call.afterMessageSeq), call.seq, call, call.startedAt);
       this.toolIndex = putIndex(this.toolIndex, call.afterMessageSeq, calls, calls.maxTime);
+    }
+  }
+
+  private putTurn(turn: CanonicalTurn, liveNotice = true): boolean {
+    if (turn.sessionKey !== this.sessionKey) return false;
+    const previous = this.turns.get(turn.seq);
+    if (previous && Number(turn.raw.rowVersion ?? 0) < Number(previous.raw.rowVersion ?? 0)) return false;
+    this.turns.set(turn.seq, turn);
+    if (liveNotice) this.turnRevision++;
+    return true;
+  }
+
+  private async readRecentTurns(generation: number, signal: AbortSignal, revisionAtRebuildStart: number): Promise<void> {
+    const read = this.transport.readRecentTurns;
+    if (!read) return;
+    try {
+      const turns = await read.call(this.transport, this.sessionKey, signal);
+      if (!this.isCurrent(generation) || signal.aborted || !this.checkIdentity()) return;
+      // Replace stale in-memory activity only if no live turn notice arrived
+      // during this rebuild. Otherwise merge by row version so a delayed REST
+      // response cannot overwrite a newer live lifecycle event.
+      const priorTurns = revisionAtRebuildStart === this.turnRevision
+        ? new Map(this.turns)
+        : undefined;
+      if (priorTurns) this.turns.clear();
+      for (const turn of turns) {
+        const previous = priorTurns?.get(turn.seq);
+        const chosen = previous && Number(previous.raw.rowVersion ?? 0) > Number(turn.raw.rowVersion ?? 0)
+          ? previous : turn;
+        this.putTurn(chosen, false);
+      }
+      this.publish({ activeTurn: undefined, activeTurnError: undefined });
+    } catch {
+      if (!this.isCurrent(generation) || signal.aborted || !this.checkIdentity()) return;
+      // Turn activity is optional. Its failure belongs to the caption alone.
+      if (revisionAtRebuildStart === this.turnRevision) {
+        this.publish({ activeTurnError: 'Activity status could not be loaded.' });
+      }
     }
   }
 
@@ -373,11 +412,8 @@ class SessionRuntime implements ChatRuntime {
         return false;
       case 'turn': {
         const turn = notice.turn;
-        if (turn.sessionKey !== this.sessionKey) return false;
-        const previous = this.turns.get(turn.seq);
-        if (previous && Number(turn.raw.rowVersion ?? 0) < Number(previous.raw.rowVersion ?? 0)) return false;
-        this.turns.set(turn.seq, turn);
-        if (!this.initializing) this.publish({ activeTurn: undefined });
+        if (!this.putTurn(turn)) return false;
+        if (!this.initializing) this.publish({ activeTurn: undefined, activeTurnError: undefined });
         return false;
       }
       case 'tool':
@@ -488,6 +524,7 @@ class SessionRuntime implements ChatRuntime {
 
   private async doRebuild(): Promise<void> {
     if (this.disposed || !this.checkIdentity()) return;
+    const turnRevisionAtStart = this.turnRevision;
     const priorOldest = this.state.records[0];
     const priorDepth = this.restoreDepth;
     const reusableConnection = this.connectionForRebuild;
@@ -724,6 +761,7 @@ class SessionRuntime implements ChatRuntime {
       }
       // A synchronous callback may have buffered a notice during publication.
       for (const notice of this.buffered.splice(0)) this.receive(notice, generation);
+      void this.readRecentTurns(generation, controller.signal, turnRevisionAtStart);
       if (((liveError && liveAttemptSettled) || sessionError || conversationError) && !sessionNotFound) {
         this.scheduleRebuild();
       }

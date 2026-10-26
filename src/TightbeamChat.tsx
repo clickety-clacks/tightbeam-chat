@@ -991,6 +991,9 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
       {caption && <div className="tb-chat-active-caption tb-chat-caption tb-chat-caption-neutral" role="status" aria-label={`Active turn: ${caption.text}`}>
         <span className="tb-chat-caption-body"><span aria-hidden="true">{caption.icon}</span><span>{caption.text}</span></span>
       </div>}
+      {!caption && state.activeTurnError && <div className="tb-chat-active-caption tb-chat-caption tb-chat-caption-caution" role="status">
+        <span className="tb-chat-caption-body">Activity status could not be loaded.</span>
+      </div>}
       {state.status === 'ready' && !state.conversationError && !state.sessionNotFound &&
         state.records.length === 0 && localSends.length === 0 && !state.hasOlder &&
         <p className="tb-chat-empty">No messages yet.</p>}

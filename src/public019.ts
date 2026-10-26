@@ -432,6 +432,17 @@ export function createPublic019Transport(config: Public019Config): { transport: 
       }
       return decodePublic019Session(body.item, sessionKey);
     },
+    async readRecentTurns(sessionKey, signal) {
+      const body = await get(`/api/sessions/${encodeURIComponent(sessionKey)}/turns?limit=50&tail=true`, signal);
+      if (body.schemaVersion !== 1 || body.resource !== 'turns' || !Array.isArray(body.items)) {
+        throw new UnsupportedTargetError('Unexpected recent-turn collection envelope.');
+      }
+      const page = record(body.page);
+      if (typeof page.hasMoreBefore !== 'boolean') {
+        throw new UnsupportedTargetError('Invalid recent-turn page metadata.');
+      }
+      return body.items.map((turn) => decodePublic019Turn(turn, sessionKey));
+    },
     readTail: (sessionKey, signal) => readPage(sessionKey, 'tail=true', signal),
     readOlder: (sessionKey, before, signal) => readPage(sessionKey, `before=${encodeURIComponent(before)}`, signal),
     // Hub.subscribe completes before subscription_ready. Runtime subscribes first,
