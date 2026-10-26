@@ -11,6 +11,8 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
   const following = useRef(true);
   const animating = useRef(false);
   const target = useRef<number | undefined>(undefined);
+  const userScrollIntent = useRef(false);
+  const userScrollTimeout = useRef<number | undefined>(undefined);
   const viewportHeight = useRef<number | undefined>(undefined);
   const anchors = useRef<Anchor[]>([]);
   const registeredRows = useRef(new Map<string, HTMLElement>());
@@ -25,6 +27,19 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
 
   const distance = (box: HTMLElement) => Math.max(0, box.scrollHeight - box.clientHeight - box.scrollTop);
   const viewportResized = (box: HTMLElement) => viewportHeight.current !== undefined && viewportHeight.current !== box.clientHeight;
+  const noteUserScroll = () => {
+    userScrollIntent.current = true;
+    window.clearTimeout(userScrollTimeout.current);
+    userScrollTimeout.current = window.setTimeout(() => {
+      userScrollIntent.current = false;
+      userScrollTimeout.current = undefined;
+    }, 250);
+  };
+  const clearUserScrollIntent = () => {
+    userScrollIntent.current = false;
+    window.clearTimeout(userScrollTimeout.current);
+    userScrollTimeout.current = undefined;
+  };
   const capture = () => {
     const box = viewport.current;
     const children = content.current?.children;
@@ -130,12 +145,17 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
     const observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(() => currentUpdate.current());
     if (content.current) observer?.observe(content.current);
     if (viewport.current) observer?.observe(viewport.current);
-    return () => observer?.disconnect();
+    return () => {
+      observer?.disconnect();
+      window.clearTimeout(userScrollTimeout.current);
+    };
   }, []);
 
   const onScroll = () => {
     const box = viewport.current;
     if (!box) return;
+    const readerInitiated = userScrollIntent.current;
+    if (readerInitiated) clearUserScrollIntent();
     const resized = viewportResized(box);
     const reachedTarget = target.current !== undefined && Math.abs(box.scrollTop - target.current) < 1;
     if (reachedTarget) {
@@ -146,16 +166,16 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
     }
     // Intermediate animation frames are not a user's decision to leave the tail.
     if (resized) {
-      if (following.current) moveToLatest(false);
+      if (readerInitiated) following.current = distance(box) <= bottomThreshold;
+      else if (following.current) moveToLatest(false);
     } else if (!animating.current) {
       const currentDistance = distance(box);
-      if (reachedTarget && following.current && currentDistance > bottomThreshold) {
-        // The scroll event for an instant or smooth programmatic move can be
-        // delivered after content grows. Keep the existing follow intent and
-        // catch up instead of treating that stale event as reader movement.
-        moveToLatest(false);
-      } else {
+      if (readerInitiated) {
         following.current = currentDistance <= bottomThreshold;
+      } else if (following.current && currentDistance > bottomThreshold) {
+        // A layout or host scroll restoration can arrive after its resize was
+        // recorded. Preserve follow intent until the reader actually scrolls.
+        moveToLatest(false);
       }
     }
     setShowLatest(!following.current);
@@ -217,5 +237,5 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
     moveToLatest(true);
   };
 
-  return { viewport, content, registerRow, showLatest, onScroll, interrupt, holdPosition, scrollBy, scrollToLatest };
+  return { viewport, content, registerRow, showLatest, onScroll, interrupt, holdPosition, scrollBy, scrollToLatest, noteUserScroll };
 }

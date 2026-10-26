@@ -76,7 +76,7 @@ beforeEach(() => {
   vi.stubGlobal('cancelAnimationFrame', clearTimeout);
   Object.defineProperty(HTMLElement.prototype, 'scrollTo', { configurable: true, value: scrollTo });
 });
-afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); resizeCallbacks.clear(); });
+afterEach(() => { vi.useRealTimers(); cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); resizeCallbacks.clear(); });
 
 function setup(records = initialRows, renderMessage?: TightbeamChatProps['renderMessage']) {
   const runtime = new ReadingRuntime();
@@ -367,7 +367,8 @@ describe('conversation reading position', () => {
   it('bounds scroll measurements to the viewport neighborhood in a long history and preserves position when older rows arrive', () => {
     function History({ ids }: { ids: number[] }) {
       const reading = useReadingPosition(true, ids);
-      return <div ref={reading.viewport} className="tb-chat-viewport" onScroll={reading.onScroll}>
+      return <div ref={reading.viewport} className="tb-chat-viewport" onScroll={reading.onScroll}
+        onWheel={event => { if (event.deltaY !== 0) reading.noteUserScroll(); }}>
         <div ref={reading.content}>{ids.map((id, index) =>
           <article ref={element => reading.registerRow(String(id), element)} key={id} data-record-key={id} data-scroll-key={id} data-test-position={index}>{id}</article>)}</div>
       </div>;
@@ -379,6 +380,7 @@ describe('conversation reading position', () => {
     const query = vi.spyOn(box, 'querySelectorAll');
     measure.mockClear();
     for (let i = 0; i < 30; i++) {
+      fireEvent.wheel(box, { deltaY: 30 });
       box.scrollTop = 90000 + i * 30;
       fireEvent.scroll(box);
     }
@@ -514,6 +516,29 @@ describe('conversation reading position', () => {
 
     expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight);
     expect(scrollTo).toHaveBeenLastCalledWith({ top: box.scrollHeight - box.clientHeight, behavior: 'instant' });
+    expect(screen.queryByRole('button', { name: 'Scroll to latest messages' })).toBeNull();
+  });
+
+  it('keeps following through a delayed inset scroll adjustment without reader input', async () => {
+    viewportHeight = 874;
+    vi.useFakeTimers();
+    const { box } = setup();
+    const oldBottom = box.scrollHeight - box.clientHeight;
+    fireEvent.scroll(box);
+    expect(box.scrollTop).toBe(oldBottom);
+
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+
+    // A late host inset reduces the viewport by 479 px. Chat sees the resize
+    // and moves to the new bottom, then WebKit restores the prior scroll offset.
+    viewportHeight = 395;
+    notifyResizeObservers();
+    const insetBottom = box.scrollHeight - box.clientHeight;
+    expect(box.scrollTop).toBe(insetBottom);
+    box.scrollTop = oldBottom;
+    fireEvent.scroll(box);
+
+    expect(box.scrollTop).toBe(insetBottom);
     expect(screen.queryByRole('button', { name: 'Scroll to latest messages' })).toBeNull();
   });
 

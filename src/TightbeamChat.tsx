@@ -933,8 +933,10 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
   return <section ref={root} className={`tb-chat ${host.composerHidden ? 'tb-chat-host-composer-hidden' : ''} ${className || ''}`}
     aria-label={agentName ? `${agentName} conversation` : 'Conversation'}>
     <div className="tb-chat-viewport" ref={viewport} onScroll={handleScroll} role="log" tabIndex={-1}
-      onWheel={reading.interrupt} onTouchStart={reading.interrupt} onPointerDown={reading.interrupt}
-      onKeyDown={(event) => { if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) reading.interrupt(); }}
+      onWheel={(event) => { reading.interrupt(); if (event.deltaY !== 0) reading.noteUserScroll(); }}
+      onTouchStart={reading.interrupt} onTouchMove={reading.noteUserScroll}
+      onPointerDown={reading.interrupt} onPointerMove={(event) => { if (event.buttons !== 0) reading.noteUserScroll(); }}
+      onKeyDown={(event) => { if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) { reading.interrupt(); reading.noteUserScroll(); } }}
       aria-label={`${agentName || 'Conversation'} messages`} aria-live="polite" aria-relevant="additions text">
       {state.loadingOlder && <div className="tb-chat-history-loading tb-chat-caption tb-chat-caption-neutral" role="status">Loading earlier messages…</div>}
       <div className="tb-chat-message-content" ref={reading.content}>
