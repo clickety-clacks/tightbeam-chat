@@ -1,5 +1,18 @@
 [
   {
+    "version": "v0.1.32",
+    "items": [
+      {
+        "title": "Latest messages",
+        "description": "Chat keeps the newest message in view as a conversation opens and its layout settles."
+      },
+      {
+        "title": "Earlier messages",
+        "description": "Older messages start loading sooner as you scroll up, while the message you are reading stays in place."
+      }
+    ]
+  },
+  {
     "version": "v0.1.31",
     "items": [
       {
