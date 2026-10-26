@@ -563,6 +563,66 @@ describe('conversation reading position', () => {
     expect(screen.queryByRole('button', { name: 'Scroll to latest messages' })).toBeNull();
   });
 
+  it('keeps following through cold-launch history loading and later layout growth', async () => {
+    const runtime = new ReadingRuntime();
+    runtime.state = { ...runtime.state, records: [message(20)], hasOlder: true };
+    runtime.loadOlder = async () => {
+      runtime.publish({ loadingOlder: true });
+      await Promise.resolve();
+      runtime.publish({
+        records: [...Array.from({ length: 12 }, (_, i) => message(i)), ...runtime.state.records],
+        hasOlder: false,
+        loadingOlder: false,
+      });
+    };
+    render(<TightbeamChat sessionKey="reading" adapter={{ open: () => runtime }} />);
+    const box = screen.getByRole('log');
+    const bottom = () => Math.max(0, box.scrollHeight - box.clientHeight);
+    scrollTo.mockImplementation(function (this: HTMLElement, options: ScrollToOptions) {
+      this.scrollTop = options.top ?? 0;
+    });
+
+    expect(box.scrollTop).toBe(bottom());
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 5)); });
+    expect(box.scrollTop).toBe(bottom());
+
+    lateLayoutGrowth = 960;
+    notifyResizeObservers();
+
+    expect(box.scrollTop).toBe(bottom());
+    expect(screen.queryByRole('button', { name: 'Scroll to latest messages' })).toBeNull();
+  });
+
+  it('preserves an away reader anchor through older history loading and layout growth', async () => {
+    const runtime = new ReadingRuntime();
+    runtime.state = { ...runtime.state, records: initialRows, hasOlder: true };
+    let releaseOlder!: () => void;
+    const olderPage = new Promise<void>(resolve => { releaseOlder = resolve; });
+    runtime.loadOlder = async () => {
+      runtime.publish({ loadingOlder: true });
+      await olderPage;
+      runtime.publish({
+        records: [...Array.from({ length: 12 }, (_, i) => message(i - 12)), ...runtime.state.records],
+        hasOlder: false,
+        loadingOlder: false,
+      });
+    };
+    render(<TightbeamChat sessionKey="reading" adapter={{ open: () => runtime }} />);
+    const box = screen.getByRole('log');
+    const anchor = screen.getByText('Message 1').closest('article')!;
+    readAt(box, 0);
+    const anchorTop = anchor.getBoundingClientRect().top;
+
+    await act(async () => { releaseOlder(); await olderPage; });
+
+    expect(anchor.getBoundingClientRect().top).toBe(anchorTop);
+    expect(screen.getByRole('button', { name: 'Scroll to latest messages' })).toBeTruthy();
+    lateLayoutGrowth = 960;
+    notifyResizeObservers();
+    expect(anchor.getBoundingClientRect().top).toBe(anchorTop);
+    expect(screen.getByRole('button', { name: 'Scroll to latest messages' })).toBeTruthy();
+  });
+
   it('returns to the newest message after a successful send but leaves a rejected draft alone', () => {
     const { runtime, box, input } = setup();
     readAt(box, 600);
