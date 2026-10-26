@@ -1,6 +1,7 @@
 import {
   AuthorizationError,
   InvalidCursorError,
+  SessionNotFoundError,
   UnsupportedTargetError,
   type ConversationRecord,
   type ChangeConnection,
@@ -250,6 +251,17 @@ function checkedBaseUrl(raw: string): string {
   return url.href.replace(/\/$/, '');
 }
 
+function isSessionDetailPath(path: string): boolean {
+  try { return /^\/api\/sessions\/[^/]+$/.test(new URL(path, 'https://gateway.invalid').pathname); }
+  catch { return false; }
+}
+
+function authorizationFailureCode(value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+  return ['unauthorized', 'forbidden', 'not_authorized', 'not_authenticated',
+    'authentication_failed', 'auth_failed'].includes(value.toLowerCase());
+}
+
 /** Gateway REST history, protocol-2 changes, and human sending. */
 export function createPublic019Transport(config: Public019Config): { transport: ChatTransport; profile: TargetProfile } {
   const baseUrl = checkedBaseUrl(config.baseUrl);
@@ -268,6 +280,9 @@ export function createPublic019Transport(config: Public019Config): { transport: 
   async function get(path: string, signal: AbortSignal): Promise<Record<string, unknown>> {
     const response = await config.host.fetch(`${baseUrl}${path}`, { method: 'GET', signal, cache: 'no-store' });
     if (response.status === 401 || response.status === 403) throw new AuthorizationError('Human REST principal is not authorized.');
+    if (response.status === 404 && isSessionDetailPath(path)) {
+      throw new SessionNotFoundError('This conversation no longer exists.');
+    }
     if (response.status === 400 && path.includes('/messages?')) throw new InvalidCursorError('History cursor was rejected.');
     if (!response.ok) {
       let code: string | undefined;
@@ -348,9 +363,19 @@ export function createPublic019Transport(config: Public019Config): { transport: 
               if (readyTimer) clearTimeout(readyTimer);
               watchHeartbeat();
               resolveReady();
+            } else if (frame.type === 'auth_result' && frame.success === false) {
+              throw new AuthorizationError('Gateway refused the authenticated change subscription.');
+            } else if (frame.type === 'error' && authorizationFailureCode(frame.code)) {
+              throw new AuthorizationError('Gateway refused the authenticated change subscription.');
             } else if (frame.type === 'error' || frame.type === 'auth_result') {
-              throw new UnsupportedTargetError('Protocol-2 subscription was refused.');
+              throw new UnsupportedTargetError('The change subscription was refused.');
             }
+            return;
+          }
+          if ((frame.type === 'auth_result' && frame.success === false) ||
+              (frame.type === 'error' && authorizationFailureCode(frame.code))) {
+            close();
+            callbacks.onAuthorizationLost?.('Gateway refused the authenticated change subscription.');
             return;
           }
           if (frame.type !== 'change' && frame.type !== 'heartbeat') {

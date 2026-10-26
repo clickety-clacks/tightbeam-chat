@@ -61,6 +61,7 @@ interface Lifetime {
   readonly sessionKey: string;
   readonly attempts: Map<string, Attempt>;
   ready: boolean;
+  unavailableReason?: string;
   unsubscribe: () => void;
 }
 
@@ -168,6 +169,7 @@ export class HostComposerBridge {
       sessionKey: runtime.getSnapshot().sessionKey,
       attempts: new Map(),
       ready: false,
+      unavailableReason: undefined,
       unsubscribe: () => {},
     };
     this.current = lifetime;
@@ -207,7 +209,18 @@ export class HostComposerBridge {
       this.detach('identity-changed');
       return;
     }
+    if (state.sessionNotFound) {
+      lifetime.ready = false;
+      this.publish();
+      if (lifetime.unavailableReason !== 'session-not-found') {
+        lifetime.unavailableReason = 'session-not-found';
+        this.emit({ event: 'unavailable', version: 1, lifetimeId: lifetime.lifetimeId,
+          reason: 'session-not-found' });
+      }
+      return;
+    }
     if (state.status === 'ready') {
+      lifetime.unavailableReason = undefined;
       if (!lifetime.ready) {
         const gatewayOrigin = this.gatewayOrigin(state.targetGateway);
         if (!gatewayOrigin) return;
@@ -236,6 +249,7 @@ export class HostComposerBridge {
     }
     if (!lifetime.ready) return;
     lifetime.ready = false;
+    lifetime.unavailableReason = runtimeUnavailableReason(state);
     this.publish();
     this.emit({ event: 'unavailable', version: 1, lifetimeId: lifetime.lifetimeId,
       reason: runtimeUnavailableReason(state) });

@@ -2,6 +2,12 @@ import { AuthorizationError, type HostIdentity } from '../src/types';
 import type { Public019Channel, Public019Host } from '../src/public019';
 import type { ChatTarget } from './entry';
 
+function isAuthorizationFailureCode(value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+  return ['unauthorized', 'forbidden', 'not_authorized', 'not_authenticated',
+    'authentication_failed', 'auth_failed'].includes(value.toLowerCase());
+}
+
 function chatSocketUrl(path: '/ws' | '/ws/changes', target: ChatTarget): URL {
   const url = new URL(`/__chat${path}`, window.location.origin);
   if (path === '/ws/changes') url.searchParams.set('protocolVersion', '2');
@@ -76,8 +82,12 @@ export function browserHost(target: ChatTarget): Public019Host {
             }
           } else if (human && frame.type === 'sync_complete' && authenticated) {
             complete();
-          } else if (frame.type === 'error' || frame.type === 'auth_result') {
-            fail(new AuthorizationError('The configured Chat connection was refused.'));
+          } else if (frame.type === 'error') {
+            fail(isAuthorizationFailureCode(frame.code)
+              ? new AuthorizationError('The configured Chat connection was refused.')
+              : new Error('The Chat connection could not be established.'));
+          } else if (frame.type === 'auth_result') {
+            fail(new Error('Invalid Chat authentication response.'));
           }
         } catch {
           if (!ready) fail(new Error('Invalid Chat connection response.'));

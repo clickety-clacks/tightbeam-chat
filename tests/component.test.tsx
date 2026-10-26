@@ -665,7 +665,7 @@ describe('conversation surface', () => {
     expect(composer.value).toBe('keep this draft');
     expect(composer.selectionStart).toBe(5);
     expect(document.activeElement).toBe(composer);
-    expect(screen.getByRole('button', { name: 'Send message' })).toHaveProperty('disabled', true);
+    expect(screen.getByRole('button', { name: 'Send message' })).toHaveProperty('disabled', false);
 
     act(() => {
       runtime.state = { ...runtime.state, status: 'ready', statusDetail: undefined };
@@ -1150,7 +1150,7 @@ describe('conversation surface', () => {
     expect(composer).toHaveProperty('value', 'keep this draft');
 
     act(() => {
-      runtime.state = { ...runtime.state, status: 'stale' };
+      runtime.state = { ...runtime.state, status: 'unauthorized' };
       for (const listener of runtime.listeners) listener();
     });
     expect(fireEvent.keyDown(composer, { key: 'Enter' })).toBe(false);
@@ -1186,9 +1186,9 @@ describe('conversation surface', () => {
     expect(screen.getByRole('textbox', { name: 'Message to Research assistant' })).toHaveProperty('value', 'Uncertain text');
   });
 
-  it('explains an unconfirmed send when an unsupported target prevents safe retry', () => {
+  it('explains an unconfirmed send when safe retry is unavailable', () => {
     const sessionKey = 'unsupported-send-recovery';
-    const runtime = new FakeRuntime(sessionKey, { status: 'unsupported', sends: [{
+    const runtime = new FakeRuntime(sessionKey, { status: 'ready', sends: [{
       sessionKey, deviceId: 'device', clientMessageId: 'unsupported-retry-id',
       content: 'Check this message before retrying', submittedAt: '2026-10-25T09:00:00.000Z',
       status: 'uncertain', reconciled: false, reason: 'retry-unavailable',
@@ -1196,8 +1196,9 @@ describe('conversation surface', () => {
     render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
 
     expect(screen.getByText('This target stopped supporting safe retries. Delivery could not be confirmed; check the conversation before retrying.')).toBeTruthy();
-    expect(screen.getByText('Reconnect to a supported target before retrying.')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Retry message' })).toHaveProperty('disabled', true);
+    expect(screen.queryByRole('button', { name: 'Retry message' })).toBeNull();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Message to Research assistant' }), { target: { value: 'new message' } });
+    expect(screen.getByRole('button', { name: 'Send message' })).toHaveProperty('disabled', false);
   });
 
   it('places a retried local send at its authoritative history position and keeps its reading key through reconciliation', () => {

@@ -74,48 +74,60 @@ function loadGatewayMap(environment, configuredGateway) {
     return { valid: true, gateways };
   }
 
+  let value;
   try {
-    const value = JSON.parse(fs.readFileSync(environment.CHAT_GATEWAY_MAP_FILE, 'utf8'));
-    if (!value || value.version !== 1 || !Array.isArray(value.gateways)) throw new Error();
-
-    const configuredKeys = new Set();
-    const entries = [];
-    for (const item of value.gateways) {
-      if (!item || typeof item !== 'object' || Array.isArray(item) ||
-          typeof item.baseDir !== 'string' || !path.isAbsolute(item.baseDir)) throw new Error();
-      const origin = canonicalOrigin(item.origin);
-      if (!origin) throw new Error();
-      const aliases = item.aliases === undefined ? [] : item.aliases;
-      if (!Array.isArray(aliases)) throw new Error();
-
-      const keys = [origin];
-      for (const alias of aliases) {
-        const canonicalAlias = canonicalOrigin(alias);
-        if (!canonicalAlias) throw new Error();
-        keys.push(canonicalAlias);
-      }
-      for (const key of keys) {
-        if (configuredKeys.has(key)) throw new Error();
-        configuredKeys.add(key);
-      }
-
-      const descriptor = readGatewayDescriptor(item.baseDir);
-      const descriptorMatches = descriptor && keys.includes(descriptor.base);
-      entries.push({ keys, descriptor, available: Boolean(descriptorMatches && descriptor.token) });
-    }
-
-    for (const item of entries) {
-      const entry = {
-        base: item.available ? item.descriptor.base : undefined,
-        token: item.available ? item.descriptor.token : '',
-        available: item.available,
-      };
-      for (const key of item.keys) gateways.set(key, entry);
-    }
-    return { valid: true, gateways };
+    value = JSON.parse(fs.readFileSync(environment.CHAT_GATEWAY_MAP_FILE, 'utf8'));
   } catch {
+    console.warn('CHAT_GATEWAY_MAP_FILE could not be read; mapped Gateway routing is unavailable.');
     return { valid: false, gateways: new Map() };
   }
+  if (!value || value.version !== 1 || !Array.isArray(value.gateways)) {
+    console.warn('CHAT_GATEWAY_MAP_FILE has an invalid root structure; mapped Gateway routing is unavailable.');
+    return { valid: false, gateways: new Map() };
+  }
+
+  const configuredKeys = new Set();
+  for (const [index, item] of value.gateways.entries()) {
+    let keys;
+    let reason;
+    if (!item || typeof item !== 'object' || Array.isArray(item) ||
+        typeof item.baseDir !== 'string' || !path.isAbsolute(item.baseDir)) {
+      reason = 'invalid entry fields';
+    } else {
+      const origin = canonicalOrigin(item.origin);
+      const aliases = item.aliases === undefined ? [] : item.aliases;
+      if (!origin) reason = 'invalid origin';
+      else if (!Array.isArray(aliases)) reason = 'aliases must be an array';
+      else {
+        keys = [origin];
+        for (const alias of aliases) {
+          const canonicalAlias = canonicalOrigin(alias);
+          if (!canonicalAlias) {
+            reason = 'invalid alias';
+            break;
+          }
+          keys.push(canonicalAlias);
+        }
+        if (!reason && new Set(keys).size !== keys.length) reason = 'duplicate origin or alias';
+        if (!reason && keys.some((key) => configuredKeys.has(key))) reason = 'origin or alias is already mapped';
+      }
+    }
+    if (reason || !keys) {
+      console.warn(`Skipping CHAT_GATEWAY_MAP_FILE entry ${index + 1}: ${reason ?? 'invalid entry'}.`);
+      continue;
+    }
+
+    for (const key of keys) configuredKeys.add(key);
+    const descriptor = readGatewayDescriptor(item.baseDir);
+    const descriptorMatches = descriptor && keys.includes(descriptor.base);
+    const entry = {
+      base: descriptorMatches && descriptor.token ? descriptor.base : undefined,
+      token: descriptorMatches && descriptor.token ? descriptor.token : '',
+      available: Boolean(descriptorMatches && descriptor.token),
+    };
+    for (const key of keys) gateways.set(key, entry);
+  }
+  return { valid: true, gateways };
 }
 
 function loadRuntimeConfig(environment) {

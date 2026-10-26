@@ -21,19 +21,13 @@ import {
   type LocalSend,
   type RuntimeState,
   type SessionRecord,
-  type TargetCapabilities,
   type TargetProfile,
   type TightbeamAdapter,
   type TurnProvenance,
+  SessionNotFoundError,
 } from './types';
 import { createTurnProvenance } from './provenance';
 import { getIndex, putIndex, trimIndexBelow } from './recordIndex';
-
-const requiredCapabilities: readonly (keyof TargetCapabilities)[] = [
-  'newestTail', 'stableOlderCursor', 'retainedHistoryAcrossResets',
-  'orderedTransitions', 'snapshotCoverage', 'versionedNotices', 'humanSendDedupe',
-  'authoritativeTurnProvenance',
-];
 
 function identityEquals(a: HostIdentity, b: HostIdentity): boolean {
   return a.principalKey === b.principalKey && a.deviceId === b.deviceId;
@@ -109,6 +103,9 @@ class SessionRuntime implements ChatRuntime {
   private readonly tools = new Map<string, ToolCallRecord>();
   private toolIndex: ToolCallIndex | undefined;
   private connection: ChangeConnection | undefined;
+  private connectionController: AbortController | undefined;
+  private connectionBinding: { generation: number; doubted: boolean } | undefined;
+  private connectionForRebuild: ChangeConnection | undefined;
   private controller: AbortController | undefined;
   private cursor: string | null = null;
   private buffered: ChangeNotice[] = [];
@@ -292,12 +289,22 @@ class SessionRuntime implements ChatRuntime {
     this.generation++;
     this.stopTools();
     this.controller?.abort();
+    this.connectionController?.abort();
+    this.connectionController = undefined;
     this.connection?.close();
     this.connection = undefined;
+    this.connectionBinding = undefined;
+    this.connectionForRebuild = undefined;
+    this.initializing = false;
+    this.buffered = [];
+    this.bufferedSession = undefined;
     for (const controller of this.sendControllers.values()) controller.abort();
     this.sendControllers.clear();
     this.rows.clear();
     this.tombstones.clear();
+    this.turns.clear();
+    this.cursor = null;
+    this.restoreDepth = 0;
     this.publish({
       generation: this.generation, status: 'unauthorized',
       identityChanged: true,
@@ -305,20 +312,10 @@ class SessionRuntime implements ChatRuntime {
       toolCalls: Object.freeze([]), toolCallIndex: undefined, toolCallsLoading: false, toolCallsError: undefined,
       records: Object.freeze([]), sends: Object.freeze([]), hasOlder: false,
       session: undefined, agentDisplayName: undefined, provenance: Object.freeze([]),
-      activeTurn: undefined, historyError: undefined,
+      activeTurn: undefined, historyError: undefined, loadingOlder: false,
+      sessionError: undefined, sessionNotFound: undefined, conversationError: undefined, liveError: undefined,
     });
     return false;
-  }
-
-  private checkTarget(observed: Awaited<ReturnType<ChatTransport['inspectTarget']>>): void {
-    if (observed.identity !== this.profile.identity) {
-      throw new UnsupportedTargetError(`Target identity ${observed.identity} does not match ${this.profile.identity}.`);
-    }
-    for (const capability of requiredCapabilities) {
-      if (!this.profile.capabilities[capability] || !observed.capabilities[capability]) {
-        throw new UnsupportedTargetError(`Required target capability ${capability} is unverified.`);
-      }
-    }
   }
 
   private put(pageRecord: ConversationRecord): void {
@@ -401,14 +398,28 @@ class SessionRuntime implements ChatRuntime {
 
   private doubt(reason: string, generation: number): void {
     if (!this.isCurrent(generation) || !this.checkIdentity()) return;
+    this.connectionController?.abort();
+    this.connectionController = undefined;
+    if (this.initializing) {
+      this.connection?.close();
+      this.connection = undefined;
+      this.connectionBinding = undefined;
+      this.connectionForRebuild = undefined;
+      this.buffered = [];
+      this.bufferedSession = undefined;
+      this.publish({ liveError: reason, activeTurn: undefined });
+      return;
+    }
     this.generation++;
     this.stopTools();
     this.controller?.abort();
     this.connection?.close();
     this.connection = undefined;
+    this.connectionBinding = undefined;
+    this.connectionForRebuild = undefined;
     this.rebuildPromise = undefined;
     this.initializing = false;
-    this.publish({ generation: this.generation, status: 'stale', statusDetail: reason, activeTurn: undefined });
+    this.publish({ generation: this.generation, status: 'ready', liveError: reason, activeTurn: undefined });
     this.scheduleRebuild();
   }
 
@@ -422,35 +433,39 @@ class SessionRuntime implements ChatRuntime {
     }, delay);
   }
 
-  private failClosed(status: 'unauthorized' | 'unsupported', reason: string): void {
+  private failClosed(reason: string): void {
     this.generation++;
+    this.initializing = false;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = undefined;
-    const sends = status === 'unauthorized' ? Object.freeze([]) : this.state.sends;
     this.stopTools();
     this.controller?.abort();
+    this.connectionController?.abort();
+    this.connectionController = undefined;
     this.connection?.close();
     this.connection = undefined;
-    if (status === 'unauthorized') {
-      for (const controller of this.sendControllers.values()) controller.abort();
-      this.sendControllers.clear();
-    }
+    this.connectionBinding = undefined;
+    this.connectionForRebuild = undefined;
+    for (const controller of this.sendControllers.values()) controller.abort();
+    this.sendControllers.clear();
     this.rows.clear();
     this.tombstones.clear();
     this.cursor = null;
     this.restoreDepth = 0;
+    this.turns.clear();
     this.publish({
-      generation: this.generation, status, statusDetail: reason,
+      generation: this.generation, status: 'unauthorized', statusDetail: reason,
       toolCalls: Object.freeze([]), toolCallIndex: undefined, toolCallsLoading: false, toolCallsError: undefined,
-      records: Object.freeze([]), sends, session: undefined,
+      records: Object.freeze([]), sends: Object.freeze([]), session: undefined,
       agentDisplayName: undefined, provenance: noProvenance, provenanceAvailable: false, activeTurn: undefined,
       hasOlder: false, loadingOlder: false, historyError: undefined,
+      sessionError: undefined, sessionNotFound: undefined, conversationError: undefined, liveError: undefined,
     });
   }
 
   rebuild = (options?: { restart?: boolean }): Promise<void> => {
     if (options?.restart) {
-      if (this.disposed || this.state.status === 'unauthorized' || this.state.status === 'unsupported') return Promise.resolve();
+      if (this.disposed || this.state.status === 'unauthorized') return Promise.resolve();
       // A suspended connection/read can outlive the background interval. Start
       // a new generation instead of waiting for that attempt to settle.
       this.rebuildPromise = undefined;
@@ -472,104 +487,233 @@ class SessionRuntime implements ChatRuntime {
     if (this.disposed || !this.checkIdentity()) return;
     const priorOldest = this.state.records[0];
     const priorDepth = this.restoreDepth;
+    const reusableConnection = this.connectionForRebuild;
+    this.connectionForRebuild = undefined;
     this.generation++;
     const generation = this.generation;
     this.stopTools();
     this.controller?.abort();
-    this.connection?.close();
-    this.connection = undefined;
+    if (reusableConnection && this.connection === reusableConnection && this.connectionBinding) {
+      this.connectionBinding.generation = generation;
+    } else {
+      this.connectionController?.abort();
+      this.connectionController = undefined;
+      this.connection?.close();
+      this.connection = undefined;
+      this.connectionBinding = undefined;
+    }
     const controller = new AbortController();
     this.controller = controller;
     this.buffered = [];
     this.bufferedSession = undefined;
-    this.turns.clear();
     this.pendingReconciledIds.clear();
     this.initializing = true;
     this.publish({
-      generation, status: this.state.records.length ? 'stale' : 'loading',
-      statusDetail: undefined, loadingOlder: false, historyError: undefined, activeTurn: undefined,
+      generation, status: this.state.status === 'ready' || this.state.records.length ? 'ready' : 'loading',
+      statusDetail: undefined, loadingOlder: false, activeTurn: undefined,
     });
 
+    let liveError: string | undefined;
     try {
-      const observed = await this.transport.inspectTarget(controller.signal);
-      if (!this.isCurrent(generation) || !this.checkIdentity()) return;
-      this.checkTarget(observed);
-      // openChanges must resolve only after selected-session subscription_ready.
-      const connection = await this.transport.openChanges(this.sessionKey, {
-        onNotice: (notice) => this.receive(notice, generation),
-        onDoubt: (reason) => this.doubt(reason, generation),
-      }, controller.signal);
-      if (!this.isCurrent(generation) || !this.checkIdentity()) {
-        connection.close();
-        return;
+      let liveAttemptSettled = Boolean(this.connection);
+      if (!this.connection) {
+        const binding = { generation, doubted: false };
+        const connectionController = new AbortController();
+        this.connectionBinding = binding;
+        this.connectionController = connectionController;
+        let opening: Promise<ChangeConnection>;
+        try {
+          // Live updates are optional; do not wait for their handshake before
+          // loading the conversation snapshot.
+          opening = this.transport.openChanges(this.sessionKey, {
+            onNotice: (notice) => this.receive(notice, binding.generation),
+            onDoubt: (reason) => {
+              binding.doubted = true;
+              liveError = reason;
+              this.doubt(reason, binding.generation);
+            },
+            onAuthorizationLost: (reason) => {
+              binding.doubted = true;
+              this.failClosed(reason);
+            },
+          }, connectionController.signal);
+        } catch (error) {
+          opening = Promise.reject(error);
+        }
+        void opening.then((connection) => {
+          liveAttemptSettled = true;
+          if (!this.isCurrent(binding.generation) || connectionController.signal.aborted || binding.doubted ||
+              this.connectionBinding !== binding) {
+            connection.close();
+            return;
+          }
+          this.connection = connection;
+          if (!this.initializing) {
+            // Re-read with the now-ready stream to cover the gap between the
+            // first REST snapshot and subscription readiness.
+            this.connectionForRebuild = connection;
+            this.scheduleRebuild();
+          }
+        }).catch((error) => {
+          liveAttemptSettled = true;
+          if (!this.isCurrent(binding.generation) || connectionController.signal.aborted) return;
+          if (error instanceof AuthorizationError) {
+            this.failClosed(errorText(error));
+            return;
+          }
+          liveError = errorText(error);
+          this.publish({ liveError });
+          if (!this.initializing) this.scheduleRebuild();
+        });
       }
-      this.connection = connection;
 
-      let [session, tail] = await Promise.all([
+      const [sessionResult, tailResult] = await Promise.allSettled([
         this.transport.readSession(this.sessionKey, controller.signal),
         this.transport.readTail(this.sessionKey, controller.signal),
-      ]);
+      ] as const);
       if (!this.isCurrent(generation) || !this.checkIdentity()) return;
-      if (session.sessionKey !== this.sessionKey) throw new UnsupportedTargetError('Session read returned another selection.');
-      this.validatePage(tail);
-      const candidate = new Map<string, ConversationRecord>();
-      for (const record of tail.records) {
-        const previous = candidate.get(record.id);
-        candidate.set(record.id, mergeRecord(previous, record));
+      const sessionFailure = sessionResult.status === 'rejected' ? sessionResult.reason : undefined;
+      const tailFailure = tailResult.status === 'rejected' ? tailResult.reason : undefined;
+      if (sessionFailure instanceof AuthorizationError || tailFailure instanceof AuthorizationError) {
+        throw sessionFailure instanceof AuthorizationError ? sessionFailure : tailFailure;
       }
-      let cursor = tail.oldestCursor;
-      let hasOlder = tail.hasOlder;
-      let restored = 0;
-      // Restore the previously visible depth from fresh canonical pages after a gap.
-      while (hasOlder && cursor && priorOldest &&
-        (restored < priorDepth ||
-          [...candidate.values()].every((record) => compareRecords(record, priorOldest) > 0))) {
-        const page = await this.transport.readOlder(this.sessionKey, cursor, controller.signal);
-        if (!this.isCurrent(generation) || !this.checkIdentity()) return;
-        this.validatePage(page);
-        if (page.oldestCursor === cursor && page.hasOlder) throw new UnsupportedTargetError('Older cursor did not advance.');
-        for (const record of page.records) {
+
+      let session: SessionRecord | undefined;
+      let sessionError: string | undefined;
+      let sessionNotFound = false;
+      if (sessionResult.status === 'fulfilled') {
+        if (sessionResult.value.sessionKey === this.sessionKey) session = sessionResult.value;
+        else sessionError = 'The session endpoint returned a different conversation.';
+      } else {
+        sessionNotFound = sessionFailure instanceof SessionNotFoundError;
+        sessionError = sessionNotFound ? 'This conversation no longer exists.' : errorText(sessionFailure);
+      }
+
+      let tail: ConversationPage | undefined;
+      let conversationError: string | undefined;
+      if (tailResult.status === 'fulfilled') {
+        try {
+          this.validatePage(tailResult.value);
+          tail = tailResult.value;
+        } catch (error) {
+          if (error instanceof AuthorizationError) throw error;
+          conversationError = errorText(error);
+        }
+      } else conversationError = errorText(tailFailure);
+
+      let cursor = this.cursor;
+      let hasOlder = this.state.hasOlder;
+      let historyError: string | undefined;
+      if (tail) {
+        const candidate = new Map<string, ConversationRecord>();
+        for (const record of tail.records) {
           const previous = candidate.get(record.id);
           candidate.set(record.id, mergeRecord(previous, record));
         }
-        cursor = page.oldestCursor;
-        hasOlder = page.hasOlder;
-        restored++;
+        cursor = tail.oldestCursor;
+        hasOlder = tail.hasOlder;
+        let restored = 0;
+        let restoreFailed = false;
+        // Restore the previously visible depth from fresh canonical pages after a gap.
+        while (hasOlder && cursor && priorOldest &&
+          (restored < priorDepth ||
+            [...candidate.values()].every((record) => compareRecords(record, priorOldest) > 0))) {
+          try {
+            const page = await this.transport.readOlder(this.sessionKey, cursor, controller.signal);
+            if (!this.isCurrent(generation) || !this.checkIdentity()) return;
+            this.validatePage(page);
+            if (page.oldestCursor === cursor && page.hasOlder) {
+              throw new UnsupportedTargetError('Older cursor did not advance.');
+            }
+            for (const record of page.records) {
+              const previous = candidate.get(record.id);
+              candidate.set(record.id, mergeRecord(previous, record));
+            }
+            cursor = page.oldestCursor;
+            hasOlder = page.hasOlder;
+            restored++;
+          } catch (error) {
+            if (error instanceof AuthorizationError) throw error;
+            historyError = errorText(error);
+            restoreFailed = true;
+            break;
+          }
+        }
+
+        if (!restoreFailed) {
+          this.rows.clear();
+          this.tombstones.clear();
+        }
+        this.cursor = cursor;
+        this.restoreDepth = restored;
+        for (const record of candidate.values()) this.put(record);
       }
 
-      this.rows.clear();
-      this.tombstones.clear();
-      this.cursor = cursor;
-      this.restoreDepth = restored;
-      for (const record of candidate.values()) this.put(record);
-
-      const prefix: ChangeNotice[] = [];
-      while (true) {
-        const next = this.buffered.splice(0);
-        prefix.push(...next);
-        for (const notice of next) {
-          this.apply(notice);
-          if (!this.isCurrent(generation)) return;
+      if (!this.connection || !session || !tail || sessionError || conversationError) {
+        this.connection?.close();
+        this.connection = undefined;
+        if (sessionNotFound) {
+          this.connectionController?.abort();
+          this.connectionController = undefined;
+          this.connectionBinding = undefined;
         }
-        if (!this.transport.proveCoverage(session, tail, prefix)) {
-          throw new UnsupportedTargetError('Snapshot and buffered notices lack verified coverage.');
+        this.buffered = [];
+        this.bufferedSession = undefined;
+        if (!liveError && (sessionError || conversationError)) {
+          liveError = 'Live updates are paused while conversation data is unavailable.';
         }
-        if (this.buffered.length === 0) break;
+      } else {
+        const prefix: ChangeNotice[] = [];
+        let coverageVerified = true;
+        while (true) {
+          prefix.push(...this.buffered.splice(0));
+          try {
+            if (!this.transport.proveCoverage(session, tail, prefix)) {
+              liveError = 'The live connection could not verify conversation updates.';
+              coverageVerified = false;
+              break;
+            }
+          } catch (error) {
+            if (error instanceof AuthorizationError) throw error;
+            liveError = errorText(error);
+            coverageVerified = false;
+            break;
+          }
+          if (this.buffered.length === 0) break;
+        }
+        if (coverageVerified) {
+          for (const notice of prefix) this.apply(notice);
+        } else {
+          this.connection?.close();
+          this.connection = undefined;
+          this.connectionController?.abort();
+          this.connectionController = undefined;
+          this.connectionBinding = undefined;
+          this.buffered = [];
+          this.bufferedSession = undefined;
+        }
       }
+
       if (!this.isCurrent(generation)) return;
       this.initializing = false;
-      this.retryDelayMs = 250;
+      if (!this.connection && !liveError) {
+        liveError = liveAttemptSettled ? 'Live updates are unavailable.' : 'Live updates are connecting.';
+      }
+      if (!liveError) this.retryDelayMs = 250;
       const sends = this.state.sends.map((send) => this.pendingReconciledIds.has(send.clientMessageId)
         ? { ...send, status: 'accepted' as const, reconciled: true, reason: undefined }
         : send);
       this.pendingReconciledIds.clear();
-      const bufferedSession = this.bufferedSession as SessionRecord | undefined;
-      const currentSession = bufferedSession && bufferedSession.rowVersion > session.rowVersion ? bufferedSession : session;
+      const bufferedSession = this.connection ? this.bufferedSession : undefined;
+      const currentSession = session
+        ? bufferedSession && bufferedSession.rowVersion > session.rowVersion ? bufferedSession : session
+        : sessionNotFound ? undefined : this.state.session;
       this.publish({
         status: 'ready', statusDetail: undefined, records: recordsFrom(this.rows), sends: Object.freeze(sends),
-        session: currentSession, agentDisplayName: currentSession.displayName,
+        session: currentSession, agentDisplayName: currentSession?.displayName ?? (sessionNotFound ? undefined : this.state.agentDisplayName),
         provenance: noProvenance, provenanceAvailable: false, activeTurn: undefined,
-        hasOlder, historyError: undefined,
+        hasOlder, historyError: tail ? historyError : this.state.historyError,
+        sessionError, sessionNotFound, conversationError, liveError,
       });
       void this.startTools();
       for (const send of sends) {
@@ -577,19 +721,25 @@ class SessionRuntime implements ChatRuntime {
       }
       // A synchronous callback may have buffered a notice during publication.
       for (const notice of this.buffered.splice(0)) this.receive(notice, generation);
+      if (((liveError && liveAttemptSettled) || sessionError || conversationError) && !sessionNotFound) {
+        this.scheduleRebuild();
+      }
     } catch (error) {
       if (!this.isCurrent(generation) || controller.signal.aborted) return;
       this.initializing = false;
+      this.connectionController?.abort();
+      this.connectionController = undefined;
       this.connection?.close();
       this.connection = undefined;
-      const status = error instanceof AuthorizationError ? 'unauthorized'
-        : error instanceof UnsupportedTargetError ? 'unsupported' : 'error';
-      if (status === 'unauthorized' || status === 'unsupported') {
-        this.failClosed(status, errorText(error));
+      this.connectionBinding = undefined;
+      this.connectionForRebuild = undefined;
+      if (error instanceof AuthorizationError) {
+        this.failClosed(errorText(error));
         return;
       }
-      this.publish({ status, statusDetail: errorText(error) });
-      if (status === 'error') this.scheduleRebuild();
+      this.publish({ status: 'ready', statusDetail: undefined,
+        conversationError: errorText(error), liveError: liveError ?? this.state.liveError });
+      this.scheduleRebuild();
     }
   }
 
@@ -628,15 +778,7 @@ class SessionRuntime implements ChatRuntime {
     } catch (error) {
       if (!this.isCurrent(generation) || signal.aborted) return;
       if (error instanceof AuthorizationError) {
-        this.failClosed('unauthorized', errorText(error));
-        return;
-      }
-      if (error instanceof UnsupportedTargetError) {
-        this.failClosed('unsupported', errorText(error));
-        return;
-      }
-      if (error instanceof InvalidCursorError) {
-        this.doubt(errorText(error), generation);
+        this.failClosed(errorText(error));
         return;
       }
       this.publish({ loadingOlder: false, historyError: errorText(error) });
@@ -644,7 +786,7 @@ class SessionRuntime implements ChatRuntime {
   };
 
   send = (content: string, clientMessageId?: string, hostSend?: HostSendContext): string | null => {
-    if (!content.trim() || this.disposed || !this.checkIdentity() || this.state.status !== 'ready') return null;
+    if (!content.trim() || this.disposed || !this.checkIdentity() || this.state.status === 'unauthorized') return null;
     const id = clientMessageId ?? `c_${crypto.randomUUID()}`;
     if (clientMessageId && !hostCorrelationPattern.test(clientMessageId)) return null;
     if (this.state.sends.some((send) => send.clientMessageId === id)) return null;
@@ -688,7 +830,7 @@ class SessionRuntime implements ChatRuntime {
         // never ends a live acknowledgement wait or turns disconnection into a
         // final delivery failure.
         if (this.state.status === 'unauthorized') return;
-        if (!this.profile.capabilities.humanSendDedupe || this.state.status === 'unsupported') {
+        if (!this.profile.capabilities.humanSendDedupe) {
           result = { outcome: 'uncertain', reason: 'retry-unavailable' };
           break;
         }
@@ -706,10 +848,6 @@ class SessionRuntime implements ChatRuntime {
           break;
         }
         if (statusAfterWait === 'unauthorized') return;
-        if (statusAfterWait === 'unsupported') {
-          result = { outcome: 'uncertain', reason: 'retry-unavailable' };
-          break;
-        }
         this.updateSend(submission.clientMessageId, (send) => send.reconciled ? send
           : { ...send, status: 'pending', reason: undefined });
         retryDelayMs = Math.min(retryDelayMs * 2, humanSendRetryMaxDelayMs);
@@ -739,7 +877,7 @@ class SessionRuntime implements ChatRuntime {
           this.notifyHostSend(submission.clientMessageId, {
             kind: 'failed', reason: 'refused', detail: 'unauthorized',
           });
-          this.failClosed('unauthorized', errorText(error));
+          this.failClosed(errorText(error));
           return;
         }
         this.updateSend(submission.clientMessageId, (send) => send.reconciled ? send
@@ -761,13 +899,13 @@ class SessionRuntime implements ChatRuntime {
 
   retrySend = async (clientMessageId: string): Promise<void> => {
     if (this.disposed || !this.checkIdentity()) return;
-    if (this.state.status === 'unsupported') return;
+    if (this.state.status === 'unauthorized') return;
     const send = this.state.sends.find((item) => item.clientMessageId === clientMessageId);
     if (!send || !['failed', 'uncertain'].includes(send.status) || send.reconciled ||
         !this.profile.capabilities.humanSendDedupe) return;
     // Rebuild/query first. Absence from a bounded tail does not mean rejection.
     await this.rebuild();
-    if (this.disposed || !this.checkIdentity() || this.state.status !== 'ready') return;
+    if (this.disposed || !this.checkIdentity() || this.state.status === 'unauthorized') return;
     const current = this.state.sends.find((item) => item.clientMessageId === clientMessageId);
     if (!current || current.reconciled || !['failed', 'uncertain'].includes(current.status)) return;
     this.updateSend(clientMessageId, (item) => ({ ...item, status: 'pending', reason: undefined }));
@@ -778,7 +916,7 @@ class SessionRuntime implements ChatRuntime {
   };
 
   refreshHostSend = async (clientMessageId: string): Promise<'found' | 'absent' | 'unavailable'> => {
-    if (this.disposed || !this.checkIdentity() || this.state.status !== 'ready' || !this.controller) return 'unavailable';
+    if (this.disposed || !this.checkIdentity() || this.state.status === 'unauthorized' || !this.controller) return 'unavailable';
     const generation = this.generation;
     const signal = this.controller.signal;
     const captured: ChangeNotice[] = [];
@@ -806,8 +944,7 @@ class SessionRuntime implements ChatRuntime {
       return found ? 'found' : 'absent';
     } catch (error) {
       if (!this.isCurrent(generation) || signal.aborted) return 'unavailable';
-      if (error instanceof AuthorizationError) this.failClosed('unauthorized', errorText(error));
-      else if (error instanceof UnsupportedTargetError) this.failClosed('unsupported', errorText(error));
+      if (error instanceof AuthorizationError) this.failClosed(errorText(error));
       return 'unavailable';
     } finally {
       this.coverageReaders.delete(captured);
@@ -815,7 +952,7 @@ class SessionRuntime implements ChatRuntime {
   };
 
   retryHostSend = (clientMessageId: string, content: string, hostSend?: HostSendContext): void => {
-    if (this.disposed || !this.checkIdentity() || this.state.status !== 'ready' ||
+    if (this.disposed || !this.checkIdentity() || this.state.status === 'unauthorized' ||
         !hostCorrelationPattern.test(clientMessageId) || !content.trim()) {
       this.notifyHostSend(clientMessageId, { kind: 'uncertain', reason: 'ack-lost' });
       return;
@@ -847,7 +984,7 @@ class SessionRuntime implements ChatRuntime {
         this.notifyHostSend(clientMessageId, { kind: 'failed', reason: 'retry-unavailable' });
         return;
       }
-      if (this.disposed || !this.checkIdentity() || this.state.status !== 'ready') {
+      if (this.disposed || !this.checkIdentity() || this.state.status === 'unauthorized') {
         this.updateSend(clientMessageId, (send) => ({ ...send, status: 'uncertain', reason: 'Connection changed before retry.' }));
         this.notifyHostSend(clientMessageId, { kind: 'uncertain', reason: 'ack-lost' });
         return;
@@ -880,7 +1017,12 @@ class SessionRuntime implements ChatRuntime {
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.stopTools();
     this.controller?.abort();
+    this.connectionController?.abort();
+    this.connectionController = undefined;
     this.connection?.close();
+    this.connection = undefined;
+    this.connectionBinding = undefined;
+    this.connectionForRebuild = undefined;
     for (const controller of this.sendControllers.values()) controller.abort();
     this.sendControllers.clear();
     this.listeners.clear();

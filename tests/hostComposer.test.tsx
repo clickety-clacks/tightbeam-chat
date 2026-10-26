@@ -8,6 +8,7 @@ import type {
   ConversationPage, ConversationRecord, HostIdentity, HumanSendResult, HumanSubmission,
   SessionRecord, TargetCapabilities, TargetObservation, TargetProfile, TightbeamAdapter,
 } from '../src/types';
+import { SessionNotFoundError } from '../src/types';
 
 const capabilities: TargetCapabilities = {
   newestTail: true, stableOlderCursor: true, retainedHistoryAcrossResets: true,
@@ -33,6 +34,7 @@ class HostComposerTransport implements ChatTransport {
   readonly observation: TargetObservation = profile;
   readyGate?: ReturnType<typeof deferred<void>>;
   failReadSessionOnce = false;
+  missingSession = false;
   nextSend?: (submission: HumanSubmission) => Promise<HumanSendResult>;
   private seq = 0;
 
@@ -45,6 +47,7 @@ class HostComposerTransport implements ChatTransport {
     return { close: () => { this.closed.add(sessionKey); this.callbacks.delete(sessionKey); } };
   };
   readSession = async (sessionKey: string): Promise<SessionRecord> => {
+    if (this.missingSession) throw new SessionNotFoundError('This conversation no longer exists.');
     if (this.failReadSessionOnce) {
       this.failReadSessionOnce = false;
       throw new Error('Temporary history read failure.');
@@ -561,7 +564,7 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     secondView.unmount();
   });
 
-  it('keeps exceptional status readable and offers inline Reconnect after opting in', async () => {
+  it('keeps session-detail failures local and offers inline Reconnect after opting in', async () => {
     const events: HostComposerEvent[] = [];
     const transport = new HostComposerTransport();
     transport.failReadSessionOnce = true;
@@ -569,9 +572,23 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     openChat(transport, 'conversation-a');
     const reconnect = await screen.findByRole('button', { name: 'Reconnect' });
     expect(screen.queryByRole('button', { name: /Connection status/ })).toBeNull();
-    expect(screen.getByText('Disconnected. Reconnect to refresh the conversation.')).toBeTruthy();
+    expect(screen.getByText('Some conversation details are unavailable.')).toBeTruthy();
     fireEvent.click(reconnect);
     await waitForReady(events, 'conversation-a');
     expect(screen.queryByRole('button', { name: /Connection status/ })).toBeNull();
+  });
+
+  it('reports a missing session through the existing unavailable event with a reason', async () => {
+    const events: HostComposerEvent[] = [];
+    const transport = new HostComposerTransport();
+    transport.missingSession = true;
+    installDeclaration(events);
+    openChat(transport, 'conversation-a');
+
+    await waitFor(() => expect(events.filter((event) => event.event === 'unavailable')).toHaveLength(1));
+    expect(events[0]).toMatchObject({ event: 'unavailable', reason: 'session-not-found' });
+    expect(events.some((event) => event.event === 'ready')).toBe(false);
+    expect(screen.getByRole('textbox', { name: /message to the selected agent/i })).toBeTruthy();
+    expect(screen.getByText('This conversation no longer exists.')).toBeTruthy();
   });
 });

@@ -167,7 +167,7 @@ describe('framework-independent runtime', () => {
       runtime.dispose();
     });
 
-  it('keeps live activity through paging, rebuilds it from the new subscription, and ignores the old generation', async () => {
+  it('keeps the active caption steady through reconnects and ignores the old generation', async () => {
     const transport = new ControlledTransport();
     transport.rows[7] = message(8, { role: 'user', sender: 'user:person', turnSeq: 90 });
     const active: CanonicalTurn = { seq: 90, sessionKey, status: 'running', messageId: 'm8',
@@ -180,10 +180,11 @@ describe('framework-independent runtime', () => {
     expect(runtime.getSnapshot().activeTurn?.turn.seq).toBe(90);
     const oldCallbacks = transport.callbacks!;
     transport.doubt();
-    expect(runtime.getSnapshot().activeTurn).toBeUndefined();
+    expect(runtime.getSnapshot().status).toBe('ready');
+    expect(runtime.getSnapshot().activeTurn?.turn.seq).toBe(90);
     transport.tailHook = undefined;
     await runtime.rebuild();
-    expect(runtime.getSnapshot().activeTurn).toBeUndefined();
+    expect(runtime.getSnapshot().activeTurn?.turn.seq).toBe(90);
     oldCallbacks.onNotice({ operation: 'turn', turn: active });
     expect(runtime.getSnapshot().activeTurn).toBeUndefined();
     transport.callbacks?.onNotice({ operation: 'turn', turn: { ...active, sessionKey: 'another-session' } });
@@ -200,7 +201,7 @@ describe('framework-independent runtime', () => {
     runtime.dispose();
   });
 
-  it('starts recovery immediately after repeated failures and cancels the old backoff retry', async () => {
+  it('retries an unavailable live stream without taking the conversation offline', async () => {
     vi.useFakeTimers();
     const transport = new ControlledTransport();
     const connect = transport.openChanges;
@@ -214,7 +215,8 @@ describe('framework-independent runtime', () => {
       open.mockRejectedValue(new Error('Connection unavailable'));
       transport.doubt();
       for (const delay of [250, 500, 1000]) await vi.advanceTimersByTimeAsync(delay);
-      expect(runtime.getSnapshot().status).toBe('error');
+      expect(runtime.getSnapshot().status).toBe('ready');
+      expect(runtime.getSnapshot().liveError).toBe('Connection unavailable');
       expect(open).toHaveBeenCalledTimes(4);
       transport.rows.push(message(9));
       open.mockImplementation((...args) => connect(...args));
@@ -228,7 +230,7 @@ describe('framework-independent runtime', () => {
     } finally { runtime.dispose(); vi.useRealTimers(); }
   });
 
-  it('replaces a stalled recovery and stays stale until fresh subscription and history catch-up complete', async () => {
+  it('replaces a stalled recovery without hiding the existing conversation', async () => {
     const transport = new ControlledTransport();
     const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
     try {
@@ -252,11 +254,11 @@ describe('framework-independent runtime', () => {
       const fresh = runtime.rebuild({ restart: true });
       await vi.waitFor(() => expect(attempts).toBe(2));
       expect(oldSignal?.aborted).toBe(true);
-      expect(runtime.getSnapshot().status).toBe('stale');
-      expect(transport.readTailCalls).toBe(1);
+      expect(runtime.getSnapshot().status).toBe('ready');
+      expect(transport.readTailCalls).toBeGreaterThanOrEqual(2);
       subscribed.resolve();
-      await vi.waitFor(() => expect(transport.readSessionCalls).toBe(2));
-      expect(runtime.getSnapshot().status).toBe('stale');
+      await vi.waitFor(() => expect(transport.readSessionCalls).toBeGreaterThanOrEqual(3));
+      expect(runtime.getSnapshot().status).toBe('ready');
       transport.rows.push(message(9));
       transport.emit(message(10));
       history.resolve();
@@ -315,6 +317,27 @@ describe('framework-independent runtime', () => {
     expect(clientMessageId).toBeTruthy();
     await vi.waitFor(() => expect(runtime.getSnapshot().sends[0]?.status).toBe('accepted'));
     expect(transport.submissions[0].content).toBe('Still available');
+    expect(runtime.getSnapshot().status).toBe('ready');
+    runtime.dispose();
+  });
+
+  it('loads and sends while the optional live subscription is still connecting', async () => {
+    const transport = new ControlledTransport();
+    const liveReady = deferred<void>();
+    transport.readyGate = liveReady;
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+
+    await runtime.rebuild();
+    expect(runtime.getSnapshot().status).toBe('ready');
+    expect(runtime.getSnapshot().records.length).toBeGreaterThan(0);
+    expect(runtime.getSnapshot().liveError).toBe('Live updates are connecting.');
+    const id = runtime.send('sending does not wait for live updates');
+    expect(id).toBeTruthy();
+    await vi.waitFor(() => expect(runtime.getSnapshot().sends[0].status).toBe('accepted'));
+
+    liveReady.resolve();
+    await vi.waitFor(() => expect(transport.readTailCalls).toBeGreaterThan(1), { timeout: 1500 });
+    await vi.waitFor(() => expect(runtime.getSnapshot().liveError).toBeUndefined(), { timeout: 1500 });
     expect(runtime.getSnapshot().status).toBe('ready');
     runtime.dispose();
   });
@@ -399,17 +422,24 @@ describe('framework-independent runtime', () => {
     runtime.dispose();
   });
 
-  it('refuses unsupported identity or unproved snapshot coverage', async () => {
+  it('keeps data and sending available when a constant profile or live coverage is unproved', async () => {
     const wrong = new ControlledTransport();
     wrong.observation = { ...profile, identity: 'unreviewed-build' };
     const runtime = createTightbeamAdapter(wrong, profile).open(sessionKey);
-    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('unsupported'));
-    expect(wrong.readTailCalls).toBe(0);
+    await runtime.rebuild();
+    expect(runtime.getSnapshot().status).toBe('ready');
+    expect(wrong.readTailCalls).toBe(1);
+    expect(runtime.getSnapshot().records.length).toBeGreaterThan(0);
+    expect(runtime.send('still available')).toBeTruthy();
     runtime.dispose();
     const noProof = new ControlledTransport();
     noProof.coverage = false;
     const second = createTightbeamAdapter(noProof, profile).open(sessionKey);
-    await vi.waitFor(() => expect(second.getSnapshot().status).toBe('unsupported'));
+    await second.rebuild();
+    expect(second.getSnapshot().status).toBe('ready');
+    expect(second.getSnapshot().records.length).toBeGreaterThan(0);
+    expect(second.getSnapshot().liveError).toContain('verify conversation updates');
+    expect(second.send('send without live updates')).toBeTruthy();
     second.dispose();
   });
 
@@ -441,7 +471,7 @@ describe('framework-independent runtime', () => {
       }
     };
     const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
-    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('stale'));
+    await vi.waitFor(() => expect(transport.readTailCalls).toBeGreaterThanOrEqual(2));
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'), { timeout: 1000 });
     expect(transport.readTailCalls).toBe(2);
     expect(runtime.getSnapshot().records.at(-1)).toMatchObject({ id: 't9', kind: 'transition', transition: 'model' });
@@ -458,7 +488,7 @@ describe('framework-independent runtime', () => {
     transport.rows.push(message(9), switchAt(10, 'harness'), message(11));
     transport.reset();
     transport.doubt();
-    expect(runtime.getSnapshot().status).toBe('stale');
+    expect(runtime.getSnapshot().status).toBe('ready');
     await vi.advanceTimersByTimeAsync(300);
     await runtime.rebuild();
     expect(runtime.getSnapshot().status).toBe('ready');
@@ -538,17 +568,38 @@ describe('framework-independent runtime', () => {
     runtime.dispose();
   });
 
-  it('fails closed when an older page violates the pinned target contract', async () => {
+  it('retains already shown history when rebuild backfill fails', async () => {
+    const transport = new ControlledTransport();
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await runtime.rebuild();
+    await runtime.loadOlder();
+    const shownIds = runtime.getSnapshot().records.map((record) => record.id);
+
+    transport.rows = Array.from({ length: 8 }, (_, index) => message(index + 9));
+    transport.readOlder = async () => { throw new Error('Older history is temporarily unavailable.'); };
+    await runtime.rebuild();
+
+    const state = runtime.getSnapshot();
+    expect(state.status).toBe('ready');
+    expect(state.historyError).toBe('Older history is temporarily unavailable.');
+    expect(shownIds.every((id) => state.records.some((record) => record.id === id))).toBe(true);
+    expect(state.records.some((record) => record.id === 'm16')).toBe(true);
+    expect(runtime.send('sending remains available')).toBeTruthy();
+    runtime.dispose();
+  });
+
+  it('keeps the conversation and sending available when an older page is invalid', async () => {
     const transport = new ControlledTransport();
     const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
     await runtime.rebuild();
     transport.readOlder = async () => ({ records: [{ ...message(4), sessionKey: 'other' }],
       oldestCursor: 'bad', hasOlder: true, coverage: 'fixture' });
     await runtime.loadOlder();
-    expect(runtime.getSnapshot().status).toBe('unsupported');
-    expect(runtime.getSnapshot().records).toHaveLength(0);
-    expect(runtime.send('must not send')).toBeNull();
-    expect(transport.closed).toBeGreaterThan(0);
+    expect(runtime.getSnapshot().status).toBe('ready');
+    expect(runtime.getSnapshot().records.length).toBeGreaterThan(0);
+    expect(runtime.getSnapshot().historyError).toContain('History page crossed session boundary');
+    expect(runtime.send('still send')).toBeTruthy();
+    expect(transport.closed).toBe(0);
     runtime.dispose();
 
     const thrown = new ControlledTransport();
@@ -556,7 +607,9 @@ describe('framework-independent runtime', () => {
     await second.rebuild();
     thrown.readOlder = async () => { throw new UnsupportedTargetError('wire schema changed'); };
     await second.loadOlder();
-    expect(second.getSnapshot().status).toBe('unsupported');
+    expect(second.getSnapshot().status).toBe('ready');
+    expect(second.getSnapshot().records.length).toBeGreaterThan(0);
+    expect(second.getSnapshot().historyError).toBe('wire schema changed');
     second.dispose();
   });
 
@@ -574,17 +627,18 @@ describe('framework-independent runtime', () => {
     transport.readOlder = async () => { throw new UnsupportedTargetError('history schema changed'); };
     await runtime.loadOlder();
     const state = runtime.getSnapshot();
-    expect(state.status).toBe('unsupported');
+    expect(state.status).toBe('ready');
+    expect(state.historyError).toBe('history schema changed');
     expect(state.sends).toEqual([
       expect.objectContaining({ clientMessageId: acceptedId, content: 'known accepted', status: 'accepted' }),
       expect.objectContaining({ clientMessageId: pendingId, content: '  exact pending text  ',
         sessionKey, deviceId: 'device', status: 'pending' }),
     ]);
-    expect(runtime.send('blocked new send')).toBeNull();
+    expect(runtime.send('new send')).toBeTruthy();
     await runtime.retrySend(pendingId);
     pendingAck.resolve({ outcome: 'accepted' });
     await vi.waitFor(() => expect(runtime.getSnapshot().sends[1].status).toBe('accepted'));
-    expect(transport.submissions).toHaveLength(2);
+    expect(transport.submissions).toHaveLength(3);
     runtime.dispose();
   });
 
@@ -715,11 +769,12 @@ describe('framework-independent runtime', () => {
     }
   });
 
-  it('settles a dropped send as uncertain if the target becomes unsupported before retry', async () => {
+  it('keeps the transcript usable when history cannot prove a safe send retry', async () => {
     const transport = new ControlledTransport();
     const firstSend = deferred<HumanSendResult>();
     transport.nextSend = () => firstSend.promise;
-    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    const noRetryProfile = { ...profile, capabilities: { ...capabilities, humanSendDedupe: false } };
+    const runtime = createTightbeamAdapter(transport, noRetryProfile).open(sessionKey);
     await runtime.rebuild();
 
     const id = runtime.send('  ambiguous after target change  ')!;
@@ -727,7 +782,8 @@ describe('framework-independent runtime', () => {
     runtime.observeHostSend(id, (signal) => signals.push(signal));
     transport.readOlder = async () => { throw new UnsupportedTargetError('target changed during send'); };
     await runtime.loadOlder();
-    expect(runtime.getSnapshot().status).toBe('unsupported');
+    expect(runtime.getSnapshot().status).toBe('ready');
+    expect(runtime.getSnapshot().historyError).toBe('target changed during send');
 
     firstSend.resolve({ outcome: 'retryable', reason: 'socket closed before acknowledgement' });
     await vi.waitFor(() => expect(runtime.getSnapshot().sends[0]).toMatchObject({
@@ -736,7 +792,7 @@ describe('framework-independent runtime', () => {
     }));
     expect(transport.submissions).toHaveLength(1);
     expect(signals).toEqual([{ kind: 'uncertain', reason: 'ack-lost' }]);
-    expect(runtime.send('blocked while unsupported')).toBeNull();
+    expect(runtime.send('still send')).toBeTruthy();
     runtime.dispose();
   });
 
@@ -751,7 +807,7 @@ describe('framework-independent runtime', () => {
     const sendSignal = transport.sendSignals[0];
     expect(runtime.getSnapshot().sends[0]).toMatchObject({ clientMessageId: id, status: 'pending' });
     transport.doubt();
-    expect(runtime.getSnapshot().status).toBe('stale');
+    expect(runtime.getSnapshot().status).toBe('ready');
     expect(runtime.getSnapshot().sends[0]).toMatchObject({ status: 'pending' });
     expect(sendSignal.aborted).toBe(false);
 

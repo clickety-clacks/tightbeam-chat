@@ -316,6 +316,10 @@ function sourceLabel(side: Bubble['side'], agentName: string): string {
 }
 
 function statusText(state: RuntimeState): string {
+  if (state.sessionNotFound) return 'Conversation not found';
+  if (state.conversationError) return 'Conversation history unavailable';
+  if (state.sessionError) return 'Session details unavailable';
+  if (state.liveError) return 'Live updates unavailable';
   switch (state.status) {
     case 'ready': return 'Connected';
     case 'loading': return 'Connecting';
@@ -507,7 +511,7 @@ const Composer = forwardRef<ComposerHandle, {
       onSettings();
       return;
     }
-    if (state.status !== 'ready') return;
+    if (state.status === 'unauthorized') return;
     if (runtime.send(draft)) {
       setDraft('');
       onSendAccepted();
@@ -550,6 +554,11 @@ const Composer = forwardRef<ComposerHandle, {
           <button type="button" aria-label="Close connection details" onClick={closeStatusPopup}>×</button>
         </div>
         {state.statusDetail && <p>{state.statusDetail}</p>}
+        {state.sessionError && <p>Session details: {state.sessionError}</p>}
+        {state.sessionNotFound && <p>This conversation no longer exists.</p>}
+        {state.conversationError && <p>Conversation history: {state.conversationError}</p>}
+        {state.historyError && <p>Earlier messages: {state.historyError}</p>}
+        {state.liveError && <p>Live updates: {state.liveError}</p>}
         <dl>
           <dt>Gateway</dt><dd>{state.targetGateway || 'Unavailable'}</dd>
           <dt>Session</dt><dd>{state.sessionKey}</dd>
@@ -557,10 +566,11 @@ const Composer = forwardRef<ComposerHandle, {
           <dt>Model</dt><dd>{state.session?.model || 'Unavailable'}</dd>
           <dt>Harness</dt><dd>{state.session?.harness || 'Unavailable'}</dd>
         </dl>
-        {state.status === 'error' && <button type="button" onClick={() => void runtime.rebuild({ restart: true })}>Reconnect</button>}
+        {(state.status === 'error' || state.sessionError || state.sessionNotFound || state.conversationError || state.liveError) &&
+          <button type="button" onClick={() => void runtime.rebuild({ restart: true })}>Reconnect</button>}
       </div>}
       <button ref={sendControl} type="submit" className="tb-chat-send-button" aria-label="Send message"
-        disabled={!draft.trim() || (state.status !== 'ready' && !isSettingsCommand(draft))}>
+        disabled={!draft.trim() || (state.status === 'unauthorized' && !isSettingsCommand(draft))}>
         <span className="tb-chat-send-button-disc" aria-hidden="true" />
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5m0 0L6 11m6-6 6 6" /></svg>
       </button>
@@ -878,6 +888,11 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
   const noticeTone = state.status === 'stale' ? 'caution'
     : state.status === 'error' || state.status === 'unauthorized' || state.status === 'unsupported' ? 'danger'
       : 'neutral';
+  const localNotice = state.sessionNotFound ? 'This conversation no longer exists.'
+    : state.conversationError ? 'Conversation history could not be loaded.'
+      : state.sessionError ? 'Some conversation details are unavailable.'
+        : state.liveError ? 'Live updates are reconnecting; conversation and sending remain available.'
+          : undefined;
 
   const renderItem = useCallback((item: TimelineItem) => {
         if (item.kind === 'tool') return <ToolCallRow key={'tool-' + item.call.id} call={item.call} registerRow={reading.registerRow} />;
@@ -900,7 +915,8 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
         const unreachable = send.reason === 'unreachable';
         const retryUnavailable = send.reason === 'retry-unavailable';
         const reconnectingSend = send.status === 'pending' && unreachable;
-        const retryAvailable = !hostManaged && ['failed', 'uncertain'].includes(send.status) && !send.reconciled;
+        const retryAvailable = !hostManaged && !retryUnavailable &&
+          ['failed', 'uncertain'].includes(send.status) && !send.reconciled;
         return <article ref={element => reading.registerRow(`local-${send.clientMessageId}`, element)} className="tb-chat-bubble tb-chat-bubble-human tb-chat-local" key={send.clientMessageId}
           data-record-key={`local-${send.clientMessageId}`} data-scroll-key={`local-${send.clientMessageId}`} aria-label={`Your message, ${send.status}`}>
           <div className="tb-chat-bubble-body">{markdownBody(send.content)}</div>
@@ -921,10 +937,9 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
                 : 'The message could not be sent. Retry it or restore the text to the composer.'}
           </p>}
           {retryAvailable && <div className="tb-chat-send-actions">
-            <button type="button" disabled={state.status !== 'ready'}
+            <button type="button" disabled={state.status === 'unauthorized'}
               onClick={() => void runtime.retrySend(send.clientMessageId)}>Retry message</button>
-            {state.status !== 'ready' && <span>{state.status === 'unsupported'
-              ? 'Reconnect to a supported target before retrying.' : 'Reconnect before retrying.'}</span>}
+            {state.status === 'unauthorized' && <span>Access to this conversation is unavailable.</span>}
             <button type="button" onClick={() => composer.current?.restore(send.content)}>Restore text to the composer</button>
           </div>}
           <time className="tb-chat-time" dateTime={time.dateTime}>{time.text}</time>
@@ -939,7 +954,16 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
       onPointerDown={reading.interrupt} onPointerMove={(event) => { if (event.buttons !== 0) reading.noteUserScroll(); }}
       onKeyDown={(event) => { if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) { reading.interrupt(); reading.noteUserScroll(); } }}
       aria-label={`${agentName || 'Conversation'} messages`} aria-live="polite" aria-relevant="additions text">
-      {state.loadingOlder && <div className="tb-chat-history-loading tb-chat-caption tb-chat-caption-neutral" role="status">Loading earlier messages…</div>}
+      {(state.loadingOlder || state.historyError || localNotice) && <div className={`tb-chat-runtime-notice tb-chat-caption ${state.historyError || state.sessionNotFound || state.conversationError
+        ? 'tb-chat-caption-danger' : 'tb-chat-caption-neutral'}`} role="status">
+        <span className="tb-chat-caption-body">
+          <span>{state.loadingOlder ? 'Loading earlier messages…'
+            : state.historyError ? `Earlier messages could not be loaded: ${state.historyError}` : localNotice}</span>
+          {state.historyError && <button type="button" onClick={loadOlder}>Retry loading messages</button>}
+          {(state.sessionNotFound || state.sessionError || state.conversationError || state.liveError) &&
+            <button type="button" onClick={() => void runtime.rebuild({ restart: true })}>Reconnect</button>}
+        </span>
+      </div>}
       <div className="tb-chat-message-content" ref={reading.content}>
       {notice && <div className={`tb-chat-notice tb-chat-caption tb-chat-caption-${noticeTone} tb-chat-notice-${state.status}`} role={state.status === 'loading' ? 'status' : 'alert'}>
         <span className="tb-chat-caption-body">
@@ -959,12 +983,6 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
           </span>
         </span>}
       </div>}
-      {state.historyError && <div className="tb-chat-history-error tb-chat-caption tb-chat-caption-danger" role="alert">
-        <span className="tb-chat-caption-body">
-          <span>Earlier messages could not be loaded: {state.historyError}</span>
-          <button type="button" onClick={loadOlder}>Retry loading messages</button>
-        </span>
-      </div>}
       {projection.issues.length > 0 && <div className="tb-chat-history-error tb-chat-caption tb-chat-caption-danger" role="alert">
         Some message sources could not be interpreted. Conversation filtering is incomplete.
       </div>}
@@ -973,7 +991,8 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
       {caption && <div className="tb-chat-active-caption tb-chat-caption tb-chat-caption-neutral" role="status" aria-label={`Active turn: ${caption.text}`}>
         <span className="tb-chat-caption-body"><span aria-hidden="true">{caption.icon}</span><span>{caption.text}</span></span>
       </div>}
-      {state.status === 'ready' && state.records.length === 0 && localSends.length === 0 && !state.hasOlder &&
+      {state.status === 'ready' && !state.conversationError && !state.sessionNotFound &&
+        state.records.length === 0 && localSends.length === 0 && !state.hasOlder &&
         <p className="tb-chat-empty">No messages yet.</p>}
       </div>
     </div>

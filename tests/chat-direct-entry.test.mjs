@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createChatServer } from '../server/chat-server.mjs';
 import { createPublic019Transport } from '../src/public019';
 
@@ -164,6 +164,7 @@ function websocketHandshakeAccept(key) {
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (const server of [...createdServers].reverse()) await closeServer(server);
   for (const root of temporaryRoots.splice(0)) await fs.rm(root, { recursive: true, force: true });
 });
@@ -477,6 +478,7 @@ describe('private direct-entry Chat service bridge', () => {
   });
 
   it('routes mapped aliases only to their explicitly provisioned Gateway and keeps unavailable selections exact', async () => {
+    const mapWarnings = vi.spyOn(console, 'warn').mockImplementation(() => {});
     function fixtureGateway(name) {
       const seen = [];
       const gateway = http.createServer(async (request, response) => {
@@ -523,6 +525,7 @@ describe('private direct-entry Chat service bridge', () => {
     const unavailableBase = await writeGatewayDescriptor(path.join(root, 'unavailable-base'), unavailableDescriptorOrigin, 'unavailable-token');
     const mapFile = await writeGatewayMap(root, [
       { origin: defaultOrigin, baseDir: defaultBase, aliases: [defaultDescriptorOrigin] },
+      { origin: 'not a Gateway origin', baseDir: selectedBase },
       { origin: selectedOrigin, baseDir: selectedBase, aliases: [selectedAlias, selectedDescriptorOrigin] },
       // Its descriptor endpoint is deliberately not associated with this entry.
       { origin: unavailableOrigin, baseDir: unavailableBase },
@@ -599,9 +602,10 @@ describe('private direct-entry Chat service bridge', () => {
     }
     expect(defaultFixture.seen).toEqual([]);
     expect(unavailableFixture.seen).toEqual([]);
+    expect(mapWarnings).toHaveBeenCalledWith(expect.stringContaining('CHAT_GATEWAY_MAP_FILE entry 2'));
   });
 
-  it('fails closed on invalid or canonically duplicated maps instead of using the legacy descriptor', async () => {
+  it('skips malformed and canonically duplicated entries without using the legacy descriptor', async () => {
     const observed = [];
     const gateway = http.createServer((request, response) => {
       observed.push(request.url);

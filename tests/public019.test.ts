@@ -4,7 +4,7 @@ import {
   createPublic019Transport, decodePublic019Message, decodeToolCall,
   decodePublic019Notice, type Public019Channel, type Public019Host,
 } from '../src/public019';
-import { AuthorizationError, UnsupportedTargetError } from '../src/types';
+import { AuthorizationError, SessionNotFoundError, UnsupportedTargetError } from '../src/types';
 
 const sessionKey = 's-public';
 const identity = { principalKey: 'person-1', deviceId: 'device-1' };
@@ -105,8 +105,8 @@ describe('Gateway wire mapping and behavior checks', () => {
     expect(candidate.paths).toEqual(paths);
     expect(candidate.paths.some(path => path.includes('/turns'))).toBe(false);
     candidate.changes.disconnect();
-    expect(runtime.getSnapshot().status).toBe('stale');
-    expect(runtime.getSnapshot().activeTurn).toBeUndefined();
+    expect(runtime.getSnapshot().status).toBe('ready');
+    expect(runtime.getSnapshot().activeTurn?.turn.seq).toBe(13);
     runtime.dispose();
   });
 
@@ -132,6 +132,21 @@ describe('Gateway wire mapping and behavior checks', () => {
     });
     expect(later.paths).toEqual([]);
     expect(later.profile.capabilities.authoritativeTurnProvenance).toBe(true);
+  });
+
+  it('keeps a missing-session response local and distinguishes its detail 404', async () => {
+    const candidate = setup();
+    candidate.host.fetch = async () => new Response(JSON.stringify({ error: { code: 'not_found' } }), { status: 404 });
+    await expect(candidate.transport.readSession(sessionKey, new AbortController().signal))
+      .rejects.toBeInstanceOf(SessionNotFoundError);
+
+    const runtime = createTightbeamAdapter(candidate.transport, candidate.profile).open(sessionKey);
+    await runtime.rebuild();
+    expect(runtime.getSnapshot()).toMatchObject({
+      status: 'ready', sessionNotFound: true, sessionError: 'This conversation no longer exists.',
+    });
+    expect(runtime.send('a missing session does not block the rest of Chat')).toBeTruthy();
+    runtime.dispose();
   });
 
   it('reads ordered transitions while using a protocol-2 Firehose subscription', async () => {
