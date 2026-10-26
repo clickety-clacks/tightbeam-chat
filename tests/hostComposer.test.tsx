@@ -536,7 +536,7 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     await waitFor(() => expect(runtimes[0].getSnapshot().liveError).toBeUndefined());
 
     const reply: CanonicalMessage = { kind: 'message', id: 'live-agent-reply', sessionKey: 'conversation-a',
-      seq: 2, rowVersion: 1, role: 'assistant', sender: 'agent:fixture',
+      seq: 2, rowVersion: 1, role: 'assistant', sender: 'assistant-service', messageType: 'assistant',
       content: 'The reply arrived without reloading.', raw: {} };
     transport.records.set(reply.sessionKey, [...(transport.records.get(reply.sessionKey) ?? []), reply]);
     act(() => transport.emit(reply));
@@ -568,7 +568,7 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     await waitFor(() => expect(runtimes[0].getSnapshot().liveError).toBeUndefined());
 
     const reply: CanonicalMessage = { kind: 'message', id: 'no-reload-reply', sessionKey: 'conversation-a',
-      seq: 2, rowVersion: 1, role: 'assistant', sender: 'agent:fixture',
+      seq: 2, rowVersion: 1, role: 'assistant', sender: 'assistant-service', messageType: 'assistant',
       content: 'This reply also arrived live.', raw: {} };
     transport.records.set(reply.sessionKey, [...(transport.records.get(reply.sessionKey) ?? []), reply]);
     act(() => transport.emit(reply));
