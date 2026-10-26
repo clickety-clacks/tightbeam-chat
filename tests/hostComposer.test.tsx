@@ -33,6 +33,7 @@ class HostComposerTransport implements ChatTransport {
   readonly targetGateway = 'https://gateway.example:8443';
   readonly observation: TargetObservation = profile;
   readyGate?: ReturnType<typeof deferred<void>>;
+  readGate?: ReturnType<typeof deferred<void>>;
   failReadSessionOnce = false;
   missingSession = false;
   nextSend?: (submission: HumanSubmission) => Promise<HumanSendResult>;
@@ -47,6 +48,7 @@ class HostComposerTransport implements ChatTransport {
     return { close: () => { this.closed.add(sessionKey); this.callbacks.delete(sessionKey); } };
   };
   readSession = async (sessionKey: string): Promise<SessionRecord> => {
+    if (this.readGate) await this.readGate.promise;
     if (this.missingSession) throw new SessionNotFoundError('This conversation no longer exists.');
     if (this.failReadSessionOnce) {
       this.failReadSessionOnce = false;
@@ -55,6 +57,7 @@ class HostComposerTransport implements ChatTransport {
     return { sessionKey, rowVersion: 1, displayName: `Agent ${sessionKey}`, model: 'Model A', harness: 'Harness A', raw: {} };
   };
   readTail = async (sessionKey: string): Promise<ConversationPage> => {
+    if (this.readGate) await this.readGate.promise;
     const rows = this.records.get(sessionKey) ?? [];
     return { records: rows.slice(-50), oldestCursor: rows[0]?.id ?? null, hasOlder: false, coverage: sessionKey };
   };
@@ -129,9 +132,11 @@ afterEach(() => {
 });
 
 describe('versioned host composer seam on the real adapter and surface', () => {
-  it('keeps the web composer until fresh ready, then hides it and exposes only text capability', async () => {
+  it('keeps the web composer until the snapshot is ready, without waiting for live updates', async () => {
     const events: HostComposerEvent[] = [];
     const transport = new HostComposerTransport();
+    const readGate = deferred<void>();
+    transport.readGate = readGate;
     transport.readyGate = deferred<void>();
     installDeclaration(events);
     openChat(transport, 'conversation-a');
@@ -139,7 +144,7 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     await screen.findByRole('textbox');
     expect(screen.queryByRole('button', { name: /Connection status/ })).toBeNull();
     expect(events.some((event) => event.event === 'ready')).toBe(false);
-    await act(async () => { transport.readyGate?.resolve(); });
+    await act(async () => { readGate.resolve(); });
 
     const ready = await waitForReady(events, 'conversation-a');
     expect(Object.keys(ready).sort()).toEqual([
@@ -151,6 +156,9 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     await waitFor(() => expect(screen.queryByRole('textbox')).toBeNull());
     expect(screen.queryByRole('button', { name: /Connection status/ })).toBeNull();
     expect(document.querySelector('.tb-chat-host-composer-hidden .tb-chat-viewport')).not.toBeNull();
+    expect(events.filter((event) => event.event === 'ready')).toHaveLength(1);
+    await act(async () => { transport.readyGate?.resolve(); });
+    expect(events.filter((event) => event.event === 'ready')).toHaveLength(1);
   });
 
   it('leaves keyboard navigation to the host after native-composer opt-in', async () => {
@@ -378,7 +386,7 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     const events: HostComposerEvent[] = [];
     const transport = new HostComposerTransport();
     const gate = deferred<void>();
-    transport.readyGate = gate;
+    transport.readGate = gate;
     const pending = deferred<HumanSendResult>();
     transport.nextSend = () => pending.promise;
     installDeclaration(events);
@@ -434,7 +442,7 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     const events: HostComposerEvent[] = [];
     const transport = new HostComposerTransport();
     const gate = deferred<void>();
-    transport.readyGate = gate;
+    transport.readGate = gate;
     installDeclaration(events);
     const { runtimes } = openChat(transport, 'local-settings');
     await screen.findByRole('textbox');
@@ -491,7 +499,7 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     expect(transport.submissions[0].sessionKey).toBe('session-a');
   });
 
-  it('reports unavailable during reconnect and returns ready in the same lifetime', async () => {
+  it('keeps the host composer ready and sending during a live-update reconnect', async () => {
     const events: HostComposerEvent[] = [];
     const transport = new HostComposerTransport();
     installDeclaration(events);
@@ -499,17 +507,17 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     const first = await waitForReady(events, 'conversation-a');
 
     act(() => transport.callbacks.get('conversation-a')?.onDoubt('connection closed'));
-    await waitFor(() => expect(events.some((event) => event.event === 'unavailable' &&
-      event.lifetimeId === first.lifetimeId && event.reason === 'reconnecting')).toBe(true));
     act(() => commandEntry()({ type: 'send', lifetimeId: first.lifetimeId, sessionKey: first.sessionKey,
-      correlationId: correlation, content: 'do not queue while reconnecting' }));
-    expect(events.at(-1)).toMatchObject({ event: 'rejected', reason: 'not-ready' });
-    expect(transport.submissions).toHaveLength(0);
+      correlationId: correlation, content: 'send while live updates reconnect' }));
+    await waitFor(() => expect(transport.submissions).toHaveLength(1));
+    await waitFor(() => expect(events.some((event) => event.event === 'delivered' &&
+      event.lifetimeId === first.lifetimeId && event.correlationId === correlation)).toBe(true));
+    expect(events.some((event) => event.event === 'unavailable' && event.lifetimeId === first.lifetimeId)).toBe(false);
+    expect(screen.getByText(/Live updates are reconnecting; conversation and sending remain available/)).toBeTruthy();
 
     await act(async () => { await runtimes[0].rebuild({ restart: true }); });
-    await waitFor(() => expect(events.filter((event) => event.event === 'ready')).toHaveLength(2));
-    const nextReady = events.filter((event): event is Extract<HostComposerEvent, { event: 'ready' }> => event.event === 'ready').at(-1);
-    expect(nextReady?.lifetimeId).toBe(first.lifetimeId);
+    expect(events.filter((event) => event.event === 'ready')).toHaveLength(1);
+    expect(readyEvent(events, 'conversation-a')?.lifetimeId).toBe(first.lifetimeId);
   });
 
   it('ends and re-handshakes its page lifetime after a cached page hide/show', async () => {
@@ -572,7 +580,7 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     openChat(transport, 'conversation-a');
     const reconnect = await screen.findByRole('button', { name: 'Reconnect' });
     expect(screen.queryByRole('button', { name: /Connection status/ })).toBeNull();
-    expect(screen.getByText('Some conversation details are unavailable.')).toBeTruthy();
+    expect(screen.getByText(/Some conversation details are unavailable/)).toBeTruthy();
     fireEvent.click(reconnect);
     await waitForReady(events, 'conversation-a');
     expect(screen.queryByRole('button', { name: /Connection status/ })).toBeNull();

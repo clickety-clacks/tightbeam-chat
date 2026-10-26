@@ -931,6 +931,7 @@ describe('conversation surface', () => {
     const status = viewport.querySelector<HTMLElement>('.tb-chat-history-loading');
     expect(status?.getAttribute('role')).toBe('status');
     expect(status?.classList.contains('tb-chat-caption-neutral')).toBe(true);
+    expect(status?.classList.contains('tb-chat-runtime-notice')).toBe(true);
     expect(status?.textContent).toBe('Loading earlier messages…');
     expect(status?.parentElement).toBe(viewport);
     expect(viewport.querySelector('.tb-chat-message-content')?.contains(status)).toBe(false);
@@ -943,6 +944,7 @@ describe('conversation surface', () => {
 
     const alert = screen.getByRole('alert');
     expect(alert.classList.contains('tb-chat-caption-danger')).toBe(true);
+    expect(alert.classList.contains('tb-chat-runtime-notice')).toBe(true);
     fireEvent.click(within(alert).getByRole('button', { name: 'Retry loading messages' }));
     await waitFor(() => expect(runtime.loadOlderCalls).toBe(1));
   });

@@ -216,6 +216,9 @@ class SessionRuntime implements ChatRuntime {
           if (!this.state.toolCallsLoading) this.publishTools();
         },
         onDoubt: reason => { if (current()) this.toolFailure(new Error(reason)); },
+        onAuthorizationLost: reason => {
+          if (current()) this.toolFailure(new AuthorizationError(reason));
+        },
       }, controller.signal);
       const connection = await this.toolReadiness;
       if (!current()) { connection.close(); return; }
@@ -534,7 +537,10 @@ class SessionRuntime implements ChatRuntime {
             },
             onAuthorizationLost: (reason) => {
               binding.doubted = true;
-              this.failClosed(reason);
+              // This refusal applies to the optional live-update endpoint.
+              // The session and transcript requests decide whether the
+              // conversation itself is still available.
+              this.doubt(reason, binding.generation);
             },
           }, connectionController.signal);
         } catch (error) {
@@ -557,10 +563,6 @@ class SessionRuntime implements ChatRuntime {
         }).catch((error) => {
           liveAttemptSettled = true;
           if (!this.isCurrent(binding.generation) || connectionController.signal.aborted) return;
-          if (error instanceof AuthorizationError) {
-            this.failClosed(errorText(error));
-            return;
-          }
           liveError = errorText(error);
           this.publish({ liveError });
           if (!this.initializing) this.scheduleRebuild();
@@ -633,7 +635,6 @@ class SessionRuntime implements ChatRuntime {
             hasOlder = page.hasOlder;
             restored++;
           } catch (error) {
-            if (error instanceof AuthorizationError) throw error;
             historyError = errorText(error);
             restoreFailed = true;
             break;
@@ -674,7 +675,6 @@ class SessionRuntime implements ChatRuntime {
               break;
             }
           } catch (error) {
-            if (error instanceof AuthorizationError) throw error;
             liveError = errorText(error);
             coverageVerified = false;
             break;
@@ -777,10 +777,6 @@ class SessionRuntime implements ChatRuntime {
       this.publishTools();
     } catch (error) {
       if (!this.isCurrent(generation) || signal.aborted) return;
-      if (error instanceof AuthorizationError) {
-        this.failClosed(errorText(error));
-        return;
-      }
       this.publish({ loadingOlder: false, historyError: errorText(error) });
     }
   };
@@ -944,7 +940,6 @@ class SessionRuntime implements ChatRuntime {
       return found ? 'found' : 'absent';
     } catch (error) {
       if (!this.isCurrent(generation) || signal.aborted) return 'unavailable';
-      if (error instanceof AuthorizationError) this.failClosed(errorText(error));
       return 'unavailable';
     } finally {
       this.coverageReaders.delete(captured);

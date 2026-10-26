@@ -171,7 +171,10 @@ describe('Gateway wire mapping and behavior checks', () => {
       type: 'subscribe', protocolVersion: 2, subscriptionId: `chat:${sessionKey}`,
       filters: { sessionKey, classes: ['message.created', 'session.', 'turn.started', 'turn.ended'] },
     }]));
-    expect(candidate.paths).toEqual([]);
+    await vi.waitFor(() => expect(candidate.paths.some(path => path.includes('/messages?'))).toBe(true));
+    expect(runtime.getSnapshot().status).toBe('ready');
+    expect(runtime.getSnapshot().records.map((record) => record.id))
+      .toEqual(['marker_before', 'm_1', 'marker_after']);
     candidate.changes.emit({ type: 'subscription_ready', subscriptionId: `chat:${sessionKey}` });
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
     await vi.waitFor(() => expect(candidate.paths.some(path => path.includes('/tool-calls?'))).toBe(true));
@@ -203,9 +206,9 @@ describe('Gateway wire mapping and behavior checks', () => {
     expect(candidate.paths.filter((path) => path.includes('/messages?'))).toHaveLength(1);
 
     const recovery = runtime.rebuild({ restart: true });
-    await vi.waitFor(() => expect(candidate.changes.sent).toHaveLength(2));
+    await vi.waitFor(() => expect(candidate.paths.filter(path => path.includes('/messages?'))).toHaveLength(2));
+    expect(candidate.changes.sent).toHaveLength(1);
     expect(candidate.paths.some((path) => path.endsWith('/version'))).toBe(false);
-    candidate.changes.emit({ type: 'subscription_ready', subscriptionId: `chat:${sessionKey}` });
     await recovery;
     await vi.waitFor(() => expect(candidate.paths.filter(path => path.includes('/tool-calls?'))).toHaveLength(2));
     await vi.waitFor(() => expect(runtime.getSnapshot().toolCallsLoading).toBe(false));

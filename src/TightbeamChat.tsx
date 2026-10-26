@@ -889,8 +889,8 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
     : state.status === 'error' || state.status === 'unauthorized' || state.status === 'unsupported' ? 'danger'
       : 'neutral';
   const localNotice = state.sessionNotFound ? 'This conversation no longer exists.'
-    : state.conversationError ? 'Conversation history could not be loaded.'
-      : state.sessionError ? 'Some conversation details are unavailable.'
+    : state.conversationError ? `Conversation history could not be loaded: ${state.conversationError}`
+      : state.sessionError ? `Some conversation details are unavailable: ${state.sessionError}`
         : state.liveError ? 'Live updates are reconnecting; conversation and sending remain available.'
           : undefined;
 
@@ -954,8 +954,8 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
       onPointerDown={reading.interrupt} onPointerMove={(event) => { if (event.buttons !== 0) reading.noteUserScroll(); }}
       onKeyDown={(event) => { if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) { reading.interrupt(); reading.noteUserScroll(); } }}
       aria-label={`${agentName || 'Conversation'} messages`} aria-live="polite" aria-relevant="additions text">
-      {(state.loadingOlder || state.historyError || localNotice) && <div className={`tb-chat-runtime-notice tb-chat-caption ${state.historyError || state.sessionNotFound || state.conversationError
-        ? 'tb-chat-caption-danger' : 'tb-chat-caption-neutral'}`} role="status">
+      {(state.loadingOlder || state.historyError || localNotice) && <div className={`tb-chat-runtime-notice ${state.loadingOlder ? 'tb-chat-history-loading ' : ''} tb-chat-caption ${state.historyError || state.sessionNotFound || state.sessionError || state.conversationError
+        ? 'tb-chat-caption-danger' : 'tb-chat-caption-neutral'}`} role={state.historyError || state.sessionNotFound || state.conversationError || state.sessionError ? 'alert' : 'status'}>
         <span className="tb-chat-caption-body">
           <span>{state.loadingOlder ? 'Loading earlier messages…'
             : state.historyError ? `Earlier messages could not be loaded: ${state.historyError}` : localNotice}</span>

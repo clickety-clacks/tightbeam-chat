@@ -186,7 +186,7 @@ export interface ChangeCallbacks {
   onNotice(notice: ChangeNotice): void;
   /** Disconnection, sequence doubt, missed heartbeat or overflow. */
   onDoubt(reason: string): void;
-  /** Explicit authentication refusal, distinct from an unavailable live-update feature. */
+  /** An optional change subscription refused authentication; this does not prove session access is lost. */
   onAuthorizationLost?(reason: string): void;
 }
 
