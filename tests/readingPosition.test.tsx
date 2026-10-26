@@ -641,7 +641,11 @@ describe('conversation reading position', () => {
     const { box } = setup();
     const bottom = box.scrollHeight - box.clientHeight;
 
-    readAt(box, bottom - 180);
+    // Let the initial instant scroll settle, then model a browser, assistive
+    // technology, find-in-page, or scrollbar move that has no input event.
+    fireEvent.scroll(box);
+    box.scrollTop = bottom - 180;
+    fireEvent.scroll(box);
 
     expect(box.scrollTop).toBe(bottom - 180);
     expect(screen.getByRole('button', { name: 'Scroll to latest messages' })).toBeTruthy();

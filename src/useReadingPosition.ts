@@ -13,6 +13,10 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
   const target = useRef<number | undefined>(undefined);
   const userScrollIntent = useRef(false);
   const userScrollTimeout = useRef<number | undefined>(undefined);
+  const lastKnownScrollTop = useRef<number | undefined>(undefined);
+  const lastKnownBottom = useRef<number | undefined>(undefined);
+  const pendingLayoutRestoreOffsets = useRef<number[]>([]);
+  const initialSettlePending = useRef(false);
   const viewportHeight = useRef<number | undefined>(undefined);
   const anchors = useRef<Anchor[]>([]);
   const registeredRows = useRef(new Map<string, HTMLElement>());
@@ -38,14 +42,27 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
   };
   const noteUserScroll = () => {
     userScrollIntent.current = true;
+    initialSettlePending.current = false;
+    pendingLayoutRestoreOffsets.current = [];
     deferUserScrollIntentExpiry();
   };
+  const recordLayoutRestoreOffsets = (box: HTMLElement) => {
+    pendingLayoutRestoreOffsets.current = [...new Set([
+      lastKnownScrollTop.current,
+      lastKnownBottom.current,
+      box.scrollTop,
+    ].filter((offset): offset is number => offset !== undefined))];
+  };
+  const isPendingLayoutRestore = (scrollTop: number) =>
+    pendingLayoutRestoreOffsets.current.some(offset => Math.abs(offset - scrollTop) < 1);
   const capture = () => {
     const box = viewport.current;
     const children = content.current?.children;
     if (!box || !children) return;
     if (box.clientHeight > 0) viewportHeight.current = box.clientHeight;
     readingTop.current = box.scrollTop;
+    lastKnownScrollTop.current = box.scrollTop;
+    lastKnownBottom.current = Math.max(0, box.scrollHeight - box.clientHeight);
     anchors.current = [];
     if (following.current) return;
     const bounds = box.getBoundingClientRect();
@@ -86,34 +103,40 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
     }
   };
 
-  const moveToLatest = (smooth: boolean) => {
+  const moveToLatest = (smooth: boolean): boolean => {
     const box = viewport.current;
-    if (!box) return;
+    if (!box) return false;
     const bottom = Math.max(0, box.scrollHeight - box.clientHeight);
     following.current = true;
     setShowLatest(false);
     if (Math.abs(box.scrollTop - bottom) < 1) {
       animating.current = false;
       target.current = undefined;
-      return;
+      return false;
     }
-    if (animating.current && target.current === bottom) return;
+    if (animating.current && target.current === bottom) return true;
     const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
     animating.current = smooth && !reduceMotion;
     target.current = bottom;
     box.scrollTo({ top: bottom, behavior: animating.current ? 'smooth' : 'instant' });
+    return true;
   };
 
   const updateLayout = () => {
     const box = viewport.current;
     if (!box) return;
     const resized = viewportResized(box);
+    const bottom = Math.max(0, box.scrollHeight - box.clientHeight);
+    const layoutChanged = lastKnownBottom.current !== undefined && Math.abs(bottom - lastKnownBottom.current) > .5;
+    if (following.current && !userScrollIntent.current && (resized || layoutChanged)) recordLayoutRestoreOffsets(box);
     if (!initialized.current) {
       if (!latestReady.current) return;
       initialized.current = true;
-      moveToLatest(false);
+      initialSettlePending.current = true;
+      if (!moveToLatest(false)) initialSettlePending.current = false;
     } else if (following.current) {
-      moveToLatest(!resized);
+      const moved = moveToLatest(!resized && !initialSettlePending.current);
+      if (initialSettlePending.current && !moved) initialSettlePending.current = false;
     } else {
       // Content changes should preserve the reader's current anchor rather
       // than compete with a still-running manual smooth scroll.
@@ -162,25 +185,43 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
     const readerInitiated = userScrollIntent.current;
     if (readerInitiated) deferUserScrollIntentExpiry();
     const resized = viewportResized(box);
+    const bottom = Math.max(0, box.scrollHeight - box.clientHeight);
+    const layoutChanged = lastKnownBottom.current !== undefined && Math.abs(bottom - lastKnownBottom.current) > .5;
+    if (following.current && !readerInitiated && (resized || layoutChanged)) recordLayoutRestoreOffsets(box);
     const currentDistance = distance(box);
     const reachedTarget = target.current !== undefined && Math.abs(box.scrollTop - target.current) < 1;
     if (reachedTarget) {
       animating.current = false;
       target.current = undefined;
+      initialSettlePending.current = false;
     } else if (!animating.current) {
       target.current = undefined;
     }
     // Intermediate animation frames are not a user's decision to leave the tail.
     if (resized) {
-      if (readerInitiated) following.current = currentDistance <= bottomThreshold;
-      else if (following.current) moveToLatest(false);
+      if (readerInitiated) {
+        initialSettlePending.current = false;
+        following.current = currentDistance <= bottomThreshold;
+      } else if (following.current) {
+        if (!moveToLatest(false) && initialSettlePending.current) initialSettlePending.current = false;
+      }
     } else if (!animating.current) {
       if (readerInitiated) {
+        initialSettlePending.current = false;
         following.current = currentDistance <= bottomThreshold;
-      } else if (following.current && currentDistance > bottomThreshold) {
-        // Browser or host restoration is not reader intent. Keep following
-        // until a wheel, touch, pointer, or keyboard event moves the reader.
+      } else if (following.current && currentDistance > bottomThreshold && initialSettlePending.current && latestReady.current) {
+        // Correct only the initial browser restoration before the first settle.
         moveToLatest(false);
+      } else {
+        const restoredLayoutOffset = isPendingLayoutRestore(box.scrollTop);
+        if (restoredLayoutOffset) pendingLayoutRestoreOffsets.current = [];
+        else if (pendingLayoutRestoreOffsets.current.length > 0 && currentDistance > 1) pendingLayoutRestoreOffsets.current = [];
+        if (following.current && currentDistance > bottomThreshold && restoredLayoutOffset) {
+          // After startup, correct only offsets that match a measured layout restore.
+          moveToLatest(false);
+        } else {
+          following.current = currentDistance <= bottomThreshold;
+        }
       }
     }
     setShowLatest(!following.current);
@@ -197,6 +238,7 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
     if (resized) {
       if (following.current) moveToLatest(false);
     } else if (userScrollIntent.current) {
+      initialSettlePending.current = false;
       following.current = distance(box) <= bottomThreshold;
     }
     capture();
@@ -209,6 +251,7 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
   const scrollBy = (amount: number) => {
     const box = viewport.current;
     if (!box || !Number.isFinite(amount) || amount === 0) return;
+    initialSettlePending.current = false;
     const bottom = Math.max(0, box.scrollHeight - box.clientHeight);
     // Repeat events build on the pending destination, so held keys continue
     // moving instead of repeatedly resetting the same smooth scroll.
@@ -237,6 +280,7 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
   const scrollToLatest = () => {
     const box = viewport.current;
     if (!box) return;
+    initialSettlePending.current = false;
     // Keep keyboard navigation somewhere useful after its button disappears.
     if (document.activeElement?.getAttribute('data-scroll-latest') === 'true') box.focus({ preventScroll: true });
     moveToLatest(true);
