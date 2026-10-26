@@ -641,6 +641,9 @@ describe('conversation reading position', () => {
     const { box } = setup();
     const bottom = box.scrollHeight - box.clientHeight;
 
+    // Let the initial instant scroll settle, then model a browser, assistive
+    // technology, find-in-page, or scrollbar move that has no input event.
+    fireEvent.scroll(box);
     box.scrollTop = bottom - 180;
     fireEvent.scroll(box);
 
@@ -721,6 +724,39 @@ describe('conversation reading position', () => {
     notifyResizeObservers();
 
     expect(box.scrollTop).toBe(bottom());
+    expect(screen.queryByRole('button', { name: 'Scroll to latest messages' })).toBeNull();
+  });
+
+  it('keeps initial bottom-follow when an unsolicited scroll restoration races automatic history prefetch', async () => {
+    const runtime = new ReadingRuntime();
+    runtime.state = { ...runtime.state, records: Array.from({ length: 6 }, (_, i) => message(i + 20)), hasOlder: true };
+    runtime.loadOlder = async () => {
+      runtime.publish({ loadingOlder: true });
+      await Promise.resolve();
+      runtime.publish({
+        records: [...Array.from({ length: 12 }, (_, i) => message(i)), ...runtime.state.records],
+        hasOlder: false,
+        loadingOlder: false,
+      });
+    };
+    scrollTo.mockImplementation(function (this: HTMLElement, options: ScrollToOptions) {
+      this.scrollTop = options.top ?? 0;
+    });
+    render(<TightbeamChat sessionKey="reading" adapter={{ open: () => runtime }} />);
+    const box = screen.getByRole('log');
+    const bottom = () => Math.max(0, box.scrollHeight - box.clientHeight);
+
+    expect(box.scrollTop).toBe(bottom());
+    scrollTo.mockClear();
+    // WebKit may apply its initial scroll restoration without a reader gesture.
+    // The automatic first history prefetch must not turn that into an away reading position.
+    box.scrollTop = 0;
+    fireEvent.scroll(box);
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 5)); });
+
+    expect(box.scrollTop).toBe(bottom());
+    expect(scrollTo.mock.calls.length).toBeGreaterThan(0);
+    expect(scrollTo.mock.calls.every(([options]) => options.behavior === 'instant')).toBe(true);
     expect(screen.queryByRole('button', { name: 'Scroll to latest messages' })).toBeNull();
   });
 

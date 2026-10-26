@@ -4,7 +4,11 @@ import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 const bottomThreshold = 64;
 type Anchor = { key: string; top: number };
 
-export function useReadingPosition(ready: boolean, revision: unknown) {
+export function useReadingPosition(
+  ready: boolean,
+  revision: unknown,
+  shouldKeepInitialSettle: (box: HTMLElement) => boolean = () => false,
+) {
   const viewport = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const initialized = useRef(false);
@@ -16,6 +20,9 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
   const lastKnownScrollTop = useRef<number | undefined>(undefined);
   const lastKnownBottom = useRef<number | undefined>(undefined);
   const pendingLayoutRestoreOffsets = useRef<number[]>([]);
+  const initialSettlePending = useRef(false);
+  const shouldKeepInitialSettleRef = useRef(shouldKeepInitialSettle);
+  shouldKeepInitialSettleRef.current = shouldKeepInitialSettle;
   const viewportHeight = useRef<number | undefined>(undefined);
   const anchors = useRef<Anchor[]>([]);
   const registeredRows = useRef(new Map<string, HTMLElement>());
@@ -41,6 +48,7 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
   };
   const noteUserScroll = () => {
     userScrollIntent.current = true;
+    initialSettlePending.current = false;
     pendingLayoutRestoreOffsets.current = [];
     deferUserScrollIntentExpiry();
   };
@@ -101,22 +109,23 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
     }
   };
 
-  const moveToLatest = (smooth: boolean) => {
+  const moveToLatest = (smooth: boolean): boolean => {
     const box = viewport.current;
-    if (!box) return;
+    if (!box) return false;
     const bottom = Math.max(0, box.scrollHeight - box.clientHeight);
     following.current = true;
     setShowLatest(false);
     if (Math.abs(box.scrollTop - bottom) < 1) {
       animating.current = false;
       target.current = undefined;
-      return;
+      return false;
     }
-    if (animating.current && target.current === bottom) return;
+    if (animating.current && target.current === bottom) return true;
     const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
     animating.current = smooth && !reduceMotion;
     target.current = bottom;
     box.scrollTo({ top: bottom, behavior: animating.current ? 'smooth' : 'instant' });
+    return true;
   };
 
   const updateLayout = () => {
@@ -129,9 +138,11 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
     if (!initialized.current) {
       if (!latestReady.current) return;
       initialized.current = true;
-      moveToLatest(false);
+      initialSettlePending.current = true;
+      if (!moveToLatest(false) && !shouldKeepInitialSettleRef.current(box)) initialSettlePending.current = false;
     } else if (following.current) {
-      moveToLatest(!resized);
+      const moved = moveToLatest(!resized && !initialSettlePending.current);
+      if (initialSettlePending.current && !moved && !shouldKeepInitialSettleRef.current(box)) initialSettlePending.current = false;
     } else {
       // Content changes should preserve the reader's current anchor rather
       // than compete with a still-running manual smooth scroll.
@@ -183,28 +194,36 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
     const bottom = Math.max(0, box.scrollHeight - box.clientHeight);
     const layoutChanged = lastKnownBottom.current !== undefined && Math.abs(bottom - lastKnownBottom.current) > .5;
     if (following.current && !readerInitiated && (resized || layoutChanged)) recordLayoutRestoreOffsets(box);
+    const currentDistance = distance(box);
     const reachedTarget = target.current !== undefined && Math.abs(box.scrollTop - target.current) < 1;
     if (reachedTarget) {
       animating.current = false;
       target.current = undefined;
+      if (!shouldKeepInitialSettleRef.current(box)) initialSettlePending.current = false;
     } else if (!animating.current) {
       target.current = undefined;
     }
     // Intermediate animation frames are not a user's decision to leave the tail.
     if (resized) {
-      if (readerInitiated) following.current = distance(box) <= bottomThreshold;
-      else if (following.current) moveToLatest(false);
-    } else if (!animating.current) {
-      const currentDistance = distance(box);
       if (readerInitiated) {
+        initialSettlePending.current = false;
         following.current = currentDistance <= bottomThreshold;
+      } else if (following.current) {
+        if (!moveToLatest(false) && initialSettlePending.current && !shouldKeepInitialSettleRef.current(box)) initialSettlePending.current = false;
+      }
+    } else if (!animating.current) {
+      if (readerInitiated) {
+        initialSettlePending.current = false;
+        following.current = currentDistance <= bottomThreshold;
+      } else if (following.current && currentDistance > bottomThreshold && initialSettlePending.current && latestReady.current) {
+        // Correct only the initial browser restoration before the first settle.
+        moveToLatest(false);
       } else {
         const restoredLayoutOffset = isPendingLayoutRestore(box.scrollTop);
         if (restoredLayoutOffset) pendingLayoutRestoreOffsets.current = [];
         else if (pendingLayoutRestoreOffsets.current.length > 0 && currentDistance > 1) pendingLayoutRestoreOffsets.current = [];
         if (following.current && currentDistance > bottomThreshold && restoredLayoutOffset) {
-          // Only correct an offset that matches the last position captured
-          // before a layout change. Other unpaired scrolls may be reader input.
+          // After startup, correct only offsets that match a measured layout restore.
           moveToLatest(false);
         } else {
           following.current = currentDistance <= bottomThreshold;
@@ -224,7 +243,8 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
     target.current = undefined;
     if (resized) {
       if (following.current) moveToLatest(false);
-    } else {
+    } else if (userScrollIntent.current) {
+      initialSettlePending.current = false;
       following.current = distance(box) <= bottomThreshold;
     }
     capture();
@@ -237,6 +257,7 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
   const scrollBy = (amount: number) => {
     const box = viewport.current;
     if (!box || !Number.isFinite(amount) || amount === 0) return;
+    initialSettlePending.current = false;
     const bottom = Math.max(0, box.scrollHeight - box.clientHeight);
     // Repeat events build on the pending destination, so held keys continue
     // moving instead of repeatedly resetting the same smooth scroll.
@@ -265,6 +286,7 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
   const scrollToLatest = () => {
     const box = viewport.current;
     if (!box) return;
+    initialSettlePending.current = false;
     // Keep keyboard navigation somewhere useful after its button disappears.
     if (document.activeElement?.getAttribute('data-scroll-latest') === 'true') box.focus({ preventScroll: true });
     moveToLatest(true);
