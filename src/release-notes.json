@@ -1,5 +1,18 @@
 [
   {
+    "version": "v0.1.33",
+    "items": [
+      {
+        "title": "Latest messages",
+        "description": "Opening a conversation keeps you at the newest message through the first history load. Scrolling back still preserves the message you are reading."
+      },
+      {
+        "title": "Keyboard layout",
+        "description": "Chat adjusts the conversation above the keyboard as it opens and closes, while preserving your place when you are reading older messages."
+      }
+    ]
+  },
+  {
     "version": "v0.1.32",
     "items": [
       {
