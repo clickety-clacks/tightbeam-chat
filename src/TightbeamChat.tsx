@@ -611,7 +611,8 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
   const getHostSnapshot = useCallback(() => getHostComposerSnapshot(hostBridge), [hostBridge]);
   const host = useSyncExternalStore(subscribeHost, getHostSnapshot, getHostSnapshot);
   const readingRevision = useMemo(() => ({ state, host }), [state, host]);
-  const reading = useReadingPosition(state.status === 'ready', readingRevision);
+  const reading = useReadingPosition(state.status === 'ready', readingRevision, box =>
+    state.loadingOlder || (!state.historyError && state.hasOlder && box.scrollTop < olderHistoryPrefetchDistance(box)));
   const { viewport } = reading;
   const root = useRef<HTMLElement>(null);
   const composer = useRef<ComposerHandle>(null);

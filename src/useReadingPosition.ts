@@ -4,7 +4,11 @@ import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 const bottomThreshold = 64;
 type Anchor = { key: string; top: number };
 
-export function useReadingPosition(ready: boolean, revision: unknown) {
+export function useReadingPosition(
+  ready: boolean,
+  revision: unknown,
+  shouldKeepInitialSettle: (box: HTMLElement) => boolean = () => false,
+) {
   const viewport = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const initialized = useRef(false);
@@ -17,6 +21,8 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
   const lastKnownBottom = useRef<number | undefined>(undefined);
   const pendingLayoutRestoreOffsets = useRef<number[]>([]);
   const initialSettlePending = useRef(false);
+  const shouldKeepInitialSettleRef = useRef(shouldKeepInitialSettle);
+  shouldKeepInitialSettleRef.current = shouldKeepInitialSettle;
   const viewportHeight = useRef<number | undefined>(undefined);
   const anchors = useRef<Anchor[]>([]);
   const registeredRows = useRef(new Map<string, HTMLElement>());
@@ -133,10 +139,10 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
       if (!latestReady.current) return;
       initialized.current = true;
       initialSettlePending.current = true;
-      if (!moveToLatest(false)) initialSettlePending.current = false;
+      if (!moveToLatest(false) && !shouldKeepInitialSettleRef.current(box)) initialSettlePending.current = false;
     } else if (following.current) {
       const moved = moveToLatest(!resized && !initialSettlePending.current);
-      if (initialSettlePending.current && !moved) initialSettlePending.current = false;
+      if (initialSettlePending.current && !moved && !shouldKeepInitialSettleRef.current(box)) initialSettlePending.current = false;
     } else {
       // Content changes should preserve the reader's current anchor rather
       // than compete with a still-running manual smooth scroll.
@@ -193,7 +199,7 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
     if (reachedTarget) {
       animating.current = false;
       target.current = undefined;
-      initialSettlePending.current = false;
+      if (!shouldKeepInitialSettleRef.current(box)) initialSettlePending.current = false;
     } else if (!animating.current) {
       target.current = undefined;
     }
@@ -203,7 +209,7 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
         initialSettlePending.current = false;
         following.current = currentDistance <= bottomThreshold;
       } else if (following.current) {
-        if (!moveToLatest(false) && initialSettlePending.current) initialSettlePending.current = false;
+        if (!moveToLatest(false) && initialSettlePending.current && !shouldKeepInitialSettleRef.current(box)) initialSettlePending.current = false;
       }
     } else if (!animating.current) {
       if (readerInitiated) {

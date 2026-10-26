@@ -739,14 +739,15 @@ describe('conversation reading position', () => {
         loadingOlder: false,
       });
     };
-    render(<TightbeamChat sessionKey="reading" adapter={{ open: () => runtime }} />);
-    const box = screen.getByRole('log');
-    const bottom = () => Math.max(0, box.scrollHeight - box.clientHeight);
     scrollTo.mockImplementation(function (this: HTMLElement, options: ScrollToOptions) {
       this.scrollTop = options.top ?? 0;
     });
+    render(<TightbeamChat sessionKey="reading" adapter={{ open: () => runtime }} />);
+    const box = screen.getByRole('log');
+    const bottom = () => Math.max(0, box.scrollHeight - box.clientHeight);
 
     expect(box.scrollTop).toBe(bottom());
+    scrollTo.mockClear();
     // WebKit may apply its initial scroll restoration without a reader gesture.
     // The automatic first history prefetch must not turn that into an away reading position.
     box.scrollTop = 0;
@@ -754,6 +755,8 @@ describe('conversation reading position', () => {
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 5)); });
 
     expect(box.scrollTop).toBe(bottom());
+    expect(scrollTo.mock.calls.length).toBeGreaterThan(0);
+    expect(scrollTo.mock.calls.every(([options]) => options.behavior === 'instant')).toBe(true);
     expect(screen.queryByRole('button', { name: 'Scroll to latest messages' })).toBeNull();
   });
 
