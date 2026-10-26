@@ -177,9 +177,9 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
     capture();
   };
   const holdPosition = () => {
+    // Older-page loading captures current intent; it must not turn an initial
+    // underfilled view at the latest message into an away-from-bottom reading.
     interrupt();
-    following.current = false;
-    capture();
   };
   const scrollBy = (amount: number) => {
     const box = viewport.current;
