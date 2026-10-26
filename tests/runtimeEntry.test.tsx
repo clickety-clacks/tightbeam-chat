@@ -19,6 +19,15 @@ const target = {
   deviceId: 'chat_abc123',
 };
 
+function unavailableGatewayFetch(configuration: typeof target, status = 500) {
+  return vi.fn<typeof fetch>(async (input) => {
+    const url = new URL(String(input), window.location.href);
+    if (url.pathname === '/chat-config.json') return jsonResponse(configuration);
+    const body = status === 503 ? { error: { code: 'chat_gateway_unavailable' } } : {};
+    return jsonResponse(body, false, status);
+  });
+}
+
 class InertWebSocket {
   close = vi.fn();
   send = vi.fn();
@@ -26,10 +35,7 @@ class InertWebSocket {
 
 describe('runtime-configured browser entry', () => {
   it('keeps the conversation and composer available when history endpoints fail', async () => {
-    const fetchMock = vi.fn<typeof fetch>()
-      .mockResolvedValueOnce(jsonResponse(target))
-      .mockResolvedValueOnce(jsonResponse({}, false))
-      .mockResolvedValueOnce(jsonResponse({}, false));
+    const fetchMock = unavailableGatewayFetch(target);
     vi.stubGlobal('fetch', fetchMock);
     vi.stubGlobal('WebSocket', InertWebSocket);
 
@@ -41,19 +47,18 @@ describe('runtime-configured browser entry', () => {
     expect(screen.queryByText(target.gateway)).toBeNull();
     expect(screen.queryByText(target.sessionKey)).toBeNull();
     expect((screen.getByRole('textbox', { name: /message to/i }) as HTMLTextAreaElement).disabled).toBe(false);
+    expect(screen.getByText('Activity status could not be loaded.')).toBeTruthy();
     expect(fetchMock.mock.calls[0][0]).toBe('/chat-config.json');
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
-    const request = new URL(String(fetchMock.mock.calls[1][0]));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input]) =>
+      new URL(String(input), window.location.href).pathname.endsWith('/turns'))).toBe(true));
+    const request = new URL(String(fetchMock.mock.calls[1][0]), window.location.href);
     expect(request.pathname).toBe(`/__chat/api/sessions/${encodeURIComponent(target.sessionKey)}`);
     expect(request.searchParams.get('gateway')).toBe(target.gateway);
   });
 
   it('keeps Chat available and reports a local routing error when a linked target has no mapping', async () => {
     window.history.replaceState({}, '', '/?gateway=https%3A%2F%2Fother.example&session=agent%3Aother%2Fchat');
-    const fetchMock = vi.fn<typeof fetch>()
-      .mockResolvedValueOnce(jsonResponse(target))
-      .mockResolvedValueOnce(jsonResponse({ error: { code: 'chat_gateway_unavailable' } }, false, 503))
-      .mockResolvedValueOnce(jsonResponse({ error: { code: 'chat_gateway_unavailable' } }, false, 503));
+    const fetchMock = unavailableGatewayFetch(target, 503);
     vi.stubGlobal('fetch', fetchMock);
 
     render(<RuntimeEntry />);
@@ -65,19 +70,17 @@ describe('runtime-configured browser entry', () => {
     expect(screen.queryByText('agent:other/chat')).toBeNull();
     expect(screen.queryByText(target.gateway)).toBeNull();
     expect(screen.queryByRole('button', { name: /sign in|pair/i })).toBeNull();
-    expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(fetchMock.mock.calls[0][0]).toBe('/chat-config.json');
-    const request = new URL(String(fetchMock.mock.calls[1][0]));
+    const request = new URL(String(fetchMock.mock.calls[1][0]), window.location.href);
     expect(request.searchParams.get('gateway')).toBe('https://other.example');
+    expect(fetchMock.mock.calls.some(([input]) =>
+      new URL(String(input), window.location.href).pathname.endsWith('/turns'))).toBe(true);
   });
 
   it('keeps linked selection private while its session endpoint is unavailable', async () => {
     const linkedSession = 'agent:example/linked-chat';
     window.history.replaceState({}, '', `/?gateway=${encodeURIComponent(target.gateway)}&session=${encodeURIComponent(linkedSession)}`);
-    const fetchMock = vi.fn<typeof fetch>()
-      .mockResolvedValueOnce(jsonResponse(target))
-      .mockResolvedValueOnce(jsonResponse({}, false))
-      .mockResolvedValueOnce(jsonResponse({}, false));
+    const fetchMock = unavailableGatewayFetch(target);
     vi.stubGlobal('fetch', fetchMock);
     vi.stubGlobal('WebSocket', InertWebSocket);
 
@@ -89,7 +92,7 @@ describe('runtime-configured browser entry', () => {
     expect(screen.queryByText(linkedSession)).toBeNull();
     expect(screen.queryByText(target.sessionKey)).toBeNull();
     expect(fetchMock.mock.calls[0][0]).toBe('/chat-config.json');
-    const request = new URL(String(fetchMock.mock.calls[1][0]));
+    const request = new URL(String(fetchMock.mock.calls[1][0]), window.location.href);
     expect(request.pathname).toBe(`/__chat/api/sessions/${encodeURIComponent(linkedSession)}`);
     expect(request.searchParams.get('gateway')).toBe(target.gateway);
   });

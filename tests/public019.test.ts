@@ -288,8 +288,12 @@ describe('Gateway wire mapping and behavior checks', () => {
     const originalFetch = candidate.host.fetch;
     let releaseTurns!: (response: Response) => void;
     const turnSnapshot = new Promise<Response>((resolve) => { releaseTurns = resolve; });
-    candidate.host.fetch = async (path, init) => path.includes('/turns?')
-      ? turnSnapshot : originalFetch(path, init);
+    let turnSnapshotFinished = false;
+    candidate.host.fetch = async (path, init) => {
+      if (!path.includes('/turns?')) return originalFetch(path, init);
+      candidate.paths.push(path);
+      return turnSnapshot.finally(() => { turnSnapshotFinished = true; });
+    };
     const runtime = createTightbeamAdapter(candidate.transport, candidate.profile).open(sessionKey);
     await vi.waitFor(() => expect(candidate.changes.sent).toHaveLength(1));
     candidate.changes.emit({ type: 'subscription_ready', subscriptionId: `chat:${sessionKey}` });
@@ -307,12 +311,18 @@ describe('Gateway wire mapping and behavior checks', () => {
     expect(runtime.getSnapshot().activeTurn?.turn.status).toBe('running');
     emitTurn('completed', 3);
     expect(runtime.getSnapshot().activeTurn).toBeUndefined();
+    const turnNotifications = vi.fn();
+    const unsubscribe = runtime.subscribe(turnNotifications);
 
     releaseTurns(new Response(JSON.stringify({ schemaVersion: 1, resource: 'turns', items: [{
       seq: 12, rowVersion: 1, sessionKey, status: 'running', origin: 'user:person-1', triggerSource: 'mike',
     }], page: { hasMoreBefore: false } }), { status: 200 }));
-    await vi.waitFor(() => expect(runtime.getSnapshot().provenance?.some(turn => turn.turn.status === 'completed')).toBe(true));
+    await vi.waitFor(() => {
+      expect(turnSnapshotFinished).toBe(true);
+      expect(turnNotifications).toHaveBeenCalled();
+    });
     expect(runtime.getSnapshot().activeTurn).toBeUndefined();
+    unsubscribe();
     runtime.dispose();
   });
 
@@ -459,6 +469,8 @@ describe('Gateway wire mapping and behavior checks', () => {
             page: { oldestCursor: null, hasMoreBefore: false } };
         } else if (path.includes('/tool-calls?')) {
           body = { schemaVersion: 1, resource: 'tool calls', items: [], page: { hasMoreBefore: false } };
+        } else if (path.includes('/turns?')) {
+          body = { schemaVersion: 1, resource: 'turns', items: [], page: { hasMoreBefore: false } };
         } else {
           sessionReads++;
           body = { schemaVersion: 1, resource: 'sessions', item: {

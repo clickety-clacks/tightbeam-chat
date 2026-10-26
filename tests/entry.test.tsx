@@ -43,10 +43,14 @@ describe('direct browser entry', () => {
     expect(screen.queryByText(defaultTarget.sessionKey)).toBeNull();
     expect(screen.queryByLabelText(/device id|device token/i)).toBeNull();
     expect(screen.queryByRole('button', { name: /sign in|pair/i })).toBeNull();
-    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(fetchSpy.mock.calls.some(([input]) =>
+      new URL(String(input)).pathname.endsWith('/turns'))).toBe(true));
     const request = new URL(String(fetchSpy.mock.calls[0][0]));
     expect(request.pathname).toBe(`/__chat/api/sessions/${encodeURIComponent(defaultTarget.sessionKey)}`);
     expect(request.searchParams.get('gateway')).toBe(defaultTarget.gateway);
+    const paths = fetchSpy.mock.calls.map(([input]) => new URL(String(input)).pathname);
+    expect(paths).toContain(`/__chat/api/sessions/${encodeURIComponent(defaultTarget.sessionKey)}/messages`);
+    expect(paths).toContain(`/__chat/api/sessions/${encodeURIComponent(defaultTarget.sessionKey)}/turns`);
     expect(new URL(socketSpy.mock.calls[0][0]).pathname).toBe('/__chat/ws/changes');
   });
 
@@ -78,6 +82,8 @@ describe('direct browser entry', () => {
       const path = new URL(String(input)).pathname;
       const body = path.includes('/tool-calls')
         ? { schemaVersion: 1, resource: 'tool calls', items: [], page: { hasMoreBefore: false } }
+        : path.endsWith('/turns')
+        ? { schemaVersion: 1, resource: 'turns', items: [], page: { hasMoreBefore: false } }
         : path.endsWith('/messages')
         ? { schemaVersion: 1, resource: 'transcript messages', items: [],
           page: { oldestCursor: null, hasMoreBefore: false } }
@@ -95,13 +101,15 @@ describe('direct browser entry', () => {
     const socketUrl = new URL(sockets[0].url);
     expect(socketUrl.pathname).toBe('/__chat/ws/changes');
     expect(socketUrl.searchParams.get('protocolVersion')).toBe('2');
-    await waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(3));
+    await waitFor(() => {
+      const paths = fetchSpy.mock.calls.map(([input]) => new URL(String(input)).pathname);
+      expect(paths).toContain(`/__chat/api/sessions/${encodeURIComponent(defaultTarget.sessionKey)}/turns`);
+      expect(paths.some(path => path.endsWith('/tool-calls'))).toBe(true);
+    });
     const paths = fetchSpy.mock.calls.map(([input]) => new URL(String(input)).pathname);
-    expect(paths.slice(0, 2)).toEqual([
-      `/__chat/api/sessions/${encodeURIComponent(defaultTarget.sessionKey)}`,
-      `/__chat/api/sessions/${encodeURIComponent(defaultTarget.sessionKey)}/messages`,
-    ]);
-    expect(paths[2]).toMatch(new RegExp(`/__chat/api/sessions/${encodeURIComponent(defaultTarget.sessionKey)}/tool-calls`));
+    expect(paths).toContain(`/__chat/api/sessions/${encodeURIComponent(defaultTarget.sessionKey)}`);
+    expect(paths).toContain(`/__chat/api/sessions/${encodeURIComponent(defaultTarget.sessionKey)}/messages`);
+    expect(paths.some(path => path.endsWith('/version'))).toBe(false);
     expect(screen.queryByRole('alert')).toBeNull();
   });
 

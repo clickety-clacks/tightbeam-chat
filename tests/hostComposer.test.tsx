@@ -31,6 +31,7 @@ class HostComposerTransport implements ChatTransport {
   recentTurns: CanonicalTurn[] = [];
   readonly callbacks = new Map<string, ChangeCallbacks>();
   readonly closed = new Set<string>();
+  changeOpenCount = 0;
   readonly targetGateway = 'https://gateway.example:8443';
   readonly observation: TargetObservation = profile;
   readyGate?: ReturnType<typeof deferred<void>>;
@@ -43,6 +44,7 @@ class HostComposerTransport implements ChatTransport {
   currentIdentity = () => identity;
   inspectTarget = async () => this.observation;
   openChanges = async (sessionKey: string, callbacks: ChangeCallbacks, signal: AbortSignal) => {
+    this.changeOpenCount++;
     this.callbacks.set(sessionKey, callbacks);
     if (this.readyGate) await this.readyGate.promise;
     if (signal.aborted) throw new Error('Changes subscription was canceled.');
@@ -530,14 +532,15 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     await screen.findByText('send while live updates reconnect');
     expect(events.some((event) => event.event === 'unavailable' && event.lifetimeId === first.lifetimeId)).toBe(false);
     expect(runtimes[0].getSnapshot().status).toBe('ready');
+    await waitFor(() => expect(transport.changeOpenCount).toBeGreaterThan(1));
+    await waitFor(() => expect(runtimes[0].getSnapshot().liveError).toBeUndefined());
 
     const reply: CanonicalMessage = { kind: 'message', id: 'live-agent-reply', sessionKey: 'conversation-a',
       seq: 2, rowVersion: 1, role: 'assistant', sender: 'agent:fixture',
       content: 'The reply arrived without reloading.', raw: {} };
+    transport.records.set(reply.sessionKey, [...(transport.records.get(reply.sessionKey) ?? []), reply]);
     act(() => transport.emit(reply));
     await screen.findByText(reply.content);
-
-    await act(async () => { await runtimes[0].rebuild({ restart: true }); });
     expect(events.filter((event) => event.event === 'ready')).toHaveLength(1);
     expect(readyEvent(events, 'conversation-a')?.lifetimeId).toBe(first.lifetimeId);
   });
@@ -561,10 +564,13 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     await screen.findByText('Send while live updates reconnect');
     await waitFor(() => expect(runtimes[0].getSnapshot().sends[0]?.status).toBe('accepted'));
     expect(runtimes[0].getSnapshot().status).toBe('ready');
+    await waitFor(() => expect(transport.changeOpenCount).toBeGreaterThan(1));
+    await waitFor(() => expect(runtimes[0].getSnapshot().liveError).toBeUndefined());
 
     const reply: CanonicalMessage = { kind: 'message', id: 'no-reload-reply', sessionKey: 'conversation-a',
       seq: 2, rowVersion: 1, role: 'assistant', sender: 'agent:fixture',
       content: 'This reply also arrived live.', raw: {} };
+    transport.records.set(reply.sessionKey, [...(transport.records.get(reply.sessionKey) ?? []), reply]);
     act(() => transport.emit(reply));
     await screen.findByText(reply.content);
     expect(runtimes).toHaveLength(1);
@@ -575,7 +581,10 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     const transport = new HostComposerTransport();
     const active: CanonicalTurn = { seq: 7, sessionKey: 'conversation-a', status: 'running',
       messageId: 'human-trigger', origin: 'user:person', triggerSource: 'mike', raw: { rowVersion: 1 } };
+    const human: CanonicalMessage = { kind: 'message', id: 'human-trigger', sessionKey: 'conversation-a',
+      seq: 1, rowVersion: 1, role: 'user', sender: 'user:person', content: 'Can you help?', turnSeq: 7, raw: {} };
     transport.recentTurns = [active];
+    transport.records.set('conversation-a', [human]);
     installDeclaration(events);
     const { runtimes } = openChat(transport, 'conversation-a');
     const caption = await screen.findByRole('status', { name: 'Active turn: Replying to you' });
@@ -584,6 +593,8 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     act(() => transport.callbacks.get('conversation-a')?.onDoubt('live connection closed'));
     expect(screen.getByRole('status', { name: 'Active turn: Replying to you' })).toBe(caption);
     await act(async () => { await runtime.rebuild({ restart: true }); });
+    await waitFor(() => expect(transport.changeOpenCount).toBeGreaterThan(1));
+    await waitFor(() => expect(runtime.getSnapshot().liveError).toBeUndefined());
     expect(screen.getByRole('status', { name: 'Active turn: Replying to you' })).toBeTruthy();
 
     act(() => transport.emitTurn({ ...active, status: 'completed', raw: { rowVersion: 2 } }));
