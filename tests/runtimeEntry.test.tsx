@@ -20,7 +20,7 @@ const target = {
 };
 
 describe('runtime-configured browser entry', () => {
-  it('loads target configuration without exposing identity while service verification is unavailable', async () => {
+  it('loads target configuration without exposing identity when the selected session endpoint fails', async () => {
     const fetchMock = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(jsonResponse(target))
       .mockResolvedValueOnce(jsonResponse({}, false));
@@ -29,7 +29,7 @@ describe('runtime-configured browser entry', () => {
 
     render(<RuntimeEntry />);
 
-    expect((await screen.findByRole('alert')).textContent).toContain('The configured Chat service is unavailable.');
+    expect((await screen.findByRole('alert')).textContent).toContain('Tightbeam REST request failed with HTTP 500.');
     expect(screen.queryByRole('heading')).toBeNull();
     expect(screen.queryByText(target.gateway)).toBeNull();
     expect(screen.queryByText(target.sessionKey)).toBeNull();
@@ -37,7 +37,7 @@ describe('runtime-configured browser entry', () => {
     expect(fetchMock.mock.calls[0][0]).toBe('/chat-config.json');
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     const request = new URL(String(fetchMock.mock.calls[1][0]));
-    expect(request.pathname).toBe('/__chat/gateway/version');
+    expect(request.pathname).toBe(`/__chat/api/sessions/${encodeURIComponent(target.sessionKey)}`);
     expect(request.searchParams.get('gateway')).toBe(target.gateway);
   });
 
@@ -63,7 +63,7 @@ describe('runtime-configured browser entry', () => {
     expect(request.searchParams.get('gateway')).toBe('https://other.example');
   });
 
-  it('keeps linked selection private while service verification is unavailable', async () => {
+  it('keeps linked selection private while its session endpoint is unavailable', async () => {
     const linkedSession = 'agent:example/linked-chat';
     window.history.replaceState({}, '', `/?gateway=${encodeURIComponent(target.gateway)}&session=${encodeURIComponent(linkedSession)}`);
     const fetchMock = vi.fn<typeof fetch>()
@@ -74,11 +74,12 @@ describe('runtime-configured browser entry', () => {
 
     render(<RuntimeEntry />);
 
-    expect((await screen.findByRole('alert')).textContent).toContain('The configured Chat service is unavailable.');
+    expect((await screen.findByRole('alert')).textContent).toContain('Tightbeam REST request failed with HTTP 500.');
     expect(screen.queryByText(linkedSession)).toBeNull();
     expect(screen.queryByText(target.sessionKey)).toBeNull();
     expect(fetchMock.mock.calls[0][0]).toBe('/chat-config.json');
     const request = new URL(String(fetchMock.mock.calls[1][0]));
+    expect(request.pathname).toBe(`/__chat/api/sessions/${encodeURIComponent(linkedSession)}`);
     expect(request.searchParams.get('gateway')).toBe(target.gateway);
   });
 

@@ -24,29 +24,14 @@ export function HostPage({ defaultTarget, configurationError }: {
       try {
         const host = browserHost(selected);
         const origin = window.location.origin;
-        const response = await host.fetch(`${origin}/__chat/gateway/version`, { method: 'GET', signal: controller.signal });
-        if (response.status === 503) {
-          let failure: unknown;
-          try { failure = await response.json(); } catch { failure = undefined; }
-          if (failure && typeof failure === 'object' && 'error' in failure &&
-              failure.error && typeof failure.error === 'object' && 'code' in failure.error &&
-              failure.error.code === 'chat_gateway_unavailable') {
-            throw new Error('No Gateway access is provisioned for the selected conversation. The selected target was not changed.');
-          }
-        }
-        if (!response.ok) throw new Error('The configured Chat service is unavailable.');
-        const version = await response.json() as { version?: unknown; build?: unknown; sha?: unknown };
-        if (version.version !== '0.1.9' || typeof version.build !== 'number' || typeof version.sha !== 'string') {
-          throw new Error('The configured service does not expose a supported Tightbeam 0.1.9 identity.');
-        }
         const { transport, profile } = createPublic019Transport({
           baseUrl: `${origin}/__chat`,
-          gatewayVersionPath: '/gateway/version',
           targetGateway: selected.gateway,
-          build: version.build,
-          sha: version.sha,
           host,
         });
+        // Resolve the selected conversation through the same endpoint Chat uses
+        // at startup. Release metadata is not a compatibility check.
+        await transport.readSession(selected.sessionKey, controller.signal);
         if (current) setAdapter(createTightbeamAdapter(transport, profile));
       } catch (failure) {
         if (current && !controller.signal.aborted) {

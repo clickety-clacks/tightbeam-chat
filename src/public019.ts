@@ -19,34 +19,9 @@ import {
   type TargetProfile,
 } from './types';
 
-/** Historical release identity retained for callers that report old observations. */
-export const PUBLIC_019_SOURCE = 'f724fc41089335887e6eb76bfd89d9b6d50db7cd';
-export const PUBLIC_019_BUILD = 2476;
-/** The release's /version.sha is a short build stamp. */
-export const PUBLIC_019_GATEWAY_SHA = 'f724fc41';
-/** Later 0.1.9 source assessed against the same required Chat wire behavior. */
-export const PUBLIC_019_SOURCE_2844 = 'ad3e0f802d5706f6ab77bae8f84c87492ba2cf56';
-export const PUBLIC_019_BUILD_2844 = 2844;
-export const PUBLIC_019_GATEWAY_SHA_2844 = 'ad3e0f80';
-/** Exact Gateway release identity; its behavior remains unqualified here. */
-export const PUBLIC_019_SOURCE_2857 = '45580d9ebac42218bbf35e1ce9694d536b378d76';
-export const PUBLIC_019_BUILD_2857 = 2857;
-export const PUBLIC_019_GATEWAY_SHA_2857 = '45580d9e';
-/** Current exact Gateway source identity compared for selected Chat paths. */
-export const PUBLIC_019_SOURCE_2887 = '0198c918dbd86861297aca19e7c3dc583943bbac';
-export const PUBLIC_019_BUILD_2887 = 2887;
-export const PUBLIC_019_GATEWAY_SHA_2887 = '0198c918';
-/** Exact Gateway source comparison supporting the elected 0.1.9 compatibility floor. */
-export const PUBLIC_019_SOURCE_2908 = '8433d22fdf86027d62a34e9923501775225813ad';
-export const PUBLIC_019_BUILD_2908 = 2908;
-export const PUBLIC_019_GATEWAY_SHA_2908 = '8433d22f';
-
-// The source comparison supports this reviewed floor. Its additional
-// failed-park reconciliation is lifecycle-only, not a transcript marker;
-// visible transitions remain the canonical markers projected by the Gateway.
 // Snapshot coverage is the Chat client's subscribe-before-REST overlap, not a
 // Gateway snapshot watermark.
-const capabilities2887: TargetCapabilities = Object.freeze({
+const gatewayCapabilities: TargetCapabilities = Object.freeze({
   newestTail: true,
   stableOlderCursor: true,
   retainedHistoryAcrossResets: true,
@@ -57,16 +32,7 @@ const capabilities2887: TargetCapabilities = Object.freeze({
   authoritativeTurnProvenance: true,
 });
 
-const unsupportedCapabilities: TargetCapabilities = Object.freeze({
-  newestTail: false, stableOlderCursor: false, retainedHistoryAcrossResets: false,
-  orderedTransitions: false, snapshotCoverage: false, versionedNotices: false,
-  humanSendDedupe: false, authoritativeTurnProvenance: false,
-});
-
-function sourceBackedCapabilities(build: number): TargetCapabilities | undefined {
-  if (build >= PUBLIC_019_BUILD_2887) return capabilities2887;
-  return undefined;
-}
+const gatewayIdentity = 'tightbeam-gateway';
 
 /** A fresh, host-authenticated socket. The host owns credentials and the auth handshake. */
 export interface Public019Channel {
@@ -88,13 +54,8 @@ export interface Public019Host {
 export interface Public019Config {
   /** Approved host route; no credentials, query, or fragment. */
   baseUrl: string;
-  /** Selected Gateway identity route. Native callers default to /version; private Chat bridges use /gateway/version. */
-  gatewayVersionPath?: '/version' | '/gateway/version';
   /** Non-secret exact Gateway origin selected by the host for status presentation. */
   targetGateway?: string;
-  /** Exact /version.build and /version.sha observed by the host. */
-  build: number;
-  sha: string;
   host: Public019Host;
   /** Timeout for non-send responses such as Firehose subscription readiness. */
   responseTimeoutMs?: number;
@@ -104,28 +65,28 @@ export interface Public019Config {
 
 const record = (value: unknown): Record<string, unknown> => {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-    throw new UnsupportedTargetError('Expected an object in the public 0.1.9 wire response.');
+    throw new UnsupportedTargetError('Expected an object in the Gateway wire response.');
   }
   return value as Record<string, unknown>;
 };
 
 const requiredString = (row: Record<string, unknown>, key: string): string => {
   const value = row[key];
-  if (typeof value !== 'string' || !value) throw new UnsupportedTargetError(`Invalid ${key} in public 0.1.9 wire response.`);
+  if (typeof value !== 'string' || !value) throw new UnsupportedTargetError(`Invalid ${key} in Gateway wire response.`);
   return value;
 };
 
 const optionalString = (row: Record<string, unknown>, key: string): string | undefined => {
   const value = row[key];
   if (value === null || value === undefined) return undefined;
-  if (typeof value !== 'string') throw new UnsupportedTargetError(`Invalid ${key} in public 0.1.9 wire response.`);
+  if (typeof value !== 'string') throw new UnsupportedTargetError(`Invalid ${key} in Gateway wire response.`);
   return value;
 };
 
 const positiveInteger = (row: Record<string, unknown>, key: string): number => {
   const value = row[key];
   if (!Number.isSafeInteger(value) || (value as number) < 1) {
-    throw new UnsupportedTargetError(`Invalid ${key} in public 0.1.9 wire response.`);
+    throw new UnsupportedTargetError(`Invalid ${key} in Gateway wire response.`);
   }
   return value as number;
 };
@@ -134,7 +95,7 @@ function optionalPositiveInteger(row: Record<string, unknown>, key: string): num
   const value = row[key];
   if (value === null || value === undefined) return undefined;
   if (!Number.isSafeInteger(value) || (value as number) < 1) {
-    throw new UnsupportedTargetError(`Invalid ${key} in public 0.1.9 wire response.`);
+    throw new UnsupportedTargetError(`Invalid ${key} in Gateway wire response.`);
   }
   return value as number;
 }
@@ -142,7 +103,7 @@ function optionalPositiveInteger(row: Record<string, unknown>, key: string): num
 function messageTime(row: Record<string, unknown>): string {
   const at = row.at;
   if (!Number.isSafeInteger(at) || (at as number) < 0) {
-    throw new UnsupportedTargetError('Invalid millisecond at timestamp in public 0.1.9 message.');
+    throw new UnsupportedTargetError('Invalid millisecond at timestamp in Gateway message.');
   }
   const date = new Date(at as number);
   if (!Number.isFinite(date.getTime())) {
@@ -281,10 +242,6 @@ export function decodePublic019Notice(value: unknown, sessionKey: string): Chang
   return { operation: 'unknown', sessionKey, resource: frame.class };
 }
 
-function identity(version: string, build: number, sha: string): string {
-  return `${version}+${build}/${sha}`;
-}
-
 function checkedBaseUrl(raw: string): string {
   const url = new URL(raw);
   if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) {
@@ -293,37 +250,45 @@ function checkedBaseUrl(raw: string): string {
   return url.href.replace(/\/$/, '');
 }
 
-/** Released 0.1.9 REST history, protocol-2 changes, and human sending. */
+/** Gateway REST history, protocol-2 changes, and human sending. */
 export function createPublic019Transport(config: Public019Config): { transport: ChatTransport; profile: TargetProfile } {
   const baseUrl = checkedBaseUrl(config.baseUrl);
   const timeoutMs = config.responseTimeoutMs ?? 15_000;
   const heartbeatTimeoutMs = config.heartbeatTimeoutMs ?? 45_000;
-  if (!Number.isSafeInteger(config.build) || config.build < 1 ||
-      !/^([a-f0-9]{8,40})$/.test(config.sha) ||
-      !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 ||
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 ||
       !Number.isSafeInteger(heartbeatTimeoutMs) || heartbeatTimeoutMs < 1) {
-    throw new Error('Expected an exact public 0.1.9 build, source SHA, and positive timeouts.');
+    throw new Error('Expected positive response and heartbeat timeouts.');
   }
-  const expectedIdentity = identity('0.1.9', config.build, config.sha);
-  const gatewayVersionPath = config.gatewayVersionPath ?? '/version';
-  const supportedCapabilities = sourceBackedCapabilities(config.build);
   const profile: TargetProfile = Object.freeze({
-    identity: expectedIdentity,
-    label: `Tightbeam 0.1.9 build ${config.build}`,
-    capabilities: supportedCapabilities ?? unsupportedCapabilities,
+    identity: gatewayIdentity,
+    label: 'Tightbeam Gateway',
+    capabilities: gatewayCapabilities,
   });
 
   async function get(path: string, signal: AbortSignal): Promise<Record<string, unknown>> {
     const response = await config.host.fetch(`${baseUrl}${path}`, { method: 'GET', signal, cache: 'no-store' });
     if (response.status === 401 || response.status === 403) throw new AuthorizationError('Human REST principal is not authorized.');
     if (response.status === 400 && path.includes('/messages?')) throw new InvalidCursorError('History cursor was rejected.');
-    if (!response.ok) throw new Error(`Tightbeam REST request failed with HTTP ${response.status}.`);
+    if (!response.ok) {
+      let code: string | undefined;
+      try {
+        const body = record(await response.json());
+        if (body.error && typeof body.error === 'object' && !Array.isArray(body.error) &&
+            typeof (body.error as Record<string, unknown>).code === 'string') {
+          code = (body.error as Record<string, unknown>).code as string;
+        }
+      } catch {
+        // Keep the HTTP status when the service does not return a JSON error.
+      }
+      if (code === 'chat_gateway_unavailable') {
+        throw new Error('No Gateway access is provisioned for the selected conversation. The selected target was not changed.');
+      }
+      throw new Error(`Tightbeam REST request failed with HTTP ${response.status}${code ? ` (${code})` : ''}.`);
+    }
     return record(await response.json());
   }
 
   const activeSessions = new Set<string>();
-  let targetObservation: TargetObservation | undefined;
-  let targetObservationRequest: Promise<TargetObservation> | undefined;
   async function readPage(sessionKey: string, query: string, signal: AbortSignal): Promise<ConversationPage> {
     const body = await get(`/api/sessions/${encodeURIComponent(sessionKey)}/messages?limit=50&${query}`, signal);
     if (body.schemaVersion !== 1 || body.resource !== 'transcript messages' || !Array.isArray(body.items)) {
@@ -429,30 +394,11 @@ export function createPublic019Transport(config: Public019Config): { transport: 
   const transport: ChatTransport = {
     currentIdentity: () => config.host.currentIdentity(),
     targetGateway: config.targetGateway,
-    async inspectTarget(signal): Promise<TargetObservation> {
-      if (targetObservation) return targetObservation;
-      // The selected Gateway identity is stable for this transport/page
-      // lifetime. Reconnects still rebuild session history, but do not repeat
-      // the unrelated version lookup each time continuity is restored.
-      const pending = targetObservationRequest ??= (async () => {
-        // Native embeddings use /version; the private Chat server exposes it
-        // through /gateway/version. The Chat bundle manifest is not the target.
-        const version = await get(gatewayVersionPath, signal);
-        const observed = identity(String(version.version), Number(version.build), String(version.sha));
-        // /version.protocolVersion identifies the Gateway API line. Firehose
-        // subscription negotiation remains an independent protocol-2 exchange.
-        return { identity: observed,
-          capabilities: supportedCapabilities && observed === expectedIdentity && version.protocolVersion === 1
-            ? supportedCapabilities : unsupportedCapabilities };
-      })();
-      try {
-        const observed = await pending;
-        targetObservation = observed;
-        return observed;
-      } catch (error) {
-        if (targetObservationRequest === pending) targetObservationRequest = undefined;
-        throw error;
-      }
+    async inspectTarget(_signal): Promise<TargetObservation> {
+      // This is the transport's declared backend profile, not a probe of
+      // release metadata. Actual REST and WebSocket operations report their
+      // own errors when Chat uses them.
+      return { identity: profile.identity, capabilities: profile.capabilities };
     },
     async readSession(sessionKey, signal) {
       const body = await get(`/api/sessions/${encodeURIComponent(sessionKey)}`, signal);
@@ -502,7 +448,7 @@ export function createPublic019Transport(config: Public019Config): { transport: 
       const submittingIdentity = config.host.currentIdentity();
       if (!submission.clientMessageId.startsWith('c_') ||
           new TextEncoder().encode(submission.content).byteLength > 64 * 1024) {
-        return { outcome: 'refused', reason: 'Invalid public 0.1.9 human message ID or content length.' };
+        return { outcome: 'refused', reason: 'Invalid Gateway human message ID or content length.' };
       }
       if (submittingIdentity.deviceId !== submission.deviceId) {
         return { outcome: 'refused', reason: 'Host device identity changed.' };

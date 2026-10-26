@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { HostPage } from '../examples/HostPage';
@@ -20,8 +20,10 @@ afterEach(() => {
 });
 
 describe('direct browser entry', () => {
-  it('keeps entry private while selected-target service verification is unavailable', async () => {
-    const fetchSpy = vi.fn<typeof fetch>().mockRejectedValue(new Error('fixture'));
+  it('keeps entry private when the selected conversation endpoint is unavailable', async () => {
+    const fetchSpy = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
+      error: { code: 'chat_gateway_unavailable' },
+    }), { status: 503, headers: { 'content-type': 'application/json' } }));
     const socketSpy = vi.fn();
     vi.stubGlobal('fetch', fetchSpy);
     vi.stubGlobal('WebSocket', socketSpy);
@@ -36,9 +38,40 @@ describe('direct browser entry', () => {
     expect(screen.queryByRole('button', { name: /sign in|pair/i })).toBeNull();
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     const request = new URL(String(fetchSpy.mock.calls[0][0]));
-    expect(request.pathname).toBe('/__chat/gateway/version');
+    expect(request.pathname).toBe(`/__chat/api/sessions/${encodeURIComponent(defaultTarget.sessionKey)}`);
     expect(request.searchParams.get('gateway')).toBe(defaultTarget.gateway);
     expect(socketSpy).not.toHaveBeenCalled();
+  });
+
+  it('opens Chat without querying Gateway release metadata', async () => {
+    const sockets: { url: string; close: () => void; send: (data: string) => void }[] = [];
+    class WebSocketStub {
+      onopen: ((event: Event) => void) | null = null;
+      onmessage: ((event: MessageEvent) => void) | null = null;
+      onerror: ((event: Event) => void) | null = null;
+      onclose: ((event: CloseEvent) => void) | null = null;
+      constructor(readonly url: string) { sockets.push(this); }
+      close() {}
+      send(_data: string) {}
+    }
+    const fetchSpy = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+      schemaVersion: 1, resource: 'sessions', item: {
+        sessionKey: defaultTarget.sessionKey, rowVersion: 1, displayName: 'Example agent',
+      },
+    }), { status: 200, headers: { 'content-type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchSpy);
+    vi.stubGlobal('WebSocket', WebSocketStub);
+
+    render(<HostPage defaultTarget={defaultTarget} />);
+
+    await waitFor(() => expect(sockets).toHaveLength(1));
+    const socketUrl = new URL(sockets[0].url);
+    expect(socketUrl.pathname).toBe('/__chat/ws/changes');
+    expect(socketUrl.searchParams.get('protocolVersion')).toBe('2');
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(new URL(String(fetchSpy.mock.calls[0][0])).pathname)
+      .toBe(`/__chat/api/sessions/${encodeURIComponent(defaultTarget.sessionKey)}`);
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 
   it('does not expose target identity while a linked conversation is unavailable', async () => {
