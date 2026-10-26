@@ -13,6 +13,9 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
   const target = useRef<number | undefined>(undefined);
   const userScrollIntent = useRef(false);
   const userScrollTimeout = useRef<number | undefined>(undefined);
+  const lastKnownScrollTop = useRef<number | undefined>(undefined);
+  const lastKnownBottom = useRef<number | undefined>(undefined);
+  const pendingLayoutRestoreOffsets = useRef<number[]>([]);
   const viewportHeight = useRef<number | undefined>(undefined);
   const anchors = useRef<Anchor[]>([]);
   const registeredRows = useRef(new Map<string, HTMLElement>());
@@ -27,25 +30,37 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
 
   const distance = (box: HTMLElement) => Math.max(0, box.scrollHeight - box.clientHeight - box.scrollTop);
   const viewportResized = (box: HTMLElement) => viewportHeight.current !== undefined && viewportHeight.current !== box.clientHeight;
-  const noteUserScroll = () => {
-    userScrollIntent.current = true;
-    window.clearTimeout(userScrollTimeout.current);
-    userScrollTimeout.current = window.setTimeout(() => {
-      userScrollIntent.current = false;
-      userScrollTimeout.current = undefined;
-    }, 250);
-  };
   const clearUserScrollIntent = () => {
     userScrollIntent.current = false;
     window.clearTimeout(userScrollTimeout.current);
     userScrollTimeout.current = undefined;
   };
+  const deferUserScrollIntentExpiry = () => {
+    window.clearTimeout(userScrollTimeout.current);
+    userScrollTimeout.current = window.setTimeout(clearUserScrollIntent, 250);
+  };
+  const noteUserScroll = () => {
+    userScrollIntent.current = true;
+    pendingLayoutRestoreOffsets.current = [];
+    deferUserScrollIntentExpiry();
+  };
+  const recordLayoutRestoreOffsets = (box: HTMLElement) => {
+    pendingLayoutRestoreOffsets.current = [...new Set([
+      lastKnownScrollTop.current,
+      lastKnownBottom.current,
+      box.scrollTop,
+    ].filter((offset): offset is number => offset !== undefined))];
+  };
+  const isPendingLayoutRestore = (scrollTop: number) =>
+    pendingLayoutRestoreOffsets.current.some(offset => Math.abs(offset - scrollTop) < 1);
   const capture = () => {
     const box = viewport.current;
     const children = content.current?.children;
     if (!box || !children) return;
     if (box.clientHeight > 0) viewportHeight.current = box.clientHeight;
     readingTop.current = box.scrollTop;
+    lastKnownScrollTop.current = box.scrollTop;
+    lastKnownBottom.current = Math.max(0, box.scrollHeight - box.clientHeight);
     anchors.current = [];
     if (following.current) return;
     const bounds = box.getBoundingClientRect();
@@ -108,6 +123,9 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
     const box = viewport.current;
     if (!box) return;
     const resized = viewportResized(box);
+    const bottom = Math.max(0, box.scrollHeight - box.clientHeight);
+    const layoutChanged = lastKnownBottom.current !== undefined && Math.abs(bottom - lastKnownBottom.current) > .5;
+    if (following.current && !userScrollIntent.current && (resized || layoutChanged)) recordLayoutRestoreOffsets(box);
     if (!initialized.current) {
       if (!latestReady.current) return;
       initialized.current = true;
@@ -144,10 +162,15 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
   useLayoutEffect(() => {
     const observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(() => currentUpdate.current());
     if (content.current) observer?.observe(content.current);
-    if (viewport.current) observer?.observe(viewport.current);
+    const box = viewport.current;
+    if (box) {
+      observer?.observe(box);
+      box.addEventListener('scrollend', clearUserScrollIntent);
+    }
     return () => {
       observer?.disconnect();
-      window.clearTimeout(userScrollTimeout.current);
+      box?.removeEventListener('scrollend', clearUserScrollIntent);
+      clearUserScrollIntent();
     };
   }, []);
 
@@ -155,8 +178,11 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
     const box = viewport.current;
     if (!box) return;
     const readerInitiated = userScrollIntent.current;
-    if (readerInitiated) clearUserScrollIntent();
+    if (readerInitiated) deferUserScrollIntentExpiry();
     const resized = viewportResized(box);
+    const bottom = Math.max(0, box.scrollHeight - box.clientHeight);
+    const layoutChanged = lastKnownBottom.current !== undefined && Math.abs(bottom - lastKnownBottom.current) > .5;
+    if (following.current && !readerInitiated && (resized || layoutChanged)) recordLayoutRestoreOffsets(box);
     const reachedTarget = target.current !== undefined && Math.abs(box.scrollTop - target.current) < 1;
     if (reachedTarget) {
       animating.current = false;
@@ -172,10 +198,17 @@ export function useReadingPosition(ready: boolean, revision: unknown) {
       const currentDistance = distance(box);
       if (readerInitiated) {
         following.current = currentDistance <= bottomThreshold;
-      } else if (following.current && currentDistance > bottomThreshold) {
-        // A layout or host scroll restoration can arrive after its resize was
-        // recorded. Preserve follow intent until the reader actually scrolls.
-        moveToLatest(false);
+      } else {
+        const restoredLayoutOffset = isPendingLayoutRestore(box.scrollTop);
+        if (restoredLayoutOffset) pendingLayoutRestoreOffsets.current = [];
+        else if (pendingLayoutRestoreOffsets.current.length > 0 && currentDistance > 1) pendingLayoutRestoreOffsets.current = [];
+        if (following.current && currentDistance > bottomThreshold && restoredLayoutOffset) {
+          // Only correct an offset that matches the last position captured
+          // before a layout change. Other unpaired scrolls may be reader input.
+          moveToLatest(false);
+        } else {
+          following.current = currentDistance <= bottomThreshold;
+        }
       }
     }
     setShowLatest(!following.current);

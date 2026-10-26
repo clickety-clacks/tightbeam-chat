@@ -89,6 +89,7 @@ function readAt(box: HTMLElement, position: number) {
   fireEvent.wheel(box, { deltaY: -100 });
   box.scrollTop = position;
   fireEvent.scroll(box);
+  fireEvent(box, new Event('scrollend'));
 }
 function notifyResizeObservers() {
   act(() => {
@@ -383,6 +384,7 @@ describe('conversation reading position', () => {
       fireEvent.wheel(box, { deltaY: 30 });
       box.scrollTop = 90000 + i * 30;
       fireEvent.scroll(box);
+      fireEvent(box, new Event('scrollend'));
     }
     expect(measure.mock.calls.length).toBeLessThan(30 * 25);
     expect(query).not.toHaveBeenCalled();
@@ -540,6 +542,37 @@ describe('conversation reading position', () => {
 
     expect(box.scrollTop).toBe(insetBottom);
     expect(screen.queryByRole('button', { name: 'Scroll to latest messages' })).toBeNull();
+  });
+
+  it('keeps a short touch flick away from latest through post-lift momentum', () => {
+    const { box } = setup();
+    const bottom = box.scrollHeight - box.clientHeight;
+
+    fireEvent.touchStart(box);
+    fireEvent.touchMove(box);
+    box.scrollTop = bottom - 40;
+    fireEvent.scroll(box);
+    expect(screen.queryByRole('button', { name: 'Scroll to latest messages' })).toBeNull();
+
+    fireEvent.touchEnd(box);
+    box.scrollTop = bottom - 160;
+    fireEvent.scroll(box);
+
+    expect(box.scrollTop).toBe(bottom - 160);
+    expect(screen.getByRole('button', { name: 'Scroll to latest messages' })).toBeTruthy();
+
+    fireEvent(box, new Event('scrollend'));
+  });
+
+  it('preserves a reader scroll without a matching layout-restoration offset', () => {
+    const { box } = setup();
+    const bottom = box.scrollHeight - box.clientHeight;
+
+    box.scrollTop = bottom - 180;
+    fireEvent.scroll(box);
+
+    expect(box.scrollTop).toBe(bottom - 180);
+    expect(screen.getByRole('button', { name: 'Scroll to latest messages' })).toBeTruthy();
   });
 
   it('preserves an away reader position when the viewport resizes', () => {
