@@ -487,7 +487,8 @@ describe('private direct-entry Chat service bridge', () => {
         seen.push({ method: request.method, url: request.url, authorization: request.headers.authorization, body });
         if (request.url === '/version') {
           response.writeHead(200, { 'content-type': 'application/json' });
-          response.end(JSON.stringify({ version: '0.1.11', build: 3390, sha: '306f423d', protocolVersion: 1 }));
+          response.end(JSON.stringify({ version: '0.1.11', build: 3390,
+            sha: name === 'selected-gateway' ? name : '306f423d', protocolVersion: 1 }));
         } else if (request.url.startsWith(`/api/sessions/${encodeURIComponent(LINKED_SESSION)}/messages?`)) {
           response.writeHead(200, { 'content-type': 'application/json' });
           response.end(JSON.stringify({ schemaVersion: 1, resource: 'transcript messages', items: [],
