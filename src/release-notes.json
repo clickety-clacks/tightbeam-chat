@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.31",
+    "items": [
+      {
+        "title": "Latest messages",
+        "description": "On a fresh open, Chat keeps you at the latest message while earlier conversation history loads."
+      }
+    ]
+  },
+  {
     "version": "v0.1.30",
     "items": [
       {
