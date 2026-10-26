@@ -35,16 +35,14 @@ export function HostPage({ defaultTarget, configurationError }: {
           }
         }
         if (!response.ok) throw new Error('The configured Chat service is unavailable.');
-        const version = await response.json() as { version?: unknown; build?: unknown; sha?: unknown };
-        if (version.version !== '0.1.9' || typeof version.build !== 'number' || typeof version.sha !== 'string') {
-          throw new Error('The configured service does not expose a supported Tightbeam 0.1.9 identity.');
+        const version = await response.json() as { protocolVersion?: unknown };
+        if (version.protocolVersion !== 1) {
+          throw new Error('The configured service does not expose Gateway API protocol 1.');
         }
         const { transport, profile } = createPublic019Transport({
           baseUrl: `${origin}/__chat`,
           gatewayVersionPath: '/gateway/version',
           targetGateway: selected.gateway,
-          build: version.build,
-          sha: version.sha,
           host,
         });
         if (current) setAdapter(createTightbeamAdapter(transport, profile));

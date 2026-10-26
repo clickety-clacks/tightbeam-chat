@@ -1,10 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createTightbeamAdapter } from '../src/runtime';
 import {
-  PUBLIC_019_BUILD, PUBLIC_019_GATEWAY_SHA, PUBLIC_019_BUILD_2844, PUBLIC_019_GATEWAY_SHA_2844,
-  PUBLIC_019_SOURCE_2857, PUBLIC_019_BUILD_2857, PUBLIC_019_GATEWAY_SHA_2857,
-  PUBLIC_019_SOURCE_2887, PUBLIC_019_BUILD_2887, PUBLIC_019_GATEWAY_SHA_2887,
-  PUBLIC_019_SOURCE_2908, PUBLIC_019_BUILD_2908, PUBLIC_019_GATEWAY_SHA_2908,
   createPublic019Transport, decodePublic019Message, decodeToolCall,
   decodePublic019Notice, type Public019Channel, type Public019Host,
 } from '../src/public019';
@@ -12,12 +8,8 @@ import { AuthorizationError, UnsupportedTargetError } from '../src/types';
 
 const sessionKey = 's-public';
 const identity = { principalKey: 'person-1', deviceId: 'device-1' };
-const version = { server: 'tightbeam', version: '0.1.9', build: PUBLIC_019_BUILD_2887, sha: PUBLIC_019_GATEWAY_SHA_2887, protocolVersion: 1 };
-const legacy2476 = { ...version, build: PUBLIC_019_BUILD, sha: PUBLIC_019_GATEWAY_SHA };
-const assessed2844 = { ...version, build: PUBLIC_019_BUILD_2844, sha: PUBLIC_019_GATEWAY_SHA_2844 };
-const identified2857 = { ...version, build: PUBLIC_019_BUILD_2857, sha: PUBLIC_019_GATEWAY_SHA_2857 };
-const identified2887 = { ...version, build: PUBLIC_019_BUILD_2887, sha: PUBLIC_019_GATEWAY_SHA_2887 };
-const identified2908 = { ...version, build: PUBLIC_019_BUILD_2908, sha: PUBLIC_019_GATEWAY_SHA_2908 };
+const version = { server: 'tightbeam', version: '0.1.11', build: 3390, sha: '306f423d', protocolVersion: 1 };
+const laterPatch = { ...version, version: '0.1.12', build: 3402, sha: '7c4d2e11' };
 const item = {
   id: 'm_1', seq: 9, sessionKey, role: 'user', content: 'hello', replyToMessageId: 'parent-1', at: Date.parse('2026-10-12T00:00:00Z'),
   sender: 'person-1', deviceId: 'device-1', clientMessageId: 'c_1', attachments: [],
@@ -46,8 +38,7 @@ class Channel implements Public019Channel {
   disconnect() { this.disconnected?.(); }
 }
 
-function setup(heartbeatTimeoutMs?: number, observedVersion = version, configuredVersion = observedVersion,
-  historyItems: unknown[] = [item]) {
+function setup(heartbeatTimeoutMs?: number, observedVersion = version, historyItems: unknown[] = [item]) {
   const changes = new Channel();
   const human = new Channel();
   const paths: string[] = [];
@@ -73,16 +64,16 @@ function setup(heartbeatTimeoutMs?: number, observedVersion = version, configure
     openAuthenticatedHuman: async () => human,
   };
   const { transport, profile } = createPublic019Transport({
-    baseUrl: 'https://host.example', build: configuredVersion.build, sha: configuredVersion.sha, host,
+    baseUrl: 'https://host.example', host,
     responseTimeoutMs: 1000, heartbeatTimeoutMs,
   });
   return { transport, profile, paths, changes, human, host };
 }
 
-describe('public 0.1.9 released wire mapping and capability gates', () => {
+describe('Gateway protocol 1 wire mapping and behavior checks', () => {
   it('consumes selected-session turn lifecycle payloads without turn queries or history refreshes', async () => {
     const humanRow = { ...item, sender: 'user:person-1', turnSeq: 12 };
-    const candidate = setup(undefined, version, version, [humanRow]);
+    const candidate = setup(undefined, version, [humanRow]);
     const runtime = createTightbeamAdapter(candidate.transport, candidate.profile).open(sessionKey);
     await vi.waitFor(() => expect(candidate.changes.sent).toHaveLength(1));
     candidate.changes.emit({ type: 'subscription_ready', subscriptionId: `chat:${sessionKey}` });
@@ -119,36 +110,36 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
     runtime.dispose();
   });
 
-  it('identifies Gateway 0.1.9+2857 exactly while keeping unqualified capabilities disabled', async () => {
-    expect(PUBLIC_019_SOURCE_2857).toBe('45580d9ebac42218bbf35e1ce9694d536b378d76');
-    const candidate = setup(undefined, identified2857);
-    expect(candidate.profile.identity).toBe('0.1.9+2857/45580d9e');
-    expect(candidate.profile.capabilities).toEqual({
-      newestTail: false, stableOlderCursor: false, retainedHistoryAcrossResets: false,
-      orderedTransitions: false, snapshotCoverage: false, versionedNotices: false,
-      humanSendDedupe: false, authoritativeTurnProvenance: false,
-    });
-    expect(await candidate.transport.inspectTarget(new AbortController().signal)).toEqual({
-      identity: candidate.profile.identity, capabilities: candidate.profile.capabilities,
+  it('accepts the current release and routine patches that keep Gateway API protocol 1', async () => {
+    const current = setup(undefined, version);
+    expect(current.profile.identity).toBe('tightbeam-api/1');
+    expect(Object.values(current.profile.capabilities).every(Boolean)).toBe(true);
+    expect(await current.transport.inspectTarget(new AbortController().signal)).toEqual({
+      identity: 'tightbeam-api/1', capabilities: current.profile.capabilities,
     });
 
-    const runtime = createTightbeamAdapter(candidate.transport, candidate.profile).open(sessionKey);
-    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('unsupported'));
-    expect(candidate.changes.sent).toHaveLength(0);
-    expect(candidate.human.sent).toHaveLength(0);
-    expect(runtime.send('must not post')).toBeNull();
+    const runtime = createTightbeamAdapter(current.transport, current.profile).open(sessionKey);
+    await vi.waitFor(() => expect(current.changes.sent).toHaveLength(1));
+    current.changes.emit({ type: 'subscription_ready', subscriptionId: `chat:${sessionKey}` });
+    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+    expect(runtime.getSnapshot().records.map((record) => record.id)).toEqual(['m_1']);
     runtime.dispose();
+
+    const later = setup(undefined, laterPatch);
+    expect(await later.transport.inspectTarget(new AbortController().signal)).toEqual({
+      identity: 'tightbeam-api/1', capabilities: later.profile.capabilities,
+    });
+    expect(later.profile.capabilities.authoritativeTurnProvenance).toBe(true);
   });
 
-  it('qualifies ordered 2887 transitions and opens only after its exact profile passes the capability gate', async () => {
-    expect(PUBLIC_019_SOURCE_2887).toBe('0198c918dbd86861297aca19e7c3dc583943bbac');
+  it('reads ordered transitions and selected-session turns on protocol 1 while using Firehose protocol 2', async () => {
     const earlierTransition = { ...item, id: 'marker_before', seq: 8, rowVersion: 8,
       messageType: 'marker', marker: { kind: 'session-restart', from: 'old', to: 'new' } };
     const laterTransition = { ...item, id: 'marker_after', seq: 10, rowVersion: 10,
       messageType: 'marker', marker: { kind: 'harness-switch', from: 'old-harness', to: 'new-harness' } };
-    const candidate = setup(undefined, identified2887, identified2887,
+    const candidate = setup(undefined, version,
       [laterTransition, item, earlierTransition]);
-    expect(candidate.profile.identity).toBe('0.1.9+2887/0198c918');
+    expect(candidate.profile.identity).toBe('tightbeam-api/1');
     expect(candidate.profile.capabilities).toEqual({
       newestTail: true, stableOlderCursor: true, retainedHistoryAcrossResets: true,
       orderedTransitions: true, snapshotCoverage: true, versionedNotices: true,
@@ -184,8 +175,8 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
     runtime.dispose();
   });
 
-  it('checks Gateway identity once per transport while true recovery rereads canonical session history', async () => {
-    const candidate = setup(undefined, identified2887);
+  it('checks the API protocol once per transport while recovery rereads canonical session history', async () => {
+    const candidate = setup(undefined, version);
     const runtime = createTightbeamAdapter(candidate.transport, candidate.profile).open(sessionKey);
     await vi.waitFor(() => expect(candidate.changes.sent).toHaveLength(1));
     candidate.changes.emit({ type: 'subscription_ready', subscriptionId: `chat:${sessionKey}` });
@@ -211,10 +202,9 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
     runtime.dispose();
   });
 
-  it('carries the reviewed 2887 profile floor through 2908 while negotiating Firehose protocol 2 separately', async () => {
-    expect(PUBLIC_019_SOURCE_2908).toBe('8433d22fdf86027d62a34e9923501775225813ad');
-    const candidate = setup(undefined, identified2908, identified2908);
-    expect(candidate.profile.identity).toBe('0.1.9+2908/8433d22f');
+  it('keeps Firehose protocol 2 separate from Gateway API protocol 1', async () => {
+    const candidate = setup(undefined, version);
+    expect(candidate.profile.identity).toBe('tightbeam-api/1');
     expect(candidate.profile.capabilities).toEqual({
       newestTail: true, stableOlderCursor: true, retainedHistoryAcrossResets: true,
       orderedTransitions: true, snapshotCoverage: true, versionedNotices: true,
@@ -255,7 +245,7 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
       { ...item, id: 'system-marker', seq: 12, role: 'assistant', sender: 'process:notifications',
         messageType: 'substrate', content: 'A system event marker' },
     ];
-    const candidate = setup(undefined, identified2887, identified2887, messages);
+    const candidate = setup(undefined, version, messages);
     const runtime = createTightbeamAdapter(candidate.transport, candidate.profile).open(sessionKey);
 
     await vi.waitFor(() => expect(candidate.changes.sent).toEqual([{
@@ -290,9 +280,9 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
     runtime.dispose();
   });
 
-  it('fails closed when the Gateway API protocol version differs from the elected line', async () => {
-    const incompatibleProtocol = { ...identified2908, protocolVersion: 2 };
-    const candidate = setup(undefined, incompatibleProtocol, identified2908);
+  it('reports unsupported when the Gateway API protocol is not version 1', async () => {
+    const incompatibleProtocol = { ...version, protocolVersion: 2 };
+    const candidate = setup(undefined, incompatibleProtocol);
     expect(await candidate.transport.inspectTarget(new AbortController().signal)).toEqual({
       identity: candidate.profile.identity,
       capabilities: {
@@ -309,8 +299,8 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
     runtime.dispose();
   });
 
-  it('uses 2887 subscribe-before-REST overlap for snapshot coverage, without a watermark claim', async () => {
-    const candidate = setup(undefined, identified2887);
+  it('uses protocol 1 subscribe-before-REST overlap for snapshot coverage, without a watermark claim', async () => {
+    const candidate = setup(undefined, version);
     const signal = new AbortController().signal;
     expect(candidate.profile.capabilities.snapshotCoverage).toBe(true);
 
@@ -337,47 +327,21 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
     expect(candidate.transport.proveCoverage({ sessionKey, rowVersion: 4, displayName: 'Fixture agent', raw: {} }, page, [])).toBe(false);
   });
 
-  it('refuses pre-floor releases while supporting later identities on the elected line', async () => {
-    for (const observed of [legacy2476, assessed2844, identified2857,
-      { ...assessed2844, sha: version.sha }]) {
-      const other = setup(undefined, observed);
-      const runtime = createTightbeamAdapter(other.transport, other.profile).open(sessionKey);
-      await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('unsupported'));
-      expect(runtime.getSnapshot().statusDetail).toContain('capability');
-      expect(other.changes.sent).toHaveLength(0);
-      expect(runtime.send('must not post')).toBeNull();
-      expect(other.human.sent).toHaveLength(0);
-      runtime.dispose();
-    }
-
-    for (const assessed of [version, identified2908, { ...identified2887, sha: '00000000' }]) {
-      const supported = setup(undefined, assessed);
-      const ready = createTightbeamAdapter(supported.transport, supported.profile).open(sessionKey);
+  it('does not gate on Gateway release, build, or source identity while requiring protocol 1', async () => {
+    for (const observed of [
+      version,
+      laterPatch,
+      { ...laterPatch, build: 2476, sha: 'f724fc41' },
+      { ...laterPatch, sha: '00000000' },
+    ]) {
+      const supported = setup(undefined, observed);
+      const runtime = createTightbeamAdapter(supported.transport, supported.profile).open(sessionKey);
       await vi.waitFor(() => expect(supported.changes.sent).toHaveLength(1));
       supported.changes.emit({ type: 'subscription_ready', subscriptionId: 'chat:s-public' });
-      await vi.waitFor(() => expect(ready.getSnapshot().status).toBe('ready'));
-      expect(ready.getSnapshot().records.map((record) => record.id)).toEqual(['m_1']);
-      ready.dispose();
-    }
-  });
-
-  it('refuses an observed target that differs from its assessed configuration before subscribing', async () => {
-    for (const observed of [version, { ...assessed2844, sha: '00000000' }]) {
-      const mismatched = setup(undefined, observed, assessed2844);
-      const runtime = createTightbeamAdapter(mismatched.transport, mismatched.profile).open(sessionKey);
-      await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('unsupported'));
-      expect(runtime.getSnapshot().statusDetail).toContain('identity');
-      expect(mismatched.changes.sent).toHaveLength(0);
-      expect(runtime.send('must not post')).toBeNull();
+      await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+      expect(runtime.getSnapshot().records.map((record) => record.id)).toEqual(['m_1']);
       runtime.dispose();
     }
-
-    const later2887 = setup(undefined, { ...identified2887, sha: '00000000' }, { ...identified2887, sha: '00000000' });
-    expect(await later2887.transport.inspectTarget(new AbortController().signal)).toEqual({
-      identity: '0.1.9+2887/00000000',
-      capabilities: later2887.profile.capabilities,
-    });
-    expect(later2887.profile.capabilities.authoritativeTurnProvenance).toBe(true);
   });
 
   it('refreshes activity after a committed turn arrives during the history read', async () => {
@@ -416,8 +380,7 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
     },
       openAuthenticatedHuman: async () => human,
     };
-    const { transport, profile } = createPublic019Transport({ baseUrl: 'https://host.example',
-      build: version.build, sha: version.sha, host });
+    const { transport, profile } = createPublic019Transport({ baseUrl: 'https://host.example', host });
     const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
     await vi.waitFor(() => expect(changes.sent).toHaveLength(1));
     changes.emit({ type: 'subscription_ready', subscriptionId: 'chat:s-public' });
@@ -481,7 +444,7 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
 
   it('keeps history ready when unknown and wake observations arrive during the tail read', async () => {
     const historyItems: unknown[] = [item];
-    const base = setup(undefined, version, version, historyItems);
+    const base = setup(undefined, version, historyItems);
     let releaseTail!: () => void;
     const tailGate = new Promise<void>((resolve) => { releaseTail = resolve; });
     let readingTail = false;
@@ -519,7 +482,7 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
 
   it('accounts for unknown selected-session events without rebuilding and keeps later events live', async () => {
     const historyItems: unknown[] = [item];
-    const base = setup(undefined, version, version, historyItems);
+    const base = setup(undefined, version, historyItems);
     const runtime = createTightbeamAdapter(base.transport, base.profile).open(sessionKey);
     await vi.waitFor(() => expect(base.changes.sent).toHaveLength(1));
     base.changes.emit({ type: 'subscription_ready', subscriptionId: 'chat:s-public' });
@@ -752,8 +715,7 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
       openAuthenticatedChanges: async () => new Channel(),
       openAuthenticatedHuman: async () => { principal = 'person-2'; return channel; },
     };
-    const { transport } = createPublic019Transport({ baseUrl: 'https://host.example',
-      build: version.build, sha: version.sha, host });
+    const { transport } = createPublic019Transport({ baseUrl: 'https://host.example', host });
     expect(await transport.sendHuman({ sessionKey, deviceId: 'device-1',
       clientMessageId: 'c_1', content: 'hello' }, new AbortController().signal))
       .toMatchObject({ outcome: 'refused' });
@@ -770,8 +732,7 @@ describe('public 0.1.9 released wire mapping and capability gates', () => {
       openAuthenticatedChanges: async () => new Channel(),
       openAuthenticatedHuman: async () => { throw rejection; },
     };
-    const { transport } = createPublic019Transport({ baseUrl: 'https://host.example',
-      build: version.build, sha: version.sha, host });
+    const { transport } = createPublic019Transport({ baseUrl: 'https://host.example', host });
     await expect(transport.sendHuman({ sessionKey, deviceId: 'device-1',
       clientMessageId: 'c_1', content: 'hello' }, new AbortController().signal))
       .rejects.toBe(rejection);
@@ -817,7 +778,7 @@ describe('tool-call contract and transition category', () => {
       openAuthenticatedChanges: async () => { const channel = new Channel(); channel.autoReady = true; channels.push(channel); return channel; },
       openAuthenticatedHuman: async () => new Channel(),
     };
-    const { transport } = createPublic019Transport({ baseUrl: 'https://host.example', build: version.build, sha: version.sha, host });
+    const { transport } = createPublic019Transport({ baseUrl: 'https://host.example', host });
     const controller = new AbortController();
     const callbacks = { onNotice: vi.fn(), onDoubt: vi.fn() };
     const main = await transport.openChanges(sessionKey, callbacks, controller.signal);

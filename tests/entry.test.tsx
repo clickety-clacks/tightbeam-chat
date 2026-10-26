@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { HostPage } from '../examples/HostPage';
@@ -39,6 +39,33 @@ describe('direct browser entry', () => {
     expect(request.pathname).toBe('/__chat/gateway/version');
     expect(request.searchParams.get('gateway')).toBe(defaultTarget.gateway);
     expect(socketSpy).not.toHaveBeenCalled();
+  });
+
+  it('accepts a newer Gateway release that exposes API protocol 1', async () => {
+    const sockets: { url: string; close: () => void; send: (data: string) => void }[] = [];
+    class WebSocketStub {
+      onopen: ((event: Event) => void) | null = null;
+      onmessage: ((event: MessageEvent) => void) | null = null;
+      onerror: ((event: Event) => void) | null = null;
+      onclose: ((event: CloseEvent) => void) | null = null;
+      constructor(readonly url: string) { sockets.push(this); }
+      close() {}
+      send(_data: string) {}
+    }
+    const fetchSpy = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({
+      server: 'tightbeam', version: '0.1.11', build: 3390, sha: '306f423d', protocolVersion: 1,
+    }), { status: 200, headers: { 'content-type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchSpy);
+    vi.stubGlobal('WebSocket', WebSocketStub);
+
+    render(<HostPage defaultTarget={defaultTarget} />);
+
+    await waitFor(() => expect(sockets).toHaveLength(1));
+    const socketUrl = new URL(sockets[0].url);
+    expect(socketUrl.pathname).toBe('/__chat/ws/changes');
+    expect(socketUrl.searchParams.get('protocolVersion')).toBe('2');
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 
   it('does not expose target identity while a linked conversation is unavailable', async () => {

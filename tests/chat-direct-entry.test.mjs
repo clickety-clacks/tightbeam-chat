@@ -179,7 +179,7 @@ describe('private direct-entry Chat service bridge', () => {
         cliVersion: request.headers['x-tightbeam-cli-version'], body });
       if (request.url === '/version') {
         response.writeHead(200, { 'content-type': 'application/json' });
-        response.end(JSON.stringify({ version: '0.1.9', build: 2847, sha: 'b75b9bf5' }));
+        response.end(JSON.stringify({ version: '0.1.11', build: 3390, sha: '306f423d', protocolVersion: 1 }));
       } else if (request.url.startsWith(`/api/sessions/${encodeURIComponent(LINKED_SESSION)}/tool-calls`)) {
         response.writeHead(200, { 'content-type': 'application/json' });
         response.end(JSON.stringify({ schemaVersion: 1, resource: 'tool calls', items: [], item: { id: 'tc_read' }, page: { hasMoreBefore: false } }));
@@ -353,7 +353,7 @@ describe('private direct-entry Chat service bridge', () => {
         authorization: request.headers.authorization });
       response.setHeader('content-type', 'application/json');
       if (parsed.pathname === '/version') {
-        response.end(JSON.stringify({ version: '0.1.9', build: 2847, sha: 'b75b9bf5', protocolVersion: 2 }));
+        response.end(JSON.stringify({ version: '0.1.11', build: 3390, sha: '306f423d', protocolVersion: 1 }));
         return;
       }
       const messagePath = /^\/api\/sessions\/([^/]+)\/messages$/.exec(parsed.pathname);
@@ -427,14 +427,14 @@ describe('private direct-entry Chat service bridge', () => {
       openAuthenticatedHuman: async () => { throw new Error('No socket needed for this history composition test.'); },
     };
     const { transport, profile } = createPublic019Transport({
-      baseUrl: `${chatOrigin}/__chat`, gatewayVersionPath: '/gateway/version', build: 2847, sha: 'b75b9bf5', host,
+      baseUrl: `${chatOrigin}/__chat`, gatewayVersionPath: '/gateway/version', host,
     });
 
     const observed = await transport.inspectTarget(new AbortController().signal);
-    expect(observed.identity).toBe('0.1.9+2847/b75b9bf5');
+    expect(observed.identity).toBe('tightbeam-api/1');
     expect(observed.identity).not.toBe('v0.1.2');
-    expect(observed.capabilities.newestTail).toBe(false);
-    expect(profile.capabilities.newestTail).toBe(false);
+    expect(observed.capabilities.newestTail).toBe(true);
+    expect(profile.capabilities.newestTail).toBe(true);
 
     const session = await transport.readSession(LINKED_SESSION, new AbortController().signal);
     expect(session.raw.clearedThroughSeq).toBe(resetSeq);
@@ -487,7 +487,7 @@ describe('private direct-entry Chat service bridge', () => {
         seen.push({ method: request.method, url: request.url, authorization: request.headers.authorization, body });
         if (request.url === '/version') {
           response.writeHead(200, { 'content-type': 'application/json' });
-          response.end(JSON.stringify({ version: '0.1.9', build: 2845, sha: name }));
+          response.end(JSON.stringify({ version: '0.1.11', build: 3390, sha: '306f423d', protocolVersion: 1 }));
         } else if (request.url.startsWith(`/api/sessions/${encodeURIComponent(LINKED_SESSION)}/messages?`)) {
           response.writeHead(200, { 'content-type': 'application/json' });
           response.end(JSON.stringify({ schemaVersion: 1, resource: 'transcript messages', items: [],
@@ -606,7 +606,7 @@ describe('private direct-entry Chat service bridge', () => {
     const gateway = http.createServer((request, response) => {
       observed.push(request.url);
       response.writeHead(200, { 'content-type': 'application/json' });
-      response.end(JSON.stringify({ version: '0.1.9', build: 2845, sha: 'legacy' }));
+      response.end(JSON.stringify({ version: '0.1.11', build: 3390, sha: '306f423d', protocolVersion: 1 }));
     });
     const gatewayPort = await listen(gateway);
     const gatewayOrigin = `http://127.0.0.1:${gatewayPort}`;
@@ -749,7 +749,7 @@ describe('private direct-entry Chat service bridge', () => {
     const gateway = http.createServer((request, response) => {
       observed.push(request.url);
       response.writeHead(200, { 'content-type': 'application/json' });
-      response.end(JSON.stringify({ version: '0.1.9', build: 2845, sha: 'b469cd27' }));
+      response.end(JSON.stringify({ version: '0.1.11', build: 3390, sha: '306f423d', protocolVersion: 1 }));
     });
     const gatewayPort = await listen(gateway);
     const gatewayOrigin = `http://127.0.0.1:${gatewayPort}`;

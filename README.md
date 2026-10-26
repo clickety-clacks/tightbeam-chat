@@ -4,7 +4,7 @@ An original, embeddable TypeScript/React conversation and Markdown composer for 
 
 ## Current status
 
-The browser example connects the component to one selected Tightbeam 0.1.9 gateway and session. The reviewed compatibility floor is build `2887` and later on the same line and protocol. It loads retained history, follows source-backed turn provenance, renders the human exchange with safe Markdown, subscribes to live changes, and sends human messages. See the [wire mapping and coverage limits](docs/public-019-profile.md). Automated validation uses synthetic wire responses; live-gateway acceptance remains separate.
+The browser example connects the component to one selected Tightbeam Gateway and session. Compatibility follows Gateway API protocol 1 and the response behavior Chat uses; it does not depend on an exact Gateway release, build, or source stamp. It loads retained history, follows source-backed turn provenance, renders the human exchange with safe Markdown, subscribes to live changes, and sends human messages. See the [wire mapping and coverage limits](docs/public-019-profile.md). Automated fixtures and isolated released-Gateway checks remain separate from deployed-host acceptance.
 
 The repository has a standard [MIT LICENSE](LICENSE) with Copyright (c) 2026 Mike Manzano. Dependency and distribution notices are inventoried separately in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
@@ -45,8 +45,8 @@ npm run build
 import { TightbeamChat, createTightbeamAdapter } from '@clickety-clacks/tightbeam-chat';
 import '@clickety-clacks/tightbeam-chat/style.css';
 
-// transport and profile must be verified against the exact elected target.
-// createPublic019Transport supplies the released 0.1.9 wire mapping.
+// The host owns Gateway authentication and supplies the API protocol profile.
+// The browser example uses the Gateway API protocol 1 wire mapping.
 const adapter = createTightbeamAdapter(transport, profile);
 
 <TightbeamChat
