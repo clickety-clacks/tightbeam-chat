@@ -48,7 +48,9 @@ Chat sends these lifetime events:
   reason: 'target-changed' | 'identity-changed' | 'disposed' | 'unloading' }
 ```
 
-The HTML composer stays visible until the page's first `ready`. After Chat hides it, it stays hidden for every later lifetime in that page load. `unavailable` disables the host send control; a later `ready` re-enables it with the same lifetime ID after reconnect, or a new lifetime ID after a target or identity change. A page reload needs a new declaration and a new `ready` before Chat hides the HTML composer again.
+The HTML composer stays visible until the page's first `ready`. After Chat hides it, it stays hidden for every later lifetime in that page load. `unavailable` disables host Send only when Chat has an actual reason that a send cannot be accepted; a later `ready` re-enables it for the same lifetime when sending can be attempted again. A target or identity change ends the lifetime, and the next `ready` uses a new lifetime ID. A page reload needs a new declaration and a new `ready` before Chat hides the HTML composer again.
+
+`ready` means Chat can accept a host send command for the selected lifetime; it does not promise that the Gateway will accept every message. A live-change-feed disconnect or reconnect by itself does not make host sending unavailable: Chat keeps the same lifetime ready, emits no `unavailable` event for that feed change, and accepts sends while authorized. A missing selected session, loss of authorization, or an actual send-endpoint refusal does make sending unavailable. For a refused send, Chat reports the attempt as `failed/refused` with its endpoint detail, then emits `unavailable` with reason `send-refused`. A command received before sending is ready is rejected as `not-ready` and posts nothing. Once Chat can accept commands again, it emits `ready` for that lifetime; feed-only reconnects do not create an unavailable/ready cycle.
 
 ## Send command and attempt messages
 

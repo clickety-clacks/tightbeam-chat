@@ -8,7 +8,7 @@ import type {
   ConversationPage, ConversationRecord, HostIdentity, HumanSendResult, HumanSubmission,
   SessionRecord, TargetCapabilities, TargetObservation, TargetProfile, TightbeamAdapter,
 } from '../src/types';
-import { SessionNotFoundError } from '../src/types';
+import { AuthorizationError, SessionNotFoundError } from '../src/types';
 
 const capabilities: TargetCapabilities = {
   newestTail: true, stableOlderCursor: true, retainedHistoryAcrossResets: true,
@@ -38,6 +38,7 @@ class HostComposerTransport implements ChatTransport {
   readGate?: ReturnType<typeof deferred<void>>;
   failReadSessionOnce = false;
   missingSession = false;
+  authorizationLost = false;
   nextSend?: (submission: HumanSubmission) => Promise<HumanSendResult>;
   private seq = 0;
 
@@ -52,6 +53,7 @@ class HostComposerTransport implements ChatTransport {
   };
   readSession = async (sessionKey: string): Promise<SessionRecord> => {
     if (this.readGate) await this.readGate.promise;
+    if (this.authorizationLost) throw new AuthorizationError('Access to this conversation is no longer authorized.');
     if (this.missingSession) throw new SessionNotFoundError('This conversation no longer exists.');
     if (this.failReadSessionOnce) {
       this.failReadSessionOnce = false;
@@ -61,6 +63,7 @@ class HostComposerTransport implements ChatTransport {
   };
   readTail = async (sessionKey: string): Promise<ConversationPage> => {
     if (this.readGate) await this.readGate.promise;
+    if (this.authorizationLost) throw new AuthorizationError('Access to this conversation is no longer authorized.');
     const rows = this.records.get(sessionKey) ?? [];
     return { records: rows.slice(-50), oldestCursor: rows[0]?.id ?? null, hasOlder: false, coverage: sessionKey };
   };
@@ -72,6 +75,7 @@ class HostComposerTransport implements ChatTransport {
   proveCoverage = (session: SessionRecord, page: ConversationPage, _buffered: readonly ChangeNotice[]) => page.coverage === session.sessionKey;
   sendHuman = async (submission: HumanSubmission): Promise<HumanSendResult> => {
     this.submissions.push(submission);
+    if (this.authorizationLost) throw new AuthorizationError('Access to this conversation is no longer authorized.');
     return this.nextSend ? this.nextSend(submission) : { outcome: 'accepted' };
   };
 
@@ -327,14 +331,17 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     const send = (id: string, content: string) => act(() => commandEntry()({ type: 'send',
       lifetimeId: ready.lifetimeId, sessionKey: ready.sessionKey, correlationId: id, content }));
 
-    send(correlation, 'refuse');
-    await waitFor(() => expect(events.some((event) => event.event === 'failed' && event.reason === 'refused')).toBe(true));
-    expect(events.find((event) => event.event === 'failed')).toMatchObject({ detail: 'client_message_id_conflict', attempt: 1 });
     const second = 'c_223e4567-e89b-42d3-a456-426614174000';
     send(second, 'uncertain');
     await waitFor(() => expect(events.some((event) => event.event === 'uncertain' && event.correlationId === second)).toBe(true));
     expect(events.find((event) => event.event === 'uncertain' && event.correlationId === second))
       .toMatchObject({ reason: 'ack-lost', attempt: 1 });
+    send(correlation, 'refuse');
+    await waitFor(() => expect(events.some((event) => event.event === 'failed' && event.reason === 'refused')).toBe(true));
+    expect(events.find((event) => event.event === 'failed')).toMatchObject({ detail: 'client_message_id_conflict', attempt: 1 });
+    expect(events.find((event) => event.event === 'unavailable')).toMatchObject({
+      event: 'unavailable', reason: 'send-refused', lifetimeId: ready.lifetimeId,
+    });
     expect(screen.getByText('Message could not be sent')).toBeTruthy();
     expect(screen.getByText('Delivery is uncertain')).toBeTruthy();
     expect(screen.getByText('This message was refused. Any retry or text editing belongs in the host composer.')).toBeTruthy();
@@ -409,9 +416,13 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     act(() => command({ type: 'send', lifetimeId: 'before-ready', sessionKey: 'conversation-a',
       correlationId: correlation, content: 'pending' }));
     expect(events.at(-1)).toMatchObject({ event: 'rejected', reason: 'not-ready' });
+    const notReadyIndex = events.findIndex((event) => event.event === 'rejected' && event.reason === 'not-ready');
     expect(screen.queryByRole('button', { name: /Connection status/ })).toBeNull();
     await act(async () => { gate.resolve(); });
     const ready = await waitForReady(events, 'conversation-a');
+    const recoveredReadyIndex = events.findIndex((event) => event.event === 'ready' && event.lifetimeId === ready.lifetimeId);
+    expect(notReadyIndex).toBeGreaterThanOrEqual(0);
+    expect(recoveredReadyIndex).toBeGreaterThan(notReadyIndex);
     act(() => command({ type: 'send', lifetimeId: 'old-lifetime', sessionKey: 'conversation-a',
       correlationId: correlation, content: 'pending' }));
     expect(events.at(-1)).toMatchObject({ event: 'rejected', reason: 'target-mismatch' });
@@ -524,6 +535,8 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     const first = await waitForReady(events, 'conversation-a');
 
     act(() => transport.callbacks.get('conversation-a')?.onDoubt('connection closed'));
+    expect(events.filter((event) => event.event === 'ready' && event.lifetimeId === first.lifetimeId)).toHaveLength(1);
+    expect(events.some((event) => event.event === 'unavailable' && event.lifetimeId === first.lifetimeId)).toBe(false);
     act(() => commandEntry()({ type: 'send', lifetimeId: first.lifetimeId, sessionKey: first.sessionKey,
       correlationId: correlation, content: 'send while live updates reconnect' }));
     await waitFor(() => expect(transport.submissions).toHaveLength(1));
@@ -712,5 +725,40 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     expect(events.some((event) => event.event === 'ready')).toBe(false);
     expect(screen.getByRole('textbox', { name: /message to the selected agent/i })).toBeTruthy();
     expect(screen.getByText('This conversation no longer exists.')).toBeTruthy();
+  });
+
+  it('reports authorization loss as unavailable without confusing it with live-feed state', async () => {
+    const events: HostComposerEvent[] = [];
+    const transport = new HostComposerTransport();
+    installDeclaration(events);
+    const { runtimes } = openChat(transport, 'conversation-a');
+    const ready = await waitForReady(events, 'conversation-a');
+
+    transport.authorizationLost = true;
+    act(() => commandEntry()({ type: 'send', lifetimeId: ready.lifetimeId, sessionKey: ready.sessionKey,
+      correlationId: correlation, content: 'authorization expired during send' }));
+    await waitFor(() => expect(events.some((event) => event.event === 'unavailable' &&
+      event.reason === 'unauthorized' && event.lifetimeId === ready.lifetimeId)).toBe(true));
+    expect(events.find((event) => event.event === 'failed' && event.correlationId === correlation))
+      .toMatchObject({ reason: 'refused', detail: 'unauthorized' });
+    expect(events.filter((event) => event.event === 'unavailable')).toHaveLength(1);
+    expect(events.filter((event) => event.event === 'ready')).toHaveLength(1);
+
+    const blockedCorrelation = 'c_223e4567-e89b-42d3-a456-426614174000';
+    act(() => commandEntry()({ type: 'send', lifetimeId: ready.lifetimeId, sessionKey: ready.sessionKey,
+      correlationId: blockedCorrelation, content: 'blocked while unauthorized' }));
+    expect(events.at(-1)).toMatchObject({ event: 'rejected', reason: 'not-ready' });
+
+    transport.authorizationLost = false;
+    await act(async () => { await runtimes[0].rebuild({ restart: true }); });
+    await waitFor(() => expect(events.filter((event) => event.event === 'ready' &&
+      event.lifetimeId === ready.lifetimeId)).toHaveLength(2));
+    const recoveredCorrelation = 'c_323e4567-e89b-42d3-a456-426614174000';
+    act(() => commandEntry()({ type: 'send', lifetimeId: ready.lifetimeId, sessionKey: ready.sessionKey,
+      correlationId: recoveredCorrelation, content: 'sending restored' }));
+    await waitFor(() => expect(transport.submissions).toHaveLength(2));
+    await waitFor(() => expect(events.some((event) => event.event === 'accepted' &&
+      event.correlationId === recoveredCorrelation)).toBe(true));
+    expect(events.some((event) => event.event === 'unavailable' && event.reason === 'unauthorized')).toBe(true);
   });
 });
