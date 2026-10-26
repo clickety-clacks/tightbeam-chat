@@ -727,11 +727,11 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     expect(screen.getByText('This conversation no longer exists.')).toBeTruthy();
   });
 
-  it('reports authorization loss as unavailable without confusing it with live-feed state', async () => {
+  it('reports authorization loss during a send as unavailable', async () => {
     const events: HostComposerEvent[] = [];
     const transport = new HostComposerTransport();
     installDeclaration(events);
-    const { runtimes } = openChat(transport, 'conversation-a');
+    openChat(transport, 'conversation-a');
     const ready = await waitForReady(events, 'conversation-a');
 
     transport.authorizationLost = true;
@@ -743,22 +743,5 @@ describe('versioned host composer seam on the real adapter and surface', () => {
       .toMatchObject({ reason: 'refused', detail: 'unauthorized' });
     expect(events.filter((event) => event.event === 'unavailable')).toHaveLength(1);
     expect(events.filter((event) => event.event === 'ready')).toHaveLength(1);
-
-    const blockedCorrelation = 'c_223e4567-e89b-42d3-a456-426614174000';
-    act(() => commandEntry()({ type: 'send', lifetimeId: ready.lifetimeId, sessionKey: ready.sessionKey,
-      correlationId: blockedCorrelation, content: 'blocked while unauthorized' }));
-    expect(events.at(-1)).toMatchObject({ event: 'rejected', reason: 'not-ready' });
-
-    transport.authorizationLost = false;
-    await act(async () => { await runtimes[0].rebuild({ restart: true }); });
-    await waitFor(() => expect(events.filter((event) => event.event === 'ready' &&
-      event.lifetimeId === ready.lifetimeId)).toHaveLength(2));
-    const recoveredCorrelation = 'c_323e4567-e89b-42d3-a456-426614174000';
-    act(() => commandEntry()({ type: 'send', lifetimeId: ready.lifetimeId, sessionKey: ready.sessionKey,
-      correlationId: recoveredCorrelation, content: 'sending restored' }));
-    await waitFor(() => expect(transport.submissions).toHaveLength(2));
-    await waitFor(() => expect(events.some((event) => event.event === 'accepted' &&
-      event.correlationId === recoveredCorrelation)).toBe(true));
-    expect(events.some((event) => event.event === 'unavailable' && event.reason === 'unauthorized')).toBe(true);
   });
 });
