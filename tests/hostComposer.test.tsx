@@ -502,6 +502,10 @@ describe('versioned host composer seam on the real adapter and surface', () => {
   it('keeps the host composer ready and sending during a live-update reconnect', async () => {
     const events: HostComposerEvent[] = [];
     const transport = new HostComposerTransport();
+    transport.nextSend = async (submission) => {
+      transport.addCanonical(submission);
+      return { outcome: 'accepted' };
+    };
     installDeclaration(events);
     const { runtimes } = openChat(transport, 'conversation-a');
     const first = await waitForReady(events, 'conversation-a');

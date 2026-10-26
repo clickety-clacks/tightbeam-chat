@@ -115,7 +115,7 @@ describe('direct browser entry', () => {
     render(<HostPage defaultTarget={defaultTarget} />);
 
     expect(await screen.findByRole('textbox', { name: /message to/i })).toBeTruthy();
-    expect(screen.getByText('Conversation history could not be loaded.')).toBeTruthy();
+    expect(screen.getByText(/Conversation history could not be loaded: fixture/)).toBeTruthy();
     expect(screen.queryByText(linkedSession)).toBeNull();
     expect(screen.queryByText(defaultTarget.sessionKey)).toBeNull();
     const request = new URL(String(fetchSpy.mock.calls[0][0]));

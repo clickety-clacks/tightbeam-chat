@@ -372,14 +372,15 @@ describe('conversation reading position', () => {
       fireEvent(document, new Event('visibilitychange'));
       offline = true;
       await act(async () => { await runtime.rebuild(); });
-      expect(runtime.getSnapshot().status).toBe('error');
+      expect(runtime.getSnapshot().status).toBe('ready');
+      expect(screen.getByText('Message 7')).toBeTruthy();
       offline = false;
       records = [...initialRows, message(20)];
       historyGate = new Promise<void>(resolve => { releaseHistory = resolve; });
       visibility = 'visible';
       await act(async () => { fireEvent(document, new Event('visibilitychange')); });
       expect(connect).toHaveBeenCalledTimes(2);
-      expect(runtime.getSnapshot().status).toBe('error');
+      expect(runtime.getSnapshot().status).toBe('ready');
       expect(screen.queryByText('Message 20')).toBeNull();
       const reconnect = runtime.rebuild();
       await waitFor(() => expect(connect).toHaveBeenCalledTimes(3));

@@ -20,44 +20,47 @@ const target = {
 };
 
 describe('runtime-configured browser entry', () => {
-  it('loads target configuration without exposing identity when the selected session endpoint fails', async () => {
+  it('keeps the conversation and composer available when history endpoints fail', async () => {
     const fetchMock = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(jsonResponse(target))
+      .mockResolvedValueOnce(jsonResponse({}, false))
       .mockResolvedValueOnce(jsonResponse({}, false));
     vi.stubGlobal('fetch', fetchMock);
     vi.stubGlobal('WebSocket', vi.fn());
 
     render(<RuntimeEntry />);
 
-    expect((await screen.findByRole('alert')).textContent).toContain('Tightbeam REST request failed with HTTP 500.');
-    expect(screen.queryByRole('heading')).toBeNull();
+    expect(await screen.findByRole('textbox', { name: /message to/i })).toBeTruthy();
+    expect((await screen.findByRole('alert')).textContent).toContain('Conversation history could not be loaded: Tightbeam REST request failed with HTTP 500.');
+    expect(screen.getByRole('log')).toBeTruthy();
     expect(screen.queryByText(target.gateway)).toBeNull();
     expect(screen.queryByText(target.sessionKey)).toBeNull();
-    expect(screen.queryByRole('button', { name: /sign in|pair/i })).toBeNull();
+    expect((screen.getByRole('textbox', { name: /message to/i }) as HTMLTextAreaElement).disabled).toBe(false);
     expect(fetchMock.mock.calls[0][0]).toBe('/chat-config.json');
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
     const request = new URL(String(fetchMock.mock.calls[1][0]));
     expect(request.pathname).toBe(`/__chat/api/sessions/${encodeURIComponent(target.sessionKey)}`);
     expect(request.searchParams.get('gateway')).toBe(target.gateway);
   });
 
-  it('routes a different-Gateway link exactly and offers recovery when no mapping exists', async () => {
+  it('keeps Chat available and reports a local routing error when a linked target has no mapping', async () => {
     window.history.replaceState({}, '', '/?gateway=https%3A%2F%2Fother.example&session=agent%3Aother%2Fchat');
     const fetchMock = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(jsonResponse(target))
+      .mockResolvedValueOnce(jsonResponse({ error: { code: 'chat_gateway_unavailable' } }, false, 503))
       .mockResolvedValueOnce(jsonResponse({ error: { code: 'chat_gateway_unavailable' } }, false, 503));
     vi.stubGlobal('fetch', fetchMock);
 
     render(<RuntimeEntry />);
 
-    const link = await screen.findByRole('link', { name: 'Open the configured conversation' });
-    expect(link.getAttribute('href')).toBe('/');
+    expect(await screen.findByRole('textbox', { name: /message to/i })).toBeTruthy();
     expect(screen.getByRole('alert').textContent).toContain('No Gateway access is provisioned for the selected conversation.');
+    expect(screen.getByRole('log')).toBeTruthy();
     expect(screen.queryByText('https://other.example')).toBeNull();
     expect(screen.queryByText('agent:other/chat')).toBeNull();
     expect(screen.queryByText(target.gateway)).toBeNull();
     expect(screen.queryByRole('button', { name: /sign in|pair/i })).toBeNull();
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(fetchMock.mock.calls[0][0]).toBe('/chat-config.json');
     const request = new URL(String(fetchMock.mock.calls[1][0]));
     expect(request.searchParams.get('gateway')).toBe('https://other.example');
@@ -68,13 +71,16 @@ describe('runtime-configured browser entry', () => {
     window.history.replaceState({}, '', `/?gateway=${encodeURIComponent(target.gateway)}&session=${encodeURIComponent(linkedSession)}`);
     const fetchMock = vi.fn<typeof fetch>()
       .mockResolvedValueOnce(jsonResponse(target))
+      .mockResolvedValueOnce(jsonResponse({}, false))
       .mockResolvedValueOnce(jsonResponse({}, false));
     vi.stubGlobal('fetch', fetchMock);
     vi.stubGlobal('WebSocket', vi.fn());
 
     render(<RuntimeEntry />);
 
-    expect((await screen.findByRole('alert')).textContent).toContain('Tightbeam REST request failed with HTTP 500.');
+    expect(await screen.findByRole('textbox', { name: /message to/i })).toBeTruthy();
+    expect((await screen.findByRole('alert')).textContent).toContain('Conversation history could not be loaded: Tightbeam REST request failed with HTTP 500.');
+    expect(screen.getByRole('log')).toBeTruthy();
     expect(screen.queryByText(linkedSession)).toBeNull();
     expect(screen.queryByText(target.sessionKey)).toBeNull();
     expect(fetchMock.mock.calls[0][0]).toBe('/chat-config.json');

@@ -704,7 +704,10 @@ class SessionRuntime implements ChatRuntime {
         ? { ...send, status: 'accepted' as const, reconciled: true, reason: undefined }
         : send);
       this.pendingReconciledIds.clear();
-      const bufferedSession = this.connection ? this.bufferedSession : undefined;
+      // The session notice may have arrived through the connection while the
+      // snapshot was being read. TypeScript cannot see mutations performed by
+      // apply(), so retain the declared runtime-state type at this boundary.
+      const bufferedSession = this.connection ? this.bufferedSession as SessionRecord | undefined : undefined;
       const currentSession = session
         ? bufferedSession && bufferedSession.rowVersion > session.rowVersion ? bufferedSession : session
         : sessionNotFound ? undefined : this.state.session;
@@ -901,7 +904,7 @@ class SessionRuntime implements ChatRuntime {
         !this.profile.capabilities.humanSendDedupe) return;
     // Rebuild/query first. Absence from a bounded tail does not mean rejection.
     await this.rebuild();
-    if (this.disposed || !this.checkIdentity() || this.state.status === 'unauthorized') return;
+    if (this.disposed || !this.checkIdentity() || (this.state.status as RuntimeState['status']) === 'unauthorized') return;
     const current = this.state.sends.find((item) => item.clientMessageId === clientMessageId);
     if (!current || current.reconciled || !['failed', 'uncertain'].includes(current.status)) return;
     this.updateSend(clientMessageId, (item) => ({ ...item, status: 'pending', reason: undefined }));
