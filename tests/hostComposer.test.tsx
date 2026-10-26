@@ -324,9 +324,11 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     const transport = new HostComposerTransport();
     transport.nextSend = async (submission) => submission.content === 'refuse'
       ? { outcome: 'refused', reason: 'client_message_id_conflict' }
-      : { outcome: 'uncertain', reason: 'ack timed out' };
+      : submission.content === 'uncertain'
+        ? { outcome: 'uncertain', reason: 'ack timed out' }
+        : { outcome: 'accepted' };
     installDeclaration(events);
-    openChat(transport, 'conversation-a');
+    const { runtimes } = openChat(transport, 'conversation-a');
     const ready = await waitForReady(events, 'conversation-a');
     const send = (id: string, content: string) => act(() => commandEntry()({ type: 'send',
       lifetimeId: ready.lifetimeId, sessionKey: ready.sessionKey, correlationId: id, content }));
@@ -349,6 +351,20 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     expect(screen.queryByRole('button', { name: 'Retry message' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Restore text to the composer' })).toBeNull();
     expect(transport.submissions).toHaveLength(2);
+
+    const blockedCorrelation = 'c_323e4567-e89b-42d3-a456-426614174000';
+    send(blockedCorrelation, 'host is unavailable');
+    expect(events.at(-1)).toMatchObject({ event: 'rejected', reason: 'not-ready' });
+    expect(transport.submissions).toHaveLength(2);
+
+    await act(async () => { await runtimes[0].rebuild({ restart: true }); });
+    await waitFor(() => expect(events.filter((event) => event.event === 'ready' &&
+      event.lifetimeId === ready.lifetimeId)).toHaveLength(2));
+    const recoveredCorrelation = 'c_423e4567-e89b-42d3-a456-426614174000';
+    send(recoveredCorrelation, 'sending works again');
+    await waitFor(() => expect(events.some((event) => event.event === 'accepted' &&
+      event.correlationId === recoveredCorrelation)).toBe(true));
+    expect(transport.submissions).toHaveLength(3);
   });
 
   it('allows same-correlation user retry after uncertainty and reconciles before another post', async () => {
