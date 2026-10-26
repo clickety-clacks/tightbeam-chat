@@ -28,7 +28,7 @@ export function browserHost(target: ChatTarget): Public019Host {
       let ready = false;
       let authenticated = false;
       let frameListener: ((frame: unknown) => void) | undefined;
-      let closeListener: (() => void) | undefined;
+      let closeListener: ((event?: { code?: number }) => void) | undefined;
       let connectionTimer: ReturnType<typeof setTimeout> | undefined = setTimeout(
         () => fail(new Error('Chat connection timed out.')), 15000);
       const clearConnectionTimer = () => {
@@ -95,9 +95,9 @@ export function browserHost(target: ChatTarget): Public019Host {
         }
       };
       socket.onerror = () => { if (!ready) fail(new Error('Could not connect to the Chat service.')); };
-      socket.onclose = () => {
+      socket.onclose = (event) => {
         cleanup();
-        if (ready) closeListener?.();
+        if (ready) closeListener?.({ code: event.code });
         else reject(new Error('Chat service closed before connection readiness.'));
       };
       if (signal.aborted) abort();

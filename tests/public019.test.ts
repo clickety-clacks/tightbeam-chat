@@ -23,19 +23,19 @@ class Channel implements Public019Channel {
   autoReady = false;
   get listening() { return this.frame !== undefined; }
   private frame?: (value: unknown) => void;
-  private disconnected?: () => void;
+  private disconnected?: (event?: { code?: number }) => void;
   send(frame: Readonly<Record<string, unknown>>) {
     this.sent.push(frame);
     if (this.autoReady) queueMicrotask(() => this.emit({ type: 'subscription_ready', subscriptionId: frame.subscriptionId }));
   }
-  listen(onFrame: (frame: unknown) => void, onClose: () => void) {
+  listen(onFrame: (frame: unknown) => void, onClose: (event?: { code?: number }) => void) {
     this.frame = onFrame;
     this.disconnected = onClose;
     return () => { this.frame = undefined; this.disconnected = undefined; };
   }
   close() { this.closed = true; }
   emit(value: unknown) { this.frame?.(value); }
-  disconnect() { this.disconnected?.(); }
+  disconnect(event?: { code?: number }) { this.disconnected?.(event); }
 }
 
 function setup(heartbeatTimeoutMs?: number, observedVersion = version, historyItems: unknown[] = [item],
@@ -280,6 +280,47 @@ describe('Gateway wire mapping and behavior checks', () => {
     expect(candidate.paths.some((path) => /^https:\/\/host\.example\/api\/turns\//.test(path))).toBe(false);
     expect(runtime.getSnapshot().status).toBe('ready');
     expect(runtime.getSnapshot().records.map((record) => record.id)).toEqual(['human-message']);
+    runtime.dispose();
+  });
+
+  it('clears a turn that ended while the live feed was disconnected', async () => {
+    const running = { seq: 12, rowVersion: 1, sessionKey, status: 'running', messageId: 'human-message',
+      origin: 'user:person-1', triggerSource: 'mike' };
+    const recentTurns: unknown[] = [running];
+    const human = { ...item, id: 'human-message', seq: 9, role: 'user', sender: 'user:person-1',
+      messageType: 'chat', clientMessageId: 'client-human', deviceId: 'device-1', turnSeq: 12,
+      content: 'Can you help?' };
+    const candidate = setup(undefined, version, [human], recentTurns);
+    const runtime = createTightbeamAdapter(candidate.transport, candidate.profile).open(sessionKey);
+    await vi.waitFor(() => expect(runtime.getSnapshot().activeTurn?.turn).toMatchObject({ seq: 12, status: 'running' }));
+    await vi.waitFor(() => expect(candidate.changes.sent).toHaveLength(1));
+    candidate.changes.emit({ type: 'subscription_ready', subscriptionId: `chat:${sessionKey}` });
+    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+
+    candidate.changes.disconnect({ code: 4008 });
+    await vi.waitFor(() => expect(runtime.getSnapshot().liveError).toBe('Firehose disconnected (close code 4008).'));
+    expect(runtime.getSnapshot().activeTurn?.turn.status).toBe('running');
+
+    recentTurns[0] = { ...running, status: 'completed', rowVersion: 2 };
+    await vi.waitFor(() => expect(candidate.changes.sent).toHaveLength(2));
+    candidate.changes.emit({ type: 'subscription_ready', subscriptionId: `chat:${sessionKey}` });
+    await vi.waitFor(() => expect(runtime.getSnapshot().liveError).toBeUndefined());
+    await vi.waitFor(() => expect(runtime.getSnapshot().activeTurn).toBeUndefined());
+    expect(runtime.getSnapshot().status).toBe('ready');
+    expect(runtime.getSnapshot().records.map((record) => record.id)).toEqual(['human-message']);
+    runtime.dispose();
+  });
+
+  it('reports the peer close code for a ready live-update socket', async () => {
+    const candidate = setup();
+    const runtime = createTightbeamAdapter(candidate.transport, candidate.profile).open(sessionKey);
+    await vi.waitFor(() => expect(candidate.changes.sent).toHaveLength(1));
+    candidate.changes.emit({ type: 'subscription_ready', subscriptionId: `chat:${sessionKey}` });
+    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+
+    candidate.changes.disconnect({ code: 4008 });
+    await vi.waitFor(() => expect(runtime.getSnapshot().liveError).toBe('Firehose disconnected (close code 4008).'));
+    expect(runtime.getSnapshot().status).toBe('ready');
     runtime.dispose();
   });
 

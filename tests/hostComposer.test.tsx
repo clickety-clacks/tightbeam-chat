@@ -592,7 +592,6 @@ describe('versioned host composer seam on the real adapter and surface', () => {
 
     act(() => transport.callbacks.get('conversation-a')?.onDoubt('live connection closed'));
     expect(screen.getByRole('status', { name: 'Active turn: Replying to you' })).toBe(caption);
-    await act(async () => { await runtime.rebuild({ restart: true }); });
     await waitFor(() => expect(transport.changeOpenCount).toBeGreaterThan(1));
     await waitFor(() => expect(runtime.getSnapshot().liveError).toBeUndefined());
     expect(screen.getByRole('status', { name: 'Active turn: Replying to you' })).toBeTruthy();
@@ -601,6 +600,34 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     await waitFor(() => expect(screen.queryByRole('status', { name: 'Active turn: Replying to you' })).toBeNull());
     expect(events.filter((event) => event.event === 'ready')).toHaveLength(1);
     runtime.dispose();
+  });
+
+  it('clears a completed turn after reconnect and restores a turn when reopening mid-run', async () => {
+    const transport = new HostComposerTransport();
+    const active: CanonicalTurn = { seq: 7, sessionKey: 'conversation-a', status: 'running',
+      messageId: 'human-trigger', origin: 'user:person', triggerSource: 'mike', raw: { rowVersion: 1 } };
+    const human: CanonicalMessage = { kind: 'message', id: 'human-trigger', sessionKey: 'conversation-a',
+      seq: 1, rowVersion: 1, role: 'user', sender: 'user:person', content: 'Can you help?', turnSeq: 7, raw: {} };
+    transport.recentTurns = [active];
+    transport.records.set('conversation-a', [human]);
+
+    const firstView = openChat(transport, 'conversation-a');
+    await screen.findByRole('status', { name: 'Active turn: Replying to you' });
+    const runtime = firstView.runtimes[0];
+    act(() => transport.callbacks.get('conversation-a')?.onDoubt('live connection closed'));
+    expect(screen.getByRole('status', { name: 'Active turn: Replying to you' })).toBeTruthy();
+
+    transport.recentTurns = [{ ...active, status: 'completed', raw: { rowVersion: 2 } }];
+    await waitFor(() => expect(transport.changeOpenCount).toBeGreaterThan(1));
+    await waitFor(() => expect(screen.queryByRole('status', { name: 'Active turn: Replying to you' })).toBeNull());
+    expect(runtime.getSnapshot().status).toBe('ready');
+    firstView.unmount();
+
+    transport.recentTurns = [{ ...active, seq: 8, messageId: 'human-trigger-next', raw: { rowVersion: 1 } }];
+    const secondView = openChat(transport, 'conversation-a');
+    await screen.findByRole('status', { name: 'Active turn: Replying to you' });
+    expect(secondView.runtimes[0].getSnapshot().activeTurn?.turn.seq).toBe(8);
+    secondView.unmount();
   });
 
   it('ends and re-handshakes its page lifetime after a cached page hide/show', async () => {

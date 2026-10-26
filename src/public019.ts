@@ -38,7 +38,7 @@ const gatewayIdentity = 'tightbeam-gateway';
 /** A fresh, host-authenticated socket. The host owns credentials and the auth handshake. */
 export interface Public019Channel {
   send(frame: Readonly<Record<string, unknown>>): void;
-  listen(onFrame: (frame: unknown) => void, onClose: () => void): () => void;
+  listen(onFrame: (frame: unknown) => void, onClose: (event?: { code?: number }) => void): () => void;
   close(): void;
 }
 
@@ -398,10 +398,15 @@ export function createPublic019Transport(config: Public019Config): { transport: 
           if (!ready) { close(); rejectReady(error); }
           else doubt(error instanceof Error ? error.message : String(error));
         }
-      }, () => {
+      }, (event) => {
         if (closed) return;
         close();
-        if (ready) callbacks.onDoubt('Firehose disconnected.');
+        if (ready) {
+          const reason = Number.isSafeInteger(event?.code)
+            ? `Firehose disconnected (close code ${event?.code}).`
+            : 'Firehose disconnected.';
+          callbacks.onDoubt(reason);
+        }
         else rejectReady(new Error('Firehose closed before subscription readiness.'));
       });
       if (signal.aborted) onAbort();
