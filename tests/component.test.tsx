@@ -836,12 +836,12 @@ describe('conversation surface', () => {
       fireEvent.wheel(log, { deltaY: -1 });
       layout.setScrollTop(300);
       fireEvent.scroll(log);
-      const anchorBefore = layout.offset(anchor);
       act(() => runtime.update({ hasOlder: true }));
       expect(runtime.loadOlderCalls).toBe(0);
 
       // At 265 px from the top, the old 80 px trigger would still be idle.
       layout.setScrollTop(265);
+      const anchorBefore = layout.offset(anchor);
       fireEvent.scroll(log);
       await waitFor(() => expect(runtime.loadOlderCalls).toBe(1));
       await waitFor(() => expect(runtime.getSnapshot().records).toContain(older));
@@ -909,13 +909,14 @@ describe('conversation surface', () => {
       expect(runtime.loadOlderCalls).toBe(1);
 
       layout.setScrollTop(afterFailure + 2);
+      const anchorBeforeRetry = layout.offset(anchor);
       fireEvent.scroll(log);
       await waitFor(() => expect(runtime.loadOlderCalls).toBe(2));
       await waitFor(() => expect(runtime.getSnapshot().records).toContain(older));
 
       expect(within(log).getByText('Older message after retry')).toBeTruthy();
       expect(runtime.getSnapshot().historyError).toBeUndefined();
-      expect(layout.offset(anchor)).toBe(anchorBeforeFailure);
+      expect(layout.offset(anchor)).toBe(anchorBeforeRetry);
     } finally {
       finishFailure();
       layout.restore();
