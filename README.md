@@ -4,7 +4,7 @@ An original, embeddable TypeScript/React conversation and Markdown composer for 
 
 ## Current status
 
-The browser example connects the component to one selected Tightbeam Gateway and session. Compatibility follows Gateway API protocol 1 and the response behavior Chat uses; it does not depend on an exact Gateway release, build, or source stamp. It loads retained history, follows source-backed turn provenance, renders the human exchange with safe Markdown, subscribes to live changes, and sends human messages. See the [wire mapping and coverage limits](docs/public-019-profile.md). Automated fixtures and isolated released-Gateway checks remain separate from deployed-host acceptance.
+The browser example connects the component to one selected Tightbeam Gateway and session. Compatibility follows the responses and connections Chat actually uses; it does not depend on a release, build, source, or protocol identifier. It loads retained history, follows source-backed turn provenance, renders the human exchange with safe Markdown, subscribes to live changes, and sends human messages. See the [wire mapping and coverage limits](docs/public-019-profile.md). Automated fixtures and isolated released-Gateway checks remain separate from deployed-host acceptance.
 
 The repository has a standard [MIT LICENSE](LICENSE) with Copyright (c) 2026 Mike Manzano. Dependency and distribution notices are inventoried separately in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
@@ -45,8 +45,8 @@ npm run build
 import { TightbeamChat, createTightbeamAdapter } from '@clickety-clacks/tightbeam-chat';
 import '@clickety-clacks/tightbeam-chat/style.css';
 
-// The host owns Gateway authentication and supplies the API protocol profile.
-// The browser example uses the Gateway API protocol 1 wire mapping.
+// The host owns Gateway authentication and supplies the backend profile.
+// The browser example validates responses and connections as Chat uses them.
 const adapter = createTightbeamAdapter(transport, profile);
 
 <TightbeamChat
@@ -111,7 +111,7 @@ The [minimal host-composer page](examples/host-composer.html) demonstrates the h
 
 ## Conversation and send behavior
 
-The runtime waits for target inspection and selected-session change subscription readiness before reading a candidate session and bounded newest tail. It publishes a candidate only if the host transport proves the elected target's snapshot/notice coverage rule. Newer row versions win; canonical identity prevents duplicate rows. The viewport opens at the newest end, and reaching the oldest loaded edge passes the opaque `oldestCursor` unchanged as `before`. The reading anchor is preserved when earlier rows are prepended, including pages with no displayable human exchange. Agent context resets, including changes to `clearedThroughSeq`, never filter retained human history. Authoritative turn/trigger data determines which human prompts and selected-agent replies appear; other agents and substrate notices stay hidden without being removed from canonical state. Replies with incomplete provenance remain visible until loaded history proves they came from nonhuman activity.
+The runtime reads the selected session through the endpoint Chat uses, then waits for selected-session change subscription readiness before reading the bounded newest tail. It publishes a candidate only if the host transport proves the elected target's snapshot/notice coverage rule. Newer row versions win; canonical identity prevents duplicate rows. The viewport opens at the newest end, and reaching the oldest loaded edge passes the opaque `oldestCursor` unchanged as `before`. The reading anchor is preserved when earlier rows are prepended, including pages with no displayable human exchange. Agent context resets, including changes to `clearedThroughSeq`, never filter retained human history. Authoritative turn/trigger data determines which human prompts and selected-agent replies appear; other agents and substrate notices stay hidden without being removed from canonical state. Replies with incomplete provenance remain visible until loaded history proves they came from nonhuman activity.
 
 On disconnect or change-stream doubt, the runtime marks the view stale and rebuilds from a fresh tail and fresh older pages. Wake and unknown event kinds still consume stream sequence but do not force a rebuild or reject snapshot coverage. Late work from a disposed session or changed principal is discarded. It does not use Firehose as token streaming or replay, and it does not accept incoming human `/ws` replay as transcript authority.
 

@@ -21,7 +21,7 @@ import {
 
 // Snapshot coverage is the Chat client's subscribe-before-REST overlap, not a
 // Gateway snapshot watermark.
-const protocol1Capabilities: TargetCapabilities = Object.freeze({
+const gatewayCapabilities: TargetCapabilities = Object.freeze({
   newestTail: true,
   stableOlderCursor: true,
   retainedHistoryAcrossResets: true,
@@ -32,13 +32,7 @@ const protocol1Capabilities: TargetCapabilities = Object.freeze({
   authoritativeTurnProvenance: true,
 });
 
-const unsupportedCapabilities: TargetCapabilities = Object.freeze({
-  newestTail: false, stableOlderCursor: false, retainedHistoryAcrossResets: false,
-  orderedTransitions: false, snapshotCoverage: false, versionedNotices: false,
-  humanSendDedupe: false, authoritativeTurnProvenance: false,
-});
-
-const gatewayProtocolIdentity = 'tightbeam-api/1';
+const gatewayIdentity = 'tightbeam-gateway';
 
 /** A fresh, host-authenticated socket. The host owns credentials and the auth handshake. */
 export interface Public019Channel {
@@ -60,8 +54,6 @@ export interface Public019Host {
 export interface Public019Config {
   /** Approved host route; no credentials, query, or fragment. */
   baseUrl: string;
-  /** Selected Gateway identity route. Native callers default to /version; private Chat bridges use /gateway/version. */
-  gatewayVersionPath?: '/version' | '/gateway/version';
   /** Non-secret exact Gateway origin selected by the host for status presentation. */
   targetGateway?: string;
   host: Public019Host;
@@ -267,24 +259,36 @@ export function createPublic019Transport(config: Public019Config): { transport: 
       !Number.isSafeInteger(heartbeatTimeoutMs) || heartbeatTimeoutMs < 1) {
     throw new Error('Expected positive response and heartbeat timeouts.');
   }
-  const gatewayVersionPath = config.gatewayVersionPath ?? '/version';
   const profile: TargetProfile = Object.freeze({
-    identity: gatewayProtocolIdentity,
-    label: 'Tightbeam Gateway API protocol 1',
-    capabilities: protocol1Capabilities,
+    identity: gatewayIdentity,
+    label: 'Tightbeam Gateway',
+    capabilities: gatewayCapabilities,
   });
 
   async function get(path: string, signal: AbortSignal): Promise<Record<string, unknown>> {
     const response = await config.host.fetch(`${baseUrl}${path}`, { method: 'GET', signal, cache: 'no-store' });
     if (response.status === 401 || response.status === 403) throw new AuthorizationError('Human REST principal is not authorized.');
     if (response.status === 400 && path.includes('/messages?')) throw new InvalidCursorError('History cursor was rejected.');
-    if (!response.ok) throw new Error(`Tightbeam REST request failed with HTTP ${response.status}.`);
+    if (!response.ok) {
+      let code: string | undefined;
+      try {
+        const body = record(await response.json());
+        if (body.error && typeof body.error === 'object' && !Array.isArray(body.error) &&
+            typeof (body.error as Record<string, unknown>).code === 'string') {
+          code = (body.error as Record<string, unknown>).code as string;
+        }
+      } catch {
+        // Keep the HTTP status when the service does not return a JSON error.
+      }
+      if (code === 'chat_gateway_unavailable') {
+        throw new Error('No Gateway access is provisioned for the selected conversation. The selected target was not changed.');
+      }
+      throw new Error(`Tightbeam REST request failed with HTTP ${response.status}${code ? ` (${code})` : ''}.`);
+    }
     return record(await response.json());
   }
 
   const activeSessions = new Set<string>();
-  let targetObservation: TargetObservation | undefined;
-  let targetObservationRequest: Promise<TargetObservation> | undefined;
   async function readPage(sessionKey: string, query: string, signal: AbortSignal): Promise<ConversationPage> {
     const body = await get(`/api/sessions/${encodeURIComponent(sessionKey)}/messages?limit=50&${query}`, signal);
     if (body.schemaVersion !== 1 || body.resource !== 'transcript messages' || !Array.isArray(body.items)) {
@@ -390,28 +394,11 @@ export function createPublic019Transport(config: Public019Config): { transport: 
   const transport: ChatTransport = {
     currentIdentity: () => config.host.currentIdentity(),
     targetGateway: config.targetGateway,
-    async inspectTarget(signal): Promise<TargetObservation> {
-      if (targetObservation) return targetObservation;
-      // The selected Gateway identity is stable for this transport/page
-      // lifetime. Reconnects still rebuild session history, but do not repeat
-      // the unrelated version lookup each time continuity is restored.
-      const pending = targetObservationRequest ??= (async () => {
-        // Native embeddings use /version; the private Chat server exposes it
-        // through /gateway/version. The Chat bundle manifest is not the target.
-        const version = await get(gatewayVersionPath, signal);
-        // Chat depends on Gateway API protocol 1. Firehose subscription
-        // negotiation remains an independent protocol-2 exchange.
-        return { identity: gatewayProtocolIdentity,
-          capabilities: version.protocolVersion === 1 ? protocol1Capabilities : unsupportedCapabilities };
-      })();
-      try {
-        const observed = await pending;
-        targetObservation = observed;
-        return observed;
-      } catch (error) {
-        if (targetObservationRequest === pending) targetObservationRequest = undefined;
-        throw error;
-      }
+    async inspectTarget(_signal): Promise<TargetObservation> {
+      // This is the transport's declared backend profile, not a probe of
+      // release metadata. Actual REST and WebSocket operations report their
+      // own errors when Chat uses them.
+      return { identity: profile.identity, capabilities: profile.capabilities };
     },
     async readSession(sessionKey, signal) {
       const body = await get(`/api/sessions/${encodeURIComponent(sessionKey)}`, signal);

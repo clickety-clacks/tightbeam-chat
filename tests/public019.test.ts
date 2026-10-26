@@ -70,7 +70,7 @@ function setup(heartbeatTimeoutMs?: number, observedVersion = version, historyIt
   return { transport, profile, paths, changes, human, host };
 }
 
-describe('Gateway protocol 1 wire mapping and behavior checks', () => {
+describe('Gateway wire mapping and behavior checks', () => {
   it('consumes selected-session turn lifecycle payloads without turn queries or history refreshes', async () => {
     const humanRow = { ...item, sender: 'user:person-1', turnSeq: 12 };
     const candidate = setup(undefined, version, [humanRow]);
@@ -110,13 +110,14 @@ describe('Gateway protocol 1 wire mapping and behavior checks', () => {
     runtime.dispose();
   });
 
-  it('accepts the current release and routine patches that keep Gateway API protocol 1', async () => {
+  it('declares the same backend profile for the current release and routine patches', async () => {
     const current = setup(undefined, version);
-    expect(current.profile.identity).toBe('tightbeam-api/1');
+    expect(current.profile.identity).toBe('tightbeam-gateway');
     expect(Object.values(current.profile.capabilities).every(Boolean)).toBe(true);
     expect(await current.transport.inspectTarget(new AbortController().signal)).toEqual({
-      identity: 'tightbeam-api/1', capabilities: current.profile.capabilities,
+      identity: 'tightbeam-gateway', capabilities: current.profile.capabilities,
     });
+    expect(current.paths).toEqual([]);
 
     const runtime = createTightbeamAdapter(current.transport, current.profile).open(sessionKey);
     await vi.waitFor(() => expect(current.changes.sent).toHaveLength(1));
@@ -127,19 +128,20 @@ describe('Gateway protocol 1 wire mapping and behavior checks', () => {
 
     const later = setup(undefined, laterPatch);
     expect(await later.transport.inspectTarget(new AbortController().signal)).toEqual({
-      identity: 'tightbeam-api/1', capabilities: later.profile.capabilities,
+      identity: 'tightbeam-gateway', capabilities: later.profile.capabilities,
     });
+    expect(later.paths).toEqual([]);
     expect(later.profile.capabilities.authoritativeTurnProvenance).toBe(true);
   });
 
-  it('reads ordered transitions and selected-session turns on protocol 1 while using Firehose protocol 2', async () => {
+  it('reads ordered transitions while using a protocol-2 Firehose subscription', async () => {
     const earlierTransition = { ...item, id: 'marker_before', seq: 8, rowVersion: 8,
       messageType: 'marker', marker: { kind: 'session-restart', from: 'old', to: 'new' } };
     const laterTransition = { ...item, id: 'marker_after', seq: 10, rowVersion: 10,
       messageType: 'marker', marker: { kind: 'harness-switch', from: 'old-harness', to: 'new-harness' } };
     const candidate = setup(undefined, version,
       [laterTransition, item, earlierTransition]);
-    expect(candidate.profile.identity).toBe('tightbeam-api/1');
+    expect(candidate.profile.identity).toBe('tightbeam-gateway');
     expect(candidate.profile.capabilities).toEqual({
       newestTail: true, stableOlderCursor: true, retainedHistoryAcrossResets: true,
       orderedTransitions: true, snapshotCoverage: true, versionedNotices: true,
@@ -154,14 +156,13 @@ describe('Gateway protocol 1 wire mapping and behavior checks', () => {
       type: 'subscribe', protocolVersion: 2, subscriptionId: `chat:${sessionKey}`,
       filters: { sessionKey, classes: ['message.created', 'session.', 'turn.started', 'turn.ended'] },
     }]));
-    expect(candidate.paths).toEqual(['https://host.example/version']);
+    expect(candidate.paths).toEqual([]);
     candidate.changes.emit({ type: 'subscription_ready', subscriptionId: `chat:${sessionKey}` });
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
     await vi.waitFor(() => expect(candidate.paths.some(path => path.includes('/tool-calls?'))).toBe(true));
     await vi.waitFor(() => expect(runtime.getSnapshot().toolCallsLoading).toBe(false));
     expect(runtime.getSnapshot().toolCallsEnabled).toBe(true);
     expect(candidate.paths).toEqual([
-      'https://host.example/version',
       'https://host.example/api/sessions/s-public',
       'https://host.example/api/sessions/s-public/messages?limit=50&tail=true',
       'https://host.example/api/sessions/s-public/tool-calls?limit=50&afterMessageSeqFromInclusive=8',
@@ -175,7 +176,7 @@ describe('Gateway protocol 1 wire mapping and behavior checks', () => {
     runtime.dispose();
   });
 
-  it('checks the API protocol once per transport while recovery rereads canonical session history', async () => {
+  it('skips release metadata during startup and recovery', async () => {
     const candidate = setup(undefined, version);
     const runtime = createTightbeamAdapter(candidate.transport, candidate.profile).open(sessionKey);
     await vi.waitFor(() => expect(candidate.changes.sent).toHaveLength(1));
@@ -183,28 +184,28 @@ describe('Gateway protocol 1 wire mapping and behavior checks', () => {
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
     await vi.waitFor(() => expect(candidate.paths.filter(path => path.includes('/tool-calls?'))).toHaveLength(1));
     await vi.waitFor(() => expect(runtime.getSnapshot().toolCallsLoading).toBe(false));
-    expect(candidate.paths.filter((path) => path.endsWith('/version'))).toHaveLength(1);
+    expect(candidate.paths.some((path) => path.endsWith('/version'))).toBe(false);
     expect(candidate.paths.filter((path) => path.includes('/messages?'))).toHaveLength(1);
 
     const recovery = runtime.rebuild({ restart: true });
     await vi.waitFor(() => expect(candidate.changes.sent).toHaveLength(2));
-    expect(candidate.paths.filter((path) => path.endsWith('/version'))).toHaveLength(1);
+    expect(candidate.paths.some((path) => path.endsWith('/version'))).toBe(false);
     candidate.changes.emit({ type: 'subscription_ready', subscriptionId: `chat:${sessionKey}` });
     await recovery;
     await vi.waitFor(() => expect(candidate.paths.filter(path => path.includes('/tool-calls?'))).toHaveLength(2));
     await vi.waitFor(() => expect(runtime.getSnapshot().toolCallsLoading).toBe(false));
 
     expect(runtime.getSnapshot().status).toBe('ready');
-    expect(candidate.paths.filter((path) => path.endsWith('/version'))).toHaveLength(1);
+    expect(candidate.paths.some((path) => path.endsWith('/version'))).toBe(false);
     expect(candidate.paths.filter((path) => path.endsWith('/api/sessions/s-public'))).toHaveLength(2);
     expect(candidate.paths.filter((path) => path.includes('/messages?'))).toHaveLength(2);
     expect(candidate.paths.filter((path) => path.includes('/tool-calls?'))).toHaveLength(2);
     runtime.dispose();
   });
 
-  it('keeps Firehose protocol 2 separate from Gateway API protocol 1', async () => {
+  it('keeps the protocol-2 Firehose exchange separate from REST behavior', async () => {
     const candidate = setup(undefined, version);
-    expect(candidate.profile.identity).toBe('tightbeam-api/1');
+    expect(candidate.profile.identity).toBe('tightbeam-gateway');
     expect(candidate.profile.capabilities).toEqual({
       newestTail: true, stableOlderCursor: true, retainedHistoryAcrossResets: true,
       orderedTransitions: true, snapshotCoverage: true, versionedNotices: true,
@@ -224,7 +225,6 @@ describe('Gateway protocol 1 wire mapping and behavior checks', () => {
     await vi.waitFor(() => expect(candidate.paths.some(path => path.includes('/tool-calls?'))).toBe(true));
     await vi.waitFor(() => expect(runtime.getSnapshot().toolCallsLoading).toBe(false));
     expect(candidate.paths).toEqual([
-      'https://host.example/version',
       'https://host.example/api/sessions/s-public',
       'https://host.example/api/sessions/s-public/messages?limit=50&tail=true',
       'https://host.example/api/sessions/s-public/tool-calls?limit=50&afterMessageSeqFromInclusive=9',
@@ -264,7 +264,6 @@ describe('Gateway protocol 1 wire mapping and behavior checks', () => {
     expect(runtime.getSnapshot().provenance).toEqual([]);
     expect(runtime.getSnapshot().activeTurn).toBeUndefined();
     expect(candidate.paths).toEqual([
-      'https://host.example/version',
       'https://host.example/api/sessions/s-public',
       'https://host.example/api/sessions/s-public/messages?limit=50&tail=true',
       'https://host.example/api/sessions/s-public/tool-calls?limit=50&afterMessageSeqFromInclusive=9',
@@ -280,26 +279,21 @@ describe('Gateway protocol 1 wire mapping and behavior checks', () => {
     runtime.dispose();
   });
 
-  it('reports unsupported when the Gateway API protocol is not version 1', async () => {
-    const incompatibleProtocol = { ...version, protocolVersion: 2 };
-    const candidate = setup(undefined, incompatibleProtocol);
-    expect(await candidate.transport.inspectTarget(new AbortController().signal)).toEqual({
-      identity: candidate.profile.identity,
-      capabilities: {
-        newestTail: false, stableOlderCursor: false, retainedHistoryAcrossResets: false,
-        orderedTransitions: false, snapshotCoverage: false, versionedNotices: false,
-        humanSendDedupe: false, authoritativeTurnProvenance: false,
-      },
-    });
-
+  it('does not gate conversation loading on protocol metadata', async () => {
+    const arbitraryProtocol = { ...version, protocolVersion: 42 };
+    const candidate = setup(undefined, arbitraryProtocol);
     const runtime = createTightbeamAdapter(candidate.transport, candidate.profile).open(sessionKey);
-    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('unsupported'));
-    expect(candidate.changes.sent).toHaveLength(0);
+    await vi.waitFor(() => expect(candidate.changes.sent).toHaveLength(1));
+    expect(candidate.paths.some((path) => path.endsWith('/version'))).toBe(false);
+    candidate.changes.emit({ type: 'subscription_ready', subscriptionId: `chat:${sessionKey}` });
+    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
     expect(candidate.human.sent).toHaveLength(0);
+    expect(candidate.paths).toContain('https://host.example/api/sessions/s-public');
+    expect(candidate.paths).toContain('https://host.example/api/sessions/s-public/messages?limit=50&tail=true');
     runtime.dispose();
   });
 
-  it('uses protocol 1 subscribe-before-REST overlap for snapshot coverage, without a watermark claim', async () => {
+  it('uses subscribe-before-REST overlap for snapshot coverage, without a watermark claim', async () => {
     const candidate = setup(undefined, version);
     const signal = new AbortController().signal;
     expect(candidate.profile.capabilities.snapshotCoverage).toBe(true);
@@ -327,12 +321,13 @@ describe('Gateway protocol 1 wire mapping and behavior checks', () => {
     expect(candidate.transport.proveCoverage({ sessionKey, rowVersion: 4, displayName: 'Fixture agent', raw: {} }, page, [])).toBe(false);
   });
 
-  it('does not gate on Gateway release, build, or source identity while requiring protocol 1', async () => {
+  it('does not gate on Gateway release, build, source, or protocol metadata', async () => {
     for (const observed of [
       version,
       laterPatch,
       { ...laterPatch, build: 2476, sha: 'f724fc41' },
       { ...laterPatch, sha: '00000000' },
+      { ...laterPatch, protocolVersion: 42 },
     ]) {
       const supported = setup(undefined, observed);
       const runtime = createTightbeamAdapter(supported.transport, supported.profile).open(sessionKey);
@@ -340,6 +335,7 @@ describe('Gateway protocol 1 wire mapping and behavior checks', () => {
       supported.changes.emit({ type: 'subscription_ready', subscriptionId: 'chat:s-public' });
       await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
       expect(runtime.getSnapshot().records.map((record) => record.id)).toEqual(['m_1']);
+      expect(supported.paths.some((path) => path.endsWith('/version'))).toBe(false);
       runtime.dispose();
     }
   });
@@ -501,12 +497,12 @@ describe('Gateway protocol 1 wire mapping and behavior checks', () => {
     runtime.dispose();
   });
 
-  it('pins the exact observed build, retains raw metadata, and reads session detail', async () => {
+  it('uses a stable backend profile, retains raw metadata, and reads session detail', async () => {
     const { transport, profile, paths } = setup();
     const signal = new AbortController().signal;
     expect(await transport.inspectTarget(signal)).toEqual({ identity: profile.identity, capabilities: profile.capabilities });
     expect(await transport.readSession(sessionKey, signal)).toMatchObject({ sessionKey, rowVersion: 4, raw: { clearedThroughSeq: 7 } });
-    expect(paths).toEqual(['https://host.example/version', 'https://host.example/api/sessions/s-public']);
+    expect(paths).toEqual(['https://host.example/api/sessions/s-public']);
     expect(decodePublic019Message(item, sessionKey)).toMatchObject({
       id: 'm_1', seq: 9, createdAt: '2026-10-12T00:00:00.000Z',
       clientMessageId: 'c_1', replyToMessageId: 'parent-1', raw: { at: item.at, unknownMetadata: { preserved: true } },

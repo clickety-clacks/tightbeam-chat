@@ -427,11 +427,11 @@ describe('private direct-entry Chat service bridge', () => {
       openAuthenticatedHuman: async () => { throw new Error('No socket needed for this history composition test.'); },
     };
     const { transport, profile } = createPublic019Transport({
-      baseUrl: `${chatOrigin}/__chat`, gatewayVersionPath: '/gateway/version', host,
+      baseUrl: `${chatOrigin}/__chat`, host,
     });
 
     const observed = await transport.inspectTarget(new AbortController().signal);
-    expect(observed.identity).toBe('tightbeam-api/1');
+    expect(observed.identity).toBe('tightbeam-gateway');
     expect(observed.identity).not.toBe('v0.1.2');
     expect(observed.capabilities.newestTail).toBe(true);
     expect(profile.capabilities.newestTail).toBe(true);
@@ -469,7 +469,6 @@ describe('private direct-entry Chat service bridge', () => {
     expect(historyRequests[0].query).toEqual([['asUser', PRINCIPAL], ['limit', '50'], ['tail', 'true']]);
     expect(historyRequests[1].query).toEqual([['asUser', PRINCIPAL], ['limit', '50'], ['before', beforeCursor]]);
     expect(chatRequests.map((request) => request.pathname)).toEqual([
-      '/__chat/gateway/version',
       `/__chat/api/sessions/${encodeURIComponent(LINKED_SESSION)}`,
       `/__chat/api/sessions/${encodeURIComponent(LINKED_SESSION)}/messages`,
       `/__chat/api/sessions/${encodeURIComponent(LINKED_SESSION)}/messages`,

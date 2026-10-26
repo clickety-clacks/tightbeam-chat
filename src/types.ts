@@ -145,7 +145,7 @@ export interface TargetCapabilities {
 }
 
 export interface TargetObservation {
-  /** Full source/build identity, or an explicitly local fixture identity. */
+  /** Stable backend identity, or an explicitly local fixture identity. */
   readonly identity: string;
   readonly capabilities: TargetCapabilities;
 }
