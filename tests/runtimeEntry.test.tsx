@@ -19,6 +19,11 @@ const target = {
   deviceId: 'chat_abc123',
 };
 
+class InertWebSocket {
+  close = vi.fn();
+  send = vi.fn();
+}
+
 describe('runtime-configured browser entry', () => {
   it('keeps the conversation and composer available when history endpoints fail', async () => {
     const fetchMock = vi.fn<typeof fetch>()
@@ -26,7 +31,7 @@ describe('runtime-configured browser entry', () => {
       .mockResolvedValueOnce(jsonResponse({}, false))
       .mockResolvedValueOnce(jsonResponse({}, false));
     vi.stubGlobal('fetch', fetchMock);
-    vi.stubGlobal('WebSocket', vi.fn());
+    vi.stubGlobal('WebSocket', InertWebSocket);
 
     render(<RuntimeEntry />);
 
@@ -74,7 +79,7 @@ describe('runtime-configured browser entry', () => {
       .mockResolvedValueOnce(jsonResponse({}, false))
       .mockResolvedValueOnce(jsonResponse({}, false));
     vi.stubGlobal('fetch', fetchMock);
-    vi.stubGlobal('WebSocket', vi.fn());
+    vi.stubGlobal('WebSocket', InertWebSocket);
 
     render(<RuntimeEntry />);
 
