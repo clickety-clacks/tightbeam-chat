@@ -584,6 +584,7 @@ describe('conversation reading position', () => {
       act(() => visualViewport.resizeTo(height));
       notifyResizeObservers();
 
+      expect(box.clientHeight).toBe(height);
       expect(anchor.getBoundingClientRect().top).toBe(before);
       expect(screen.getByRole('button', { name: 'Scroll to latest messages' })).toBeTruthy();
     }
