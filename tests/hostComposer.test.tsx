@@ -624,6 +624,10 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     firstView.unmount();
 
     transport.recentTurns = [{ ...active, seq: 8, messageId: 'human-trigger-next', raw: { rowVersion: 1 } }];
+    transport.records.set('conversation-a', [...(transport.records.get('conversation-a') ?? []), {
+      kind: 'message', id: 'human-trigger-next', sessionKey: 'conversation-a', seq: 2, rowVersion: 1,
+      role: 'user', sender: 'user:person', content: 'A second question while reopening.', turnSeq: 8, raw: {},
+    }]);
     const secondView = openChat(transport, 'conversation-a');
     await screen.findByRole('status', { name: 'Active turn: Replying to you' });
     expect(secondView.runtimes[0].getSnapshot().activeTurn?.turn.seq).toBe(8);
