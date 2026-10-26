@@ -43,6 +43,8 @@ interface Bubble {
   readonly derived: boolean;
 }
 
+const olderHistoryPrefetchDistance = (viewport: HTMLElement) => Math.max(80, viewport.clientHeight * 1.5);
+
 type TimelineItem =
   | { readonly kind: 'tool'; readonly call: ToolCallRecord }
   | { readonly kind: 'transition'; readonly record: CanonicalTransition }
@@ -839,9 +841,16 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
     void runtime.loadOlder();
   };
 
+  const previousScrollTop = useRef<number | undefined>(undefined);
   useLayoutEffect(() => {
     const box = viewport.current;
-    if (!box || state.status !== 'ready' || !state.hasOlder || state.loadingOlder || state.historyError || box.scrollTop >= 80) return;
+    if (box) previousScrollTop.current = box.scrollTop;
+  }, [state, host]);
+
+  useLayoutEffect(() => {
+    const box = viewport.current;
+    if (!box || state.status !== 'ready' || !state.hasOlder || state.loadingOlder || state.historyError
+      || box.scrollTop < 0 || box.scrollTop >= olderHistoryPrefetchDistance(box)) return;
     const frame = requestAnimationFrame(() => loadOlder());
     return () => cancelAnimationFrame(frame);
   }, [state.status, state.hasOlder, state.loadingOlder, state.historyError, state.records, state.provenance]);
@@ -849,8 +858,13 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
   const handleScroll = () => {
     const box = viewport.current;
     if (!box) return;
+    const previous = previousScrollTop.current;
+    const current = box.scrollTop;
+    previousScrollTop.current = current;
     reading.onScroll();
-    if (box.scrollTop < 80 && state.status === 'ready' && state.hasOlder && !state.loadingOlder) loadOlder();
+    const movedUp = previous !== undefined && current < previous;
+    if (!movedUp || current < 0 || state.status !== 'ready' || !state.hasOlder || state.loadingOlder) return;
+    if (state.historyError || current < olderHistoryPrefetchDistance(box)) loadOlder();
   };
 
   const notice = state.status === 'ready' ? undefined

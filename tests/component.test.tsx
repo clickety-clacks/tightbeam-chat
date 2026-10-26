@@ -811,6 +811,118 @@ describe('conversation surface', () => {
     expect(screen.queryByText('Oldest activity')).toBeNull();
   });
 
+  it('prefetches older history before the reader reaches the top and holds the visible row', async () => {
+    const sessionKey = 'history-prefetch';
+    const messages = Array.from({ length: 8 }, (_, index) => row(sessionKey, `message-${index + 1}`, `Message ${index + 1}`, {
+      seq: index + 1, role: 'user', sender: 'user:person', messageType: 'chat',
+    }));
+    const older = row(sessionKey, 'older-message', 'Older message', {
+      seq: 0, role: 'user', sender: 'user:person', messageType: 'chat',
+    });
+    const runtime = new FakeRuntime(sessionKey, { records: messages });
+    runtime.loadOlder = async () => {
+      runtime.loadOlderCalls++;
+      runtime.update({ loadingOlder: true, historyError: undefined });
+      await Promise.resolve();
+      runtime.update({ records: [older, ...runtime.getSnapshot().records], hasOlder: false,
+        loadingOlder: false, historyError: undefined });
+    };
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+    const log = screen.getByRole('log');
+    const layout = installViewportLayout(log);
+    const anchor = within(log).getByText('Message 5').closest('article')!;
+
+    try {
+      fireEvent.wheel(log, { deltaY: -1 });
+      layout.setScrollTop(300);
+      fireEvent.scroll(log);
+      act(() => runtime.update({ hasOlder: true }));
+      expect(runtime.loadOlderCalls).toBe(0);
+
+      // At 265 px from the top, the old 80 px trigger would still be idle.
+      layout.setScrollTop(265);
+      const anchorBefore = layout.offset(anchor);
+      fireEvent.scroll(log);
+      await waitFor(() => expect(runtime.loadOlderCalls).toBe(1));
+      await waitFor(() => expect(runtime.getSnapshot().records).toContain(older));
+
+      expect(within(log).getByText('Older message')).toBeTruthy();
+      expect(layout.offset(anchor)).toBe(anchorBefore);
+      expect(layout.scrollTop).toBe(357);
+    } finally {
+      layout.restore();
+    }
+  });
+
+  it('retracts a failed history load without moving the reader and retries on the next upward scroll', async () => {
+    const sessionKey = 'history-retry-on-scroll';
+    const messages = Array.from({ length: 8 }, (_, index) => row(sessionKey, `message-${index + 1}`, `Message ${index + 1}`, {
+      seq: index + 1, role: 'user', sender: 'user:person', messageType: 'chat',
+    }));
+    const older = row(sessionKey, 'older-message', 'Older message after retry', {
+      seq: 0, role: 'user', sender: 'user:person', messageType: 'chat',
+    });
+    const runtime = new FakeRuntime(sessionKey, { records: messages });
+    let finishFailure!: () => void;
+    const failure = new Promise<void>((resolve) => { finishFailure = resolve; });
+    runtime.loadOlder = async () => {
+      runtime.loadOlderCalls++;
+      const attempt = runtime.loadOlderCalls;
+      runtime.update({ loadingOlder: true, historyError: undefined });
+      if (attempt === 1) {
+        await failure;
+        runtime.update({ loadingOlder: false, historyError: 'The request failed' });
+        return;
+      }
+      await Promise.resolve();
+      runtime.update({ records: [older, ...runtime.getSnapshot().records], hasOlder: false,
+        loadingOlder: false, historyError: undefined });
+    };
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+    const log = screen.getByRole('log');
+    const layout = installViewportLayout(log);
+    const anchor = within(log).getByText('Message 5').closest('article')!;
+
+    try {
+      fireEvent.wheel(log, { deltaY: -1 });
+      layout.setScrollTop(300);
+      fireEvent.scroll(log);
+      act(() => runtime.update({ hasOlder: true }));
+      layout.setScrollTop(265);
+      fireEvent.scroll(log);
+      await waitFor(() => expect(runtime.loadOlderCalls).toBe(1));
+      await waitFor(() => expect(runtime.getSnapshot().loadingOlder).toBe(true));
+      const anchorBeforeFailure = layout.offset(anchor);
+
+      await act(async () => {
+        finishFailure();
+        await failure;
+      });
+      await waitFor(() => expect(runtime.getSnapshot().historyError).toBe('The request failed'));
+      expect(log.querySelector('.tb-chat-history-loading')).toBeNull();
+      expect(within(log).getByRole('alert').textContent).toContain('Earlier messages could not be loaded');
+      expect(layout.offset(anchor)).toBe(anchorBeforeFailure);
+
+      const afterFailure = layout.scrollTop;
+      layout.setScrollTop(afterFailure + 8);
+      fireEvent.scroll(log);
+      expect(runtime.loadOlderCalls).toBe(1);
+
+      layout.setScrollTop(afterFailure + 2);
+      const anchorBeforeRetry = layout.offset(anchor);
+      fireEvent.scroll(log);
+      await waitFor(() => expect(runtime.loadOlderCalls).toBe(2));
+      await waitFor(() => expect(runtime.getSnapshot().records).toContain(older));
+
+      expect(within(log).getByText('Older message after retry')).toBeTruthy();
+      expect(runtime.getSnapshot().historyError).toBeUndefined();
+      expect(layout.offset(anchor)).toBe(anchorBeforeRetry);
+    } finally {
+      finishFailure();
+      layout.restore();
+    }
+  });
+
   it('keeps the older-page status outside the scrollable message layout', () => {
     const runtime = new FakeRuntime('loading-status', { loadingOlder: true });
     render(<TightbeamChat sessionKey="loading-status" adapter={adapterFor(runtime)} />);
