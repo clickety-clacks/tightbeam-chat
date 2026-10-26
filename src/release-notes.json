@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.34",
+    "items": [
+      {
+        "title": "Conversation loading",
+        "description": "Chat no longer refuses to load based on Gateway version or build metadata. It loads the selected session directly, so routine Gateway releases do not require a matching Chat update."
+      }
+    ]
+  },
+  {
     "version": "v0.1.33",
     "items": [
       {
