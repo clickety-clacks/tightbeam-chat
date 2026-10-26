@@ -641,8 +641,7 @@ describe('conversation reading position', () => {
     const { box } = setup();
     const bottom = box.scrollHeight - box.clientHeight;
 
-    box.scrollTop = bottom - 180;
-    fireEvent.scroll(box);
+    readAt(box, bottom - 180);
 
     expect(box.scrollTop).toBe(bottom - 180);
     expect(screen.getByRole('button', { name: 'Scroll to latest messages' })).toBeTruthy();
@@ -719,6 +718,36 @@ describe('conversation reading position', () => {
 
     lateLayoutGrowth = 960;
     notifyResizeObservers();
+
+    expect(box.scrollTop).toBe(bottom());
+    expect(screen.queryByRole('button', { name: 'Scroll to latest messages' })).toBeNull();
+  });
+
+  it('keeps initial bottom-follow when an unsolicited scroll restoration races automatic history prefetch', async () => {
+    const runtime = new ReadingRuntime();
+    runtime.state = { ...runtime.state, records: Array.from({ length: 6 }, (_, i) => message(i + 20)), hasOlder: true };
+    runtime.loadOlder = async () => {
+      runtime.publish({ loadingOlder: true });
+      await Promise.resolve();
+      runtime.publish({
+        records: [...Array.from({ length: 12 }, (_, i) => message(i)), ...runtime.state.records],
+        hasOlder: false,
+        loadingOlder: false,
+      });
+    };
+    render(<TightbeamChat sessionKey="reading" adapter={{ open: () => runtime }} />);
+    const box = screen.getByRole('log');
+    const bottom = () => Math.max(0, box.scrollHeight - box.clientHeight);
+    scrollTo.mockImplementation(function (this: HTMLElement, options: ScrollToOptions) {
+      this.scrollTop = options.top ?? 0;
+    });
+
+    expect(box.scrollTop).toBe(bottom());
+    // WebKit may apply its initial scroll restoration without a reader gesture.
+    // The automatic first history prefetch must not turn that into an away reading position.
+    box.scrollTop = 0;
+    fireEvent.scroll(box);
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 5)); });
 
     expect(box.scrollTop).toBe(bottom());
     expect(screen.queryByRole('button', { name: 'Scroll to latest messages' })).toBeNull();
