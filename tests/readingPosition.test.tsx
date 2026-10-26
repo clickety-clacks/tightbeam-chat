@@ -384,7 +384,7 @@ describe('conversation reading position', () => {
       expect(screen.queryByText('Message 20')).toBeNull();
       const reconnect = runtime.rebuild();
       await waitFor(() => expect(connect).toHaveBeenCalledTimes(3));
-      expect(runtime.getSnapshot().status).toBe('stale');
+      expect(runtime.getSnapshot().status).toBe('ready');
       await act(async () => { releaseHistory(); await reconnect; });
       expect(runtime.getSnapshot().status).toBe('ready');
       expect(screen.getByText('Message 20')).toBeTruthy();

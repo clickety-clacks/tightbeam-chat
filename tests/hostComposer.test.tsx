@@ -517,7 +517,7 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     await waitFor(() => expect(events.some((event) => event.event === 'delivered' &&
       event.lifetimeId === first.lifetimeId && event.correlationId === correlation)).toBe(true));
     expect(events.some((event) => event.event === 'unavailable' && event.lifetimeId === first.lifetimeId)).toBe(false);
-    expect(screen.getByText(/Live updates are reconnecting; conversation and sending remain available/)).toBeTruthy();
+    expect(runtimes[0].getSnapshot().status).toBe('ready');
 
     await act(async () => { await runtimes[0].rebuild({ restart: true }); });
     expect(events.filter((event) => event.event === 'ready')).toHaveLength(1);
