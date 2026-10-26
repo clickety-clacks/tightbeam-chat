@@ -43,8 +43,9 @@ const rows = () => [...document.querySelectorAll<HTMLElement>('article[data-reco
 const styleSource = readFileSync(resolve(process.cwd(), 'src/style.css'), 'utf8');
 const keyboardInset = () => Number.parseFloat(document.querySelector<HTMLElement>('.tb-chat')?.style.getPropertyValue('--tb-chat-keyboard-inset') || '0') || 0;
 const followsKeyboardInset = styleSource.includes('max-height: calc(100% - var(--tb-chat-keyboard-inset, 0px));');
+let keyboardViewportSimulation = false;
 const renderedViewportHeight = () => {
-  return Math.max(0, viewportHeight - (followsKeyboardInset ? keyboardInset() : 0));
+  return Math.max(0, viewportHeight - (keyboardViewportSimulation && followsKeyboardInset ? keyboardInset() : 0));
 };
 const scrollHeight = () => 32 + rows().length * 92 + lateLayoutGrowth + Number.parseFloat(document.querySelector<HTMLElement>('.tb-chat-viewport')?.style.getPropertyValue('--tb-chat-anchor-space') || '0');
 const rect = (top: number, height: number) => ({ top, bottom: top + height, left: 0, right: 400, width: 400, height, x: 0, y: top, toJSON() {} });
@@ -60,10 +61,12 @@ let restoreVisualViewport: (() => void) | undefined;
 function installVisualViewport(height: number) {
   const previous = Object.getOwnPropertyDescriptor(window, 'visualViewport');
   const visualViewport = new TestVisualViewport(height);
+  keyboardViewportSimulation = true;
   Object.defineProperty(window, 'visualViewport', { configurable: true, value: visualViewport });
   restoreVisualViewport = () => {
     if (previous) Object.defineProperty(window, 'visualViewport', previous);
     else delete (window as Window & { visualViewport?: VisualViewport }).visualViewport;
+    keyboardViewportSimulation = false;
     restoreVisualViewport = undefined;
   };
   return visualViewport;
@@ -83,7 +86,7 @@ beforeEach(() => {
     unobserve() {}
   });
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
-    if (this.classList.contains('tb-chat')) return rect(0, viewportHeight);
+    if (this.classList.contains('tb-chat')) return rect(0, keyboardViewportSimulation ? viewportHeight : 50);
     if (this.classList.contains('tb-chat-viewport')) return rect(0, renderedViewportHeight());
     const index = this.dataset.testPosition === undefined ? rows().indexOf(this) : Number(this.dataset.testPosition);
     if (index >= 0) return rect(16 + Number.parseFloat(document.querySelector<HTMLElement>('.tb-chat-viewport')?.style.getPropertyValue('--tb-chat-anchor-space') || '0') + index * 92 - scrollTop, 80);
@@ -94,7 +97,7 @@ beforeEach(() => {
   });
   vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(function (this: HTMLElement) {
     if (this.classList.contains('tb-chat-viewport')) return renderedViewportHeight();
-    return this.classList.contains('tb-chat') ? viewportHeight : 300;
+    return this.classList.contains('tb-chat') && keyboardViewportSimulation ? viewportHeight : 300;
   });
   vi.spyOn(HTMLElement.prototype, 'scrollTop', 'get').mockImplementation(() => scrollTop);
   vi.spyOn(HTMLElement.prototype, 'scrollTop', 'set').mockImplementation(value => { scrollTop = Math.max(0, Math.min(value, scrollHeight() - renderedViewportHeight())); });
