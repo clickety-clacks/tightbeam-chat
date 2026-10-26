@@ -65,7 +65,7 @@ function installVisualViewport(height: number) {
   Object.defineProperty(window, 'visualViewport', { configurable: true, value: visualViewport });
   restoreVisualViewport = () => {
     if (previous) Object.defineProperty(window, 'visualViewport', previous);
-    else delete (window as Window & { visualViewport?: VisualViewport }).visualViewport;
+    else Reflect.deleteProperty(window, 'visualViewport');
     keyboardViewportSimulation = false;
     restoreVisualViewport = undefined;
   };
