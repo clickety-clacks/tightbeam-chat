@@ -38,10 +38,15 @@ class ControlledTransport implements ChatTransport {
   callbacks?: ChangeCallbacks;
   readTailCalls = 0;
   readOlderCalls = 0;
+  readAfterCalls: string[] = [];
+  readMessageCalls: string[] = [];
   readSessionCalls = 0;
   closed = 0;
   coverage = true;
   tailPage?: ConversationPage;
+  afterHook?: (cursor: string) => ConversationPage;
+  messageDetails = new Map<string, ConversationRecord>();
+  clearBarrier = 0;
   openingFailures: Error[] = [];
   readyGate?: ReturnType<typeof deferred<void>>;
   tailHook?: () => void;
@@ -65,11 +70,14 @@ class ControlledTransport implements ChatTransport {
   readSession = async (): Promise<SessionRecord> => {
     this.readSessionCalls++;
     await this.readSessionHook?.(this.readSessionCalls);
-    return { sessionKey, rowVersion: 1, displayName: 'Fixture agent', raw: { clearedThroughSeq: 7 }, activity: 'idle' };
+    return { sessionKey, rowVersion: this.readSessionCalls, displayName: 'Fixture agent',
+      clearedThroughSeq: this.clearBarrier, raw: { clearedThroughSeq: this.clearBarrier }, activity: 'idle' };
   };
   private page(rows: ConversationRecord[]): ConversationPage {
+    const firstSeq = rows[0]?.seq;
     return { records: rows, oldestCursor: rows.length ? rows[0].id : null,
-      hasOlder: rows.length ? this.rows.findIndex((row) => row.id === rows[0].id) > 0 : false,
+      newestCursor: rows.length ? `after:${rows.at(-1)!.seq}` : null, hasNewer: false,
+      hasOlder: rows.length ? this.rows.some((row) => row.seq < firstSeq! && row.seq > this.clearBarrier) : false,
       coverage: 'controlled-fixture' };
   }
   readTail = async (): Promise<ConversationPage> => {
@@ -78,11 +86,25 @@ class ControlledTransport implements ChatTransport {
     this.tailHook?.();
     return page;
   };
+  readAfter: ChatTransport['readAfter'] = async (_key: string, cursor: string): Promise<ConversationPage> => {
+    this.readAfterCalls.push(cursor);
+    if (this.afterHook) return this.afterHook(cursor);
+    const afterSeq = Number(cursor.slice('after:'.length));
+    const newer = this.rows.filter((row) => row.seq > afterSeq);
+    const rows = newer.slice(0, 3);
+    return { ...this.page(rows), hasNewer: newer.length > rows.length };
+  };
   readOlder = async (_key: string, before: string): Promise<ConversationPage> => {
     this.readOlderCalls++;
     const index = this.rows.findIndex((row) => row.id === before);
     if (index < 0) throw new Error('cursor missing');
-    return this.page(this.rows.slice(Math.max(0, index - 3), index));
+    return this.page(this.rows.slice(Math.max(0, index - 3), index).filter((row) => row.seq > this.clearBarrier));
+  };
+  readMessage: ChatTransport['readMessage'] = async (_key: string, id: string): Promise<ConversationRecord> => {
+    this.readMessageCalls.push(id);
+    const detail = this.messageDetails.get(id) ?? this.rows.find((row) => row.id === id);
+    if (!detail) throw new Error('message detail not found');
+    return detail;
   };
   proveCoverage = () => this.coverage;
   sendHuman = async (submission: HumanSubmission, signal: AbortSignal): Promise<HumanSendResult> => {
@@ -93,7 +115,7 @@ class ControlledTransport implements ChatTransport {
   emit(record: ConversationRecord) { this.callbacks?.onNotice({ operation: 'upsert', record }); }
   reset() {
     this.callbacks?.onNotice({ operation: 'session', session: {
-      sessionKey, rowVersion: 2, displayName: 'Fixture agent', raw: { clearedThroughSeq: 100 }, activity: 'reset',
+      sessionKey, rowVersion: 2, displayName: 'Fixture agent', raw: { clearedThroughSeq: this.clearBarrier }, activity: 'reset',
     } });
   }
   doubt() { this.callbacks?.onDoubt('connection lost'); }
@@ -133,7 +155,7 @@ describe('framework-independent runtime', () => {
       runtime.dispose();
     });
 
-  it.each(['live', 'buffered rebuild', 'restored-page overlap', 'older-page race'])(
+  it.each(['live', 'buffered rebuild', 'forward-page overlap', 'older-page race'])(
     'enriches a missing same-version turn link without replacing other message fields (%s)', async (arrival) => {
       const transport = new ControlledTransport();
       const index = arrival === 'older-page race' ? 4 : 7;
@@ -148,10 +170,14 @@ describe('framework-independent runtime', () => {
       if (arrival === 'buffered rebuild') transport.tailHook = () => { emitTurn(); transport.emit(enriched); };
       const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
       await runtime.rebuild();
-      if (arrival === 'restored-page overlap') {
+      if (arrival === 'forward-page overlap') {
         await runtime.loadOlder();
-        transport.readOlder = async () => ({ records: [message(5), enriched], oldestCursor: 'm5', hasOlder: false, coverage: 'controlled-fixture' });
-        transport.tailHook = emitTurn;
+        transport.afterHook = (cursor) => {
+          emitTurn();
+          transport.emit(enriched);
+          return { records: [], oldestCursor: null, newestCursor: cursor, hasNewer: false,
+            hasOlder: false, coverage: 'controlled-fixture' };
+        };
         await runtime.rebuild();
       } else if (arrival !== 'buffered rebuild') {
         emitTurn();
@@ -277,7 +303,9 @@ describe('framework-independent runtime', () => {
       const subscribed = deferred<void>();
       const history = deferred<void>();
       const connect = transport.openChanges;
+      const readAfter = transport.readAfter!;
       let attempts = 0;
+      let catchupAttempts = 0;
       let oldSignal: AbortSignal | undefined;
       transport.openChanges = async (key, callbacks, signal?: AbortSignal) => {
         attempts++;
@@ -285,17 +313,22 @@ describe('framework-independent runtime', () => {
         else await subscribed.promise;
         return connect(key, callbacks);
       };
+      transport.readAfter = async (key, cursor, signal) => {
+        catchupAttempts++;
+        if (catchupAttempts <= 2) await history.promise;
+        return readAfter(key, cursor, signal);
+      };
       const pending = runtime.rebuild();
       await vi.waitFor(() => expect(attempts).toBe(1));
-      const readTail = transport.readTail;
-      transport.readTail = async () => { await history.promise; return readTail(); };
+      await vi.waitFor(() => expect(catchupAttempts).toBe(1));
       const fresh = runtime.rebuild({ restart: true });
       await vi.waitFor(() => expect(attempts).toBe(2));
       expect(oldSignal?.aborted).toBe(true);
       expect(runtime.getSnapshot().status).toBe('ready');
-      expect(transport.readTailCalls).toBeGreaterThanOrEqual(2);
+      expect(transport.readTailCalls).toBe(1);
       subscribed.resolve();
       await vi.waitFor(() => expect(transport.readSessionCalls).toBeGreaterThanOrEqual(3));
+      await vi.waitFor(() => expect(catchupAttempts).toBe(2));
       expect(runtime.getSnapshot().status).toBe('ready');
       transport.rows.push(message(9));
       transport.emit(message(10));
@@ -397,7 +430,7 @@ describe('framework-independent runtime', () => {
     await vi.waitFor(() => expect(transport.readTailCalls).toBeGreaterThan(1));
     await vi.waitFor(() => expect((runtime.getSnapshot().records[2] as CanonicalMessage)?.content).toBe('updated eight'));
     expect((runtime.getSnapshot().records[2] as CanonicalMessage).content).toBe('updated eight');
-    expect(runtime.getSnapshot().session?.raw.clearedThroughSeq).toBe(100);
+    expect(runtime.getSnapshot().session?.raw.clearedThroughSeq).toBe(0);
     while (runtime.getSnapshot().hasOlder) await runtime.loadOlder();
     expect(runtime.getSnapshot().records.map((row) => row.id)).toEqual(
       ['m1', 'm2', 't3', 'm4', 'm5', 't6', 'm7', 'm8']);
@@ -500,7 +533,7 @@ describe('framework-independent runtime', () => {
     runtime.dispose();
   });
 
-  it('rejects an initialization interrupted after the tail read and starts a fresh generation', async () => {
+  it('catches up after an initialization feed gap without repeating the settled tail', async () => {
     const transport = new ControlledTransport();
     let first = true;
     transport.tailHook = () => {
@@ -511,9 +544,10 @@ describe('framework-independent runtime', () => {
       }
     };
     const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
-    await vi.waitFor(() => expect(transport.readTailCalls).toBeGreaterThanOrEqual(2));
+    await vi.waitFor(() => expect(transport.readAfterCalls).toHaveLength(1));
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'), { timeout: 1000 });
-    expect(transport.readTailCalls).toBe(2);
+    expect(transport.readTailCalls).toBe(1);
+    expect(transport.readAfterCalls).toEqual(['after:8']);
     expect(runtime.getSnapshot().records.at(-1)).toMatchObject({ id: 't9', kind: 'transition', transition: 'model' });
     runtime.dispose();
   });
@@ -548,11 +582,8 @@ describe('framework-independent runtime', () => {
     const shownIds = runtime.getSnapshot().records.map((row) => row.id);
     expect(runtime.getSnapshot().hasOlder).toBe(true);
 
-    // Model a successful but incomplete reconnect snapshot: the tail response
-    // omits messages already on screen and reports no earlier page. The older
-    // endpoint still has the prior cursor and can continue the reader's history.
-    transport.tailPage = { records: [message(8)], oldestCursor: null, hasOlder: false,
-      coverage: 'controlled-fixture' };
+    // The bounded forward page is empty, so settled rows remain held and the
+    // reader's existing older-page cursor stays usable.
     transport.doubt();
     await runtime.rebuild();
 
@@ -561,10 +592,106 @@ describe('framework-independent runtime', () => {
     expect(shownIds.every((id) => recovered.records.some((row) => row.id === id))).toBe(true);
     expect(recovered.hasOlder).toBe(true);
 
-    transport.tailPage = undefined;
     await runtime.loadOlder();
     expect(runtime.getSnapshot().records.map((row) => row.id)).toContain('m1');
     expect(runtime.getSnapshot().records.map((row) => row.id)).toContain('m2');
+    runtime.dispose();
+  });
+
+  it('catches up from the newest held cursor without rereading settled pages', async () => {
+    const transport = new ControlledTransport();
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await runtime.rebuild();
+    await runtime.loadOlder();
+    await runtime.loadOlder();
+    const tailReads = transport.readTailCalls;
+    const olderReads = transport.readOlderCalls;
+
+    transport.rows.push(message(9), switchAt(10, 'harness'), message(11), message(12), message(13), message(14));
+    transport.doubt();
+    await vi.waitFor(() => expect(runtime.getSnapshot().records.some((row) => row.id === 'm14')).toBe(true));
+
+    expect(transport.readAfterCalls).toEqual(['after:8', 'after:11']);
+    expect(transport.readTailCalls).toBe(tailReads);
+    expect(transport.readOlderCalls).toBe(olderReads);
+    expect(runtime.getSnapshot().records.some((row) => row.id === 'm1')).toBe(true);
+
+    transport.rows.push(message(15));
+    transport.doubt();
+    await vi.waitFor(() => expect(runtime.getSnapshot().records.some((row) => row.id === 'm15')).toBe(true));
+    expect(transport.readAfterCalls).toEqual(['after:8', 'after:11', 'after:14']);
+    expect(transport.readTailCalls).toBe(tailReads);
+    runtime.dispose();
+  });
+
+  it('reconciles only high-attention substrate rows that Gateway can revise in place', async () => {
+    const transport = new ControlledTransport();
+    const original = message(6, { messageType: 'substrate', attentionTier: 1,
+      clientMessageId: 'terminal-credential:tcf_test:person',
+      createdAt: '2026-10-01T00:00:00.000Z' });
+    transport.rows[5] = original;
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await runtime.rebuild();
+    const revised = { ...original, content: 'Revised source notice', createdAt: '2026-10-02T00:00:00.000Z' };
+    transport.messageDetails.set(original.id, revised);
+    transport.doubt();
+
+    await vi.waitFor(() => expect((runtime.getSnapshot().records.find((row) => row.id === original.id) as CanonicalMessage)?.content)
+      .toBe('Revised source notice'));
+    expect(transport.readMessageCalls).toEqual([original.id]);
+    expect(transport.readAfterCalls).toEqual(['after:8']);
+    expect(transport.readTailCalls).toBe(1);
+    runtime.dispose();
+  });
+
+  it('skips detail reads for immutable high-attention wake notices on reconnect', async () => {
+    const transport = new ControlledTransport();
+    transport.rows = transport.rows.map((record) => {
+      if (record.kind !== 'message') return record;
+      const clientMessageId = record.seq % 2 === 0
+        ? `wake-undeliverable:${record.seq}` : `wake-undelivered:${record.seq}`;
+      return { ...record, messageType: 'substrate', attentionTier: 1,
+        clientMessageId };
+    });
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await runtime.rebuild();
+    while (runtime.getSnapshot().hasOlder) await runtime.loadOlder();
+    const immutableIds = runtime.getSnapshot().records
+      .filter((record): record is CanonicalMessage => record.kind === 'message' &&
+        record.messageType === 'substrate' && record.attentionTier === 1 &&
+        record.clientMessageId?.startsWith('wake-') === true)
+      .map((record) => record.id);
+    const tailReads = transport.readTailCalls;
+    const olderReads = transport.readOlderCalls;
+    expect(immutableIds).toHaveLength(6);
+
+    transport.rows.push(message(9));
+    transport.doubt();
+    await vi.waitFor(() => expect(runtime.getSnapshot().records.some((row) => row.id === 'm9')).toBe(true));
+
+    expect(transport.readMessageCalls).toEqual([]);
+    expect(transport.readAfterCalls).toEqual(['after:8']);
+    expect(transport.readTailCalls).toBe(tailReads);
+    expect(transport.readOlderCalls).toBe(olderReads);
+    expect(immutableIds.every((id) => runtime.getSnapshot().records.some((row) => row.id === id))).toBe(true);
+    runtime.dispose();
+  });
+
+  it('reanchors from a fresh tail when a session clear invalidates the held history cursor', async () => {
+    const transport = new ControlledTransport();
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await runtime.rebuild();
+    await runtime.loadOlder();
+    const tailReads = transport.readTailCalls;
+    transport.clearBarrier = 5;
+    transport.rows.push(message(9));
+    transport.doubt();
+    await vi.waitFor(() => expect(runtime.getSnapshot().records.some((row) => row.id === 'm9')).toBe(true));
+
+    expect(transport.readTailCalls).toBe(tailReads + 1);
+    expect(transport.readAfterCalls).toHaveLength(0);
+    expect(runtime.getSnapshot().records.map((row) => row.seq)).toEqual([6, 7, 8, 9]);
+    expect(runtime.getSnapshot().hasOlder).toBe(true);
     runtime.dispose();
   });
 
@@ -580,10 +707,8 @@ describe('framework-independent runtime', () => {
       expect(shownIds.length).toBeGreaterThan(3);
       expect(runtime.getSnapshot().hasOlder).toBe(true);
 
-      // The next reconnect attempt also closes before readiness, while its
-      // successful REST tail is shorter than the history already displayed.
-      transport.tailPage = { records: [message(8)], oldestCursor: null, hasOlder: false,
-        coverage: 'controlled-fixture' };
+      // The next reconnect attempt also closes before readiness; the forward
+      // read still preserves the already displayed rows.
       transport.openingFailures.push(new Error('Firehose closed before subscription readiness.'));
       await vi.advanceTimersByTimeAsync(250);
 
@@ -648,6 +773,7 @@ describe('framework-independent runtime', () => {
 
   it('restores across the old reading coordinate when that anchor row was deleted', async () => {
     const transport = new ControlledTransport();
+    transport.readAfter = undefined;
     transport.rows = Array.from({ length: 30 }, (_, index) => message(index + 1));
     const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
     await runtime.rebuild();
@@ -665,22 +791,22 @@ describe('framework-independent runtime', () => {
     runtime.dispose();
   });
 
-  it('retains already shown history when rebuild backfill fails', async () => {
+  it('retains already shown history when forward catch-up fails', async () => {
     const transport = new ControlledTransport();
     const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
     await runtime.rebuild();
     await runtime.loadOlder();
     const shownIds = runtime.getSnapshot().records.map((record) => record.id);
 
-    transport.rows = Array.from({ length: 8 }, (_, index) => message(index + 9));
-    transport.readOlder = async () => { throw new AuthorizationError('Older history is not authorized.'); };
+    transport.rows.push(message(9));
+    transport.readAfter = async () => { throw new Error('Forward history is temporarily unavailable.'); };
     await runtime.rebuild();
 
     const state = runtime.getSnapshot();
     expect(state.status).toBe('ready');
-    expect(state.historyError).toBe('Older history is not authorized.');
+    expect(state.conversationError).toBe('Forward history is temporarily unavailable.');
     expect(shownIds.every((id) => state.records.some((record) => record.id === id))).toBe(true);
-    expect(state.records.some((record) => record.id === 'm16')).toBe(true);
+    expect(state.records.some((record) => record.id === 'm9')).toBe(false);
     expect(runtime.send('sending remains available')).toBeTruthy();
     runtime.dispose();
   });
@@ -1100,19 +1226,19 @@ describe('optional tool history and live category', () => {
     await runtime.rebuild();
     expect(transport.toolOpens).toBe(1);
     expect(transport.ranges).toHaveLength(toolReadsBeforeDisabledRebuild);
-    const mainReadsAfterDisabledRebuild = transport.readTailCalls;
+    const mainReadsAfterDisabledRebuild = transport.readAfterCalls.length;
 
     runtime.setToolCallsEnabled!(true);
     await vi.waitFor(() => expect(runtime.getSnapshot().toolCallsLoading).toBe(false));
     expect(visibleTools(runtime.getSnapshot()).at(-1)?.id).toBe('tc_while_off');
     expect(transport.toolOpens).toBe(2);
-    expect(transport.readTailCalls).toBe(mainReadsAfterDisabledRebuild);
+    expect(transport.readAfterCalls).toHaveLength(mainReadsAfterDisabledRebuild);
     transport.rows.push(message(9));
     await runtime.rebuild();
     await vi.waitFor(() => expect(runtime.getSnapshot().toolCallsLoading).toBe(false));
     expect(visibleTools(runtime.getSnapshot()).at(-1)?.id).toBe('tc_while_off');
     expect(transport.toolOpens).toBe(3);
-    expect(transport.readTailCalls).toBe(mainReadsAfterDisabledRebuild + 1);
+    expect(transport.readAfterCalls).toHaveLength(mainReadsAfterDisabledRebuild + 1);
     runtime.dispose();
   });
 

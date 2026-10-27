@@ -142,6 +142,8 @@ export function decodePublic019Message(value: unknown, sessionKey: string): Conv
     seq: positiveInteger(row, 'seq'),
     rowVersion: positiveInteger(row, 'rowVersion'),
     role: requiredString(row, 'role'),
+    attentionTier: typeof row.attentionTier === 'number' && Number.isSafeInteger(row.attentionTier)
+      ? row.attentionTier : undefined,
     content: typeof row.content === 'string' ? row.content : requiredString(row, 'content'),
     sender: optionalString(row, 'sender'),
     replyToMessageId: optionalString(row, 'replyToMessageId'),
@@ -180,6 +182,8 @@ export function decodePublic019Session(value: unknown, sessionKey: string): Sess
   return Object.freeze({
     sessionKey,
     rowVersion: positiveInteger(row, 'rowVersion'),
+    clearedThroughSeq: typeof row.clearedThroughSeq === 'number' && Number.isSafeInteger(row.clearedThroughSeq) &&
+      row.clearedThroughSeq >= 0 ? row.clearedThroughSeq : undefined,
     displayName: requiredString(row, 'displayName'),
     model: optionalString(row, 'model'),
     harness: optionalString(row, 'harness'),
@@ -311,11 +315,14 @@ export function createPublic019Transport(config: Public019Config): { transport: 
     }
     const page = record(body.page);
     const oldestCursor = optionalString(page, 'oldestCursor') ?? null;
-    if (typeof page.hasMoreBefore !== 'boolean' || (page.hasMoreBefore && !oldestCursor)) {
+    const newestCursor = optionalString(page, 'newestCursor') ?? null;
+    if (typeof page.hasMoreBefore !== 'boolean' || typeof page.hasMoreAfter !== 'boolean' ||
+        (page.hasMoreBefore && !oldestCursor) || (page.hasMoreAfter && !newestCursor)) {
       throw new UnsupportedTargetError('Invalid transcript page metadata.');
     }
     return { records: body.items.map((item) => decodePublic019Message(item, sessionKey))
-      .sort((a, b) => a.seq - b.seq), oldestCursor, hasOlder: page.hasMoreBefore, coverage: sessionKey };
+      .sort((a, b) => a.seq - b.seq), oldestCursor, hasOlder: page.hasMoreBefore,
+      newestCursor, hasNewer: page.hasMoreAfter, coverage: sessionKey };
   }
 
   async function openChanges(sessionKey: string, callbacks: ChangeCallbacks, signal: AbortSignal, tools = false): Promise<ChangeConnection> {
@@ -437,6 +444,13 @@ export function createPublic019Transport(config: Public019Config): { transport: 
       }
       return decodePublic019Session(body.item, sessionKey);
     },
+    async readMessage(sessionKey, messageId, signal) {
+      const body = await get(`/api/sessions/${encodeURIComponent(sessionKey)}/messages/${encodeURIComponent(messageId)}`, signal);
+      if (body.schemaVersion !== 1 || body.resource !== 'transcript messages') {
+        throw new UnsupportedTargetError('Unexpected transcript message detail envelope.');
+      }
+      return decodePublic019Message(body.item, sessionKey);
+    },
     async readRecentTurns(sessionKey, signal) {
       const body = await get(`/api/sessions/${encodeURIComponent(sessionKey)}/turns?limit=50&tail=true`, signal);
       if (body.schemaVersion !== 1 || body.resource !== 'turns' || !Array.isArray(body.items)) {
@@ -450,6 +464,7 @@ export function createPublic019Transport(config: Public019Config): { transport: 
     },
     readTail: (sessionKey, signal) => readPage(sessionKey, 'tail=true', signal),
     readOlder: (sessionKey, before, signal) => readPage(sessionKey, `before=${encodeURIComponent(before)}`, signal),
+    readAfter: (sessionKey, after, signal) => readPage(sessionKey, `after=${encodeURIComponent(after)}`, signal),
     // Hub.subscribe completes before subscription_ready. Runtime subscribes first,
     // then reads retained append-only rows and unions buffered versioned notices.
     // This is overlap coverage, not a server snapshot watermark or replay promise.

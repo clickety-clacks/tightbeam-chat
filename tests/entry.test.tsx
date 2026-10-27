@@ -86,7 +86,7 @@ describe('direct browser entry', () => {
         ? { schemaVersion: 1, resource: 'turns', items: [], page: { hasMoreBefore: false } }
         : path.endsWith('/messages')
         ? { schemaVersion: 1, resource: 'transcript messages', items: [],
-          page: { oldestCursor: null, hasMoreBefore: false } }
+          page: { oldestCursor: null, newestCursor: null, hasMoreBefore: false, hasMoreAfter: false } }
         : { schemaVersion: 1, resource: 'sessions', item: {
           sessionKey: defaultTarget.sessionKey, rowVersion: 1, displayName: 'Example agent',
         } };
