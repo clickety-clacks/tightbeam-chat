@@ -42,6 +42,7 @@ class ControlledTransport implements ChatTransport {
   closed = 0;
   coverage = true;
   tailPage?: ConversationPage;
+  openingFailures: Error[] = [];
   readyGate?: ReturnType<typeof deferred<void>>;
   tailHook?: () => void;
   readSessionHook?: (call: number) => Promise<void> | void;
@@ -53,6 +54,11 @@ class ControlledTransport implements ChatTransport {
   inspectTarget = async () => this.observation;
   openChanges = async (_key: string, callbacks: ChangeCallbacks) => {
     this.callbacks = callbacks;
+    const failure = this.openingFailures.shift();
+    if (failure) {
+      if (this.callbacks === callbacks) this.callbacks = undefined;
+      throw failure;
+    }
     if (this.readyGate) await this.readyGate.promise;
     return { close: () => { this.closed++; if (this.callbacks === callbacks) this.callbacks = undefined; } };
   };
@@ -560,6 +566,35 @@ describe('framework-independent runtime', () => {
     expect(runtime.getSnapshot().records.map((row) => row.id)).toContain('m1');
     expect(runtime.getSnapshot().records.map((row) => row.id)).toContain('m2');
     runtime.dispose();
+  });
+
+  it('keeps shown messages when a replacement feed closes before readiness', async () => {
+    vi.useFakeTimers();
+    try {
+      const transport = new ControlledTransport();
+      transport.openingFailures.push(new Error('Firehose closed before subscription readiness.'));
+      const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+      await runtime.rebuild();
+      await runtime.loadOlder();
+      const shownIds = runtime.getSnapshot().records.map((row) => row.id);
+      expect(shownIds.length).toBeGreaterThan(3);
+      expect(runtime.getSnapshot().hasOlder).toBe(true);
+
+      // The next reconnect attempt also closes before readiness, while its
+      // successful REST tail is shorter than the history already displayed.
+      transport.tailPage = { records: [message(8)], oldestCursor: null, hasOlder: false,
+        coverage: 'controlled-fixture' };
+      transport.openingFailures.push(new Error('Firehose closed before subscription readiness.'));
+      await vi.advanceTimersByTimeAsync(250);
+
+      const recovered = runtime.getSnapshot();
+      expect(recovered.status).toBe('ready');
+      expect(shownIds.every((id) => recovered.records.some((row) => row.id === id))).toBe(true);
+      expect(recovered.hasOlder).toBe(true);
+      runtime.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('keeps out-of-order live rows visible in sequence order while older history loads', async () => {

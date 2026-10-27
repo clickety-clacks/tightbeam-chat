@@ -534,6 +534,11 @@ class SessionRuntime implements ChatRuntime {
     const priorCursor = this.cursor;
     const priorHasOlder = this.state.hasOlder;
     const reusableConnection = this.connectionForRebuild;
+    if (this.rows.size > 0 && !reusableConnection) {
+      // A replacement feed can close before subscription_ready, which rejects
+      // openChanges without calling onDoubt. Keep shown rows for that recovery too.
+      this.preserveRowsOnReconnect = true;
+    }
     this.connectionForRebuild = undefined;
     this.generation++;
     const generation = this.generation;
