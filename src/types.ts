@@ -8,6 +8,8 @@ export interface CanonicalMessage {
   readonly rowVersion: number;
   readonly role: string;
   readonly sender?: string;
+  /** Gateway attention tier; high-attention substrate rows may be revised in place. */
+  readonly attentionTier?: number;
   readonly replyToMessageId?: string;
   readonly turnIncludesHuman?: boolean;
   readonly isBatchCarrier?: boolean;
@@ -104,6 +106,10 @@ export interface ConversationPage {
   readonly records: readonly ConversationRecord[];
   readonly oldestCursor: string | null;
   readonly hasOlder: boolean;
+  /** Opaque cursor for records at or before the newest row in this page. */
+  readonly newestCursor?: string | null;
+  /** Whether an `after` page has another page of newer records. */
+  readonly hasNewer?: boolean;
   /** Opaque coverage evidence interpreted only by the host's target implementation. */
   readonly coverage: unknown;
 }
@@ -111,6 +117,7 @@ export interface ConversationPage {
 export interface SessionRecord {
   readonly sessionKey: string;
   readonly rowVersion: number;
+  readonly clearedThroughSeq?: number;
   readonly displayName: string;
   readonly model?: string;
   readonly harness?: string;
@@ -205,6 +212,10 @@ export interface ChatTransport {
   readToolCalls?(sessionKey: string, range: ToolCallRange, signal: AbortSignal): Promise<readonly ToolCallRecord[]>;
   readTail(sessionKey: string, signal: AbortSignal): Promise<ConversationPage>;
   readOlder(sessionKey: string, before: string, signal: AbortSignal): Promise<ConversationPage>;
+  /** Read only rows newer than a held Gateway transcript cursor. */
+  readAfter?(sessionKey: string, after: string, signal: AbortSignal): Promise<ConversationPage>;
+  /** Refresh one known in-place-editable transcript row without rereading a page. */
+  readMessage?(sessionKey: string, messageId: string, signal: AbortSignal): Promise<ConversationRecord>;
   readSession(sessionKey: string, signal: AbortSignal): Promise<SessionRecord>;
   /** Optional bounded activity snapshot for opening or returning during an active turn. */
   readRecentTurns?(sessionKey: string, signal: AbortSignal): Promise<readonly CanonicalTurn[]>;

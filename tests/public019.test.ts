@@ -53,9 +53,14 @@ function setup(heartbeatTimeoutMs?: number, observedVersion = version, historyIt
       if (path.includes('/turns?')) return new Response(JSON.stringify({
         schemaVersion: 1, resource: 'turns', items: turnItems, page: { hasMoreBefore: false },
       }), { status: turnStatus });
+      if (path.includes('/messages/')) return new Response(JSON.stringify({
+        schemaVersion: 1, resource: 'transcript messages', item,
+      }), { status: 200 });
+      const afterCurrentCursor = path.includes('/messages?') && new URL(path).searchParams.get('after') === 'newer-cursor';
       const body = path.endsWith('/version') ? observedVersion : path.includes('/messages?')
-        ? { schemaVersion: 1, resource: 'transcript messages', items: historyItems,
-          page: { oldestCursor: 'older-cursor', hasMoreBefore: true } }
+        ? { schemaVersion: 1, resource: 'transcript messages', items: afterCurrentCursor ? [] : historyItems,
+          page: { oldestCursor: afterCurrentCursor ? null : 'older-cursor', newestCursor: 'newer-cursor',
+            hasMoreBefore: !afterCurrentCursor, hasMoreAfter: false } }
         : { schemaVersion: 1, resource: 'sessions', item: session };
       return new Response(JSON.stringify(body), { status: 200 });
     },
@@ -507,7 +512,7 @@ describe('Gateway wire mapping and behavior checks', () => {
           tailStarted = true;
           await tailGate;
           body = { schemaVersion: 1, resource: 'transcript messages', items: [item],
-            page: { oldestCursor: null, hasMoreBefore: false } };
+            page: { oldestCursor: null, newestCursor: 'newer-cursor', hasMoreBefore: false, hasMoreAfter: false } };
         } else if (path.includes('/tool-calls?')) {
           body = { schemaVersion: 1, resource: 'tool calls', items: [], page: { hasMoreBefore: false } };
         } else if (path.includes('/turns?')) {
@@ -678,6 +683,20 @@ describe('Gateway wire mapping and behavior checks', () => {
     expect(transport.proveCoverage({ sessionKey, rowVersion: 4, displayName: 'Fixture agent', raw: {} }, page, [])).toBe(true);
     runtime.dispose();
     expect(transport.proveCoverage({ sessionKey, rowVersion: 4, displayName: 'Fixture agent', raw: {} }, page, [])).toBe(false);
+  });
+
+  it('reads forward pages and individual transcript details through the 0.1.11 routes', async () => {
+    const { transport, paths } = setup();
+    const signal = new AbortController().signal;
+    const page = await transport.readAfter!(sessionKey, 'opaque+/=', signal);
+    expect(page.records.map((row) => row.id)).toEqual(['m_1']);
+    expect(page.newestCursor).toBe('newer-cursor');
+    expect(page.hasNewer).toBe(false);
+    expect(paths.at(-1)).toBe('https://host.example/api/sessions/s-public/messages?limit=50&after=opaque%2B%2F%3D');
+
+    const detail = await transport.readMessage!(sessionKey, 'm_1', signal);
+    expect(detail).toMatchObject({ id: 'm_1', sessionKey, seq: 9, content: 'hello' });
+    expect(paths.at(-1)).toBe('https://host.example/api/sessions/s-public/messages/m_1');
   });
 
   it('keeps failed-park recovery lifecycle-only and decodes the projected transcript markers', () => {
