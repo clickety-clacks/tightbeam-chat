@@ -2,10 +2,9 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 
-const releaseRefScript = fileURLToPath(new URL('../scripts/assert-chat-release-ref.mjs', import.meta.url));
+const releaseRefScript = path.resolve(process.cwd(), 'scripts/assert-chat-release-ref.mjs');
 const repository = 'clickety-clacks/tightbeam-chat';
 const fixtures = [];
 
