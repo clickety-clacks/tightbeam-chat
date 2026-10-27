@@ -115,6 +115,7 @@ class SessionRuntime implements ChatRuntime {
   private disposed = false;
   private initializing = false;
   private restoreDepth = 0;
+  private preserveRowsOnReconnect = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   private retryDelayMs = 250;
   private rebuildPromise: Promise<void> | undefined;
@@ -437,6 +438,9 @@ class SessionRuntime implements ChatRuntime {
 
   private doubt(reason: string, generation: number): void {
     if (!this.isCurrent(generation) || !this.checkIdentity()) return;
+    // A feed gap does not make the already shown transcript less trustworthy.
+    // Keep it while REST and the replacement subscription catch up.
+    this.preserveRowsOnReconnect = true;
     this.connectionController?.abort();
     this.connectionController = undefined;
     if (this.initializing) {
@@ -527,6 +531,8 @@ class SessionRuntime implements ChatRuntime {
     const turnRevisionAtStart = this.turnRevision;
     const priorOldest = this.state.records[0];
     const priorDepth = this.restoreDepth;
+    const priorCursor = this.cursor;
+    const priorHasOlder = this.state.hasOlder;
     const reusableConnection = this.connectionForRebuild;
     this.connectionForRebuild = undefined;
     this.generation++;
@@ -678,12 +684,20 @@ class SessionRuntime implements ChatRuntime {
           }
         }
 
-        if (!restoreFailed) {
+        const preservingReconnectRows = this.preserveRowsOnReconnect;
+        if (!restoreFailed && !preservingReconnectRows) {
           this.rows.clear();
           this.tombstones.clear();
         }
+        // A successful but shorter tail can happen while the feed is being
+        // re-established. Do not let it hide loaded history or strand the
+        // reader at the top; continue from the last cursor already shown.
+        if (preservingReconnectRows && priorHasOlder) {
+          if (!hasOlder && priorCursor) cursor = priorCursor;
+          hasOlder = true;
+        }
         this.cursor = cursor;
-        this.restoreDepth = restored;
+        this.restoreDepth = preservingReconnectRows ? Math.max(priorDepth, restored) : restored;
         for (const record of candidate.values()) this.put(record);
       }
 
@@ -720,6 +734,7 @@ class SessionRuntime implements ChatRuntime {
         }
         if (coverageVerified) {
           for (const notice of prefix) this.apply(notice);
+          if (this.preserveRowsOnReconnect && !historyError) this.preserveRowsOnReconnect = false;
         } else {
           this.connection?.close();
           this.connection = undefined;
