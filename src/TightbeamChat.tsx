@@ -910,7 +910,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
           <div className="tb-chat-bubble-body">{markdownBody(send.content)}</div>
           <p className="tb-chat-send-state" data-send-status={send.status} role={send.status === 'pending' ? 'status' : undefined}>{send.status === 'uncertain' ? 'Delivery is uncertain'
             : send.status === 'failed' ? 'Message could not be sent'
-              : send.status === 'pending' ? 'Sending.'
+              : send.status === 'pending' ? 'Sending…'
                 : hostManaged && !send.reconciled ? 'Accepted; checking conversation history' : 'Sent'}</p>
           {send.reason && !reconnectingSend && <p className="tb-chat-send-reason" role="alert">
             {send.status === 'uncertain'

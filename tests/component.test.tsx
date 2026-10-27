@@ -1213,7 +1213,7 @@ describe('conversation surface', () => {
     expect(screen.getByText('Failed text')).toBeTruthy();
     expect(screen.getByText('Uncertain text')).toBeTruthy();
     expect(screen.getByText('Offline text')).toBeTruthy();
-    const sendStatus = screen.getByText('Sending.');
+    const sendStatus = screen.getByText('Sending…');
     expect(sendStatus.getAttribute('role')).toBe('status');
     expect(screen.queryByText(/Not connected to the server|retrying…/)).toBeNull();
     expect(screen.queryByText('Reconnect, then check the conversation before retrying this message.')).toBeNull();
