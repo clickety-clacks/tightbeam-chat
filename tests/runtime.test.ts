@@ -41,6 +41,8 @@ class ControlledTransport implements ChatTransport {
   readSessionCalls = 0;
   closed = 0;
   coverage = true;
+  tailPage?: ConversationPage;
+  openingFailures: Error[] = [];
   readyGate?: ReturnType<typeof deferred<void>>;
   tailHook?: () => void;
   readSessionHook?: (call: number) => Promise<void> | void;
@@ -52,6 +54,11 @@ class ControlledTransport implements ChatTransport {
   inspectTarget = async () => this.observation;
   openChanges = async (_key: string, callbacks: ChangeCallbacks) => {
     this.callbacks = callbacks;
+    const failure = this.openingFailures.shift();
+    if (failure) {
+      if (this.callbacks === callbacks) this.callbacks = undefined;
+      throw failure;
+    }
     if (this.readyGate) await this.readyGate.promise;
     return { close: () => { this.closed++; if (this.callbacks === callbacks) this.callbacks = undefined; } };
   };
@@ -67,7 +74,7 @@ class ControlledTransport implements ChatTransport {
   }
   readTail = async (): Promise<ConversationPage> => {
     this.readTailCalls++;
-    const page = this.page(this.rows.slice(-3));
+    const page = this.tailPage ?? this.page(this.rows.slice(-3));
     this.tailHook?.();
     return page;
   };
@@ -531,6 +538,63 @@ describe('framework-independent runtime', () => {
     expect(runtime.getSnapshot().records[0].id).toBe('m1');
     runtime.dispose();
     vi.useRealTimers();
+  });
+
+  it('keeps shown messages and older paging when a reconnect tail is temporarily incomplete', async () => {
+    const transport = new ControlledTransport();
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await runtime.rebuild();
+    await runtime.loadOlder();
+    const shownIds = runtime.getSnapshot().records.map((row) => row.id);
+    expect(runtime.getSnapshot().hasOlder).toBe(true);
+
+    // Model a successful but incomplete reconnect snapshot: the tail response
+    // omits messages already on screen and reports no earlier page. The older
+    // endpoint still has the prior cursor and can continue the reader's history.
+    transport.tailPage = { records: [message(8)], oldestCursor: null, hasOlder: false,
+      coverage: 'controlled-fixture' };
+    transport.doubt();
+    await runtime.rebuild();
+
+    const recovered = runtime.getSnapshot();
+    expect(recovered.status).toBe('ready');
+    expect(shownIds.every((id) => recovered.records.some((row) => row.id === id))).toBe(true);
+    expect(recovered.hasOlder).toBe(true);
+
+    transport.tailPage = undefined;
+    await runtime.loadOlder();
+    expect(runtime.getSnapshot().records.map((row) => row.id)).toContain('m1');
+    expect(runtime.getSnapshot().records.map((row) => row.id)).toContain('m2');
+    runtime.dispose();
+  });
+
+  it('keeps shown messages when a replacement feed closes before readiness', async () => {
+    vi.useFakeTimers();
+    try {
+      const transport = new ControlledTransport();
+      transport.openingFailures.push(new Error('Firehose closed before subscription readiness.'));
+      const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+      await runtime.rebuild();
+      await runtime.loadOlder();
+      const shownIds = runtime.getSnapshot().records.map((row) => row.id);
+      expect(shownIds.length).toBeGreaterThan(3);
+      expect(runtime.getSnapshot().hasOlder).toBe(true);
+
+      // The next reconnect attempt also closes before readiness, while its
+      // successful REST tail is shorter than the history already displayed.
+      transport.tailPage = { records: [message(8)], oldestCursor: null, hasOlder: false,
+        coverage: 'controlled-fixture' };
+      transport.openingFailures.push(new Error('Firehose closed before subscription readiness.'));
+      await vi.advanceTimersByTimeAsync(250);
+
+      const recovered = runtime.getSnapshot();
+      expect(recovered.status).toBe('ready');
+      expect(shownIds.every((id) => recovered.records.some((row) => row.id === id))).toBe(true);
+      expect(recovered.hasOlder).toBe(true);
+      runtime.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('keeps out-of-order live rows visible in sequence order while older history loads', async () => {
