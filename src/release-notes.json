@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.36",
+    "items": [
+      {
+        "title": "Conversation history",
+        "description": "Messages you have already loaded stay on screen when live updates reconnect. A shorter recovery response no longer drops those messages or prevents loading earlier history."
+      }
+    ]
+  },
+  {
     "version": "v0.1.35",
     "items": [
       {
