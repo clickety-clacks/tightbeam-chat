@@ -263,7 +263,7 @@ describe('conversation reading position', () => {
 
     scrollTo.mockClear();
     act(() => runtime.publish({ records: [...runtime.state.records, message(21)] }));
-    expect(scrollTo).toHaveBeenLastCalledWith({ top: box.scrollHeight - box.clientHeight, behavior: 'smooth' });
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: box.scrollHeight - box.clientHeight, behavior: 'instant' });
   });
 
   it('releases a finished entrance without replaying it on ordinary rerenders', () => {
@@ -314,7 +314,7 @@ describe('conversation reading position', () => {
     expect(animate).toHaveBeenCalledTimes(2);
   });
 
-  it('animates only canonical human members of a new batch while smoothly following from near bottom', () => {
+  it('animates only canonical human members of a new batch while keeping the latest content in the same frame', () => {
     const { runtime, box } = setup();
     readAt(box, box.scrollHeight - box.clientHeight - 40);
     const carrier = { ...message(20), isBatchCarrier: true, sender: 'process:notifications', messageType: 'substrate', content: [
@@ -326,7 +326,7 @@ describe('conversation reading position', () => {
     expect(animate).toHaveBeenCalledTimes(1);
     expect(animate.mock.contexts[0]).toBe(screen.getByText('A new human message').closest('article'));
     expect(screen.queryByText('Nonhuman notice')).toBeNull();
-    expect(scrollTo).toHaveBeenLastCalledWith({ top: box.scrollHeight - box.clientHeight, behavior: 'smooth' });
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: box.scrollHeight - box.clientHeight, behavior: 'instant' });
     act(() => runtime.publish({ records: [...initialRows, { ...carrier, rowVersion: 2 }, { ...message(21), content: 'A new human message' }] }));
     expect(animate).toHaveBeenCalledTimes(1);
   });
@@ -481,16 +481,16 @@ describe('conversation reading position', () => {
     expect(input.selectionStart).toBe(5);
   });
 
-  it.each([0, 40])('smoothly follows new content when previously %i pixels from bottom', gap => {
+  it.each([0, 40])('keeps the latest content in the same frame when previously %i pixels from bottom', gap => {
     const { runtime, box } = setup();
     readAt(box, box.scrollHeight - box.clientHeight - gap);
     act(() => runtime.publish({ records: [...initialRows, message(20), message(21)] }));
-    expect(scrollTo).toHaveBeenLastCalledWith({ top: box.scrollHeight - box.clientHeight, behavior: 'smooth' });
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: box.scrollHeight - box.clientHeight, behavior: 'instant' });
     // Animation frames are not mistaken for the user leaving the bottom.
     box.scrollTop += 20;
     fireEvent.scroll(box);
     act(() => runtime.publish({ records: [...runtime.state.records, message(22)] }));
-    expect(scrollTo).toHaveBeenLastCalledWith({ top: box.scrollHeight - box.clientHeight, behavior: 'smooth' });
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: box.scrollHeight - box.clientHeight, behavior: 'instant' });
     expect(screen.queryByRole('button', { name: 'Scroll to latest messages' })).toBeNull();
   });
 

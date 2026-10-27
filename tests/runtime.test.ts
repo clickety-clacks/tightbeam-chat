@@ -1048,6 +1048,7 @@ describe('optional tool history and live category', () => {
     toolOpens = 0;
     toolReady = false;
     toolReadyGate?: ReturnType<typeof deferred<void>>;
+    toolReadGate?: ReturnType<typeof deferred<void>>;
     ranges: ToolCallRange[] = [];
     calls = [call('tc_old', 3), call('tc_tail', 8)];
     toolHook?: () => void;
@@ -1063,6 +1064,7 @@ describe('optional tool history and live category', () => {
       expect(this.toolCallbacks).toBeDefined();
       expect(this.toolReady).toBe(true);
       this.ranges.push(range);
+      await this.toolReadGate?.promise;
       const rows = this.calls.filter(call => call.afterMessageSeq >= range.fromInclusive &&
         (range.toExclusive === undefined || call.afterMessageSeq < range.toExclusive));
       this.toolHook?.();
@@ -1111,6 +1113,35 @@ describe('optional tool history and live category', () => {
     expect(visibleTools(runtime.getSnapshot()).at(-1)?.id).toBe('tc_while_off');
     expect(transport.toolOpens).toBe(3);
     expect(transport.readTailCalls).toBe(mainReadsAfterDisabledRebuild + 1);
+    runtime.dispose();
+  });
+
+  it('keeps shown tool rows while an optional history refresh is pending or unavailable', async () => {
+    const transport = new ToolsTransport();
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+    await vi.waitFor(() => expect(runtime.getSnapshot().toolCallsLoading).toBe(false));
+    const shown = visibleTools(runtime.getSnapshot());
+    expect(shown.map(call => call.id)).toEqual(['tc_tail']);
+
+    transport.calls = [call('tc_replacement', 8)];
+    transport.toolReadGate = deferred<void>();
+    transport.toolError = new Error('Tool history is unavailable.');
+    runtime.retryToolCalls!();
+    await vi.waitFor(() => expect(transport.ranges).toHaveLength(2));
+
+    expect(runtime.getSnapshot().toolCallsLoading).toBe(false);
+    expect(visibleTools(runtime.getSnapshot())).toEqual(shown);
+    transport.toolCallbacks?.onNotice({ operation: 'tool', tool: call('tc_live', 8, { seq: 9 }) });
+    transport.toolReadGate.resolve();
+    await vi.waitFor(() => expect(runtime.getSnapshot().toolCallsError).toBe('Tool history is unavailable.'));
+    expect(new Set(visibleTools(runtime.getSnapshot()).map(call => call.id))).toEqual(new Set(['tc_tail', 'tc_live']));
+
+    transport.toolReadGate = undefined;
+    transport.toolError = undefined;
+    runtime.retryToolCalls!();
+    await vi.waitFor(() => expect(runtime.getSnapshot().toolCallsError).toBeUndefined());
+    expect(visibleTools(runtime.getSnapshot()).map(call => call.id)).toEqual(['tc_replacement']);
     runtime.dispose();
   });
 

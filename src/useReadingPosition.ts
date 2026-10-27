@@ -141,7 +141,10 @@ export function useReadingPosition(
       initialSettlePending.current = true;
       if (!moveToLatest(false) && !shouldKeepInitialSettleRef.current(box)) initialSettlePending.current = false;
     } else if (following.current) {
-      const moved = moveToLatest(!resized && !initialSettlePending.current);
+      // Layout corrections run before paint. Smooth-scrolling here exposes a
+      // temporary gap whenever a caption, message, or optional tool row changes
+      // height while the reader is following the latest content.
+      const moved = moveToLatest(false);
       if (initialSettlePending.current && !moved && !shouldKeepInitialSettleRef.current(box)) initialSettlePending.current = false;
     } else {
       // Content changes should preserve the reader's current anchor rather

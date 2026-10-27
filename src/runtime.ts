@@ -103,6 +103,7 @@ class SessionRuntime implements ChatRuntime {
   private toolEpoch = 0;
   private readonly tools = new Map<string, ToolCallRecord>();
   private toolIndex: ToolCallIndex | undefined;
+  private toolHistoryLoaded = false;
   private connection: ChangeConnection | undefined;
   private connectionController: AbortController | undefined;
   private connectionBinding: { generation: number; doubted: boolean } | undefined;
@@ -226,9 +227,12 @@ class SessionRuntime implements ChatRuntime {
     if (toolCallIndex !== this.state.toolCallIndex) this.publish({ toolCallIndex });
   }
 
-  private toolFailure(error: unknown): void {
+  private toolFailure(error: unknown, pendingTools: Iterable<ToolCallRecord> = []): void {
     this.stopTools();
-    this.publish({ toolCallsLoading: false, toolCallsError: errorText(error) });
+    for (const call of pendingTools) this.putTool(call);
+    const floor = this.state.hasOlder ? this.state.records[0]?.seq ?? 0 : 0;
+    this.publish({ toolCallIndex: trimIndexBelow(this.toolIndex, floor), toolCallsLoading: false,
+      toolCallsError: errorText(error) });
   }
 
   /** Tools are optional to conversation availability, but never silently complete. */
@@ -241,23 +245,33 @@ class SessionRuntime implements ChatRuntime {
     const controller = new AbortController();
     this.toolController = controller;
     const current = () => this.isCurrent(generation) && epoch === this.toolEpoch && this.checkIdentity();
-    this.tools.clear();
-    this.toolIndex = undefined;
-    this.publish({ toolCalls: Object.freeze([]), toolCallIndex: undefined, toolCallsLoading: true, toolCallsError: undefined });
+    // Keep the last displayed rows while an optional refresh is in flight. A
+    // reconnect or retry must not make the transcript collapse before the
+    // separate tool-history request has succeeded.
+    this.publish({ toolCallsLoading: !this.toolHistoryLoaded && !this.state.toolCallsError });
+    const liveDuringRead = new Map<string, ToolCallRecord>();
+    let readingSnapshot = true;
     try {
       this.toolReadiness = this.transport.openToolChanges(this.sessionKey, {
         onNotice: notice => {
           if (!current()) return;
           if (notice.operation !== 'tool') {
-            this.toolFailure(new Error('Tool subscription needs a fresh history read.'));
+            this.toolFailure(new Error('Tool subscription needs a fresh history read.'), liveDuringRead.values());
+            return;
+          }
+          if (readingSnapshot) {
+            const previous = liveDuringRead.get(notice.tool.id);
+            if (!previous || notice.tool.rowVersion > previous.rowVersion) {
+              liveDuringRead.set(notice.tool.id, notice.tool);
+            }
             return;
           }
           this.putTool(notice.tool);
           if (!this.state.toolCallsLoading) this.publishTools();
         },
-        onDoubt: reason => { if (current()) this.toolFailure(new Error(reason)); },
+        onDoubt: reason => { if (current()) this.toolFailure(new Error(reason), liveDuringRead.values()); },
         onAuthorizationLost: reason => {
-          if (current()) this.toolFailure(new AuthorizationError(reason));
+          if (current()) this.toolFailure(new AuthorizationError(reason), liveDuringRead.values());
         },
       }, controller.signal);
       const connection = await this.toolReadiness;
@@ -266,11 +280,21 @@ class SessionRuntime implements ChatRuntime {
       const range = { fromInclusive: this.state.records[0]?.seq ?? 0 };
       const calls = await this.transport.readToolCalls(this.sessionKey, range, controller.signal);
       if (!current()) return;
-      for (const call of calls) this.putTool(call);
-      this.publish({ toolCallsLoading: false });
+      const snapshot = new Map<string, ToolCallRecord>();
+      for (const call of [...calls, ...liveDuringRead.values()]) {
+        const previous = snapshot.get(call.id) ?? this.tools.get(call.id);
+        if (!previous || call.rowVersion > previous.rowVersion) snapshot.set(call.id, call);
+        else if (!snapshot.has(call.id)) snapshot.set(call.id, previous);
+      }
+      this.tools.clear();
+      this.toolIndex = undefined;
+      for (const call of snapshot.values()) this.putTool(call);
+      readingSnapshot = false;
+      this.toolHistoryLoaded = true;
+      this.publish({ toolCalls: Object.freeze([...this.tools.values()]), toolCallsLoading: false, toolCallsError: undefined });
       this.publishTools();
     } catch (error) {
-      if (current()) this.toolFailure(error);
+      if (current()) this.toolFailure(error, liveDuringRead.values());
     }
   }
 
@@ -298,6 +322,7 @@ class SessionRuntime implements ChatRuntime {
     this.stopTools();
     this.tools.clear();
     this.toolIndex = undefined;
+    this.toolHistoryLoaded = false;
     this.publish({ toolCallsEnabled: enabled, toolCalls: Object.freeze([]), toolCallIndex: undefined,
       toolCallsLoading: false, toolCallsError: undefined });
     if (enabled) void this.startTools();
