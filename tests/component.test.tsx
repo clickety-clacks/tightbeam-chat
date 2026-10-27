@@ -657,9 +657,9 @@ describe('conversation surface', () => {
 
     expect(screen.getByText('A new question')).toBeTruthy();
     expect(screen.getByText('A new answer')).toBeTruthy();
-    expect(screen.getByText('Reconnecting; the conversation may be out of date.')).toBeTruthy();
-    expect(screen.getByText('Reconnecting; the conversation may be out of date.')
-      .closest('.tb-chat-caption')?.classList.contains('tb-chat-caption-caution')).toBe(true);
+    expect(screen.queryByText(/Reconnecting|conversation may be out of date/)).toBeNull();
+    const reconnectingButton = screen.getByRole('button', { name: 'Connection status: Reconnecting. Show details' });
+    expect(reconnectingButton.querySelector('.tb-chat-status-dot')?.classList.contains('tb-chat-status-stale')).toBe(true);
     expect(screen.queryByText(/selected-session|gateway\.example/)).toBeNull();
     expect(composer.disabled).toBe(false);
     expect(composer.value).toBe('keep this draft');
@@ -671,6 +671,9 @@ describe('conversation surface', () => {
       runtime.state = { ...runtime.state, status: 'ready', statusDetail: undefined };
       for (const listener of runtime.listeners) listener();
     });
+    const connectedButton = screen.getByRole('button', { name: 'Connection status: Connected. Show details' });
+    expect(connectedButton.querySelector('.tb-chat-status-dot')?.classList.contains('tb-chat-status-ready')).toBe(true);
+    expect(screen.queryByText(/Reconnecting|conversation may be out of date/)).toBeNull();
     expect(composer.value).toBe('keep this draft');
     expect(composer.selectionStart).toBe(5);
     expect(document.activeElement).toBe(composer);
@@ -695,13 +698,46 @@ describe('conversation surface', () => {
       runtime.state = { ...runtime.state, status: 'error', statusDetail: 'Connection lost for exact-session' };
       for (const listener of runtime.listeners) listener();
     });
-    expect(screen.getByText('Disconnected. Open connection details to reconnect.')).toBeTruthy();
-    expect(screen.getByRole('alert').classList.contains('tb-chat-caption-danger')).toBe(true);
+    expect(screen.queryByText(/Disconnected|Connecting|Reconnecting/)).toBeNull();
     expect(screen.queryByText(/exact-session/)).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Connection status: Disconnected. Show details' }));
+    const disconnectedButton = screen.getByRole('button', { name: 'Connection status: Disconnected. Show details' });
+    expect(disconnectedButton.querySelector('.tb-chat-status-dot')?.classList.contains('tb-chat-status-error')).toBe(true);
+    fireEvent.click(disconnectedButton);
     const disconnected = screen.getByRole('dialog', { name: 'Connection details' });
+    expect(within(disconnected).queryByText('Disconnected')).toBeNull();
+    expect(within(disconnected).queryByText('Connection lost for exact-session')).toBeNull();
     fireEvent.click(within(disconnected).getByRole('button', { name: 'Reconnect' }));
     expect(runtime.rebuildOptions).toEqual([{ restart: true }]);
+  });
+
+  it('shows a live-feed reconnect only through the yellow then green status dot', () => {
+    const runtime = new FakeRuntime('feed-status', { status: 'ready', liveError: 'Changes socket closed' });
+    render(<TightbeamChat sessionKey="feed-status" adapter={adapterFor(runtime)} />);
+
+    const reconnectingButton = screen.getByRole('button', { name: 'Connection status: Reconnecting. Show details' });
+    expect(reconnectingButton.querySelector('.tb-chat-status-dot')?.classList.contains('tb-chat-status-stale')).toBe(true);
+    expect(screen.queryByText(/Reconnecting|Live updates are reconnecting|conversation may be out of date/)).toBeNull();
+    fireEvent.click(reconnectingButton);
+    const details = screen.getByRole('dialog', { name: 'Connection details' });
+    expect(within(details).queryByText(/Changes socket closed|Live updates:/)).toBeNull();
+    expect(within(details).getByRole('button', { name: 'Reconnect' })).toBeTruthy();
+
+    act(() => runtime.update({ liveError: undefined }));
+    const connectedButton = screen.getByRole('button', { name: 'Connection status: Connected. Show details' });
+    expect(connectedButton.querySelector('.tb-chat-status-dot')?.classList.contains('tb-chat-status-ready')).toBe(true);
+    expect(screen.queryByText(/Reconnecting|Live updates are reconnecting|conversation may be out of date/)).toBeNull();
+  });
+
+  it('keeps the authorization-loss explanation with the red connection dot', () => {
+    const runtime = new FakeRuntime('unauthorized-status', { status: 'unauthorized' });
+    render(<TightbeamChat sessionKey="unauthorized-status" adapter={adapterFor(runtime)} />);
+
+    expect(screen.getByRole('alert').textContent).toContain('Access to this conversation is unavailable.');
+    const disconnectedButton = screen.getByRole('button', {
+      name: 'Connection status: Access to this conversation is unavailable. Show details',
+    });
+    expect(disconnectedButton.querySelector('.tb-chat-status-dot')?.classList.contains('tb-chat-status-unauthorized')).toBe(true);
+    expect(screen.queryByText(/^Disconnected$/)).toBeNull();
   });
 
   it('renders only typed live activity with principal proof and clears captions at turn end', () => {
@@ -1160,7 +1196,7 @@ describe('conversation surface', () => {
     expect(composer).toHaveProperty('value', 'keep this draft');
   });
 
-  it('shows a nonterminal connection notice while retrying and keeps settled recovery actions readable', () => {
+  it('shows Sending while a message remains pending during a connection retry', () => {
     const sessionKey = 'send-recovery';
     const runtime = new FakeRuntime(sessionKey, { sends: [
       { sessionKey, deviceId: 'device', clientMessageId: 'failed-id', content: 'Failed text',
@@ -1177,8 +1213,9 @@ describe('conversation surface', () => {
     expect(screen.getByText('Failed text')).toBeTruthy();
     expect(screen.getByText('Uncertain text')).toBeTruthy();
     expect(screen.getByText('Offline text')).toBeTruthy();
-    const connectionNotice = screen.getByText('Not connected to the server; retrying…');
-    expect(connectionNotice.getAttribute('role')).toBe('status');
+    const sendStatus = screen.getByText('Sending.');
+    expect(sendStatus.getAttribute('role')).toBe('status');
+    expect(screen.queryByText(/Not connected to the server|retrying…/)).toBeNull();
     expect(screen.queryByText('Reconnect, then check the conversation before retrying this message.')).toBeNull();
     expect(screen.getAllByRole('alert').every((alert) => !alert.textContent?.includes('private'))).toBe(true);
     expect(screen.queryByText(/private target detail|private session detail/)).toBeNull();
