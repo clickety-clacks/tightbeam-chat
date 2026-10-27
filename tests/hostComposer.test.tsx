@@ -319,7 +319,7 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     }
   });
 
-  it('reports refusal and uncertain outcomes without automatically reposting', async () => {
+  it('restores readiness after a per-message refusal without a runtime rebuild', async () => {
     const events: HostComposerEvent[] = [];
     const transport = new HostComposerTransport();
     transport.nextSend = async (submission) => submission.content === 'refuse'
@@ -328,7 +328,7 @@ describe('versioned host composer seam on the real adapter and surface', () => {
         ? { outcome: 'uncertain', reason: 'ack timed out' }
         : { outcome: 'accepted' };
     installDeclaration(events);
-    const { runtimes } = openChat(transport, 'conversation-a');
+    openChat(transport, 'conversation-a');
     const ready = await waitForReady(events, 'conversation-a');
     const send = (id: string, content: string) => act(() => commandEntry()({ type: 'send',
       lifetimeId: ready.lifetimeId, sessionKey: ready.sessionKey, correlationId: id, content }));
@@ -352,14 +352,15 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     expect(screen.queryByRole('button', { name: 'Restore text to the composer' })).toBeNull();
     expect(transport.submissions).toHaveLength(2);
 
-    const blockedCorrelation = 'c_323e4567-e89b-42d3-a456-426614174000';
-    send(blockedCorrelation, 'host is unavailable');
-    expect(events.at(-1)).toMatchObject({ event: 'rejected', reason: 'not-ready' });
-    expect(transport.submissions).toHaveLength(2);
-
-    await act(async () => { await runtimes[0].rebuild({ restart: true }); });
     await waitFor(() => expect(events.filter((event) => event.event === 'ready' &&
       event.lifetimeId === ready.lifetimeId)).toHaveLength(2));
+    const unavailableIndex = events.findIndex((event) => event.event === 'unavailable' &&
+      event.lifetimeId === ready.lifetimeId);
+    const recoveredReadyIndex = events.findIndex((event, index) => index > unavailableIndex &&
+      event.event === 'ready' && event.lifetimeId === ready.lifetimeId);
+    expect(unavailableIndex).toBeGreaterThan(-1);
+    expect(recoveredReadyIndex).toBeGreaterThan(unavailableIndex);
+
     const recoveredCorrelation = 'c_423e4567-e89b-42d3-a456-426614174000';
     send(recoveredCorrelation, 'sending works again');
     await waitFor(() => expect(events.some((event) => event.event === 'accepted' &&
@@ -551,6 +552,7 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     const first = await waitForReady(events, 'conversation-a');
 
     act(() => transport.callbacks.get('conversation-a')?.onDoubt('connection closed'));
+    expect(screen.queryByRole('button', { name: 'Reconnect' })).toBeNull();
     expect(events.filter((event) => event.event === 'ready' && event.lifetimeId === first.lifetimeId)).toHaveLength(1);
     expect(events.some((event) => event.event === 'unavailable' && event.lifetimeId === first.lifetimeId)).toBe(false);
     act(() => commandEntry()({ type: 'send', lifetimeId: first.lifetimeId, sessionKey: first.sessionKey,

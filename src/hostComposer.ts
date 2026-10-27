@@ -161,6 +161,18 @@ export class HostComposerBridge {
     this.emit({ event: 'unavailable', version: 1, lifetimeId: lifetime.lifetimeId, reason });
   }
 
+  private markSendRefused(lifetime: Lifetime, detail?: string): void {
+    const state = lifetime.runtime.getSnapshot();
+    const reason = state.sessionNotFound ? 'session-not-found'
+      : state.status === 'unauthorized' || detail === 'unauthorized' ? 'unauthorized'
+        : 'send-refused';
+    this.markUnavailable(lifetime, reason);
+    // A typed per-message refusal can arrive after the runtime's last publish.
+    // If the selected session is still ready and authorized, restore the same
+    // lifetime now instead of waiting for unrelated activity to publish again.
+    if (reason === 'send-refused') this.onRuntimeChange(lifetime);
+  }
+
   attach(runtime: ChatRuntime, refreshBeforeReady = false): void {
     if (this.disposed) return;
     if (this.current?.runtime === runtime) return;
@@ -316,8 +328,7 @@ export class HostComposerBridge {
     else if (!lifetime.runtime.send(command.content, correlationId, hostSend)) {
       this.settle(lifetime, attempt, { event: 'failed', lifetimeId: lifetime.lifetimeId,
         correlationId, attempt: attempt.number, reason: 'refused', detail: 'send-not-started' });
-      const state = lifetime.runtime.getSnapshot();
-      this.markUnavailable(lifetime, state.status === 'unauthorized' ? 'unauthorized' : 'send-refused');
+      this.markSendRefused(lifetime, 'send-not-started');
     }
   }
 
@@ -339,7 +350,7 @@ export class HostComposerBridge {
         this.settle(lifetime, attempt, { event: 'failed', lifetimeId: lifetime.lifetimeId,
           correlationId: attempt.correlationId, attempt: attempt.number, reason: signal.reason, detail: signal.detail });
         if (signal.reason === 'refused') {
-          this.markUnavailable(lifetime, signal.detail === 'unauthorized' ? 'unauthorized' : 'send-refused');
+          this.markSendRefused(lifetime, signal.detail);
         }
         return;
       case 'uncertain':

@@ -880,7 +880,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
     : state.conversationError ? `Conversation history could not be loaded: ${state.conversationError}`
       : state.sessionError ? `Some conversation details are unavailable: ${state.sessionError}`
         : undefined;
-  const showHostReconnect = host.optedIn && (state.status === 'error' || Boolean(state.liveError));
+  const showHostReconnect = host.optedIn && state.status === 'error';
 
   const renderItem = useCallback((item: TimelineItem) => {
         if (item.kind === 'tool') return <ToolCallRow key={'tool-' + item.call.id} call={item.call} registerRow={reading.registerRow} />;
