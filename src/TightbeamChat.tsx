@@ -323,14 +323,7 @@ function statusText(state: RuntimeState): string {
   if (state.sessionNotFound) return 'Conversation not found';
   if (state.conversationError) return 'Conversation history unavailable';
   if (state.sessionError) return 'Session details unavailable';
-  switch (state.status) {
-    case 'ready': return 'Connected';
-    case 'unsupported': return 'This conversation is not supported';
-    case 'loading':
-    case 'stale':
-    case 'unauthorized':
-    case 'error': return 'Disconnected';
-  }
+  return state.status === 'ready' ? 'Connected' : 'This conversation is not supported';
 }
 
 function statusIndicatorState(state: RuntimeState): RuntimeState['status'] {
