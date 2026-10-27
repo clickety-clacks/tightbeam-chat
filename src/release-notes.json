@@ -1,5 +1,22 @@
 [
   {
+    "version": "v0.1.37",
+    "items": [
+      {
+        "title": "Conversation history",
+        "description": "Loaded messages stay visible through live-update recovery, even when a recovery response contains fewer messages."
+      },
+      {
+        "title": "Bottom follow",
+        "description": "When you are following the newest message, layout changes adjust the conversation immediately. Reading older messages and tapping Latest keep their existing behavior."
+      },
+      {
+        "title": "Tool history",
+        "description": "Visible tool calls stay in place while tool history refreshes or fails. An unavailable tool history shows its own error while the conversation remains usable."
+      }
+    ]
+  },
+  {
     "version": "v0.1.36",
     "items": [
       {
