@@ -4,6 +4,7 @@ import {
   sameOriginBridgeOrigin,
 } from '../examples/entry';
 import { browserHost } from '../examples/browserHost';
+import { AuthorizationError } from '../src/types';
 
 const configured = {
   gateway: 'https://default.example:8443',
@@ -164,5 +165,27 @@ describe('private browser entry and same-origin gateway bridge', () => {
     await vi.advanceTimersByTimeAsync(15_000);
     await rejected;
     expect(socket.closed).toBe(true);
+  });
+
+  it('treats a non-authentication socket error as a local feature failure', async () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket as unknown as typeof WebSocket);
+    const host = browserHost({ ...configured, gateway: 'https://gateway.example' });
+    const opening = host.openAuthenticatedChanges(new AbortController().signal);
+    const socket = FakeWebSocket.instances[0]!;
+    socket.open();
+    socket.frame({ type: 'error', code: 'gateway_unavailable' });
+    await expect(opening).rejects.toThrow('The Chat connection could not be established.');
+    await expect(opening).rejects.not.toBeInstanceOf(AuthorizationError);
+    expect(socket.closed).toBe(true);
+  });
+
+  it('keeps explicit authentication refusal distinct from service unavailability', async () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket as unknown as typeof WebSocket);
+    const host = browserHost({ ...configured, gateway: 'https://gateway.example' });
+    const opening = host.openAuthenticatedChanges(new AbortController().signal);
+    const socket = FakeWebSocket.instances[0]!;
+    socket.open();
+    socket.frame({ type: 'error', code: 'unauthorized' });
+    await expect(opening).rejects.toBeInstanceOf(AuthorizationError);
   });
 });

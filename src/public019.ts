@@ -1,6 +1,7 @@
 import {
   AuthorizationError,
   InvalidCursorError,
+  SessionNotFoundError,
   UnsupportedTargetError,
   type ConversationRecord,
   type ChangeConnection,
@@ -37,7 +38,7 @@ const gatewayIdentity = 'tightbeam-gateway';
 /** A fresh, host-authenticated socket. The host owns credentials and the auth handshake. */
 export interface Public019Channel {
   send(frame: Readonly<Record<string, unknown>>): void;
-  listen(onFrame: (frame: unknown) => void, onClose: () => void): () => void;
+  listen(onFrame: (frame: unknown) => void, onClose: (event?: { code?: number }) => void): () => void;
   close(): void;
 }
 
@@ -250,6 +251,17 @@ function checkedBaseUrl(raw: string): string {
   return url.href.replace(/\/$/, '');
 }
 
+function isSessionDetailPath(path: string): boolean {
+  try { return /^\/api\/sessions\/[^/]+$/.test(new URL(path, 'https://gateway.invalid').pathname); }
+  catch { return false; }
+}
+
+function authorizationFailureCode(value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+  return ['unauthorized', 'forbidden', 'not_authorized', 'not_authenticated',
+    'authentication_failed', 'auth_failed'].includes(value.toLowerCase());
+}
+
 /** Gateway REST history, protocol-2 changes, and human sending. */
 export function createPublic019Transport(config: Public019Config): { transport: ChatTransport; profile: TargetProfile } {
   const baseUrl = checkedBaseUrl(config.baseUrl);
@@ -268,6 +280,9 @@ export function createPublic019Transport(config: Public019Config): { transport: 
   async function get(path: string, signal: AbortSignal): Promise<Record<string, unknown>> {
     const response = await config.host.fetch(`${baseUrl}${path}`, { method: 'GET', signal, cache: 'no-store' });
     if (response.status === 401 || response.status === 403) throw new AuthorizationError('Human REST principal is not authorized.');
+    if (response.status === 404 && isSessionDetailPath(path)) {
+      throw new SessionNotFoundError('This conversation no longer exists.');
+    }
     if (response.status === 400 && path.includes('/messages?')) throw new InvalidCursorError('History cursor was rejected.');
     if (!response.ok) {
       let code: string | undefined;
@@ -348,9 +363,19 @@ export function createPublic019Transport(config: Public019Config): { transport: 
               if (readyTimer) clearTimeout(readyTimer);
               watchHeartbeat();
               resolveReady();
+            } else if (frame.type === 'auth_result' && frame.success === false) {
+              throw new AuthorizationError('Gateway refused the authenticated change subscription.');
+            } else if (frame.type === 'error' && authorizationFailureCode(frame.code)) {
+              throw new AuthorizationError('Gateway refused the authenticated change subscription.');
             } else if (frame.type === 'error' || frame.type === 'auth_result') {
-              throw new UnsupportedTargetError('Protocol-2 subscription was refused.');
+              throw new UnsupportedTargetError('The change subscription was refused.');
             }
+            return;
+          }
+          if ((frame.type === 'auth_result' && frame.success === false) ||
+              (frame.type === 'error' && authorizationFailureCode(frame.code))) {
+            close();
+            callbacks.onAuthorizationLost?.('Gateway refused the authenticated change subscription.');
             return;
           }
           if (frame.type !== 'change' && frame.type !== 'heartbeat') {
@@ -373,10 +398,15 @@ export function createPublic019Transport(config: Public019Config): { transport: 
           if (!ready) { close(); rejectReady(error); }
           else doubt(error instanceof Error ? error.message : String(error));
         }
-      }, () => {
+      }, (event) => {
         if (closed) return;
         close();
-        if (ready) callbacks.onDoubt('Firehose disconnected.');
+        if (ready) {
+          const reason = Number.isSafeInteger(event?.code)
+            ? `Firehose disconnected (close code ${event?.code}).`
+            : 'Firehose disconnected.';
+          callbacks.onDoubt(reason);
+        }
         else rejectReady(new Error('Firehose closed before subscription readiness.'));
       });
       if (signal.aborted) onAbort();
@@ -406,6 +436,17 @@ export function createPublic019Transport(config: Public019Config): { transport: 
         throw new UnsupportedTargetError('Unexpected sessions detail envelope.');
       }
       return decodePublic019Session(body.item, sessionKey);
+    },
+    async readRecentTurns(sessionKey, signal) {
+      const body = await get(`/api/sessions/${encodeURIComponent(sessionKey)}/turns?limit=50&tail=true`, signal);
+      if (body.schemaVersion !== 1 || body.resource !== 'turns' || !Array.isArray(body.items)) {
+        throw new UnsupportedTargetError('Unexpected recent-turn collection envelope.');
+      }
+      const page = record(body.page);
+      if (typeof page.hasMoreBefore !== 'boolean') {
+        throw new UnsupportedTargetError('Invalid recent-turn page metadata.');
+      }
+      return body.items.map((turn) => decodePublic019Turn(turn, sessionKey));
     },
     readTail: (sessionKey, signal) => readPage(sessionKey, 'tail=true', signal),
     readOlder: (sessionKey, before, signal) => readPage(sessionKey, `before=${encodeURIComponent(before)}`, signal),

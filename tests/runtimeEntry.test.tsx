@@ -19,66 +19,80 @@ const target = {
   deviceId: 'chat_abc123',
 };
 
+function unavailableGatewayFetch(configuration: typeof target, status = 500) {
+  return vi.fn<typeof fetch>(async (input) => {
+    const url = new URL(String(input), window.location.href);
+    if (url.pathname === '/chat-config.json') return jsonResponse(configuration);
+    const body = status === 503 ? { error: { code: 'chat_gateway_unavailable' } } : {};
+    return jsonResponse(body, false, status);
+  });
+}
+
+class InertWebSocket {
+  close = vi.fn();
+  send = vi.fn();
+}
+
 describe('runtime-configured browser entry', () => {
-  it('loads target configuration without exposing identity when the selected session endpoint fails', async () => {
-    const fetchMock = vi.fn<typeof fetch>()
-      .mockResolvedValueOnce(jsonResponse(target))
-      .mockResolvedValueOnce(jsonResponse({}, false));
+  it('keeps the conversation and composer available when history endpoints fail', async () => {
+    const fetchMock = unavailableGatewayFetch(target);
     vi.stubGlobal('fetch', fetchMock);
-    vi.stubGlobal('WebSocket', vi.fn());
+    vi.stubGlobal('WebSocket', InertWebSocket);
 
     render(<RuntimeEntry />);
 
-    expect((await screen.findByRole('alert')).textContent).toContain('Tightbeam REST request failed with HTTP 500.');
-    expect(screen.queryByRole('heading')).toBeNull();
+    expect(await screen.findByRole('textbox', { name: /message to/i })).toBeTruthy();
+    expect((await screen.findByRole('alert')).textContent).toContain('Conversation history could not be loaded: Tightbeam REST request failed with HTTP 500.');
+    expect(screen.getByRole('log')).toBeTruthy();
     expect(screen.queryByText(target.gateway)).toBeNull();
     expect(screen.queryByText(target.sessionKey)).toBeNull();
-    expect(screen.queryByRole('button', { name: /sign in|pair/i })).toBeNull();
+    expect((screen.getByRole('textbox', { name: /message to/i }) as HTMLTextAreaElement).disabled).toBe(false);
+    expect(screen.getByText('Activity status could not be loaded.')).toBeTruthy();
     expect(fetchMock.mock.calls[0][0]).toBe('/chat-config.json');
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
-    const request = new URL(String(fetchMock.mock.calls[1][0]));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input]) =>
+      new URL(String(input), window.location.href).pathname.endsWith('/turns'))).toBe(true));
+    const request = new URL(String(fetchMock.mock.calls[1][0]), window.location.href);
     expect(request.pathname).toBe(`/__chat/api/sessions/${encodeURIComponent(target.sessionKey)}`);
     expect(request.searchParams.get('gateway')).toBe(target.gateway);
   });
 
-  it('routes a different-Gateway link exactly and offers recovery when no mapping exists', async () => {
+  it('keeps Chat available and reports a local routing error when a linked target has no mapping', async () => {
     window.history.replaceState({}, '', '/?gateway=https%3A%2F%2Fother.example&session=agent%3Aother%2Fchat');
-    const fetchMock = vi.fn<typeof fetch>()
-      .mockResolvedValueOnce(jsonResponse(target))
-      .mockResolvedValueOnce(jsonResponse({ error: { code: 'chat_gateway_unavailable' } }, false, 503));
+    const fetchMock = unavailableGatewayFetch(target, 503);
     vi.stubGlobal('fetch', fetchMock);
 
     render(<RuntimeEntry />);
 
-    const link = await screen.findByRole('link', { name: 'Open the configured conversation' });
-    expect(link.getAttribute('href')).toBe('/');
+    expect(await screen.findByRole('textbox', { name: /message to/i })).toBeTruthy();
     expect(screen.getByRole('alert').textContent).toContain('No Gateway access is provisioned for the selected conversation.');
+    expect(screen.getByRole('log')).toBeTruthy();
     expect(screen.queryByText('https://other.example')).toBeNull();
     expect(screen.queryByText('agent:other/chat')).toBeNull();
     expect(screen.queryByText(target.gateway)).toBeNull();
     expect(screen.queryByRole('button', { name: /sign in|pair/i })).toBeNull();
-    expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock.mock.calls[0][0]).toBe('/chat-config.json');
-    const request = new URL(String(fetchMock.mock.calls[1][0]));
+    const request = new URL(String(fetchMock.mock.calls[1][0]), window.location.href);
     expect(request.searchParams.get('gateway')).toBe('https://other.example');
+    expect(fetchMock.mock.calls.some(([input]) =>
+      new URL(String(input), window.location.href).pathname.endsWith('/turns'))).toBe(true);
   });
 
   it('keeps linked selection private while its session endpoint is unavailable', async () => {
     const linkedSession = 'agent:example/linked-chat';
     window.history.replaceState({}, '', `/?gateway=${encodeURIComponent(target.gateway)}&session=${encodeURIComponent(linkedSession)}`);
-    const fetchMock = vi.fn<typeof fetch>()
-      .mockResolvedValueOnce(jsonResponse(target))
-      .mockResolvedValueOnce(jsonResponse({}, false));
+    const fetchMock = unavailableGatewayFetch(target);
     vi.stubGlobal('fetch', fetchMock);
-    vi.stubGlobal('WebSocket', vi.fn());
+    vi.stubGlobal('WebSocket', InertWebSocket);
 
     render(<RuntimeEntry />);
 
-    expect((await screen.findByRole('alert')).textContent).toContain('Tightbeam REST request failed with HTTP 500.');
+    expect(await screen.findByRole('textbox', { name: /message to/i })).toBeTruthy();
+    expect((await screen.findByRole('alert')).textContent).toContain('Conversation history could not be loaded: Tightbeam REST request failed with HTTP 500.');
+    expect(screen.getByRole('log')).toBeTruthy();
     expect(screen.queryByText(linkedSession)).toBeNull();
     expect(screen.queryByText(target.sessionKey)).toBeNull();
     expect(fetchMock.mock.calls[0][0]).toBe('/chat-config.json');
-    const request = new URL(String(fetchMock.mock.calls[1][0]));
+    const request = new URL(String(fetchMock.mock.calls[1][0]), window.location.href);
     expect(request.pathname).toBe(`/__chat/api/sessions/${encodeURIComponent(linkedSession)}`);
     expect(request.searchParams.get('gateway')).toBe(target.gateway);
   });

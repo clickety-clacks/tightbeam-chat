@@ -16,30 +16,20 @@ export function HostPage({ defaultTarget, configurationError }: {
 
   useEffect(() => {
     if (!selected) return;
-    const controller = new AbortController();
-    let current = true;
     setAdapter(undefined);
     setError('');
-    void (async () => {
-      try {
-        const host = browserHost(selected);
-        const origin = window.location.origin;
-        const { transport, profile } = createPublic019Transport({
-          baseUrl: `${origin}/__chat`,
-          targetGateway: selected.gateway,
-          host,
-        });
-        // Resolve the selected conversation through the same endpoint Chat uses
-        // at startup. Release metadata is not a compatibility check.
-        await transport.readSession(selected.sessionKey, controller.signal);
-        if (current) setAdapter(createTightbeamAdapter(transport, profile));
-      } catch (failure) {
-        if (current && !controller.signal.aborted) {
-          setError(failure instanceof Error ? failure.message : 'The configured Chat service is unavailable.');
-        }
-      }
-    })();
-    return () => { current = false; controller.abort(); };
+    try {
+      const host = browserHost(selected);
+      const origin = window.location.origin;
+      const { transport, profile } = createPublic019Transport({
+        baseUrl: `${origin}/__chat`,
+        targetGateway: selected.gateway,
+        host,
+      });
+      setAdapter(createTightbeamAdapter(transport, profile));
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : 'The configured Chat service is unavailable.');
+    }
   }, [selected?.gateway, selected?.sessionKey, selected?.principalKey, selected?.deviceId]);
 
   if (selected && adapter) return <TightbeamChat sessionKey={selected.sessionKey} adapter={adapter} />;

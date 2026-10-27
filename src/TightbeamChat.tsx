@@ -316,14 +316,18 @@ function sourceLabel(side: Bubble['side'], agentName: string): string {
 }
 
 function statusText(state: RuntimeState): string {
-  switch (state.status) {
-    case 'ready': return 'Connected';
-    case 'loading': return 'Connecting';
-    case 'stale': return 'Reconnecting; conversation may be out of date';
-    case 'unsupported': return 'This conversation is not supported';
-    case 'unauthorized': return 'Access to this conversation is unavailable';
-    case 'error': return 'Disconnected';
-  }
+  if (state.status === 'error') return 'Disconnected';
+  if (state.status === 'loading') return 'Connecting';
+  if (state.status === 'stale' || (state.status === 'ready' && state.liveError)) return 'Reconnecting';
+  if (state.status === 'unauthorized') return 'Access to this conversation is unavailable';
+  if (state.sessionNotFound) return 'Conversation not found';
+  if (state.conversationError) return 'Conversation history unavailable';
+  if (state.sessionError) return 'Session details unavailable';
+  return state.status === 'ready' ? 'Connected' : 'This conversation is not supported';
+}
+
+function statusIndicatorState(state: RuntimeState): RuntimeState['status'] {
+  return state.status === 'ready' && state.liveError ? 'stale' : state.status;
 }
 
 function activeCaption(provenance?: TurnProvenance): { icon: string; text: string } | undefined {
@@ -346,7 +350,7 @@ function activeCaption(provenance?: TurnProvenance): { icon: string; text: strin
 }
 
 function StatusIcon({ state }: { state: RuntimeState }) {
-  const status = state.status;
+  const status = statusIndicatorState(state);
   return <span className={`tb-chat-status-dot tb-chat-status-${status}`} aria-hidden="true" />;
 }
 
@@ -507,7 +511,7 @@ const Composer = forwardRef<ComposerHandle, {
       onSettings();
       return;
     }
-    if (state.status !== 'ready') return;
+    if (state.status === 'unauthorized') return;
     if (runtime.send(draft)) {
       setDraft('');
       onSendAccepted();
@@ -546,10 +550,13 @@ const Composer = forwardRef<ComposerHandle, {
         <StatusIcon state={state} />
       </button>}
       {!suppressStatus && statusOpen && <div className="tb-chat-status-popup" id={statusId} role="dialog" aria-label="Connection details">
-        <div className="tb-chat-popup-heading"><StatusIcon state={state} /><strong>{statusName}</strong>
+        <div className="tb-chat-popup-heading"><StatusIcon state={state} />
           <button type="button" aria-label="Close connection details" onClick={closeStatusPopup}>×</button>
         </div>
-        {state.statusDetail && <p>{state.statusDetail}</p>}
+        {state.sessionError && <p>Session details: {state.sessionError}</p>}
+        {state.sessionNotFound && <p>This conversation no longer exists.</p>}
+        {state.conversationError && <p>Conversation history: {state.conversationError}</p>}
+        {state.historyError && <p>Earlier messages: {state.historyError}</p>}
         <dl>
           <dt>Gateway</dt><dd>{state.targetGateway || 'Unavailable'}</dd>
           <dt>Session</dt><dd>{state.sessionKey}</dd>
@@ -557,10 +564,11 @@ const Composer = forwardRef<ComposerHandle, {
           <dt>Model</dt><dd>{state.session?.model || 'Unavailable'}</dd>
           <dt>Harness</dt><dd>{state.session?.harness || 'Unavailable'}</dd>
         </dl>
-        {state.status === 'error' && <button type="button" onClick={() => void runtime.rebuild({ restart: true })}>Reconnect</button>}
+        {(state.status === 'error' || state.sessionError || state.sessionNotFound || state.conversationError || state.liveError) &&
+          <button type="button" onClick={() => void runtime.rebuild({ restart: true })}>Reconnect</button>}
       </div>}
       <button ref={sendControl} type="submit" className="tb-chat-send-button" aria-label="Send message"
-        disabled={!draft.trim() || (state.status !== 'ready' && !isSettingsCommand(draft))}>
+        disabled={!draft.trim() || (state.status === 'unauthorized' && !isSettingsCommand(draft))}>
         <span className="tb-chat-send-button-disc" aria-hidden="true" />
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5m0 0L6 11m6-6 6 6" /></svg>
       </button>
@@ -712,8 +720,6 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
     previousTail.current = { generation: state.generation, ready: state.status === 'ready',
       seq: Math.max(previousTail.current?.seq ?? -1, tailSeq) };
   }, [state.generation, state.status, tailSeq]);
-  const statusName = statusText(state);
-
   useEffect(() => {
     if (host.settingsRequestRevision <= handledSettingsRevision.current) return;
     handledSettingsRevision.current = host.settingsRequestRevision;
@@ -868,16 +874,13 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
     if (state.historyError || current < olderHistoryPrefetchDistance(box)) loadOlder();
   };
 
-  const notice = state.status === 'ready' ? undefined
-    : state.status === 'loading' ? 'Connecting to the selected conversation…'
-      : state.status === 'stale' ? 'Reconnecting; the conversation may be out of date.'
-        : state.status === 'error' ? (host.optedIn
-          ? 'Disconnected. Reconnect to refresh the conversation.'
-          : 'Disconnected. Open connection details to reconnect.')
-          : statusName;
-  const noticeTone = state.status === 'stale' ? 'caution'
-    : state.status === 'error' || state.status === 'unauthorized' || state.status === 'unsupported' ? 'danger'
-      : 'neutral';
+  const localNotice = state.sessionNotFound ? 'This conversation no longer exists.'
+    : state.status === 'unauthorized' ? 'Access to this conversation is unavailable.'
+      : state.status === 'unsupported' ? 'This conversation is not supported.'
+    : state.conversationError ? `Conversation history could not be loaded: ${state.conversationError}`
+      : state.sessionError ? `Some conversation details are unavailable: ${state.sessionError}`
+        : undefined;
+  const showHostReconnect = host.optedIn && state.status === 'error';
 
   const renderItem = useCallback((item: TimelineItem) => {
         if (item.kind === 'tool') return <ToolCallRow key={'tool-' + item.call.id} call={item.call} registerRow={reading.registerRow} />;
@@ -900,13 +903,14 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
         const unreachable = send.reason === 'unreachable';
         const retryUnavailable = send.reason === 'retry-unavailable';
         const reconnectingSend = send.status === 'pending' && unreachable;
-        const retryAvailable = !hostManaged && ['failed', 'uncertain'].includes(send.status) && !send.reconciled;
+        const retryAvailable = !hostManaged && !retryUnavailable &&
+          ['failed', 'uncertain'].includes(send.status) && !send.reconciled;
         return <article ref={element => reading.registerRow(`local-${send.clientMessageId}`, element)} className="tb-chat-bubble tb-chat-bubble-human tb-chat-local" key={send.clientMessageId}
           data-record-key={`local-${send.clientMessageId}`} data-scroll-key={`local-${send.clientMessageId}`} aria-label={`Your message, ${send.status}`}>
           <div className="tb-chat-bubble-body">{markdownBody(send.content)}</div>
-          <p className="tb-chat-send-state" data-send-status={send.status} role={reconnectingSend ? 'status' : undefined}>{send.status === 'uncertain' ? 'Delivery is uncertain'
-            : send.status === 'failed' ? unreachable ? 'Not connected to the server' : 'Message could not be sent'
-              : send.status === 'pending' ? reconnectingSend ? 'Not connected to the server; retrying…' : 'Sending…'
+          <p className="tb-chat-send-state" data-send-status={send.status} role={send.status === 'pending' ? 'status' : undefined}>{send.status === 'uncertain' ? 'Delivery is uncertain'
+            : send.status === 'failed' ? 'Message could not be sent'
+              : send.status === 'pending' ? 'Sending…'
                 : hostManaged && !send.reconciled ? 'Accepted; checking conversation history' : 'Sent'}</p>
           {send.reason && !reconnectingSend && <p className="tb-chat-send-reason" role="alert">
             {send.status === 'uncertain'
@@ -915,16 +919,15 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
                 : retryUnavailable
                   ? 'This target stopped supporting safe retries. Delivery could not be confirmed; check the conversation before retrying.'
                 : 'Delivery could not be confirmed. Retry after the connection is current.'
-              : unreachable ? 'Reconnect, then check the conversation before retrying this message.'
+              : unreachable ? 'Delivery could not be confirmed. Check the conversation before retrying this message.'
               : hostManaged
                 ? 'This message was refused. Any retry or text editing belongs in the host composer.'
                 : 'The message could not be sent. Retry it or restore the text to the composer.'}
           </p>}
           {retryAvailable && <div className="tb-chat-send-actions">
-            <button type="button" disabled={state.status !== 'ready'}
+            <button type="button" disabled={state.status === 'unauthorized'}
               onClick={() => void runtime.retrySend(send.clientMessageId)}>Retry message</button>
-            {state.status !== 'ready' && <span>{state.status === 'unsupported'
-              ? 'Reconnect to a supported target before retrying.' : 'Reconnect before retrying.'}</span>}
+            {state.status === 'unauthorized' && <span>Access to this conversation is unavailable.</span>}
             <button type="button" onClick={() => composer.current?.restore(send.content)}>Restore text to the composer</button>
           </div>}
           <time className="tb-chat-time" dateTime={time.dateTime}>{time.text}</time>
@@ -939,15 +942,17 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
       onPointerDown={reading.interrupt} onPointerMove={(event) => { if (event.buttons !== 0) reading.noteUserScroll(); }}
       onKeyDown={(event) => { if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) { reading.interrupt(); reading.noteUserScroll(); } }}
       aria-label={`${agentName || 'Conversation'} messages`} aria-live="polite" aria-relevant="additions text">
-      {state.loadingOlder && <div className="tb-chat-history-loading tb-chat-caption tb-chat-caption-neutral" role="status">Loading earlier messages…</div>}
-      <div className="tb-chat-message-content" ref={reading.content}>
-      {notice && <div className={`tb-chat-notice tb-chat-caption tb-chat-caption-${noticeTone} tb-chat-notice-${state.status}`} role={state.status === 'loading' ? 'status' : 'alert'}>
+      {(state.loadingOlder || state.historyError || localNotice || showHostReconnect) && <div className={`tb-chat-runtime-notice ${state.loadingOlder ? 'tb-chat-history-loading ' : ''} tb-chat-caption ${state.historyError || state.sessionNotFound || state.sessionError || state.conversationError || state.status === 'unauthorized' || state.status === 'unsupported'
+        ? 'tb-chat-caption-danger' : 'tb-chat-caption-neutral'}`} role={state.historyError || state.sessionNotFound || state.conversationError || state.sessionError || state.status === 'unauthorized' || state.status === 'unsupported' ? 'alert' : 'status'}>
         <span className="tb-chat-caption-body">
-          <span>{notice}</span>
-          {host.optedIn && state.status === 'error' &&
+          {(state.loadingOlder || state.historyError || localNotice) && <span>{state.loadingOlder ? 'Loading earlier messages…'
+            : state.historyError ? `Earlier messages could not be loaded: ${state.historyError}` : localNotice}</span>}
+          {state.historyError && <button type="button" onClick={loadOlder}>Retry loading messages</button>}
+          {(state.sessionNotFound || state.sessionError || state.conversationError || showHostReconnect) &&
             <button type="button" onClick={() => void runtime.rebuild({ restart: true })}>Reconnect</button>}
         </span>
       </div>}
+      <div className="tb-chat-message-content" ref={reading.content}>
       {state.toolCallsEnabled !== undefined && <div className="tb-chat-tool-controls">
         <button type="button" aria-pressed={state.toolCallsEnabled}
           onClick={() => runtime.setToolCallsEnabled?.(!state.toolCallsEnabled)}>Tool calls</button>
@@ -959,12 +964,6 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
           </span>
         </span>}
       </div>}
-      {state.historyError && <div className="tb-chat-history-error tb-chat-caption tb-chat-caption-danger" role="alert">
-        <span className="tb-chat-caption-body">
-          <span>Earlier messages could not be loaded: {state.historyError}</span>
-          <button type="button" onClick={loadOlder}>Retry loading messages</button>
-        </span>
-      </div>}
       {projection.issues.length > 0 && <div className="tb-chat-history-error tb-chat-caption tb-chat-caption-danger" role="alert">
         Some message sources could not be interpreted. Conversation filtering is incomplete.
       </div>}
@@ -973,7 +972,11 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
       {caption && <div className="tb-chat-active-caption tb-chat-caption tb-chat-caption-neutral" role="status" aria-label={`Active turn: ${caption.text}`}>
         <span className="tb-chat-caption-body"><span aria-hidden="true">{caption.icon}</span><span>{caption.text}</span></span>
       </div>}
-      {state.status === 'ready' && state.records.length === 0 && localSends.length === 0 && !state.hasOlder &&
+      {!caption && state.activeTurnError && <div className="tb-chat-active-caption tb-chat-caption tb-chat-caption-caution" role="status">
+        <span className="tb-chat-caption-body">Activity status could not be loaded.</span>
+      </div>}
+      {state.status === 'ready' && !state.conversationError && !state.sessionNotFound &&
+        state.records.length === 0 && localSends.length === 0 && !state.hasOlder &&
         <p className="tb-chat-empty">No messages yet.</p>}
       </div>
     </div>
@@ -1019,7 +1022,10 @@ export function TightbeamChat({ sessionKey, adapter, identityKey, renderMessage,
   }, [adapter, sessionKey, key]);
   if (!opened || opened.key !== key || opened.adapter !== adapter) {
     return <section className={`tb-chat ${className || ''}`} aria-label="Conversation" role="status">
-      <span className="tb-chat-initial-caption tb-chat-caption tb-chat-caption-neutral">Connecting…</span>
+      <span className="tb-chat-initial-caption">
+        <span className="tb-chat-status-dot tb-chat-status-loading" aria-hidden="true" />
+        <span className="tb-chat-sr-only">Connecting</span>
+      </span>
     </section>;
   }
   return <ChatBody key={key} runtime={opened.runtime} renderMessage={renderMessage}

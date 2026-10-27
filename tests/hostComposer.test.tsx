@@ -4,10 +4,11 @@ import { TightbeamChat } from '../src/TightbeamChat';
 import { createTightbeamAdapter } from '../src/runtime';
 import { HOST_COMMAND_NAME, HOST_DECLARATION_NAME, HostComposerBridge, type HostComposerCommandEntry, type HostComposerEvent } from '../src/hostComposer';
 import type {
-  CanonicalMessage, ChangeCallbacks, ChangeNotice, ChatRuntime, ChatTransport,
+  CanonicalMessage, CanonicalTurn, ChangeCallbacks, ChangeNotice, ChatRuntime, ChatTransport,
   ConversationPage, ConversationRecord, HostIdentity, HumanSendResult, HumanSubmission,
   SessionRecord, TargetCapabilities, TargetObservation, TargetProfile, TightbeamAdapter,
 } from '../src/types';
+import { AuthorizationError, SessionNotFoundError } from '../src/types';
 
 const capabilities: TargetCapabilities = {
   newestTail: true, stableOlderCursor: true, retainedHistoryAcrossResets: true,
@@ -27,24 +28,33 @@ function deferred<T>() {
 class HostComposerTransport implements ChatTransport {
   readonly submissions: HumanSubmission[] = [];
   readonly records = new Map<string, ConversationRecord[]>();
+  recentTurns: CanonicalTurn[] = [];
   readonly callbacks = new Map<string, ChangeCallbacks>();
   readonly closed = new Set<string>();
+  changeOpenCount = 0;
   readonly targetGateway = 'https://gateway.example:8443';
   readonly observation: TargetObservation = profile;
   readyGate?: ReturnType<typeof deferred<void>>;
+  readGate?: ReturnType<typeof deferred<void>>;
   failReadSessionOnce = false;
+  missingSession = false;
+  authorizationLost = false;
   nextSend?: (submission: HumanSubmission) => Promise<HumanSendResult>;
   private seq = 0;
 
   currentIdentity = () => identity;
   inspectTarget = async () => this.observation;
   openChanges = async (sessionKey: string, callbacks: ChangeCallbacks, signal: AbortSignal) => {
+    this.changeOpenCount++;
     this.callbacks.set(sessionKey, callbacks);
     if (this.readyGate) await this.readyGate.promise;
     if (signal.aborted) throw new Error('Changes subscription was canceled.');
     return { close: () => { this.closed.add(sessionKey); this.callbacks.delete(sessionKey); } };
   };
   readSession = async (sessionKey: string): Promise<SessionRecord> => {
+    if (this.readGate) await this.readGate.promise;
+    if (this.authorizationLost) throw new AuthorizationError('Access to this conversation is no longer authorized.');
+    if (this.missingSession) throw new SessionNotFoundError('This conversation no longer exists.');
     if (this.failReadSessionOnce) {
       this.failReadSessionOnce = false;
       throw new Error('Temporary history read failure.');
@@ -52,15 +62,20 @@ class HostComposerTransport implements ChatTransport {
     return { sessionKey, rowVersion: 1, displayName: `Agent ${sessionKey}`, model: 'Model A', harness: 'Harness A', raw: {} };
   };
   readTail = async (sessionKey: string): Promise<ConversationPage> => {
+    if (this.readGate) await this.readGate.promise;
+    if (this.authorizationLost) throw new AuthorizationError('Access to this conversation is no longer authorized.');
     const rows = this.records.get(sessionKey) ?? [];
     return { records: rows.slice(-50), oldestCursor: rows[0]?.id ?? null, hasOlder: false, coverage: sessionKey };
   };
+  readRecentTurns = async (sessionKey: string): Promise<readonly CanonicalTurn[]> =>
+    this.recentTurns.filter(turn => turn.sessionKey === sessionKey);
   readOlder = async (_sessionKey: string, _before: string): Promise<ConversationPage> => ({
     records: [], oldestCursor: null, hasOlder: false, coverage: _sessionKey,
   });
   proveCoverage = (session: SessionRecord, page: ConversationPage, _buffered: readonly ChangeNotice[]) => page.coverage === session.sessionKey;
   sendHuman = async (submission: HumanSubmission): Promise<HumanSendResult> => {
     this.submissions.push(submission);
+    if (this.authorizationLost) throw new AuthorizationError('Access to this conversation is no longer authorized.');
     return this.nextSend ? this.nextSend(submission) : { outcome: 'accepted' };
   };
 
@@ -74,6 +89,14 @@ class HostComposerTransport implements ChatTransport {
     rows.push(record);
     this.records.set(submission.sessionKey, rows);
     return record;
+  }
+
+  emit(record: ConversationRecord): void {
+    this.callbacks.get(record.sessionKey)?.onNotice({ operation: 'upsert', record });
+  }
+
+  emitTurn(turn: CanonicalTurn): void {
+    this.callbacks.get(turn.sessionKey)?.onNotice({ operation: 'turn', turn });
   }
 }
 
@@ -126,9 +149,11 @@ afterEach(() => {
 });
 
 describe('versioned host composer seam on the real adapter and surface', () => {
-  it('keeps the web composer until fresh ready, then hides it and exposes only text capability', async () => {
+  it('keeps the web composer until the snapshot is ready, without waiting for live updates', async () => {
     const events: HostComposerEvent[] = [];
     const transport = new HostComposerTransport();
+    const readGate = deferred<void>();
+    transport.readGate = readGate;
     transport.readyGate = deferred<void>();
     installDeclaration(events);
     openChat(transport, 'conversation-a');
@@ -136,7 +161,7 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     await screen.findByRole('textbox');
     expect(screen.queryByRole('button', { name: /Connection status/ })).toBeNull();
     expect(events.some((event) => event.event === 'ready')).toBe(false);
-    await act(async () => { transport.readyGate?.resolve(); });
+    await act(async () => { readGate.resolve(); });
 
     const ready = await waitForReady(events, 'conversation-a');
     expect(Object.keys(ready).sort()).toEqual([
@@ -148,6 +173,9 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     await waitFor(() => expect(screen.queryByRole('textbox')).toBeNull());
     expect(screen.queryByRole('button', { name: /Connection status/ })).toBeNull();
     expect(document.querySelector('.tb-chat-host-composer-hidden .tb-chat-viewport')).not.toBeNull();
+    expect(events.filter((event) => event.event === 'ready')).toHaveLength(1);
+    await act(async () => { transport.readyGate?.resolve(); });
+    expect(events.filter((event) => event.event === 'ready')).toHaveLength(1);
   });
 
   it('leaves keyboard navigation to the host after native-composer opt-in', async () => {
@@ -291,26 +319,31 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     }
   });
 
-  it('reports refusal and uncertain outcomes without automatically reposting', async () => {
+  it('restores readiness after a per-message refusal without a runtime rebuild', async () => {
     const events: HostComposerEvent[] = [];
     const transport = new HostComposerTransport();
     transport.nextSend = async (submission) => submission.content === 'refuse'
       ? { outcome: 'refused', reason: 'client_message_id_conflict' }
-      : { outcome: 'uncertain', reason: 'ack timed out' };
+      : submission.content === 'uncertain'
+        ? { outcome: 'uncertain', reason: 'ack timed out' }
+        : { outcome: 'accepted' };
     installDeclaration(events);
     openChat(transport, 'conversation-a');
     const ready = await waitForReady(events, 'conversation-a');
     const send = (id: string, content: string) => act(() => commandEntry()({ type: 'send',
       lifetimeId: ready.lifetimeId, sessionKey: ready.sessionKey, correlationId: id, content }));
 
-    send(correlation, 'refuse');
-    await waitFor(() => expect(events.some((event) => event.event === 'failed' && event.reason === 'refused')).toBe(true));
-    expect(events.find((event) => event.event === 'failed')).toMatchObject({ detail: 'client_message_id_conflict', attempt: 1 });
     const second = 'c_223e4567-e89b-42d3-a456-426614174000';
     send(second, 'uncertain');
     await waitFor(() => expect(events.some((event) => event.event === 'uncertain' && event.correlationId === second)).toBe(true));
     expect(events.find((event) => event.event === 'uncertain' && event.correlationId === second))
       .toMatchObject({ reason: 'ack-lost', attempt: 1 });
+    send(correlation, 'refuse');
+    await waitFor(() => expect(events.some((event) => event.event === 'failed' && event.reason === 'refused')).toBe(true));
+    expect(events.find((event) => event.event === 'failed')).toMatchObject({ detail: 'client_message_id_conflict', attempt: 1 });
+    expect(events.find((event) => event.event === 'unavailable')).toMatchObject({
+      event: 'unavailable', reason: 'send-refused', lifetimeId: ready.lifetimeId,
+    });
     expect(screen.getByText('Message could not be sent')).toBeTruthy();
     expect(screen.getByText('Delivery is uncertain')).toBeTruthy();
     expect(screen.getByText('This message was refused. Any retry or text editing belongs in the host composer.')).toBeTruthy();
@@ -318,6 +351,21 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     expect(screen.queryByRole('button', { name: 'Retry message' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Restore text to the composer' })).toBeNull();
     expect(transport.submissions).toHaveLength(2);
+
+    await waitFor(() => expect(events.filter((event) => event.event === 'ready' &&
+      event.lifetimeId === ready.lifetimeId)).toHaveLength(2));
+    const unavailableIndex = events.findIndex((event) => event.event === 'unavailable' &&
+      event.lifetimeId === ready.lifetimeId);
+    const recoveredReadyIndex = events.findIndex((event, index) => index > unavailableIndex &&
+      event.event === 'ready' && event.lifetimeId === ready.lifetimeId);
+    expect(unavailableIndex).toBeGreaterThan(-1);
+    expect(recoveredReadyIndex).toBeGreaterThan(unavailableIndex);
+
+    const recoveredCorrelation = 'c_423e4567-e89b-42d3-a456-426614174000';
+    send(recoveredCorrelation, 'sending works again');
+    await waitFor(() => expect(events.some((event) => event.event === 'accepted' &&
+      event.correlationId === recoveredCorrelation)).toBe(true));
+    expect(transport.submissions).toHaveLength(3);
   });
 
   it('allows same-correlation user retry after uncertainty and reconciles before another post', async () => {
@@ -375,7 +423,7 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     const events: HostComposerEvent[] = [];
     const transport = new HostComposerTransport();
     const gate = deferred<void>();
-    transport.readyGate = gate;
+    transport.readGate = gate;
     const pending = deferred<HumanSendResult>();
     transport.nextSend = () => pending.promise;
     installDeclaration(events);
@@ -385,9 +433,13 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     act(() => command({ type: 'send', lifetimeId: 'before-ready', sessionKey: 'conversation-a',
       correlationId: correlation, content: 'pending' }));
     expect(events.at(-1)).toMatchObject({ event: 'rejected', reason: 'not-ready' });
+    const notReadyIndex = events.findIndex((event) => event.event === 'rejected' && event.reason === 'not-ready');
     expect(screen.queryByRole('button', { name: /Connection status/ })).toBeNull();
     await act(async () => { gate.resolve(); });
     const ready = await waitForReady(events, 'conversation-a');
+    const recoveredReadyIndex = events.findIndex((event) => event.event === 'ready' && event.lifetimeId === ready.lifetimeId);
+    expect(notReadyIndex).toBeGreaterThanOrEqual(0);
+    expect(recoveredReadyIndex).toBeGreaterThan(notReadyIndex);
     act(() => command({ type: 'send', lifetimeId: 'old-lifetime', sessionKey: 'conversation-a',
       correlationId: correlation, content: 'pending' }));
     expect(events.at(-1)).toMatchObject({ event: 'rejected', reason: 'target-mismatch' });
@@ -431,7 +483,7 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     const events: HostComposerEvent[] = [];
     const transport = new HostComposerTransport();
     const gate = deferred<void>();
-    transport.readyGate = gate;
+    transport.readGate = gate;
     installDeclaration(events);
     const { runtimes } = openChat(transport, 'local-settings');
     await screen.findByRole('textbox');
@@ -488,25 +540,129 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     expect(transport.submissions[0].sessionKey).toBe('session-a');
   });
 
-  it('reports unavailable during reconnect and returns ready in the same lifetime', async () => {
+  it('keeps the host composer ready and sending during a live-update reconnect', async () => {
     const events: HostComposerEvent[] = [];
     const transport = new HostComposerTransport();
+    transport.nextSend = async (submission) => {
+      transport.addCanonical(submission);
+      return { outcome: 'accepted' };
+    };
     installDeclaration(events);
     const { runtimes } = openChat(transport, 'conversation-a');
     const first = await waitForReady(events, 'conversation-a');
 
     act(() => transport.callbacks.get('conversation-a')?.onDoubt('connection closed'));
-    await waitFor(() => expect(events.some((event) => event.event === 'unavailable' &&
-      event.lifetimeId === first.lifetimeId && event.reason === 'reconnecting')).toBe(true));
+    expect(screen.queryByRole('button', { name: 'Reconnect' })).toBeNull();
+    expect(events.filter((event) => event.event === 'ready' && event.lifetimeId === first.lifetimeId)).toHaveLength(1);
+    expect(events.some((event) => event.event === 'unavailable' && event.lifetimeId === first.lifetimeId)).toBe(false);
     act(() => commandEntry()({ type: 'send', lifetimeId: first.lifetimeId, sessionKey: first.sessionKey,
-      correlationId: correlation, content: 'do not queue while reconnecting' }));
-    expect(events.at(-1)).toMatchObject({ event: 'rejected', reason: 'not-ready' });
-    expect(transport.submissions).toHaveLength(0);
+      correlationId: correlation, content: 'send while live updates reconnect' }));
+    await waitFor(() => expect(transport.submissions).toHaveLength(1));
+    await waitFor(() => expect(events.some((event) => event.event === 'delivered' &&
+      event.lifetimeId === first.lifetimeId && event.correlationId === correlation)).toBe(true));
+    await screen.findByText('send while live updates reconnect');
+    expect(events.some((event) => event.event === 'unavailable' && event.lifetimeId === first.lifetimeId)).toBe(false);
+    expect(runtimes[0].getSnapshot().status).toBe('ready');
+    await waitFor(() => expect(transport.changeOpenCount).toBeGreaterThan(1));
+    await waitFor(() => expect(runtimes[0].getSnapshot().liveError).toBeUndefined());
 
-    await act(async () => { await runtimes[0].rebuild({ restart: true }); });
-    await waitFor(() => expect(events.filter((event) => event.event === 'ready')).toHaveLength(2));
-    const nextReady = events.filter((event): event is Extract<HostComposerEvent, { event: 'ready' }> => event.event === 'ready').at(-1);
-    expect(nextReady?.lifetimeId).toBe(first.lifetimeId);
+    const reply: CanonicalMessage = { kind: 'message', id: 'live-agent-reply', sessionKey: 'conversation-a',
+      seq: 2, rowVersion: 1, role: 'assistant', sender: 'assistant-service', messageType: 'assistant',
+      content: 'The reply arrived without reloading.', raw: {} };
+    transport.records.set(reply.sessionKey, [...(transport.records.get(reply.sessionKey) ?? []), reply]);
+    act(() => transport.emit(reply));
+    await screen.findByText(reply.content);
+    expect(events.filter((event) => event.event === 'ready')).toHaveLength(1);
+    expect(readyEvent(events, 'conversation-a')?.lifetimeId).toBe(first.lifetimeId);
+  });
+
+  it('keeps the built-in composer live through reconnect and renders the human and agent rows without reload', async () => {
+    const transport = new HostComposerTransport();
+    transport.nextSend = async (submission) => {
+      transport.addCanonical(submission);
+      return { outcome: 'accepted' };
+    };
+    const { runtimes } = openChat(transport, 'conversation-a');
+    await screen.findByRole('textbox', { name: /Message to Agent conversation-a/ });
+    await waitFor(() => expect(runtimes[0].getSnapshot().status).toBe('ready'));
+
+    act(() => transport.callbacks.get('conversation-a')?.onDoubt('Firehose closed with code 4008'));
+    const textbox = screen.getByRole('textbox', { name: /Message to Agent conversation-a/ });
+    fireEvent.change(textbox, { target: { value: 'Send while live updates reconnect' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+
+    await waitFor(() => expect(transport.submissions).toHaveLength(1));
+    await screen.findByText('Send while live updates reconnect');
+    await waitFor(() => expect(runtimes[0].getSnapshot().sends[0]?.status).toBe('accepted'));
+    expect(runtimes[0].getSnapshot().status).toBe('ready');
+    await waitFor(() => expect(transport.changeOpenCount).toBeGreaterThan(1));
+    await waitFor(() => expect(runtimes[0].getSnapshot().liveError).toBeUndefined());
+
+    const reply: CanonicalMessage = { kind: 'message', id: 'no-reload-reply', sessionKey: 'conversation-a',
+      seq: 2, rowVersion: 1, role: 'assistant', sender: 'assistant-service', messageType: 'assistant',
+      content: 'This reply also arrived live.', raw: {} };
+    transport.records.set(reply.sessionKey, [...(transport.records.get(reply.sessionKey) ?? []), reply]);
+    act(() => transport.emit(reply));
+    await screen.findByText(reply.content);
+    expect(runtimes).toHaveLength(1);
+  });
+
+  it('shows a turn already running on open, keeps its caption through reconnect, and clears it at completion', async () => {
+    const events: HostComposerEvent[] = [];
+    const transport = new HostComposerTransport();
+    const active: CanonicalTurn = { seq: 7, sessionKey: 'conversation-a', status: 'running',
+      messageId: 'human-trigger', origin: 'user:person', triggerSource: 'mike', raw: { rowVersion: 1 } };
+    const human: CanonicalMessage = { kind: 'message', id: 'human-trigger', sessionKey: 'conversation-a',
+      seq: 1, rowVersion: 1, role: 'user', sender: 'user:person', content: 'Can you help?', turnSeq: 7, raw: {} };
+    transport.recentTurns = [active];
+    transport.records.set('conversation-a', [human]);
+    installDeclaration(events);
+    const { runtimes } = openChat(transport, 'conversation-a');
+    const caption = await screen.findByRole('status', { name: 'Active turn: Replying to you' });
+    const runtime = runtimes[0];
+
+    act(() => transport.callbacks.get('conversation-a')?.onDoubt('live connection closed'));
+    expect(screen.getByRole('status', { name: 'Active turn: Replying to you' })).toBe(caption);
+    await waitFor(() => expect(transport.changeOpenCount).toBeGreaterThan(1));
+    await waitFor(() => expect(runtime.getSnapshot().liveError).toBeUndefined());
+    expect(screen.getByRole('status', { name: 'Active turn: Replying to you' })).toBeTruthy();
+
+    act(() => transport.emitTurn({ ...active, status: 'completed', raw: { rowVersion: 2 } }));
+    await waitFor(() => expect(screen.queryByRole('status', { name: 'Active turn: Replying to you' })).toBeNull());
+    expect(events.filter((event) => event.event === 'ready')).toHaveLength(1);
+    runtime.dispose();
+  });
+
+  it('clears a completed turn after reconnect and restores a turn when reopening mid-run', async () => {
+    const transport = new HostComposerTransport();
+    const active: CanonicalTurn = { seq: 7, sessionKey: 'conversation-a', status: 'running',
+      messageId: 'human-trigger', origin: 'user:person', triggerSource: 'mike', raw: { rowVersion: 1 } };
+    const human: CanonicalMessage = { kind: 'message', id: 'human-trigger', sessionKey: 'conversation-a',
+      seq: 1, rowVersion: 1, role: 'user', sender: 'user:person', content: 'Can you help?', turnSeq: 7, raw: {} };
+    transport.recentTurns = [active];
+    transport.records.set('conversation-a', [human]);
+
+    const firstView = openChat(transport, 'conversation-a');
+    await screen.findByRole('status', { name: 'Active turn: Replying to you' });
+    const runtime = firstView.runtimes[0];
+    act(() => transport.callbacks.get('conversation-a')?.onDoubt('live connection closed'));
+    expect(screen.getByRole('status', { name: 'Active turn: Replying to you' })).toBeTruthy();
+
+    transport.recentTurns = [{ ...active, status: 'completed', raw: { rowVersion: 2 } }];
+    await waitFor(() => expect(transport.changeOpenCount).toBeGreaterThan(1));
+    await waitFor(() => expect(screen.queryByRole('status', { name: 'Active turn: Replying to you' })).toBeNull());
+    expect(runtime.getSnapshot().status).toBe('ready');
+    firstView.unmount();
+
+    transport.recentTurns = [{ ...active, seq: 8, messageId: 'human-trigger-next', raw: { rowVersion: 1 } }];
+    transport.records.set('conversation-a', [...(transport.records.get('conversation-a') ?? []), {
+      kind: 'message', id: 'human-trigger-next', sessionKey: 'conversation-a', seq: 2, rowVersion: 1,
+      role: 'user', sender: 'user:person', content: 'A second question while reopening.', turnSeq: 8, raw: {},
+    }]);
+    const secondView = openChat(transport, 'conversation-a');
+    await screen.findByRole('status', { name: 'Active turn: Replying to you' });
+    expect(secondView.runtimes[0].getSnapshot().activeTurn?.turn.seq).toBe(8);
+    secondView.unmount();
   });
 
   it('ends and re-handshakes its page lifetime after a cached page hide/show', async () => {
@@ -561,7 +717,7 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     secondView.unmount();
   });
 
-  it('keeps exceptional status readable and offers inline Reconnect after opting in', async () => {
+  it('keeps session-detail failures local and offers inline Reconnect after opting in', async () => {
     const events: HostComposerEvent[] = [];
     const transport = new HostComposerTransport();
     transport.failReadSessionOnce = true;
@@ -569,9 +725,41 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     openChat(transport, 'conversation-a');
     const reconnect = await screen.findByRole('button', { name: 'Reconnect' });
     expect(screen.queryByRole('button', { name: /Connection status/ })).toBeNull();
-    expect(screen.getByText('Disconnected. Reconnect to refresh the conversation.')).toBeTruthy();
+    expect(screen.getByText(/Some conversation details are unavailable/)).toBeTruthy();
     fireEvent.click(reconnect);
     await waitForReady(events, 'conversation-a');
     expect(screen.queryByRole('button', { name: /Connection status/ })).toBeNull();
+  });
+
+  it('reports a missing session through the existing unavailable event with a reason', async () => {
+    const events: HostComposerEvent[] = [];
+    const transport = new HostComposerTransport();
+    transport.missingSession = true;
+    installDeclaration(events);
+    openChat(transport, 'conversation-a');
+
+    await waitFor(() => expect(events.filter((event) => event.event === 'unavailable')).toHaveLength(1));
+    expect(events[0]).toMatchObject({ event: 'unavailable', reason: 'session-not-found' });
+    expect(events.some((event) => event.event === 'ready')).toBe(false);
+    expect(screen.getByRole('textbox', { name: /message to the selected agent/i })).toBeTruthy();
+    expect(screen.getByText('This conversation no longer exists.')).toBeTruthy();
+  });
+
+  it('reports authorization loss during a send as unavailable', async () => {
+    const events: HostComposerEvent[] = [];
+    const transport = new HostComposerTransport();
+    installDeclaration(events);
+    openChat(transport, 'conversation-a');
+    const ready = await waitForReady(events, 'conversation-a');
+
+    transport.authorizationLost = true;
+    act(() => commandEntry()({ type: 'send', lifetimeId: ready.lifetimeId, sessionKey: ready.sessionKey,
+      correlationId: correlation, content: 'authorization expired during send' }));
+    await waitFor(() => expect(events.some((event) => event.event === 'unavailable' &&
+      event.reason === 'unauthorized' && event.lifetimeId === ready.lifetimeId)).toBe(true));
+    expect(events.find((event) => event.event === 'failed' && event.correlationId === correlation))
+      .toMatchObject({ reason: 'refused', detail: 'unauthorized' });
+    expect(events.filter((event) => event.event === 'unavailable')).toHaveLength(1);
+    expect(events.filter((event) => event.event === 'ready')).toHaveLength(1);
   });
 });

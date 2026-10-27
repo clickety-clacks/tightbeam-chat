@@ -657,20 +657,23 @@ describe('conversation surface', () => {
 
     expect(screen.getByText('A new question')).toBeTruthy();
     expect(screen.getByText('A new answer')).toBeTruthy();
-    expect(screen.getByText('Reconnecting; the conversation may be out of date.')).toBeTruthy();
-    expect(screen.getByText('Reconnecting; the conversation may be out of date.')
-      .closest('.tb-chat-caption')?.classList.contains('tb-chat-caption-caution')).toBe(true);
+    expect(screen.queryByText(/Reconnecting|conversation may be out of date/)).toBeNull();
+    const reconnectingButton = screen.getByRole('button', { name: 'Connection status: Reconnecting. Show details' });
+    expect(reconnectingButton.querySelector('.tb-chat-status-dot')?.classList.contains('tb-chat-status-stale')).toBe(true);
     expect(screen.queryByText(/selected-session|gateway\.example/)).toBeNull();
     expect(composer.disabled).toBe(false);
     expect(composer.value).toBe('keep this draft');
     expect(composer.selectionStart).toBe(5);
     expect(document.activeElement).toBe(composer);
-    expect(screen.getByRole('button', { name: 'Send message' })).toHaveProperty('disabled', true);
+    expect(screen.getByRole('button', { name: 'Send message' })).toHaveProperty('disabled', false);
 
     act(() => {
       runtime.state = { ...runtime.state, status: 'ready', statusDetail: undefined };
       for (const listener of runtime.listeners) listener();
     });
+    const connectedButton = screen.getByRole('button', { name: 'Connection status: Connected. Show details' });
+    expect(connectedButton.querySelector('.tb-chat-status-dot')?.classList.contains('tb-chat-status-ready')).toBe(true);
+    expect(screen.queryByText(/Reconnecting|conversation may be out of date/)).toBeNull();
     expect(composer.value).toBe('keep this draft');
     expect(composer.selectionStart).toBe(5);
     expect(document.activeElement).toBe(composer);
@@ -695,13 +698,46 @@ describe('conversation surface', () => {
       runtime.state = { ...runtime.state, status: 'error', statusDetail: 'Connection lost for exact-session' };
       for (const listener of runtime.listeners) listener();
     });
-    expect(screen.getByText('Disconnected. Open connection details to reconnect.')).toBeTruthy();
-    expect(screen.getByRole('alert').classList.contains('tb-chat-caption-danger')).toBe(true);
+    expect(screen.queryByText(/Disconnected|Connecting|Reconnecting/)).toBeNull();
     expect(screen.queryByText(/exact-session/)).toBeNull();
-    fireEvent.click(screen.getByRole('button', { name: 'Connection status: Disconnected. Show details' }));
+    const disconnectedButton = screen.getByRole('button', { name: 'Connection status: Disconnected. Show details' });
+    expect(disconnectedButton.querySelector('.tb-chat-status-dot')?.classList.contains('tb-chat-status-error')).toBe(true);
+    fireEvent.click(disconnectedButton);
     const disconnected = screen.getByRole('dialog', { name: 'Connection details' });
+    expect(within(disconnected).queryByText('Disconnected')).toBeNull();
+    expect(within(disconnected).queryByText('Connection lost for exact-session')).toBeNull();
     fireEvent.click(within(disconnected).getByRole('button', { name: 'Reconnect' }));
     expect(runtime.rebuildOptions).toEqual([{ restart: true }]);
+  });
+
+  it('shows a live-feed reconnect only through the yellow then green status dot', () => {
+    const runtime = new FakeRuntime('feed-status', { status: 'ready', liveError: 'Changes socket closed' });
+    render(<TightbeamChat sessionKey="feed-status" adapter={adapterFor(runtime)} />);
+
+    const reconnectingButton = screen.getByRole('button', { name: 'Connection status: Reconnecting. Show details' });
+    expect(reconnectingButton.querySelector('.tb-chat-status-dot')?.classList.contains('tb-chat-status-stale')).toBe(true);
+    expect(screen.queryByText(/Reconnecting|Live updates are reconnecting|conversation may be out of date/)).toBeNull();
+    fireEvent.click(reconnectingButton);
+    const details = screen.getByRole('dialog', { name: 'Connection details' });
+    expect(within(details).queryByText(/Changes socket closed|Live updates:/)).toBeNull();
+    expect(within(details).getByRole('button', { name: 'Reconnect' })).toBeTruthy();
+
+    act(() => runtime.update({ liveError: undefined }));
+    const connectedButton = screen.getByRole('button', { name: 'Connection status: Connected. Show details' });
+    expect(connectedButton.querySelector('.tb-chat-status-dot')?.classList.contains('tb-chat-status-ready')).toBe(true);
+    expect(screen.queryByText(/Reconnecting|Live updates are reconnecting|conversation may be out of date/)).toBeNull();
+  });
+
+  it('keeps the authorization-loss explanation with the red connection dot', () => {
+    const runtime = new FakeRuntime('unauthorized-status', { status: 'unauthorized' });
+    render(<TightbeamChat sessionKey="unauthorized-status" adapter={adapterFor(runtime)} />);
+
+    expect(screen.getByRole('alert').textContent).toContain('Access to this conversation is unavailable.');
+    const disconnectedButton = screen.getByRole('button', {
+      name: 'Connection status: Access to this conversation is unavailable. Show details',
+    });
+    expect(disconnectedButton.querySelector('.tb-chat-status-dot')?.classList.contains('tb-chat-status-unauthorized')).toBe(true);
+    expect(screen.queryByText(/^Disconnected$/)).toBeNull();
   });
 
   it('renders only typed live activity with principal proof and clears captions at turn end', () => {
@@ -931,6 +967,7 @@ describe('conversation surface', () => {
     const status = viewport.querySelector<HTMLElement>('.tb-chat-history-loading');
     expect(status?.getAttribute('role')).toBe('status');
     expect(status?.classList.contains('tb-chat-caption-neutral')).toBe(true);
+    expect(status?.classList.contains('tb-chat-runtime-notice')).toBe(true);
     expect(status?.textContent).toBe('Loading earlier messages…');
     expect(status?.parentElement).toBe(viewport);
     expect(viewport.querySelector('.tb-chat-message-content')?.contains(status)).toBe(false);
@@ -943,6 +980,7 @@ describe('conversation surface', () => {
 
     const alert = screen.getByRole('alert');
     expect(alert.classList.contains('tb-chat-caption-danger')).toBe(true);
+    expect(alert.classList.contains('tb-chat-runtime-notice')).toBe(true);
     fireEvent.click(within(alert).getByRole('button', { name: 'Retry loading messages' }));
     await waitFor(() => expect(runtime.loadOlderCalls).toBe(1));
   });
@@ -1150,7 +1188,7 @@ describe('conversation surface', () => {
     expect(composer).toHaveProperty('value', 'keep this draft');
 
     act(() => {
-      runtime.state = { ...runtime.state, status: 'stale' };
+      runtime.state = { ...runtime.state, status: 'unauthorized' };
       for (const listener of runtime.listeners) listener();
     });
     expect(fireEvent.keyDown(composer, { key: 'Enter' })).toBe(false);
@@ -1158,7 +1196,7 @@ describe('conversation surface', () => {
     expect(composer).toHaveProperty('value', 'keep this draft');
   });
 
-  it('shows a nonterminal connection notice while retrying and keeps settled recovery actions readable', () => {
+  it('shows Sending while a message remains pending during a connection retry', () => {
     const sessionKey = 'send-recovery';
     const runtime = new FakeRuntime(sessionKey, { sends: [
       { sessionKey, deviceId: 'device', clientMessageId: 'failed-id', content: 'Failed text',
@@ -1175,8 +1213,9 @@ describe('conversation surface', () => {
     expect(screen.getByText('Failed text')).toBeTruthy();
     expect(screen.getByText('Uncertain text')).toBeTruthy();
     expect(screen.getByText('Offline text')).toBeTruthy();
-    const connectionNotice = screen.getByText('Not connected to the server; retrying…');
-    expect(connectionNotice.getAttribute('role')).toBe('status');
+    const sendStatus = screen.getByText('Sending…');
+    expect(sendStatus.getAttribute('role')).toBe('status');
+    expect(screen.queryByText(/Not connected to the server|retrying…/)).toBeNull();
     expect(screen.queryByText('Reconnect, then check the conversation before retrying this message.')).toBeNull();
     expect(screen.getAllByRole('alert').every((alert) => !alert.textContent?.includes('private'))).toBe(true);
     expect(screen.queryByText(/private target detail|private session detail/)).toBeNull();
@@ -1186,9 +1225,9 @@ describe('conversation surface', () => {
     expect(screen.getByRole('textbox', { name: 'Message to Research assistant' })).toHaveProperty('value', 'Uncertain text');
   });
 
-  it('explains an unconfirmed send when an unsupported target prevents safe retry', () => {
+  it('explains an unconfirmed send when safe retry is unavailable', () => {
     const sessionKey = 'unsupported-send-recovery';
-    const runtime = new FakeRuntime(sessionKey, { status: 'unsupported', sends: [{
+    const runtime = new FakeRuntime(sessionKey, { status: 'ready', sends: [{
       sessionKey, deviceId: 'device', clientMessageId: 'unsupported-retry-id',
       content: 'Check this message before retrying', submittedAt: '2026-10-25T09:00:00.000Z',
       status: 'uncertain', reconciled: false, reason: 'retry-unavailable',
@@ -1196,8 +1235,9 @@ describe('conversation surface', () => {
     render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
 
     expect(screen.getByText('This target stopped supporting safe retries. Delivery could not be confirmed; check the conversation before retrying.')).toBeTruthy();
-    expect(screen.getByText('Reconnect to a supported target before retrying.')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Retry message' })).toHaveProperty('disabled', true);
+    expect(screen.queryByRole('button', { name: 'Retry message' })).toBeNull();
+    fireEvent.change(screen.getByRole('textbox', { name: 'Message to Research assistant' }), { target: { value: 'new message' } });
+    expect(screen.getByRole('button', { name: 'Send message' })).toHaveProperty('disabled', false);
   });
 
   it('places a retried local send at its authoritative history position and keeps its reading key through reconciliation', () => {

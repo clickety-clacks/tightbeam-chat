@@ -61,6 +61,7 @@ interface Lifetime {
   readonly sessionKey: string;
   readonly attempts: Map<string, Attempt>;
   ready: boolean;
+  unavailableReason?: string;
   unsubscribe: () => void;
 }
 
@@ -74,15 +75,10 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
-function runtimeUnavailableReason(state: RuntimeState): string {
-  switch (state.status) {
-    case 'loading': return 'connecting';
-    case 'stale': return 'reconnecting';
-    case 'error': return 'disconnected';
-    case 'unsupported': return 'unsupported';
-    case 'unauthorized': return 'unauthorized';
-    case 'ready': return 'ready';
-  }
+function runtimeUnavailableReason(state: RuntimeState): string | undefined {
+  if (state.sessionNotFound) return 'session-not-found';
+  if (state.status === 'unauthorized') return 'unauthorized';
+  return undefined;
 }
 
 function errorSafeEmit(handler: (event: HostComposerEvent) => void, event: HostComposerEvent): void {
@@ -156,6 +152,27 @@ export class HostComposerBridge {
     errorSafeEmit(this.onEvent, event);
   }
 
+  private markUnavailable(lifetime: Lifetime, reason: string): void {
+    if (this.current !== lifetime || this.disposed) return;
+    if (!lifetime.ready && lifetime.unavailableReason === reason) return;
+    lifetime.ready = false;
+    lifetime.unavailableReason = reason;
+    this.publish();
+    this.emit({ event: 'unavailable', version: 1, lifetimeId: lifetime.lifetimeId, reason });
+  }
+
+  private markSendRefused(lifetime: Lifetime, detail?: string): void {
+    const state = lifetime.runtime.getSnapshot();
+    const reason = state.sessionNotFound ? 'session-not-found'
+      : state.status === 'unauthorized' || detail === 'unauthorized' ? 'unauthorized'
+        : 'send-refused';
+    this.markUnavailable(lifetime, reason);
+    // A typed per-message refusal can arrive after the runtime's last publish.
+    // If the selected session is still ready and authorized, restore the same
+    // lifetime now instead of waiting for unrelated activity to publish again.
+    if (reason === 'send-refused') this.onRuntimeChange(lifetime);
+  }
+
   attach(runtime: ChatRuntime, refreshBeforeReady = false): void {
     if (this.disposed) return;
     if (this.current?.runtime === runtime) return;
@@ -168,6 +185,7 @@ export class HostComposerBridge {
       sessionKey: runtime.getSnapshot().sessionKey,
       attempts: new Map(),
       ready: false,
+      unavailableReason: undefined,
       unsubscribe: () => {},
     };
     this.current = lifetime;
@@ -207,7 +225,17 @@ export class HostComposerBridge {
       this.detach('identity-changed');
       return;
     }
+    if (state.sessionNotFound) {
+      this.markUnavailable(lifetime, 'session-not-found');
+      return;
+    }
+    const unavailableReason = runtimeUnavailableReason(state);
+    if (unavailableReason) {
+      this.markUnavailable(lifetime, unavailableReason);
+      return;
+    }
     if (state.status === 'ready') {
+      lifetime.unavailableReason = undefined;
       if (!lifetime.ready) {
         const gatewayOrigin = this.gatewayOrigin(state.targetGateway);
         if (!gatewayOrigin) return;
@@ -234,11 +262,8 @@ export class HostComposerBridge {
       }
       return;
     }
-    if (!lifetime.ready) return;
-    lifetime.ready = false;
-    this.publish();
-    this.emit({ event: 'unavailable', version: 1, lifetimeId: lifetime.lifetimeId,
-      reason: runtimeUnavailableReason(state) });
+    // A live-feed or snapshot-status change alone does not refuse host sending.
+    // Only authorization/session loss or an actual rejected send invalidates it.
   }
 
   setOverlayOpen(open: boolean): void {
@@ -269,7 +294,12 @@ export class HostComposerBridge {
       return reject('local-command');
     }
     const lifetime = this.current;
-    if (!lifetime?.ready || lifetime.runtime.getSnapshot().status !== 'ready') return reject('not-ready');
+    if (!lifetime?.ready) return reject('not-ready');
+    const state = lifetime.runtime.getSnapshot();
+    if (state.sessionNotFound || state.status === 'unauthorized') {
+      this.markUnavailable(lifetime, state.sessionNotFound ? 'session-not-found' : 'unauthorized');
+      return reject('not-ready');
+    }
     if (command.lifetimeId !== lifetime.lifetimeId || command.sessionKey !== lifetime.sessionKey) return reject('target-mismatch');
     if (typeof correlationId !== 'string' || !correlationPattern.test(correlationId)) return reject('invalid-correlation');
     if (typeof command.content !== 'string' || !command.content.trim()) return reject('empty');
@@ -298,6 +328,7 @@ export class HostComposerBridge {
     else if (!lifetime.runtime.send(command.content, correlationId, hostSend)) {
       this.settle(lifetime, attempt, { event: 'failed', lifetimeId: lifetime.lifetimeId,
         correlationId, attempt: attempt.number, reason: 'refused', detail: 'send-not-started' });
+      this.markSendRefused(lifetime, 'send-not-started');
     }
   }
 
@@ -318,6 +349,9 @@ export class HostComposerBridge {
       case 'failed':
         this.settle(lifetime, attempt, { event: 'failed', lifetimeId: lifetime.lifetimeId,
           correlationId: attempt.correlationId, attempt: attempt.number, reason: signal.reason, detail: signal.detail });
+        if (signal.reason === 'refused') {
+          this.markSendRefused(lifetime, signal.detail);
+        }
         return;
       case 'uncertain':
         this.settle(lifetime, attempt, { event: 'uncertain', lifetimeId: lifetime.lifetimeId,
