@@ -40,6 +40,10 @@ describe('release notes versions and browser record', () => {
     expect(unseenReleaseNotes(memoryStorage(), null, notes)).toBeNull();
   });
 
+  it('does not open What\'s New when the current version has no note entry', () => {
+    expect(unseenReleaseNotes(memoryStorage(), 'v0.1.29', notes)).toBeNull();
+  });
+
   it('fails closed when browser storage cannot be read or written and preserves a higher seen version', () => {
     const unreadable = { ...memoryStorage(), getItem: () => { throw new Error('blocked'); } };
     const unwritable = { ...memoryStorage(), setItem: () => { throw new Error('blocked'); } };

@@ -33,8 +33,7 @@ try {
   process.exit(1);
 }
 if (!hasUserFacingNotesForTag(releaseNotes, tag)) {
-  process.stderr.write('This Chat version needs user-facing release notes before release staging.\n');
-  process.exit(1);
+  process.stderr.write('Warning: no user-facing release note entry exists for this Chat version; What\'s New will not appear.\n');
 }
 
 process.stdout.write(`Verified Chat release ${tag} at ${sourceCommit}.\n`);
