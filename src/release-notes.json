@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.35",
+    "items": [
+      {
+        "title": "Live updates",
+        "description": "Keep reading and sending while live updates reconnect. After a refused message, sending becomes available again when the conversation is ready and authorized, without reloading. Active reply status is restored when you return to a conversation."
+      }
+    ]
+  },
+  {
     "version": "v0.1.34",
     "items": [
       {
