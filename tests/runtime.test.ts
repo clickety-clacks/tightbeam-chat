@@ -1132,7 +1132,7 @@ describe('optional tool history and live category', () => {
 
     expect(runtime.getSnapshot().toolCallsLoading).toBe(false);
     expect(visibleTools(runtime.getSnapshot())).toEqual(shown);
-    transport.toolCallbacks?.onNotice({ operation: 'tool', tool: call('tc_live', 8) });
+    transport.toolCallbacks?.onNotice({ operation: 'tool', tool: call('tc_live', 8, { seq: 9 }) });
     transport.toolReadGate.resolve();
     await vi.waitFor(() => expect(runtime.getSnapshot().toolCallsError).toBe('Tool history is unavailable.'));
     expect(new Set(visibleTools(runtime.getSnapshot()).map(call => call.id))).toEqual(new Set(['tc_tail', 'tc_live']));
