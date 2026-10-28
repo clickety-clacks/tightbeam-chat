@@ -511,7 +511,7 @@ describe('conversation reading position', () => {
       status: 'running', triggerSource: 'agent', raw: { seq: 21, origin: 'agent:other' },
     }, [], 'person', 'person');
 
-    act(() => runtime.publish({ provenanceAvailable: true, activeTurn }));
+    act(() => runtime.publish({ provenanceAvailable: true, activityTurnStateAvailable: true, activeTurn }));
     expect(screen.getByRole('status', { name: 'Active turn: Other activity' })).toBeTruthy();
     expect(newest.getBoundingClientRect().top).toBe(originalTop);
 

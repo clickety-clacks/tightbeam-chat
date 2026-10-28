@@ -28,7 +28,7 @@ describe('principal-scoped message projection', () => {
     expect(forOther.find(row => row.key === 'cli')?.senderLabel).toBe('User');
   });
 
-  it('preserves canonical batch members and uses owner-scoped reply flags without parsing carrier text', () => {
+  it('preserves canonical batch members without fabricating duplicate rows', () => {
     const carrier = message('carrier', { sender: 'process:notifications', isBatchCarrier: true, turnSeq: 10,
       content: '[batched notices: 1]\n[1] source=example sender=user:person cause=notice class=fyi\nHidden wrapper' });
     const rows = [carrier, message('member-one', { turnSeq: 10 }), message('member-two', { turnSeq: 10 }),
@@ -42,6 +42,28 @@ describe('principal-scoped message projection', () => {
     expect(projectMessages(rows, 'person', 'person').messages.slice(0, 2).map((row) => row.side)).toEqual(['human', 'human']);
     // A session-owner flag cannot classify a different authenticated principal.
     expect(project(rows, 'visitor')).toEqual(['member-one', 'member-two', 'mixed-answer', 'nonhuman-answer', 'incomplete-batch']);
+  });
+
+  it('extracts known human rows from an unmarked process batch without trusting its wrapper', () => {
+    const batch = message('process-batch', { role: 'user', sender: 'process:notifications', messageType: 'substrate', turnSeq: 10,
+      content: [
+        '[batched notices: 2]', '',
+        '[1] source=process sender=user:person cause=notice class=fyi', 'Question one', '',
+        '[2] source=agent:helper sender=agent:helper cause=wake class=fyi', 'A helper started', '',
+        'coalesced by notices',
+      ].join('\n') });
+    const answer = reply('answer-to-batch', batch.id, { turnSeq: 10, turnIncludesHuman: true });
+
+    const forPerson = projectMessages([batch, answer], 'person', 'person').messages;
+    expect(forPerson.map(row => row.key)).toEqual(['process-batch:member:1', 'answer-to-batch']);
+    expect(forPerson[0]).toMatchObject({ side: 'human', senderLabel: 'You', member: {
+      sender: 'user:person', content: 'Question one',
+    } });
+
+    const forVisitor = projectMessages([batch, answer], 'visitor', 'person').messages;
+    expect(forVisitor.map(row => row.key)).toEqual(['process-batch:member:1']);
+    expect(forVisitor[0].senderLabel).toBe('User');
+    expect(forPerson[0].member?.content).toBe('Question one');
   });
 
   it('requires the complete direct turn relation and reclassifies when older parents arrive', () => {

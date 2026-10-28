@@ -85,7 +85,7 @@ const expectedLight: Tokens = {
   background: '#F1EEE9', text: '#31302D', muted: '#5C5854', border: '#DEDAD3',
   'agent-surface': '#E6E1D8', 'human-surface': '#DCE3DA', code: '#E2DCD2',
   accent: '#526657', 'on-accent': '#F3F0EA', teak: '#7A5540', fjord: '#4D6470',
-  ok: '#4E6547', caution: '#73592A', danger: '#A63A2A', idle: '#5C5854',
+  ok: '#4E6547', caution: '#73592A', transition: '#6B6458', danger: '#A63A2A', idle: '#5C5854',
   placeholder: '#53504C', glass: 'rgba(250,246,238,0.74)',
   'glass-edge': 'rgba(60,45,30,0.10)', shadow: 'rgb(60,45,30)',
   'composer-shadow-alpha': '12%',
@@ -95,7 +95,7 @@ const expectedDark: Tokens = {
   background: '#161514', text: '#DDD9D1', muted: '#9E9992', border: '#2C2A27',
   'agent-surface': '#24221F', 'human-surface': '#26302A', code: '#1C1B19',
   accent: '#A5BAA9', 'on-accent': '#19211B', teak: '#C9A891', fjord: '#9FB4BF',
-  ok: '#A5BC9C', caution: '#D8BE84', danger: '#EE8B75', idle: '#9E9992',
+  ok: '#A5BC9C', caution: '#D8BE84', transition: '#B0A18D', danger: '#EE8B75', idle: '#9E9992',
   placeholder: '#D2CDC6', glass: 'rgba(46,42,37,0.74)',
   'glass-edge': 'rgba(240,230,215,0.10)', shadow: '#000000',
   'composer-shadow-alpha': '35%',
@@ -196,16 +196,41 @@ describe('Nordic theme', () => {
     expect(rule(componentCss, '.tb-chat-caption::before')).toContain("content: '•'");
     expect(rule(componentCss, '.tb-chat-caption-neutral')).toContain('color: var(--tb-chat-muted)');
     expect(rule(componentCss, '.tb-chat-active-caption::before')).toContain('content: none');
-    expect(rule(componentCss, '.tb-chat-active-caption > .tb-chat-caption-body > span[aria-hidden="true"]'))
-      .toContain('color: var(--tb-chat-ok)');
+    expect(rule(componentCss, '.tb-chat-active-caption')).toContain('text-align: center');
+    expect(rule(componentCss, '.tb-chat-active-caption > .tb-chat-caption-body')).toContain('justify-content: center');
+    expect(rule(componentCss, '.tb-chat-active-caption-icon')).toContain('color: var(--tb-chat-ok)');
+    const activity = rule(componentCss, '.tb-chat-activity-line');
+    expect(activity).toContain('white-space: nowrap');
+    expect(activity).toContain('text-overflow: ellipsis');
+    expect(rule(componentCss, '.tb-chat-activity-agent')).toContain('color: var(--tb-chat-fjord)');
+    expect(rule(componentCss, '.tb-chat-activity-substrate')).toContain('color: var(--tb-chat-muted)');
+    expect(rule(componentCss, '.tb-chat-activity-tool')).toContain('color: var(--tb-chat-teak)');
+    expect(rule(componentCss, '.tb-chat-activity-rail')).toContain('color: var(--tb-chat-caution)');
+    const boundary = rule(componentCss, '.tb-chat-transition-marker');
+    expect(boundary).toContain('color: var(--tb-chat-transition)');
+    expect(boundary).toContain('background: color-mix(in srgb, var(--tb-chat-transition) 8%, var(--tb-chat-background))');
+    expect(boundary).toContain('border-block: 1px solid');
+    expect(boundary).toContain('font-size: .78rem');
+    expect(boundary).toContain('width: calc(100% + var(--tb-chat-viewport-inline-padding) + var(--tb-chat-viewport-inline-padding))');
+    expect(boundary).toContain('margin-inline: calc(0px - var(--tb-chat-viewport-inline-padding))');
+    expect(rule(componentCss, '.tb-chat-transition-marker::before')).toContain('content: none');
     expect(rule(componentCss, '.tb-chat-caption-caution')).toContain('var(--tb-chat-caution) 94%');
     expect(rule(componentCss, '.tb-chat-caption-danger')).toContain('var(--tb-chat-danger) 94%');
-    for (const tokens of [light, dark]) {
+    for (const [variant, tokens] of [['light', light], ['dark', dark]] as const) {
       const background = tokenColor(tokens, 'background');
+      const activityColors = ['fjord', 'muted', 'teak', 'caution'].map(name => tokens[name]);
+      expect(new Set(activityColors).size).toBe(activityColors.length);
+      expect(tokens.transition).not.toBe(tokens.ok);
+      for (const color of activityColors) expect(tokens.transition).not.toBe(color);
+      const boundaryFill = mix(tokenColor(tokens, 'transition'), tokenColor(tokens, 'background'), .08);
+      expect(contrast(tokenColor(tokens, 'transition'), boundaryFill), `${variant}: transition label on bar`)
+        .toBeGreaterThanOrEqual(4.5);
       for (const role of ['caution', 'danger']) {
         expect(contrast(mix(tokenColor(tokens, role), background, .94), background), `${role} caption on its theme surface`)
           .toBeGreaterThanOrEqual(4.5);
       }
+      expect(contrast(tokenColor(tokens, 'transition'), background))
+        .toBeLessThan(contrast(tokenColor(tokens, 'text'), background));
     }
     const captionAction = rule(componentCss, '.tb-chat-caption button');
     expect(captionAction).toContain('min-height: 2.75rem');

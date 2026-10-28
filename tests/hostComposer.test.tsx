@@ -28,7 +28,7 @@ function deferred<T>() {
 class HostComposerTransport implements ChatTransport {
   readonly submissions: HumanSubmission[] = [];
   readonly records = new Map<string, ConversationRecord[]>();
-  recentTurns: CanonicalTurn[] = [];
+  currentTurns: CanonicalTurn[] = [];
   readonly callbacks = new Map<string, ChangeCallbacks>();
   readonly closed = new Set<string>();
   changeOpenCount = 0;
@@ -49,6 +49,12 @@ class HostComposerTransport implements ChatTransport {
     this.callbacks.set(sessionKey, callbacks);
     if (this.readyGate) await this.readyGate.promise;
     if (signal.aborted) throw new Error('Changes subscription was canceled.');
+    queueMicrotask(() => {
+      if (signal.aborted || this.callbacks.get(sessionKey) !== callbacks) return;
+      for (const turn of this.currentTurns.filter(turn => turn.sessionKey === sessionKey)) {
+        callbacks.onNotice({ operation: 'turn', turn });
+      }
+    });
     return { close: () => { this.closed.add(sessionKey); this.callbacks.delete(sessionKey); } };
   };
   readSession = async (sessionKey: string): Promise<SessionRecord> => {
@@ -67,8 +73,6 @@ class HostComposerTransport implements ChatTransport {
     const rows = this.records.get(sessionKey) ?? [];
     return { records: rows.slice(-50), oldestCursor: rows[0]?.id ?? null, hasOlder: false, coverage: sessionKey };
   };
-  readRecentTurns = async (sessionKey: string): Promise<readonly CanonicalTurn[]> =>
-    this.recentTurns.filter(turn => turn.sessionKey === sessionKey);
   readOlder = async (_sessionKey: string, _before: string): Promise<ConversationPage> => ({
     records: [], oldestCursor: null, hasOlder: false, coverage: _sessionKey,
   });
@@ -96,6 +100,9 @@ class HostComposerTransport implements ChatTransport {
   }
 
   emitTurn(turn: CanonicalTurn): void {
+    const index = this.currentTurns.findIndex(current => current.seq === turn.seq && current.sessionKey === turn.sessionKey);
+    this.currentTurns = index < 0 ? [...this.currentTurns, turn]
+      : this.currentTurns.map((current, currentIndex) => currentIndex === index ? turn : current);
     this.callbacks.get(turn.sessionKey)?.onNotice({ operation: 'turn', turn });
   }
 }
@@ -607,22 +614,24 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     expect(runtimes).toHaveLength(1);
   });
 
-  it('shows a turn already running on open, keeps its caption through reconnect, and clears it at completion', async () => {
+  it('shows only delivered turn state on open and after reconnect, then clears it at completion', async () => {
     const events: HostComposerEvent[] = [];
     const transport = new HostComposerTransport();
     const active: CanonicalTurn = { seq: 7, sessionKey: 'conversation-a', status: 'running',
       messageId: 'human-trigger', origin: 'user:person', triggerSource: 'mike', raw: { rowVersion: 1 } };
     const human: CanonicalMessage = { kind: 'message', id: 'human-trigger', sessionKey: 'conversation-a',
       seq: 1, rowVersion: 1, role: 'user', sender: 'user:person', content: 'Can you help?', turnSeq: 7, raw: {} };
-    transport.recentTurns = [active];
     transport.records.set('conversation-a', [human]);
     installDeclaration(events);
     const { runtimes } = openChat(transport, 'conversation-a');
-    const caption = await screen.findByRole('status', { name: 'Active turn: Replying to you' });
+    await waitForReady(events, 'conversation-a');
+    expect(screen.queryByRole('status', { name: 'Active turn: Replying to you' })).toBeNull();
+    act(() => transport.emitTurn(active));
+    await screen.findByRole('status', { name: 'Active turn: Replying to you' });
     const runtime = runtimes[0];
 
     act(() => transport.callbacks.get('conversation-a')?.onDoubt('live connection closed'));
-    expect(screen.getByRole('status', { name: 'Active turn: Replying to you' })).toBe(caption);
+    expect(screen.queryByRole('status', { name: 'Active turn: Replying to you' })).toBeNull();
     await waitFor(() => expect(transport.changeOpenCount).toBeGreaterThan(1));
     await waitFor(() => expect(runtime.getSnapshot().liveError).toBeUndefined());
     expect(screen.getByRole('status', { name: 'Active turn: Replying to you' })).toBeTruthy();
@@ -639,22 +648,22 @@ describe('versioned host composer seam on the real adapter and surface', () => {
       messageId: 'human-trigger', origin: 'user:person', triggerSource: 'mike', raw: { rowVersion: 1 } };
     const human: CanonicalMessage = { kind: 'message', id: 'human-trigger', sessionKey: 'conversation-a',
       seq: 1, rowVersion: 1, role: 'user', sender: 'user:person', content: 'Can you help?', turnSeq: 7, raw: {} };
-    transport.recentTurns = [active];
+    transport.emitTurn(active);
     transport.records.set('conversation-a', [human]);
 
     const firstView = openChat(transport, 'conversation-a');
     await screen.findByRole('status', { name: 'Active turn: Replying to you' });
     const runtime = firstView.runtimes[0];
     act(() => transport.callbacks.get('conversation-a')?.onDoubt('live connection closed'));
-    expect(screen.getByRole('status', { name: 'Active turn: Replying to you' })).toBeTruthy();
+    expect(screen.queryByRole('status', { name: 'Active turn: Replying to you' })).toBeNull();
 
-    transport.recentTurns = [{ ...active, status: 'completed', raw: { rowVersion: 2 } }];
+    transport.emitTurn({ ...active, status: 'completed', raw: { rowVersion: 2 } });
     await waitFor(() => expect(transport.changeOpenCount).toBeGreaterThan(1));
     await waitFor(() => expect(screen.queryByRole('status', { name: 'Active turn: Replying to you' })).toBeNull());
     expect(runtime.getSnapshot().status).toBe('ready');
     firstView.unmount();
 
-    transport.recentTurns = [{ ...active, seq: 8, messageId: 'human-trigger-next', raw: { rowVersion: 1 } }];
+    transport.emitTurn({ ...active, seq: 8, messageId: 'human-trigger-next', raw: { rowVersion: 1 } });
     transport.records.set('conversation-a', [...(transport.records.get('conversation-a') ?? []), {
       kind: 'message', id: 'human-trigger-next', sessionKey: 'conversation-a', seq: 2, rowVersion: 1,
       role: 'user', sender: 'user:person', content: 'A second question while reopening.', turnSeq: 8, raw: {},

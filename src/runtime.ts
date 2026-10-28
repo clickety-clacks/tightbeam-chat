@@ -20,6 +20,7 @@ import {
   type HumanSendResult,
   type HumanSubmission,
   type LocalSend,
+  type LiveRailDenial,
   type RuntimeState,
   type SessionRecord,
   type TargetProfile,
@@ -110,9 +111,13 @@ class SessionRuntime implements ChatRuntime {
   private readonly turns = new Map<number, CanonicalTurn>();
   private readonly listeners = new Set<() => void>();
   private readonly identity: HostIdentity;
-  private turnRevision = 0;
   private readonly rows = new Map<string, ConversationRecord>();
   private readonly tombstones = new Map<string, number>();
+  private readonly liveActivityIds = new Set<string>();
+  private readonly liveActivityEligibleIds = new Set<string>();
+  private readonly liveRailDenials = new Map<string, LiveRailDenial>();
+  private activityTurnStateAvailable = false;
+  private railArrivalOrder = 0;
   private readonly sendControllers = new Map<string, AbortController>();
   private readonly pendingReconciledIds = new Set<string>();
   private readonly hostSendObservers = new Map<string, Set<HostSendObserver>>();
@@ -158,6 +163,8 @@ class SessionRuntime implements ChatRuntime {
       toolCalls: Object.freeze([]), toolCallIndex: undefined,
       hasOlder: false, loadingOlder: false, sends: Object.freeze([]), targetLabel: profile.label,
       targetGateway: transport.targetGateway, provenance: noProvenance, provenanceAvailable: false,
+      activityTurnStateAvailable: false, liveActivityIds: Object.freeze([]),
+      liveActivityEligibleIds: Object.freeze([]), liveRailDenials: Object.freeze([]),
     });
     void this.rebuild();
   }
@@ -187,6 +194,22 @@ class SessionRuntime implements ChatRuntime {
     for (const listener of this.listeners) listener();
   }
 
+  private activityStatePatch(): Pick<RuntimeState, 'activityTurnStateAvailable' | 'liveActivityIds' |
+    'liveActivityEligibleIds' | 'liveRailDenials'> {
+    return {
+      activityTurnStateAvailable: this.activityTurnStateAvailable,
+      liveActivityIds: Object.freeze([...this.liveActivityIds]),
+      liveActivityEligibleIds: Object.freeze([...this.liveActivityEligibleIds]),
+      liveRailDenials: Object.freeze([...this.liveRailDenials.values()]),
+    };
+  }
+
+  private liveTailEligibleAtArrival(): boolean {
+    if (!this.activityTurnStateAvailable) return true;
+    for (const turn of this.turns.values()) if (turn.status === 'running') return true;
+    return false;
+  }
+
   private stopTools(): void {
     this.toolEpoch++;
     this.toolController?.abort();
@@ -206,42 +229,12 @@ class SessionRuntime implements ChatRuntime {
     }
   }
 
-  private putTurn(turn: CanonicalTurn, liveNotice = true): boolean {
+  private putTurn(turn: CanonicalTurn): boolean {
     if (turn.sessionKey !== this.sessionKey) return false;
     const previous = this.turns.get(turn.seq);
     if (previous && Number(turn.raw.rowVersion ?? 0) < Number(previous.raw.rowVersion ?? 0)) return false;
     this.turns.set(turn.seq, turn);
-    if (liveNotice) this.turnRevision++;
     return true;
-  }
-
-  private async readRecentTurns(generation: number, signal: AbortSignal, revisionAtRebuildStart: number): Promise<void> {
-    const read = this.transport.readRecentTurns;
-    if (!read) return;
-    try {
-      const turns = await read.call(this.transport, this.sessionKey, signal);
-      if (!this.isCurrent(generation) || signal.aborted || !this.checkIdentity()) return;
-      // Replace stale in-memory activity only if no live turn notice arrived
-      // during this rebuild. Otherwise merge by row version so a delayed REST
-      // response cannot overwrite a newer live lifecycle event.
-      const priorTurns = revisionAtRebuildStart === this.turnRevision
-        ? new Map(this.turns)
-        : undefined;
-      if (priorTurns) this.turns.clear();
-      for (const turn of turns) {
-        const previous = priorTurns?.get(turn.seq);
-        const chosen = previous && Number(previous.raw.rowVersion ?? 0) > Number(turn.raw.rowVersion ?? 0)
-          ? previous : turn;
-        this.putTurn(chosen, false);
-      }
-      this.publish({ activeTurn: undefined, activeTurnError: undefined });
-    } catch {
-      if (!this.isCurrent(generation) || signal.aborted || !this.checkIdentity()) return;
-      // Turn activity is optional. Its failure belongs to the caption alone.
-      if (revisionAtRebuildStart === this.turnRevision) {
-        this.publish({ activeTurnError: 'Activity status could not be loaded.' });
-      }
-    }
   }
 
   private publishTools(): void {
@@ -393,6 +386,11 @@ class SessionRuntime implements ChatRuntime {
     this.sendControllers.clear();
     this.rows.clear();
     this.tombstones.clear();
+    this.liveActivityIds.clear();
+    this.liveActivityEligibleIds.clear();
+    this.liveRailDenials.clear();
+    this.activityTurnStateAvailable = false;
+    this.railArrivalOrder = 0;
     this.turns.clear();
     this.cursor = null;
     this.newestCursor = null;
@@ -407,6 +405,7 @@ class SessionRuntime implements ChatRuntime {
       records: Object.freeze([]), sends: Object.freeze([]), hasOlder: false,
       session: undefined, agentDisplayName: undefined, provenance: Object.freeze([]),
       activeTurn: undefined, historyError: undefined, loadingOlder: false,
+      ...this.activityStatePatch(),
       sessionError: undefined, sessionNotFound: undefined, conversationError: undefined, liveError: undefined,
     });
     return false;
@@ -440,6 +439,23 @@ class SessionRuntime implements ChatRuntime {
         const record = notice.record;
         if (record.sessionKey !== this.sessionKey) return false;
         this.put(record);
+        if (record.kind === 'message' && (record.messageType === 'substrate' || record.messageType === 'process' ||
+            record.messageType === 'agent' ||
+            /^(?:agent|process|remedy|session):/.test(record.sender ?? ''))) {
+          const firstLiveArrival = !this.liveActivityIds.has(record.id);
+          this.liveActivityIds.add(record.id);
+          if (firstLiveArrival && this.liveTailEligibleAtArrival()) this.liveActivityEligibleIds.add(record.id);
+        }
+        return true;
+      }
+      case 'rail-denial': {
+        if (notice.principal !== `session:${this.sessionKey}` || !notice.verb.trim() || !notice.rule.trim() ||
+            this.liveRailDenials.has(notice.id)) return false;
+        const afterMessageSeq = Math.max(0, ...[...this.rows.values()].map((row) => row.seq));
+        this.liveRailDenials.set(notice.id, Object.freeze({ id: notice.id, principal: notice.principal,
+          verb: notice.verb, rule: notice.rule, occurredAt: notice.occurredAt,
+          tailEligibleAtArrival: this.liveTailEligibleAtArrival(),
+          afterMessageSeq, arrivalOrder: ++this.railArrivalOrder }));
         return true;
       }
       case 'delete': {
@@ -465,8 +481,9 @@ class SessionRuntime implements ChatRuntime {
         return clearedRows;
       case 'turn': {
         const turn = notice.turn;
-        if (!this.putTurn(turn)) return false;
-        if (!this.initializing) this.publish({ activeTurn: undefined, activeTurnError: undefined });
+        this.activityTurnStateAvailable = true;
+        this.putTurn(turn);
+        if (!this.initializing) this.publish({ ...this.activityStatePatch(), activeTurn: undefined });
         return false;
       }
       case 'tool':
@@ -501,7 +518,7 @@ class SessionRuntime implements ChatRuntime {
       return;
     }
     for (const captured of this.coverageReaders) captured.push(notice);
-    if (this.apply(notice)) this.publish({ records: recordsFrom(this.rows) });
+    if (this.apply(notice)) this.publish({ records: recordsFrom(this.rows), ...this.activityStatePatch() });
   }
 
   private doubt(reason: string, generation: number): void {
@@ -509,6 +526,10 @@ class SessionRuntime implements ChatRuntime {
     // A feed gap does not make the already shown transcript less trustworthy.
     // Keep it while REST and the replacement subscription catch up.
     this.preserveRowsOnReconnect = true;
+    this.turns.clear();
+    this.liveActivityIds.clear();
+    this.liveActivityEligibleIds.clear();
+    this.activityTurnStateAvailable = false;
     this.connectionController?.abort();
     this.connectionController = undefined;
     if (this.initializing) {
@@ -518,7 +539,7 @@ class SessionRuntime implements ChatRuntime {
       this.connectionForRebuild = undefined;
       this.buffered = [];
       this.bufferedSession = undefined;
-      this.publish({ liveError: reason, activeTurn: undefined });
+      this.publish({ liveError: reason, activeTurn: undefined, ...this.activityStatePatch() });
       return;
     }
     this.generation++;
@@ -530,7 +551,8 @@ class SessionRuntime implements ChatRuntime {
     this.connectionForRebuild = undefined;
     this.rebuildPromise = undefined;
     this.initializing = false;
-    this.publish({ generation: this.generation, status: 'ready', liveError: reason, activeTurn: undefined });
+    this.publish({ generation: this.generation, status: 'ready', liveError: reason, activeTurn: undefined,
+      ...this.activityStatePatch() });
     this.scheduleRebuild();
   }
 
@@ -561,6 +583,11 @@ class SessionRuntime implements ChatRuntime {
     this.sendControllers.clear();
     this.rows.clear();
     this.tombstones.clear();
+    this.liveActivityIds.clear();
+    this.liveActivityEligibleIds.clear();
+    this.liveRailDenials.clear();
+    this.activityTurnStateAvailable = false;
+    this.railArrivalOrder = 0;
     this.cursor = null;
     this.newestCursor = null;
     this.clearBarrier = 0;
@@ -573,6 +600,7 @@ class SessionRuntime implements ChatRuntime {
       records: Object.freeze([]), sends: Object.freeze([]), session: undefined,
       agentDisplayName: undefined, provenance: noProvenance, provenanceAvailable: false, activeTurn: undefined,
       hasOlder: false, loadingOlder: false, historyError: undefined,
+      ...this.activityStatePatch(),
       sessionError: undefined, sessionNotFound: undefined, conversationError: undefined, liveError: undefined,
     });
   }
@@ -599,7 +627,6 @@ class SessionRuntime implements ChatRuntime {
 
   private async doRebuild(): Promise<void> {
     if (this.disposed || !this.checkIdentity()) return;
-    const turnRevisionAtStart = this.turnRevision;
     const priorOldest = this.state.records[0];
     const priorDepth = this.restoreDepth;
     const priorCursor = this.cursor;
@@ -624,6 +651,10 @@ class SessionRuntime implements ChatRuntime {
       this.connection?.close();
       this.connection = undefined;
       this.connectionBinding = undefined;
+      this.turns.clear();
+      this.liveActivityIds.clear();
+      this.liveActivityEligibleIds.clear();
+      this.activityTurnStateAvailable = false;
     }
     const controller = new AbortController();
     this.controller = controller;
@@ -634,6 +665,7 @@ class SessionRuntime implements ChatRuntime {
     this.publish({
       generation, status: this.state.status === 'ready' || this.state.records.length ? 'ready' : 'loading',
       statusDetail: undefined, loadingOlder: false, activeTurn: undefined,
+      ...this.activityStatePatch(),
     });
 
     let liveError: string | undefined;
@@ -898,6 +930,7 @@ class SessionRuntime implements ChatRuntime {
         status: 'ready', statusDetail: undefined, records: recordsFrom(this.rows), sends: Object.freeze(sends),
         session: currentSession, agentDisplayName: currentSession?.displayName ?? (sessionNotFound ? undefined : this.state.agentDisplayName),
         provenance: noProvenance, provenanceAvailable: false, activeTurn: undefined,
+        ...this.activityStatePatch(),
         hasOlder, historyError: tail ? historyError : this.state.historyError,
         sessionError, sessionNotFound, conversationError, liveError,
       });
@@ -907,7 +940,6 @@ class SessionRuntime implements ChatRuntime {
       }
       // A synchronous callback may have buffered a notice during publication.
       for (const notice of this.buffered.splice(0)) this.receive(notice, generation);
-      void this.readRecentTurns(generation, controller.signal, turnRevisionAtStart);
       if (((liveError && liveAttemptSettled) || sessionError || conversationError) && !sessionNotFound) {
         this.scheduleRebuild();
       }

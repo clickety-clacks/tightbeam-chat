@@ -84,7 +84,7 @@ describe('Gateway wire mapping and behavior checks', () => {
     const humanRow = { ...item, sender: 'user:person-1', turnSeq: 12 };
     const candidate = setup(undefined, version, [humanRow]);
     const runtime = createTightbeamAdapter(candidate.transport, candidate.profile).open(sessionKey);
-    await vi.waitFor(() => expect(candidate.changes.sent).toHaveLength(1));
+    await vi.waitFor(() => expect(candidate.changes.sent).toHaveLength(2));
     candidate.changes.emit({ type: 'subscription_ready', subscriptionId: `chat:${sessionKey}` });
     let sequence = 0;
     const turnEvent = (status: string, extra: Record<string, unknown> = {}) => candidate.changes.emit({
@@ -102,7 +102,6 @@ describe('Gateway wire mapping and behavior checks', () => {
     expect(runtime.getSnapshot().principalKey).toBe('person-1');
     expect(runtime.getSnapshot().activeTurn).toMatchObject({ sourceKind: 'human', turn: { seq: 12, status: 'running' } });
     const history = runtime.getSnapshot().records;
-    await vi.waitFor(() => expect(candidate.paths.some(path => path.includes('/turns?'))).toBe(true));
     const paths = [...candidate.paths];
     turnEvent('completed');
     expect(runtime.getSnapshot().activeTurn).toBeUndefined();
@@ -113,11 +112,12 @@ describe('Gateway wire mapping and behavior checks', () => {
     expect(runtime.getSnapshot().status).toBe('ready');
     expect(runtime.getSnapshot().records).toBe(history);
     expect(candidate.paths).toEqual(paths);
-    expect(candidate.paths.filter(path => path.includes('/turns?'))).toHaveLength(1);
+    expect(candidate.paths.some(path => path.includes('/turns?'))).toBe(false);
     expect(candidate.paths.some(path => /^https:\/\/host\.example\/api\/turns\//.test(path))).toBe(false);
     candidate.changes.disconnect();
     expect(runtime.getSnapshot().status).toBe('ready');
-    expect(runtime.getSnapshot().activeTurn?.turn.seq).toBe(13);
+    expect(runtime.getSnapshot().activeTurn).toBeUndefined();
+    expect(runtime.getSnapshot().activityTurnStateAvailable).toBe(false);
     runtime.dispose();
   });
 
@@ -131,7 +131,7 @@ describe('Gateway wire mapping and behavior checks', () => {
     expect(current.paths).toEqual([]);
 
     const runtime = createTightbeamAdapter(current.transport, current.profile).open(sessionKey);
-    await vi.waitFor(() => expect(current.changes.sent).toHaveLength(1));
+    await vi.waitFor(() => expect(current.changes.sent).toHaveLength(2));
     current.changes.emit({ type: 'subscription_ready', subscriptionId: `chat:${sessionKey}` });
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
     expect(runtime.getSnapshot().records.map((record) => record.id)).toEqual(['m_1']);
@@ -178,10 +178,12 @@ describe('Gateway wire mapping and behavior checks', () => {
     });
 
     const runtime = createTightbeamAdapter(candidate.transport, candidate.profile).open(sessionKey);
-    await vi.waitFor(() => expect(candidate.changes.sent).toEqual([{
-      type: 'subscribe', protocolVersion: 2, subscriptionId: `chat:${sessionKey}`,
-      filters: { sessionKey, classes: ['message.created', 'session.', 'turn.started', 'turn.ended'] },
-    }]));
+    await vi.waitFor(() => expect(candidate.changes.sent).toEqual([
+      { type: 'subscribe', protocolVersion: 2, subscriptionId: `chat:${sessionKey}`,
+        filters: { sessionKey, classes: ['message.created', 'transition.recorded', 'session.', 'turn.started', 'turn.ended'] } },
+      { type: 'subscribe', protocolVersion: 2, subscriptionId: `rail:${sessionKey}`,
+        filters: { principal: `session:${sessionKey}`, classes: ['rail.denied'] } },
+    ]));
     await vi.waitFor(() => expect(candidate.paths.some(path => path.includes('/messages?'))).toBe(true));
     expect(runtime.getSnapshot().status).toBe('ready');
     expect(runtime.getSnapshot().records.map((record) => record.id))
@@ -194,14 +196,13 @@ describe('Gateway wire mapping and behavior checks', () => {
     expect(candidate.paths).toEqual([
       'https://host.example/api/sessions/s-public',
       'https://host.example/api/sessions/s-public/messages?limit=50&tail=true',
-      'https://host.example/api/sessions/s-public/turns?limit=50&tail=true',
       'https://host.example/api/sessions/s-public/tool-calls?limit=50&afterMessageSeqFromInclusive=8',
     ]);
     expect(runtime.getSnapshot().records.map((record) => record.id))
       .toEqual(['marker_before', 'm_1', 'marker_after']);
     expect(runtime.getSnapshot().records.map((record) => record.kind))
       .toEqual(['transition', 'message', 'transition']);
-    expect(candidate.changes.sent).toHaveLength(1);
+    expect(candidate.changes.sent).toHaveLength(2);
     expect(candidate.human.sent).toHaveLength(0);
     runtime.dispose();
   });
@@ -209,29 +210,27 @@ describe('Gateway wire mapping and behavior checks', () => {
   it('skips release metadata during startup and recovery', async () => {
     const candidate = setup(undefined, version);
     const runtime = createTightbeamAdapter(candidate.transport, candidate.profile).open(sessionKey);
-    await vi.waitFor(() => expect(candidate.changes.sent).toHaveLength(1));
+    await vi.waitFor(() => expect(candidate.changes.sent).toHaveLength(2));
     candidate.changes.emit({ type: 'subscription_ready', subscriptionId: `chat:${sessionKey}` });
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
     await vi.waitFor(() => expect(candidate.paths.filter(path => path.includes('/tool-calls?'))).toHaveLength(1));
-    await vi.waitFor(() => expect(candidate.paths.filter(path => path.includes('/turns?'))).toHaveLength(1));
     await vi.waitFor(() => expect(runtime.getSnapshot().toolCallsLoading).toBe(false));
     expect(candidate.paths.some((path) => path.endsWith('/version'))).toBe(false);
     expect(candidate.paths.filter((path) => path.includes('/messages?'))).toHaveLength(1);
 
     const recovery = runtime.rebuild({ restart: true });
     await vi.waitFor(() => expect(candidate.paths.filter(path => path.includes('/messages?'))).toHaveLength(2));
-    expect(candidate.changes.sent).toHaveLength(1);
+    expect(candidate.changes.sent).toHaveLength(2);
     expect(candidate.paths.some((path) => path.endsWith('/version'))).toBe(false);
     await recovery;
     await vi.waitFor(() => expect(candidate.paths.filter(path => path.includes('/tool-calls?'))).toHaveLength(2));
-    await vi.waitFor(() => expect(candidate.paths.filter(path => path.includes('/turns?'))).toHaveLength(2));
     await vi.waitFor(() => expect(runtime.getSnapshot().toolCallsLoading).toBe(false));
 
     expect(runtime.getSnapshot().status).toBe('ready');
     expect(candidate.paths.some((path) => path.endsWith('/version'))).toBe(false);
     expect(candidate.paths.filter((path) => path.endsWith('/api/sessions/s-public'))).toHaveLength(2);
     expect(candidate.paths.filter((path) => path.includes('/messages?'))).toHaveLength(2);
-    expect(candidate.paths.filter((path) => path.includes('/turns?'))).toHaveLength(2);
+    expect(candidate.paths.some(path => path.includes('/turns?'))).toBe(false);
     expect(candidate.paths.filter((path) => path.includes('/tool-calls?'))).toHaveLength(2);
     runtime.dispose();
   });
@@ -249,10 +248,12 @@ describe('Gateway wire mapping and behavior checks', () => {
     });
 
     const runtime = createTightbeamAdapter(candidate.transport, candidate.profile).open(sessionKey);
-    await vi.waitFor(() => expect(candidate.changes.sent).toEqual([{
+    await vi.waitFor(() => expect(candidate.changes.sent[0]).toEqual({
       type: 'subscribe', protocolVersion: 2, subscriptionId: `chat:${sessionKey}`,
-      filters: { sessionKey, classes: ['message.created', 'session.', 'turn.started', 'turn.ended'] },
-    }]));
+      filters: { sessionKey, classes: ['message.created', 'transition.recorded', 'session.', 'turn.started', 'turn.ended'] },
+    }));
+    expect(candidate.changes.sent[1]).toEqual({ type: 'subscribe', protocolVersion: 2,
+      subscriptionId: `rail:${sessionKey}`, filters: { principal: `session:${sessionKey}`, classes: ['rail.denied'] } });
     candidate.changes.emit({ type: 'subscription_ready', subscriptionId: `chat:${sessionKey}` });
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
     await vi.waitFor(() => expect(candidate.paths.some(path => path.includes('/tool-calls?'))).toBe(true));
@@ -260,7 +261,6 @@ describe('Gateway wire mapping and behavior checks', () => {
     expect(candidate.paths).toEqual([
       'https://host.example/api/sessions/s-public',
       'https://host.example/api/sessions/s-public/messages?limit=50&tail=true',
-      'https://host.example/api/sessions/s-public/turns?limit=50&tail=true',
       'https://host.example/api/sessions/s-public/tool-calls?limit=50&afterMessageSeqFromInclusive=9',
     ]);
     expect(runtime.getSnapshot().records.map((record) => record.id)).toEqual(['m_1']);
@@ -268,7 +268,7 @@ describe('Gateway wire mapping and behavior checks', () => {
     runtime.dispose();
   });
 
-  it('loads a current-turn snapshot when opening during a running turn', async () => {
+  it('shows a running turn delivered on the current feed when opening mid-turn', async () => {
     const human = { ...item, id: 'human-message', seq: 9, role: 'user', sender: 'user:person-1',
       messageType: 'chat', clientMessageId: 'client-human', deviceId: 'device-1', turnSeq: 12,
       content: 'Can you help?' };
@@ -276,41 +276,50 @@ describe('Gateway wire mapping and behavior checks', () => {
       origin: 'user:person-1', triggerSource: 'mike' };
     const candidate = setup(undefined, version, [human], [turn]);
     const runtime = createTightbeamAdapter(candidate.transport, candidate.profile).open(sessionKey);
-
+    await vi.waitFor(() => expect(candidate.changes.sent).toHaveLength(2));
+    candidate.changes.emit({ type: 'subscription_ready', subscriptionId: `chat:${sessionKey}` });
+    candidate.changes.emit({ type: 'change', schemaVersion: 2, subscriptionId: `chat:${sessionKey}`, seq: 1,
+      class: 'turn.started', resource: 'turns', op: 'upsert', refs: { sessionKey, turnSeq: 12 }, payload: turn });
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
     await vi.waitFor(() => expect(runtime.getSnapshot().activeTurn).toMatchObject({
       sourceKind: 'human', turn: { seq: 12, status: 'running' },
     }));
-    expect(candidate.paths).toContain('https://host.example/api/sessions/s-public/turns?limit=50&tail=true');
+    expect(candidate.paths.some(path => path.includes('/turns?'))).toBe(false);
     expect(candidate.paths.some((path) => /^https:\/\/host\.example\/api\/turns\//.test(path))).toBe(false);
     expect(runtime.getSnapshot().status).toBe('ready');
     expect(runtime.getSnapshot().records.map((record) => record.id)).toEqual(['human-message']);
     runtime.dispose();
   });
 
-  it('clears a turn that ended while the live feed was disconnected', async () => {
+  it('clears stale turn state at disconnect and only uses records delivered after reconnect', async () => {
     const running = { seq: 12, rowVersion: 1, sessionKey, status: 'running', messageId: 'human-message',
       origin: 'user:person-1', triggerSource: 'mike' };
-    const recentTurns: unknown[] = [running];
     const human = { ...item, id: 'human-message', seq: 9, role: 'user', sender: 'user:person-1',
       messageType: 'chat', clientMessageId: 'client-human', deviceId: 'device-1', turnSeq: 12,
       content: 'Can you help?' };
-    const candidate = setup(undefined, version, [human], recentTurns);
+    const candidate = setup(undefined, version, [human]);
     const runtime = createTightbeamAdapter(candidate.transport, candidate.profile).open(sessionKey);
-    await vi.waitFor(() => expect(runtime.getSnapshot().activeTurn?.turn).toMatchObject({ seq: 12, status: 'running' }));
-    await vi.waitFor(() => expect(candidate.changes.sent).toHaveLength(1));
+    await vi.waitFor(() => expect(candidate.changes.sent).toHaveLength(2));
     candidate.changes.emit({ type: 'subscription_ready', subscriptionId: `chat:${sessionKey}` });
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+    candidate.changes.emit({ type: 'change', schemaVersion: 2, subscriptionId: `chat:${sessionKey}`, seq: 1,
+      class: 'turn.started', resource: 'turns', op: 'upsert', refs: { sessionKey, turnSeq: 12 }, payload: running });
+    await vi.waitFor(() => expect(runtime.getSnapshot().activeTurn?.turn).toMatchObject({ seq: 12, status: 'running' }));
 
     candidate.changes.disconnect({ code: 4008 });
     await vi.waitFor(() => expect(runtime.getSnapshot().liveError).toBe('Firehose disconnected (close code 4008).'));
-    expect(runtime.getSnapshot().activeTurn?.turn.status).toBe('running');
+    expect(runtime.getSnapshot().activeTurn).toBeUndefined();
+    expect(runtime.getSnapshot().activityTurnStateAvailable).toBe(false);
 
-    recentTurns[0] = { ...running, status: 'completed', rowVersion: 2 };
-    await vi.waitFor(() => expect(candidate.changes.sent).toHaveLength(2));
+    await vi.waitFor(() => expect(candidate.changes.sent).toHaveLength(4));
     candidate.changes.emit({ type: 'subscription_ready', subscriptionId: `chat:${sessionKey}` });
     await vi.waitFor(() => expect(runtime.getSnapshot().liveError).toBeUndefined());
-    await vi.waitFor(() => expect(runtime.getSnapshot().activeTurn).toBeUndefined());
+    candidate.changes.emit({ type: 'change', schemaVersion: 2, subscriptionId: `chat:${sessionKey}`, seq: 1,
+      class: 'turn.ended', resource: 'turns', op: 'upsert', refs: { sessionKey, turnSeq: 12 },
+      payload: { ...running, status: 'completed', rowVersion: 2 } });
+    expect(runtime.getSnapshot().activityTurnStateAvailable).toBe(true);
+    expect(runtime.getSnapshot().activeTurn).toBeUndefined();
+    expect(candidate.paths.some(path => path.includes('/turns?'))).toBe(false);
     expect(runtime.getSnapshot().status).toBe('ready');
     expect(runtime.getSnapshot().records.map((record) => record.id)).toEqual(['human-message']);
     runtime.dispose();
@@ -319,7 +328,7 @@ describe('Gateway wire mapping and behavior checks', () => {
   it('reports the peer close code for a ready live-update socket', async () => {
     const candidate = setup();
     const runtime = createTightbeamAdapter(candidate.transport, candidate.profile).open(sessionKey);
-    await vi.waitFor(() => expect(candidate.changes.sent).toHaveLength(1));
+    await vi.waitFor(() => expect(candidate.changes.sent).toHaveLength(2));
     candidate.changes.emit({ type: 'subscription_ready', subscriptionId: `chat:${sessionKey}` });
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
 
@@ -329,55 +338,13 @@ describe('Gateway wire mapping and behavior checks', () => {
     runtime.dispose();
   });
 
-  it('does not let a delayed turn snapshot resurrect a turn ended on the live connection', async () => {
-    const candidate = setup(undefined, version, []);
-    const originalFetch = candidate.host.fetch;
-    let releaseTurns!: (response: Response) => void;
-    const turnSnapshot = new Promise<Response>((resolve) => { releaseTurns = resolve; });
-    let turnSnapshotFinished = false;
-    candidate.host.fetch = async (path, init) => {
-      if (!path.includes('/turns?')) return originalFetch(path, init);
-      candidate.paths.push(path);
-      return turnSnapshot.finally(() => { turnSnapshotFinished = true; });
-    };
+  it('keeps conversation and sending available without a separate turn snapshot', async () => {
+    const candidate = setup(undefined, version, [item]);
     const runtime = createTightbeamAdapter(candidate.transport, candidate.profile).open(sessionKey);
-    await vi.waitFor(() => expect(candidate.changes.sent).toHaveLength(1));
-    candidate.changes.emit({ type: 'subscription_ready', subscriptionId: `chat:${sessionKey}` });
+
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
-    await vi.waitFor(() => expect(candidate.paths.some(path => path.includes('/turns?'))).toBe(true));
-
-    let sequence = 0;
-    const emitTurn = (status: string, rowVersion: number) => candidate.changes.emit({
-      type: 'change', schemaVersion: 2, subscriptionId: `chat:${sessionKey}`, seq: ++sequence,
-      class: status === 'running' ? 'turn.started' : 'turn.ended', resource: 'turns', op: 'upsert',
-      refs: { sessionKey, turnSeq: 12 }, payload: { seq: 12, rowVersion, sessionKey, status,
-        origin: 'user:person-1', triggerSource: 'mike' },
-    });
-    emitTurn('running', 2);
-    expect(runtime.getSnapshot().activeTurn?.turn.status).toBe('running');
-    emitTurn('completed', 3);
-    expect(runtime.getSnapshot().activeTurn).toBeUndefined();
-    const turnNotifications = vi.fn();
-    const unsubscribe = runtime.subscribe(turnNotifications);
-
-    releaseTurns(new Response(JSON.stringify({ schemaVersion: 1, resource: 'turns', items: [{
-      seq: 12, rowVersion: 1, sessionKey, status: 'running', origin: 'user:person-1', triggerSource: 'mike',
-    }], page: { hasMoreBefore: false } }), { status: 200 }));
-    await vi.waitFor(() => {
-      expect(turnSnapshotFinished).toBe(true);
-      expect(turnNotifications).toHaveBeenCalled();
-    });
-    expect(runtime.getSnapshot().activeTurn).toBeUndefined();
-    unsubscribe();
-    runtime.dispose();
-  });
-
-  it('keeps conversation and sending available when the optional active-turn snapshot fails', async () => {
-    const candidate = setup(undefined, version, [item], [], 503);
-    const runtime = createTightbeamAdapter(candidate.transport, candidate.profile).open(sessionKey);
-
-    await vi.waitFor(() => expect(runtime.getSnapshot().activeTurnError).toBe('Activity status could not be loaded.'));
     expect(runtime.getSnapshot().status).toBe('ready');
+    expect(candidate.paths.some(path => path.includes('/turns?'))).toBe(false);
     expect(runtime.getSnapshot().records.map((record) => record.id)).toEqual(['m_1']);
     const clientMessageId = runtime.send('Still available while activity status is unavailable');
     expect(clientMessageId).toBeTruthy();
@@ -402,10 +369,10 @@ describe('Gateway wire mapping and behavior checks', () => {
     const candidate = setup(undefined, version, messages);
     const runtime = createTightbeamAdapter(candidate.transport, candidate.profile).open(sessionKey);
 
-    await vi.waitFor(() => expect(candidate.changes.sent).toEqual([{
+    await vi.waitFor(() => expect(candidate.changes.sent[0]).toEqual({
       type: 'subscribe', protocolVersion: 2, subscriptionId: `chat:${sessionKey}`,
-      filters: { sessionKey, classes: ['message.created', 'session.', 'turn.started', 'turn.ended'] },
-    }]));
+      filters: { sessionKey, classes: ['message.created', 'transition.recorded', 'session.', 'turn.started', 'turn.ended'] },
+    }));
     candidate.changes.emit({ type: 'subscription_ready', subscriptionId: `chat:${sessionKey}` });
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
     await vi.waitFor(() => expect(candidate.paths.some(path => path.includes('/tool-calls?'))).toBe(true));
@@ -420,7 +387,6 @@ describe('Gateway wire mapping and behavior checks', () => {
     expect(candidate.paths).toEqual([
       'https://host.example/api/sessions/s-public',
       'https://host.example/api/sessions/s-public/messages?limit=50&tail=true',
-      'https://host.example/api/sessions/s-public/turns?limit=50&tail=true',
       'https://host.example/api/sessions/s-public/tool-calls?limit=50&afterMessageSeqFromInclusive=9',
     ]);
     expect(candidate.paths.some((path) => /^https:\/\/host\.example\/api\/turns\//.test(path))).toBe(false);
@@ -439,7 +405,7 @@ describe('Gateway wire mapping and behavior checks', () => {
     const arbitraryProtocol = { ...version, protocolVersion: 42 };
     const candidate = setup(undefined, arbitraryProtocol);
     const runtime = createTightbeamAdapter(candidate.transport, candidate.profile).open(sessionKey);
-    await vi.waitFor(() => expect(candidate.changes.sent).toHaveLength(1));
+    await vi.waitFor(() => expect(candidate.changes.sent).toHaveLength(2));
     expect(candidate.paths.some((path) => path.endsWith('/version'))).toBe(false);
     candidate.changes.emit({ type: 'subscription_ready', subscriptionId: `chat:${sessionKey}` });
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
@@ -457,10 +423,13 @@ describe('Gateway wire mapping and behavior checks', () => {
     const pending = candidate.transport.openChanges(sessionKey, {
       onNotice: () => {}, onDoubt: () => {},
     }, signal);
-    await vi.waitFor(() => expect(candidate.changes.sent).toEqual([{
+    await vi.waitFor(() => expect(candidate.changes.sent).toHaveLength(2));
+    expect(candidate.changes.sent[0]).toEqual({
       type: 'subscribe', protocolVersion: 2, subscriptionId: `chat:${sessionKey}`,
-      filters: { sessionKey, classes: ['message.created', 'session.', 'turn.started', 'turn.ended'] },
-    }]));
+      filters: { sessionKey, classes: ['message.created', 'transition.recorded', 'session.', 'turn.started', 'turn.ended'] },
+    });
+    expect(candidate.changes.sent[1]).toEqual({ type: 'subscribe', protocolVersion: 2,
+      subscriptionId: `rail:${sessionKey}`, filters: { principal: `session:${sessionKey}`, classes: ['rail.denied'] } });
     candidate.changes.emit({ type: 'subscription_ready', subscriptionId: `chat:${sessionKey}` });
     const connection = await pending;
 
@@ -487,7 +456,7 @@ describe('Gateway wire mapping and behavior checks', () => {
     ]) {
       const supported = setup(undefined, observed);
       const runtime = createTightbeamAdapter(supported.transport, supported.profile).open(sessionKey);
-      await vi.waitFor(() => expect(supported.changes.sent).toHaveLength(1));
+    await vi.waitFor(() => expect(supported.changes.sent).toHaveLength(2));
       supported.changes.emit({ type: 'subscription_ready', subscriptionId: 'chat:s-public' });
       await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
       expect(runtime.getSnapshot().records.map((record) => record.id)).toEqual(['m_1']);
@@ -536,7 +505,7 @@ describe('Gateway wire mapping and behavior checks', () => {
     };
     const { transport, profile } = createPublic019Transport({ baseUrl: 'https://host.example', host });
     const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
-    await vi.waitFor(() => expect(changes.sent).toHaveLength(1));
+    await vi.waitFor(() => expect(changes.sent).toHaveLength(2));
     changes.emit({ type: 'subscription_ready', subscriptionId: 'chat:s-public' });
     await vi.waitFor(() => expect(tailStarted).toBe(true));
     changes.emit({ type: 'change', schemaVersion: 2, subscriptionId: 'chat:s-public', seq: 1,
@@ -573,7 +542,7 @@ describe('Gateway wire mapping and behavior checks', () => {
       class: 'verb.accepted', op: 'observe', refs: { sessionKey }, payload: { verb: 'post' },
     });
     const runtime = createTightbeamAdapter(transport, base.profile).open(sessionKey);
-    await vi.waitFor(() => expect(base.changes.sent).toHaveLength(1));
+    await vi.waitFor(() => expect(base.changes.sent).toHaveLength(2));
     base.changes.emit({ type: 'subscription_ready', subscriptionId: 'chat:s-public' });
     await vi.waitFor(() => expect(readingTail).toBe(true));
     base.changes.emit(accepted(1));
@@ -613,7 +582,7 @@ describe('Gateway wire mapping and behavior checks', () => {
       return page;
     } };
     const runtime = createTightbeamAdapter(transport, base.profile).open(sessionKey);
-    await vi.waitFor(() => expect(base.changes.sent).toHaveLength(1));
+    await vi.waitFor(() => expect(base.changes.sent).toHaveLength(2));
     base.changes.emit({ type: 'subscription_ready', subscriptionId: 'chat:s-public' });
     await vi.waitFor(() => expect(readingTail).toBe(true));
     base.changes.emit({ type: 'change', schemaVersion: 2, subscriptionId: 'chat:s-public', seq: 1,
@@ -630,7 +599,7 @@ describe('Gateway wire mapping and behavior checks', () => {
     expect(runtime.getSnapshot().records.map((record) => record.id)).toEqual(['m_1', 'm_2']);
     expect(runtime.getSnapshot().records[1]).toMatchObject({ kind: 'message', content: 'Received during the tail read' });
     expect(runtime.getSnapshot().session?.sessionKey).toBe(sessionKey);
-    expect(base.changes.sent).toHaveLength(1);
+    expect(base.changes.sent).toHaveLength(2);
     runtime.dispose();
   });
 
@@ -638,7 +607,7 @@ describe('Gateway wire mapping and behavior checks', () => {
     const historyItems: unknown[] = [item];
     const base = setup(undefined, version, historyItems);
     const runtime = createTightbeamAdapter(base.transport, base.profile).open(sessionKey);
-    await vi.waitFor(() => expect(base.changes.sent).toHaveLength(1));
+    await vi.waitFor(() => expect(base.changes.sent).toHaveLength(2));
     base.changes.emit({ type: 'subscription_ready', subscriptionId: 'chat:s-public' });
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
 
@@ -651,7 +620,7 @@ describe('Gateway wire mapping and behavior checks', () => {
     expect(base.paths.filter((path) => path.includes('/messages?'))).toHaveLength(1);
     expect(runtime.getSnapshot().records.map((record) => record.id)).toEqual(['m_1', 'm_2']);
     expect(runtime.getSnapshot().records[1]).toMatchObject({ kind: 'message', content: 'Visible on the same subscription' });
-    expect(base.changes.sent).toHaveLength(1);
+    expect(base.changes.sent).toHaveLength(2);
     runtime.dispose();
   });
 
@@ -672,7 +641,7 @@ describe('Gateway wire mapping and behavior checks', () => {
   it('reads bounded tail and opaque before pages and gates coverage on an active subscription', async () => {
     const { transport, profile, changes, paths } = setup();
     const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
-    await vi.waitFor(() => expect(changes.sent).toHaveLength(1));
+    await vi.waitFor(() => expect(changes.sent).toHaveLength(2));
     changes.emit({ type: 'subscription_ready', subscriptionId: 'chat:s-public' });
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
     expect(runtime.getSnapshot().records).toHaveLength(1);
@@ -704,13 +673,14 @@ describe('Gateway wire mapping and behavior checks', () => {
       expect(decodePublic019Message({ ...item, messageType: 'marker',
         marker: { kind, from: 'old', to: 'new' } }, sessionKey)).toMatchObject({ kind: 'transition', transition, from: 'old', to: 'new' });
     }
-    expect(() => decodePublic019Message({ ...item, messageType: 'marker' }, sessionKey)).toThrow(UnsupportedTargetError);
+    expect(decodePublic019Message({ ...item, messageType: 'marker' }, sessionKey))
+      .toMatchObject({ kind: 'transition', transition: 'unknown', content: item.content });
     expect(decodePublic019Message({ ...item, messageType: 'marker',
       marker: { kind: 'future-boundary', from: 'old', to: 'new' } }, sessionKey))
       .toMatchObject({ kind: 'transition', transition: 'unknown', content: item.content });
   });
 
-  it('decodes protocol-2 selected-session notices and refuses fabricated marker data', () => {
+  it('decodes protocol-2 selected-session notices without inventing transition details', () => {
     const notice = {
       type: 'change', schemaVersion: 2, subscriptionId: 'chat:s-public', seq: 1,
       class: 'message.created', resource: 'messages', op: 'upsert',
@@ -718,8 +688,9 @@ describe('Gateway wire mapping and behavior checks', () => {
     };
     expect(decodePublic019Notice(notice, sessionKey)).toMatchObject({ operation: 'upsert',
       record: { id: 'm_1', createdAt: '2026-10-12T00:00:00.000Z', raw: { at: item.at } } });
-    expect(() => decodePublic019Notice({ ...notice, payload: { ...item, messageType: 'marker' } }, sessionKey))
-      .toThrow(UnsupportedTargetError);
+    expect(decodePublic019Notice({ ...notice, class: 'transition.recorded', resource: 'transcript messages',
+      payload: { ...item, messageType: 'marker' } }, sessionKey))
+      .toMatchObject({ operation: 'upsert', record: { kind: 'transition', transition: 'unknown', content: item.content } });
     expect(decodePublic019Notice({ ...notice, class: 'turn.started', resource: 'turns', payload: {
       seq: 12, sessionKey, status: 'running', messageId: null, origin: 'process:events', triggerSource: 'batch', batchMemberCount: 2,
     } }, sessionKey)).toMatchObject({ operation: 'turn', turn: {
@@ -756,16 +727,21 @@ describe('Gateway wire mapping and behavior checks', () => {
     const pending = transport.openChanges(sessionKey, {
       onNotice: (notice) => notices.push(notice.operation), onDoubt: (reason) => doubts.push(reason),
     }, new AbortController().signal);
-    await vi.waitFor(() => expect(changes.sent).toHaveLength(1));
+    await vi.waitFor(() => expect(changes.sent).toHaveLength(2));
     expect(changes.sent[0]).toEqual({ type: 'subscribe', protocolVersion: 2,
-      subscriptionId: 'chat:s-public', filters: { sessionKey, classes: ['message.created', 'session.', 'turn.started', 'turn.ended'] } });
+      subscriptionId: 'chat:s-public', filters: { sessionKey, classes: ['message.created', 'transition.recorded', 'session.', 'turn.started', 'turn.ended'] } });
+    expect(changes.sent[1]).toEqual({ type: 'subscribe', protocolVersion: 2,
+      subscriptionId: 'rail:s-public', filters: { principal: 'session:s-public', classes: ['rail.denied'] } });
     changes.emit({ type: 'subscription_ready', subscriptionId: 'chat:s-public' });
     const connection = await pending;
-    changes.emit({ type: 'change', schemaVersion: 2, subscriptionId: 'chat:s-public', seq: 1,
+    changes.emit({ type: 'change', schemaVersion: 2, subscriptionId: 'rail:s-public', seq: 1,
+      class: 'rail.denied', op: 'observe', refs: { principal: 'session:s-public', railDenialId: 8 },
+      occurredAt: 120, payload: { verb: 'assign', rule: 'sample-rule' } });
+    changes.emit({ type: 'change', schemaVersion: 2, subscriptionId: 'chat:s-public', seq: 2,
       class: 'message.created', resource: 'messages', op: 'upsert',
       refs: { sessionKey, messageId: 'm_1' }, payload: item });
-    expect(notices).toEqual(['upsert']);
-    changes.emit({ type: 'heartbeat', seq: 3 });
+    expect(notices).toEqual(['rail-denial', 'upsert']);
+    changes.emit({ type: 'heartbeat', seq: 4 });
     expect(doubts).toHaveLength(1);
     expect(changes.closed).toBe(true);
     connection.close();
@@ -928,7 +904,7 @@ describe('tool-call contract and transition category', () => {
       .toMatchObject({ operation: 'upsert', record: { transition: 'compaction', content: item.content } });
     expect(decodePublic019Notice({ type: 'change', schemaVersion: 2, class: 'transition.recorded',
       resource: 'transcript messages', op: 'upsert', refs: { sessionKey }, payload: marker }, sessionKey))
-      .toEqual({ operation: 'unknown', sessionKey, resource: 'transition.recorded' });
+      .toMatchObject({ operation: 'upsert', record: { kind: 'transition', transition: 'compaction', content: item.content } });
   });
 
   it('exhausts fixed-range tool pages and keeps tool subscriptions separate from transcript classes', async () => {

@@ -124,6 +124,70 @@ class ControlledTransport implements ChatTransport {
 async function settle() { await vi.waitFor(() => {}, { timeout: 50 }); }
 
 describe('framework-independent runtime', () => {
+  it('marks session-addressed live messages as activity without turn history', async () => {
+    const transport = new ControlledTransport();
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await runtime.rebuild();
+    const activity = message(9, { role: 'user', sender: 'session:helper', messageType: undefined });
+    transport.emit(activity);
+    expect(runtime.getSnapshot().liveActivityIds).toContain(activity.id);
+    expect(runtime.getSnapshot().liveActivityEligibleIds).toContain(activity.id);
+    runtime.dispose();
+  });
+
+  it('keeps live-tail eligibility fixed to turn state when each message arrives', async () => {
+    const transport = new ControlledTransport();
+    const settledTurn: CanonicalTurn = { seq: 80, sessionKey, status: 'completed', messageId: 'm8',
+      origin: 'user:person', triggerSource: 'mike', raw: { rowVersion: 1 } };
+    transport.tailHook = () => transport.callbacks?.onNotice({ operation: 'turn', turn: settledTurn });
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await runtime.rebuild();
+    expect(runtime.getSnapshot().activityTurnStateAvailable).toBe(true);
+
+    const idleActivity = message(9, { role: 'user', sender: 'agent:helper', messageType: 'agent' });
+    transport.emit(idleActivity);
+    expect(runtime.getSnapshot().liveActivityIds).toContain(idleActivity.id);
+    expect(runtime.getSnapshot().liveActivityEligibleIds).not.toContain(idleActivity.id);
+
+    const runningTurn: CanonicalTurn = { ...settledTurn, seq: 81, status: 'running', messageId: 'm9',
+      raw: { rowVersion: 1 } };
+    transport.callbacks?.onNotice({ operation: 'turn', turn: runningTurn });
+    expect(runtime.getSnapshot().activeTurn?.turn.seq).toBe(81);
+    expect(runtime.getSnapshot().liveActivityEligibleIds).not.toContain(idleActivity.id);
+    transport.emit({ ...idleActivity, rowVersion: 2, content: 'Updated after the next turn started' });
+    expect(runtime.getSnapshot().liveActivityEligibleIds).not.toContain(idleActivity.id);
+
+    const activeActivity = message(10, { role: 'user', sender: 'process:work', messageType: 'substrate' });
+    transport.emit(activeActivity);
+    expect(runtime.getSnapshot().liveActivityEligibleIds).toContain(activeActivity.id);
+
+    transport.callbacks?.onNotice({ operation: 'turn', turn: { ...runningTurn, status: 'completed',
+      raw: { rowVersion: 2 } } });
+    expect(runtime.getSnapshot().liveActivityEligibleIds).toContain(activeActivity.id);
+    runtime.dispose();
+  });
+
+  it('treats retained rows as history after opening a replacement live subscription', async () => {
+    const transport = new ControlledTransport();
+    const settledTurn: CanonicalTurn = { seq: 80, sessionKey, status: 'completed', messageId: 'm8',
+      origin: 'user:person', triggerSource: 'mike', raw: { rowVersion: 1 } };
+    transport.tailHook = () => transport.callbacks?.onNotice({ operation: 'turn', turn: settledTurn });
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await runtime.rebuild();
+    const activity = message(9, { role: 'user', sender: 'agent:helper', messageType: 'agent' });
+    transport.emit(activity);
+    expect(runtime.getSnapshot().records.some(record => record.id === activity.id)).toBe(true);
+    const previousCallbacks = transport.callbacks;
+
+    await runtime.rebuild({ restart: true });
+
+    expect(transport.callbacks).not.toBe(previousCallbacks);
+    expect(runtime.getSnapshot().records.some(record => record.id === activity.id)).toBe(true);
+    expect(runtime.getSnapshot().liveActivityIds).not.toContain(activity.id);
+    expect(runtime.getSnapshot().liveActivityEligibleIds).not.toContain(activity.id);
+    runtime.dispose();
+  });
+
   it.each(['live', 'running-first seed', 'queued-first seed'])(
     'keeps the running caption across queued successors (%s)', async (arrival) => {
       const transport = new ControlledTransport();
@@ -200,7 +264,7 @@ describe('framework-independent runtime', () => {
       runtime.dispose();
     });
 
-  it('keeps the active caption steady through reconnects and ignores the old generation', async () => {
+  it('clears stale caption state on reconnect and restores it from the replacement feed', async () => {
     const transport = new ControlledTransport();
     transport.rows[7] = message(8, { role: 'user', sender: 'user:person', turnSeq: 90 });
     const active: CanonicalTurn = { seq: 90, sessionKey, status: 'running', messageId: 'm8',
@@ -214,9 +278,16 @@ describe('framework-independent runtime', () => {
     const oldCallbacks = transport.callbacks!;
     transport.doubt();
     expect(runtime.getSnapshot().status).toBe('ready');
-    expect(runtime.getSnapshot().activeTurn?.turn.seq).toBe(90);
+    expect(runtime.getSnapshot().activeTurn).toBeUndefined();
+    expect(runtime.getSnapshot().activityTurnStateAvailable).toBe(false);
+    // Freshness loss clears cached caption state. The active turn returns only
+    // when the replacement subscription delivers its current turn records.
     transport.tailHook = undefined;
     await runtime.rebuild();
+    const replacementCallbacks = transport.callbacks!;
+    expect(replacementCallbacks).not.toBe(oldCallbacks);
+    expect(runtime.getSnapshot().activeTurn).toBeUndefined();
+    replacementCallbacks.onNotice({ operation: 'turn', turn: active });
     expect(runtime.getSnapshot().activeTurn?.turn.seq).toBe(90);
     oldCallbacks.onNotice({ operation: 'turn', turn: active });
     expect(runtime.getSnapshot().activeTurn?.turn.seq).toBe(90);

@@ -47,13 +47,15 @@ describe('runtime-configured browser entry', () => {
     expect(screen.queryByText(target.gateway)).toBeNull();
     expect(screen.queryByText(target.sessionKey)).toBeNull();
     expect((screen.getByRole('textbox', { name: /message to/i }) as HTMLTextAreaElement).disabled).toBe(false);
-    expect(screen.getByText('Activity status could not be loaded.')).toBeTruthy();
+    expect(screen.queryByText('Activity status could not be loaded.')).toBeNull();
     expect(fetchMock.mock.calls[0][0]).toBe('/chat-config.json');
     await waitFor(() => expect(fetchMock.mock.calls.some(([input]) =>
-      new URL(String(input), window.location.href).pathname.endsWith('/turns'))).toBe(true));
+      new URL(String(input), window.location.href).pathname.endsWith('/messages'))).toBe(true));
     const request = new URL(String(fetchMock.mock.calls[1][0]), window.location.href);
     expect(request.pathname).toBe(`/__chat/api/sessions/${encodeURIComponent(target.sessionKey)}`);
     expect(request.searchParams.get('gateway')).toBe(target.gateway);
+    expect(fetchMock.mock.calls.some(([input]) =>
+      new URL(String(input), window.location.href).pathname.endsWith('/turns'))).toBe(false);
   });
 
   it('keeps Chat available and reports a local routing error when a linked target has no mapping', async () => {
@@ -74,7 +76,7 @@ describe('runtime-configured browser entry', () => {
     const request = new URL(String(fetchMock.mock.calls[1][0]), window.location.href);
     expect(request.searchParams.get('gateway')).toBe('https://other.example');
     expect(fetchMock.mock.calls.some(([input]) =>
-      new URL(String(input), window.location.href).pathname.endsWith('/turns'))).toBe(true);
+      new URL(String(input), window.location.href).pathname.endsWith('/turns'))).toBe(false);
   });
 
   it('keeps linked selection private while its session endpoint is unavailable', async () => {
