@@ -44,13 +44,13 @@ describe('direct browser entry', () => {
     expect(screen.queryByLabelText(/device id|device token/i)).toBeNull();
     expect(screen.queryByRole('button', { name: /sign in|pair/i })).toBeNull();
     await waitFor(() => expect(fetchSpy.mock.calls.some(([input]) =>
-      new URL(String(input)).pathname.endsWith('/turns'))).toBe(true));
+      new URL(String(input)).pathname.endsWith('/messages'))).toBe(true));
     const request = new URL(String(fetchSpy.mock.calls[0][0]));
     expect(request.pathname).toBe(`/__chat/api/sessions/${encodeURIComponent(defaultTarget.sessionKey)}`);
     expect(request.searchParams.get('gateway')).toBe(defaultTarget.gateway);
     const paths = fetchSpy.mock.calls.map(([input]) => new URL(String(input)).pathname);
     expect(paths).toContain(`/__chat/api/sessions/${encodeURIComponent(defaultTarget.sessionKey)}/messages`);
-    expect(paths).toContain(`/__chat/api/sessions/${encodeURIComponent(defaultTarget.sessionKey)}/turns`);
+    expect(paths).not.toContain(`/__chat/api/sessions/${encodeURIComponent(defaultTarget.sessionKey)}/turns`);
     expect(new URL(socketSpy.mock.calls[0][0]).pathname).toBe('/__chat/ws/changes');
   });
 
@@ -103,12 +103,13 @@ describe('direct browser entry', () => {
     expect(socketUrl.searchParams.get('protocolVersion')).toBe('2');
     await waitFor(() => {
       const paths = fetchSpy.mock.calls.map(([input]) => new URL(String(input)).pathname);
-      expect(paths).toContain(`/__chat/api/sessions/${encodeURIComponent(defaultTarget.sessionKey)}/turns`);
+      expect(paths).toContain(`/__chat/api/sessions/${encodeURIComponent(defaultTarget.sessionKey)}/messages`);
       expect(paths.some(path => path.endsWith('/tool-calls'))).toBe(true);
     });
     const paths = fetchSpy.mock.calls.map(([input]) => new URL(String(input)).pathname);
     expect(paths).toContain(`/__chat/api/sessions/${encodeURIComponent(defaultTarget.sessionKey)}`);
     expect(paths).toContain(`/__chat/api/sessions/${encodeURIComponent(defaultTarget.sessionKey)}/messages`);
+    expect(paths.some(path => path.endsWith('/turns'))).toBe(false);
     expect(paths.some(path => path.endsWith('/version'))).toBe(false);
     expect(screen.queryByRole('alert')).toBeNull();
   });
