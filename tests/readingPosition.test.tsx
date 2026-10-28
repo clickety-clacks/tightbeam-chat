@@ -34,6 +34,7 @@ const message = (id: number): CanonicalMessage => ({ kind: 'message', id: `messa
   seq: id, rowVersion: 1, role: 'user', sender: 'user:person', content: `Message ${id}`, raw: {} });
 const initialRows = Array.from({ length: 20 }, (_, i) => message(i));
 let scrollTop = 0;
+let clampScrollTopOnRead = false;
 let viewportHeight = 300;
 let lateLayoutGrowth = 0;
 let scrollTo: ReturnType<typeof vi.fn>;
@@ -79,6 +80,7 @@ function installVisualViewport(height: number) {
 }
 beforeEach(() => {
   scrollTop = 0;
+  clampScrollTopOnRead = false;
   viewportHeight = 300;
   lateLayoutGrowth = 0;
   reducedMotion = false;
@@ -93,10 +95,14 @@ beforeEach(() => {
     unobserve() {}
   });
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+    const readScrollTop = () => {
+      if (clampScrollTopOnRead) scrollTop = Math.max(0, Math.min(scrollTop, scrollHeight() - renderedViewportHeight()));
+      return scrollTop;
+    };
     if (this.classList.contains('tb-chat')) return rect(0, keyboardViewportSimulation ? viewportHeight : 50);
     if (this.classList.contains('tb-chat-viewport')) return rect(0, renderedViewportHeight());
     const index = this.dataset.testPosition === undefined ? rows().indexOf(this) : Number(this.dataset.testPosition);
-    if (index >= 0) return rect(16 + Number.parseFloat(document.querySelector<HTMLElement>('.tb-chat-viewport')?.style.getPropertyValue('--tb-chat-anchor-space') || '0') + index * 92 - scrollTop, 80);
+    if (index >= 0) return rect(16 + Number.parseFloat(document.querySelector<HTMLElement>('.tb-chat-viewport')?.style.getPropertyValue('--tb-chat-anchor-space') || '0') + index * 92 - readScrollTop(), 80);
     return rect(0, 50);
   });
   vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function (this: HTMLElement) {
@@ -106,7 +112,10 @@ beforeEach(() => {
     if (this.classList.contains('tb-chat-viewport')) return renderedViewportHeight();
     return this.classList.contains('tb-chat') && keyboardViewportSimulation ? viewportHeight : 300;
   });
-  vi.spyOn(HTMLElement.prototype, 'scrollTop', 'get').mockImplementation(() => scrollTop);
+  vi.spyOn(HTMLElement.prototype, 'scrollTop', 'get').mockImplementation(() => {
+    if (clampScrollTopOnRead) scrollTop = Math.max(0, Math.min(scrollTop, scrollHeight() - renderedViewportHeight()));
+    return scrollTop;
+  });
   vi.spyOn(HTMLElement.prototype, 'scrollTop', 'set').mockImplementation(value => { scrollTop = Math.max(0, Math.min(value, scrollHeight() - renderedViewportHeight())); });
   scrollTo = vi.fn(function (this: HTMLElement, options: ScrollToOptions) {
     // Keep smooth motion pending so intermediate scroll frames can be exercised.
@@ -459,6 +468,25 @@ describe('conversation reading position', () => {
 
     expect(anchor.getBoundingClientRect().top).toBe(readerPosition);
     expect(box.scrollTop).toBe(previousTop + 60 + 2 * 92);
+  });
+
+  it('does not treat browser clamping after rows shrink as reader movement', () => {
+    const { runtime, box } = setup();
+    readAt(box, 1400);
+    fireEvent(box, new Event('scrollend'));
+    const previousTop = box.scrollTop;
+    const anchor = screen.getByText('Message 15').closest<HTMLElement>('[data-scroll-key]')!;
+    const viewportTop = box.getBoundingClientRect().top;
+    const anchorOffset = anchor.getBoundingClientRect().top - viewportTop;
+
+    // Removing rows above the reader reduces the maximum scroll position.
+    // Model the browser clamp before React's layout effect can restore the row.
+    clampScrollTopOnRead = true;
+    act(() => runtime.publish({ records: runtime.state.records.filter((_, index) => index >= 5) }));
+    clampScrollTopOnRead = false;
+
+    expect(anchor.getBoundingClientRect().top - viewportTop).toBe(anchorOffset);
+    expect(box.scrollTop).toBe(previousTop - 5 * 92);
   });
 
   it.each([40, 2000])('bounds anchor work across message, status and send updates with %i loaded rows', count => {
