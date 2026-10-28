@@ -818,7 +818,7 @@ describe('conversation surface', () => {
       expect(screen.getByRole('status', { name: 'Active turn: Replying to you' }).style.opacity).toBe('1');
     } finally {
       if (original) Object.defineProperty(window, 'matchMedia', original);
-      else delete (window as Window & { matchMedia?: Window['matchMedia'] }).matchMedia;
+      else Reflect.deleteProperty(window, 'matchMedia');
     }
   });
 
@@ -1483,7 +1483,7 @@ describe('tool-call and transition display', () => {
     overflow.focus();
     fireEvent.click(overflow);
     expect(view.container.querySelectorAll('.tb-chat-activity-tool')).toHaveLength(2000);
-    const retained = view.container.querySelector<HTMLElement>('[data-record-key="tool-tc_1000"]')!;
+    const retained = view.container.querySelector<HTMLDetailsElement>('[data-record-key="tool-tc_1000"]')!;
     retained.open = true;
     fireEvent(retained, new Event('toggle'));
     insert(tool(2001));

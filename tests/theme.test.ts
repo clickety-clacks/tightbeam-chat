@@ -216,7 +216,7 @@ describe('Nordic theme', () => {
     expect(rule(componentCss, '.tb-chat-transition-marker::before')).toContain('content: none');
     expect(rule(componentCss, '.tb-chat-caption-caution')).toContain('var(--tb-chat-caution) 94%');
     expect(rule(componentCss, '.tb-chat-caption-danger')).toContain('var(--tb-chat-danger) 94%');
-    for (const tokens of [light, dark]) {
+    for (const [variant, tokens] of [['light', light], ['dark', dark]] as const) {
       const background = tokenColor(tokens, 'background');
       const activityColors = ['fjord', 'muted', 'teak', 'caution'].map(name => tokens[name]);
       expect(new Set(activityColors).size).toBe(activityColors.length);

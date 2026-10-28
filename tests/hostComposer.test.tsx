@@ -627,7 +627,7 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     await waitForReady(events, 'conversation-a');
     expect(screen.queryByRole('status', { name: 'Active turn: Replying to you' })).toBeNull();
     act(() => transport.emitTurn(active));
-    const caption = await screen.findByRole('status', { name: 'Active turn: Replying to you' });
+    await screen.findByRole('status', { name: 'Active turn: Replying to you' });
     const runtime = runtimes[0];
 
     act(() => transport.callbacks.get('conversation-a')?.onDoubt('live connection closed'));

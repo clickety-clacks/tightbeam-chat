@@ -57,11 +57,12 @@ describe('activity trail projection', () => {
 
     const ordered = combined(plan.messageItems, plan.toolItems as ReadonlyMap<string, MessageActivityItem>);
     expect(ordered.map(item => item.kind)).toEqual(['tool', 'tool', 'tool', 'substrate', 'agent']);
-    expect(ordered.slice(0, 3).map(item => item.gist)).toEqual([
+    const lines = ordered.filter((item): item is ActivityLine => item.kind !== 'overflow');
+    expect(lines.slice(0, 3).map(item => item.gist)).toEqual([
       'Tool done · done', 'Tool failed · failed', 'Tool running · running',
     ]);
-    expect(ordered[3].accessibleText).toBe('Substrate: Assigned a task');
-    expect(ordered[4].accessibleText).toBe('Other agent: Another agent — Started a helper task');
+    expect(lines[3].accessibleText).toBe('Substrate: Assigned a task');
+    expect(lines[4].accessibleText).toBe('Other agent: Another agent — Started a helper task');
 
     const hiddenReply = message('hidden-reply', 2, 'assistant-service', 'Must not become activity', {
       role: 'assistant', messageType: 'assistant', turnIncludesHuman: false,
@@ -83,7 +84,7 @@ describe('activity trail projection', () => {
     expect(runItems(firstRun).map(item => item.kind)).toEqual(['substrate', 'substrate']);
     expect(runItems(secondRun).filter(item => item.kind === 'overflow')).toHaveLength(1);
     expect(runItems(secondRun).filter(item => item.kind === 'substrate')).toHaveLength(5);
-    expect(runItems(secondRun).filter(item => item.kind === 'substrate').map(item => item.gist))
+    expect(runItems(secondRun).filter((item): item is ActivityLine => item.kind === 'substrate').map(item => item.gist))
       .toEqual(['Activity 6', 'Activity 7', 'Activity 8', 'Activity 9', 'Activity 10']);
 
     const expanded = build({ records: initial, bubbles, shownRuns: firstPlan.membership,
