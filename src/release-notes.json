@@ -1,5 +1,18 @@
 [
   {
+    "version": "v0.1.42",
+    "items": [
+      {
+        "title": "Keep your place in history",
+        "description": "Your reading position stays steady when older conversation content changes or shrinks."
+      },
+      {
+        "title": "Optional tool history",
+        "description": "Unsupported tool-call history is skipped quietly while the conversation and live tool updates remain usable."
+      }
+    ]
+  },
+  {
     "version": "v0.1.41",
     "items": [
       {
