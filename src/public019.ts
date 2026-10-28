@@ -361,6 +361,7 @@ export function createPublic019Transport(config: Public019Config): { transport: 
       let closed = false;
       let ready = false;
       let railSubscriptionPending = false;
+      let railRefusalBeforeReady = false;
       let lastSeq = 0;
       let stopListening = () => {};
       let readyTimer: ReturnType<typeof setTimeout> | undefined;
@@ -406,6 +407,10 @@ export function createPublic019Transport(config: Public019Config): { transport: 
             if (frame.type === 'subscription_ready' && frame.subscriptionId === subscriptionId) {
               ready = true;
               if (!tools) activeSessions.add(sessionKey);
+              // An invalid_request without a subscription id is ambiguous until
+              // the primary readiness frame arrives. Once it does, the optional
+              // rail refusal cannot have prevented the conversation feed.
+              railRefusalBeforeReady = false;
               if (readyTimer) clearTimeout(readyTimer);
               watchHeartbeat();
               resolveReady();
@@ -414,6 +419,14 @@ export function createPublic019Transport(config: Public019Config): { transport: 
             } else if (frame.type === 'error' && hasRailSubscription && frame.subscriptionId === railSubscriptionId) {
               // Rail activity is optional to the conversation feed, including when its filter is refused.
               railSubscriptionPending = false;
+              return;
+            } else if (frame.type === 'error' && hasRailSubscription && railSubscriptionPending &&
+                frame.subscriptionId === undefined && frame.code === 'invalid_request') {
+              // Gateway v2 omits subscriptionId on invalid_request. Keep the
+              // result pending until primary readiness distinguishes a rail
+              // refusal from a conversation subscription that never becomes ready.
+              railSubscriptionPending = false;
+              railRefusalBeforeReady = true;
               return;
             } else if (frame.type === 'error' && authorizationFailureCode(frame.code)) {
               throw new AuthorizationError('Gateway refused the authenticated change subscription.');
@@ -477,7 +490,13 @@ export function createPublic019Transport(config: Public019Config): { transport: 
       });
       if (signal.aborted) onAbort();
       else if (!closed) {
-        readyTimer = setTimeout(() => { close(); rejectReady(new Error('Firehose subscription readiness timed out.')); }, timeoutMs);
+        readyTimer = setTimeout(() => {
+          const error = railRefusalBeforeReady
+            ? new UnsupportedTargetError('The conversation feed did not become ready after an uncorrelated subscription refusal.')
+            : new Error('Firehose subscription readiness timed out.');
+          close();
+          rejectReady(error);
+        }, timeoutMs);
         try {
           channel.send({ type: 'subscribe', protocolVersion: 2, subscriptionId, filters: { sessionKey, classes: tools ? ['tool_call.']
               : ['message.created', 'transition.recorded', 'session.', 'turn.started', 'turn.ended'] } });
@@ -486,7 +505,7 @@ export function createPublic019Transport(config: Public019Config): { transport: 
           railSubscriptionPending = true;
           try {
             channel.send({ type: 'subscribe', protocolVersion: 2, subscriptionId: railSubscriptionId,
-              filters: { principal: `session:${sessionKey}`, classes: ['rail.denied'] } });
+              filters: { sessionKey, classes: ['rail.denied'] } });
           } catch {
             railSubscriptionPending = false;
             // The secondary activity category must not disable the primary feed.
