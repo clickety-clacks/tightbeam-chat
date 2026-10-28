@@ -66,7 +66,7 @@ export interface CanonicalTransition {
   readonly transition: 'harness' | 'model' | 'restart' | 'compaction' | 'unknown';
   readonly content?: string;
   readonly from?: string;
-  readonly to: string;
+  readonly to?: string;
   readonly createdAt?: string;
   readonly raw: Readonly<Record<string, unknown>>;
 }
@@ -128,6 +128,8 @@ export interface SessionRecord {
 export type ChangeNotice =
   | { readonly operation: 'tool'; readonly tool: ToolCallRecord }
   | { readonly operation: 'upsert'; readonly record: ConversationRecord }
+  | { readonly operation: 'rail-denial'; readonly id: string; readonly principal: string; readonly verb: string;
+      readonly rule: string; readonly occurredAt?: number; readonly afterMessageSeq?: number }
   | { readonly operation: 'delete'; readonly sessionKey: string; readonly id: string; readonly rowVersion: number }
   | { readonly operation: 'session'; readonly session: SessionRecord }
   | { readonly operation: 'turn'; readonly turn: CanonicalTurn }
@@ -217,8 +219,6 @@ export interface ChatTransport {
   /** Refresh one known in-place-editable transcript row without rereading a page. */
   readMessage?(sessionKey: string, messageId: string, signal: AbortSignal): Promise<ConversationRecord>;
   readSession(sessionKey: string, signal: AbortSignal): Promise<SessionRecord>;
-  /** Optional bounded activity snapshot for opening or returning during an active turn. */
-  readRecentTurns?(sessionKey: string, signal: AbortSignal): Promise<readonly CanonicalTurn[]>;
   /** Exact non-secret Gateway origin selected by the host, when the transport knows it. */
   readonly targetGateway?: string;
   /** Establishes the elected target's snapshot/notice coverage rule. */
@@ -276,7 +276,12 @@ export interface RuntimeState {
   readonly provenanceAvailable?: boolean;
   readonly activeTurn?: TurnProvenance;
   /** A local caption-only failure; it never makes conversation or sending unavailable. */
-  readonly activeTurnError?: string;
+  /** True only after this live subscription has delivered at least one turn record. */
+  readonly activityTurnStateAvailable?: boolean;
+  /** Message ids observed on the live subscription; used only for the live-tail rule. */
+  readonly liveActivityIds?: readonly string[];
+  /** Ephemeral rail.denied observations; they are not transcript history. */
+  readonly liveRailDenials?: readonly LiveRailDenial[];
   readonly targetGateway?: string;
   readonly agentDisplayName?: string;
   readonly hasOlder: boolean;
@@ -284,6 +289,17 @@ export interface RuntimeState {
   readonly historyError?: string;
   readonly sends: readonly LocalSend[];
   readonly targetLabel: string;
+}
+
+export interface LiveRailDenial {
+  readonly id: string;
+  readonly principal: string;
+  readonly verb: string;
+  readonly rule: string;
+  readonly occurredAt?: number;
+  /** Message sequence at receipt; its rendered position remains fixed for this runtime. */
+  readonly afterMessageSeq: number;
+  readonly arrivalOrder: number;
 }
 
 export interface ChatRuntime {

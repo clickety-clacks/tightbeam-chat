@@ -257,6 +257,17 @@ export function useReadingPosition(
     // underfilled view at the latest message into an away-from-bottom reading.
     interrupt();
   };
+  const preserveVisiblePosition = () => {
+    const box = viewport.current;
+    if (!box) return;
+    initialSettlePending.current = false;
+    if (animating.current) box.scrollTo({ top: box.scrollTop, behavior: 'instant' });
+    animating.current = false;
+    target.current = undefined;
+    // Expanding an activity run is not reader intent to leave the latest edge.
+    setShowLatest(distance(box) > bottomThreshold);
+    capture();
+  };
   const scrollBy = (amount: number) => {
     const box = viewport.current;
     if (!box || !Number.isFinite(amount) || amount === 0) return;
@@ -295,5 +306,6 @@ export function useReadingPosition(
     moveToLatest(true);
   };
 
-  return { viewport, content, registerRow, showLatest, onScroll, interrupt, holdPosition, scrollBy, scrollToLatest, noteUserScroll };
+  return { viewport, content, registerRow, showLatest, onScroll, interrupt, holdPosition,
+    preserveVisiblePosition, scrollBy, scrollToLatest, noteUserScroll };
 }

@@ -124,6 +124,16 @@ class ControlledTransport implements ChatTransport {
 async function settle() { await vi.waitFor(() => {}, { timeout: 50 }); }
 
 describe('framework-independent runtime', () => {
+  it('marks session-addressed live messages as activity without turn history', async () => {
+    const transport = new ControlledTransport();
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await runtime.rebuild();
+    const activity = message(9, { role: 'user', sender: 'session:helper', messageType: undefined });
+    transport.emit(activity);
+    expect(runtime.getSnapshot().liveActivityIds).toContain(activity.id);
+    runtime.dispose();
+  });
+
   it.each(['live', 'running-first seed', 'queued-first seed'])(
     'keeps the running caption across queued successors (%s)', async (arrival) => {
       const transport = new ControlledTransport();

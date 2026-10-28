@@ -1,11 +1,44 @@
 import type { CanonicalMessage, ConversationRecord } from './types';
 
-/** Retained for renderer source compatibility; canonical member rows need no extraction. */
 export interface HumanMember {
   readonly index: number;
   readonly sourceId: string;
   readonly sender: string;
   readonly content: string;
+}
+
+export interface ParsedBatchMember extends HumanMember {
+  readonly sender: string;
+}
+
+const batchHeading = /^\[(\d+)\] source=([^\s]+) sender=([^\s]+) cause=([^\s]+) class=([^\s]+)$/;
+
+/** Parse only the delivered, indexed notice-batch form; unknown wrappers stay hidden. */
+export function parseBatchMembers(record: CanonicalMessage): readonly ParsedBatchMember[] | undefined {
+  if (record.isBatchCarrier !== true && !record.sender?.startsWith('process:')) return undefined;
+  const lines = record.content.split(/\r?\n/);
+  const countMatch = /^\[batched notices: ([1-9]\d*)\]$/.exec(lines[0] ?? '');
+  if (!countMatch) return undefined;
+  const count = Number(countMatch[1]);
+  if (!Number.isSafeInteger(count)) return undefined;
+
+  const headers = lines.flatMap((line, lineIndex) => {
+    const match = batchHeading.exec(line);
+    return match ? [{ lineIndex, index: Number(match[1]), sender: match[3] }] : [];
+  });
+  if (headers.length !== count || headers.some((header, index) => header.index !== index + 1)) return undefined;
+  const footerIndex = lines.reduce((found, line, index) => /^coalesced by\s+\S/.test(line) ? index : found, -1);
+  if (footerIndex <= headers.at(-1)!.lineIndex) return undefined;
+
+  return headers.map((header, index) => {
+    const bodyStart = header.lineIndex + 1;
+    const boundary = headers[index + 1]?.lineIndex ?? footerIndex;
+    let bodyEnd = boundary;
+    // A single empty line separates a member body from the next framing line.
+    if (bodyEnd > bodyStart && lines[bodyEnd - 1] === '') bodyEnd--;
+    return Object.freeze({ index: header.index, sourceId: `${record.id}:member:${header.index}`,
+      sender: header.sender, content: lines.slice(bodyStart, bodyEnd).join('\n') });
+  });
 }
 
 const nonhumanTypes = new Set(['substrate', 'agent', 'process', 'marker']);
@@ -56,7 +89,16 @@ export function projectMessages(records: readonly ConversationRecord[], principa
   const issues: string[] = [];
   for (const record of byId.values()) {
     const classification = classifyMessage(record, principalKey);
-    if (classification === 'human') {
+    const members = parseBatchMembers(record);
+    if (members && record.isBatchCarrier !== true) {
+      for (const member of members) {
+        if (member.sender.startsWith('user:')) {
+          messages.push({ key: `${record.id}:member:${member.index}`, source: record, side: 'human',
+            senderLabel: member.sender === `user:${principalKey}` ? 'You' : 'User',
+            provenancePending: false, member });
+        }
+      }
+    } else if (classification === 'human') {
       messages.push({ key: record.id, source: record, side: 'human', senderLabel: 'You', provenancePending: false });
     } else if (isVisibleHumanRow(record)) {
       // A missing or different sender does not prove this row belongs to the viewer,
@@ -69,7 +111,11 @@ export function projectMessages(records: readonly ConversationRecord[], principa
       const linked = parent && parent.sessionKey === record.sessionKey && record.turnSeq !== undefined &&
         parent.turnSeq === record.turnSeq;
       const parentKind = linked ? classifyMessage(parent, principalKey) : 'unknown';
-      const direct = parentKind === 'human' ? true : parentKind === 'nonhuman' ? false : undefined;
+      const parentMembers = linked && parent?.isBatchCarrier !== true ? parseBatchMembers(parent!) : undefined;
+      const parentHasHumanMember = parentMembers?.some(member => member.sender === `user:${principalKey}`) === true;
+      const parentIsClassifiedBatch = parentMembers !== undefined;
+      const direct = parentKind === 'human' || parentHasHumanMember ? true
+        : parentKind === 'nonhuman' || (parentIsClassifiedBatch && !parentHasHumanMember) ? false : undefined;
       const flag = scopedHumanFlag(record, principalKey, ownerUserId);
       if (direct === true && flag === false) issues.push('Reply classification conflicts with its human parent');
       const includesHuman = direct === true ? true : flag ?? direct;

@@ -13,6 +13,7 @@
   --tb-chat-fjord: #4D6470;
   --tb-chat-ok: #4E6547;
   --tb-chat-caution: #73592A;
+  --tb-chat-transition: #6B6458;
   --tb-chat-danger: #A63A2A;
   --tb-chat-idle: #5C5854;
   --tb-chat-placeholder: #53504C;
@@ -37,6 +38,7 @@
     --tb-chat-fjord: #9FB4BF;
     --tb-chat-ok: #A5BC9C;
     --tb-chat-caution: #D8BE84;
+    --tb-chat-transition: #B0A18D;
     --tb-chat-danger: #EE8B75;
     --tb-chat-idle: #9E9992;
     --tb-chat-placeholder: #D2CDC6;
