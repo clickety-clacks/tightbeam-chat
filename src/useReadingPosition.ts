@@ -30,7 +30,6 @@ export function useReadingPosition(
     if (element) registeredRows.current.set(key, element);
     else registeredRows.current.delete(key);
   }, []);
-  const readingTop = useRef(0);
   const latestReady = useRef(ready);
   const [showLatest, setShowLatest] = useState(false);
   latestReady.current = ready;
@@ -66,7 +65,6 @@ export function useReadingPosition(
     const children = content.current?.children;
     if (!box || !children) return;
     if (box.clientHeight > 0) viewportHeight.current = box.clientHeight;
-    readingTop.current = box.scrollTop;
     lastKnownScrollTop.current = box.scrollTop;
     lastKnownBottom.current = Math.max(0, box.scrollHeight - box.clientHeight);
     anchors.current = [];
@@ -160,7 +158,10 @@ export function useReadingPosition(
         // Retain the next visible row if filtering removed the original anchor.
         box.style.removeProperty('--tb-chat-anchor-space');
         const offset = rows.get(survivor.key)!.getBoundingClientRect().top - box.getBoundingClientRect().top;
-        const wanted = box.scrollTop + offset - (survivor.top - readingTop.current);
+        // Preserve the anchor's position from the reader's current viewport.
+        // A native scroll can reach scrollTop before its scroll event is
+        // delivered; using the prior capture here would undo that movement.
+        const wanted = box.scrollTop + offset - (survivor.top - box.scrollTop);
         // A removed first row can require negative scrollTop; browsers clamp it.
         if (wanted < 0) box.style.setProperty('--tb-chat-anchor-space', `${-wanted}px`);
         if (Math.abs(box.scrollTop - Math.max(0, wanted)) > .5) box.scrollTop = Math.max(0, wanted);

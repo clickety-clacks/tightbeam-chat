@@ -2,6 +2,7 @@ import { indexValues } from '../src/recordIndex';
 import { describe, expect, it, vi } from 'vitest';
 import { createTightbeamAdapter } from '../src/runtime';
 import { AuthorizationError, UnsupportedTargetError } from '../src/types';
+import { ToolHistoryUnavailableError } from '../src/toolHistory';
 import type {
   RuntimeState, ToolCallRecord, ToolCallRange, CanonicalMessage, CanonicalTransition, CanonicalTurn, ChangeCallbacks, ChatTransport,
   ConversationPage, ConversationRecord, HostIdentity, HumanSendResult,
@@ -1339,6 +1340,29 @@ describe('optional tool history and live category', () => {
     runtime.retryToolCalls!();
     await vi.waitFor(() => expect(runtime.getSnapshot().toolCallsError).toBeUndefined());
     expect(visibleTools(runtime.getSnapshot()).map(call => call.id)).toEqual(['tc_replacement']);
+    runtime.dispose();
+  });
+
+  it('keeps the live tool feed without a history error when the history collection is absent', async () => {
+    const transport = new ToolsTransport();
+    transport.toolError = new ToolHistoryUnavailableError('Tool history is unavailable.');
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+    await vi.waitFor(() => expect(transport.ranges).toHaveLength(1));
+    await vi.waitFor(() => expect(runtime.getSnapshot().toolCallsLoading).toBe(false));
+
+    expect(runtime.getSnapshot()).toMatchObject({ status: 'ready', toolCallsEnabled: true });
+    expect(runtime.getSnapshot().records.length).toBeGreaterThan(0);
+    expect(runtime.getSnapshot().toolCallsError).toBeUndefined();
+    expect(transport.toolClosed).toBe(0);
+    expect(transport.toolCallbacks).toBeDefined();
+
+    runtime.retryToolCalls!();
+    await vi.waitFor(() => expect(transport.toolOpens).toBe(2));
+    expect(transport.ranges).toHaveLength(1);
+    expect(runtime.getSnapshot().toolCallsError).toBeUndefined();
+    transport.toolCallbacks?.onNotice({ operation: 'tool', tool: call('tc_live_only', 8) });
+    expect(visibleTools(runtime.getSnapshot()).map(tool => tool.id)).toEqual(['tc_live_only']);
     runtime.dispose();
   });
 

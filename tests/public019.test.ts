@@ -5,6 +5,7 @@ import {
   decodePublic019Notice, type Public019Channel, type Public019Host,
 } from '../src/public019';
 import { AuthorizationError, SessionNotFoundError, UnsupportedTargetError } from '../src/types';
+import { ToolHistoryUnavailableError } from '../src/toolHistory';
 
 const sessionKey = 's-public';
 const identity = { principalKey: 'person-1', deviceId: 'device-1' };
@@ -158,6 +159,19 @@ describe('Gateway wire mapping and behavior checks', () => {
     });
     expect(runtime.send('a missing session does not block the rest of Chat')).toBeTruthy();
     runtime.dispose();
+  });
+
+  it('classifies only a missing tool-history collection as optional history', async () => {
+    const candidate = setup();
+    candidate.host.fetch = async () => new Response(JSON.stringify({ error: { code: 'not_found' } }), { status: 404 });
+    await expect(candidate.transport.readToolCalls!(sessionKey, { fromInclusive: 0 }, new AbortController().signal))
+      .rejects.toBeInstanceOf(ToolHistoryUnavailableError);
+    await expect(candidate.transport.readTail(sessionKey, new AbortController().signal))
+      .rejects.toThrow('HTTP 404 (not_found)');
+
+    candidate.host.fetch = async () => new Response(JSON.stringify({ error: { code: 'chat_gateway_unavailable' } }), { status: 404 });
+    await expect(candidate.transport.readToolCalls!(sessionKey, { fromInclusive: 0 }, new AbortController().signal))
+      .rejects.toThrow('No Gateway access is provisioned');
   });
 
   it('reads ordered transitions while using a protocol-2 Firehose subscription', async () => {

@@ -19,6 +19,7 @@ import {
   type TargetObservation,
   type TargetProfile,
 } from './types';
+import { ToolHistoryUnavailableError } from './toolHistory';
 
 // Snapshot coverage is the Chat client's subscribe-before-REST overlap, not a
 // Gateway snapshot watermark.
@@ -282,6 +283,11 @@ function isSessionDetailPath(path: string): boolean {
   catch { return false; }
 }
 
+function isToolHistoryCollectionPath(path: string): boolean {
+  try { return /^\/api\/sessions\/[^/]+\/tool-calls$/.test(new URL(path, 'https://gateway.invalid').pathname); }
+  catch { return false; }
+}
+
 function authorizationFailureCode(value: unknown): boolean {
   if (typeof value !== 'string') return false;
   return ['unauthorized', 'forbidden', 'not_authorized', 'not_authenticated',
@@ -323,6 +329,9 @@ export function createPublic019Transport(config: Public019Config): { transport: 
       }
       if (code === 'chat_gateway_unavailable') {
         throw new Error('No Gateway access is provisioned for the selected conversation. The selected target was not changed.');
+      }
+      if (response.status === 404 && isToolHistoryCollectionPath(path)) {
+        throw new ToolHistoryUnavailableError('Tool history is unavailable.');
       }
       throw new Error(`Tightbeam REST request failed with HTTP ${response.status}${code ? ` (${code})` : ''}.`);
     }

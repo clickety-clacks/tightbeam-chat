@@ -28,6 +28,7 @@ import {
   type TurnProvenance,
   SessionNotFoundError,
 } from './types';
+import { ToolHistoryUnavailableError } from './toolHistory';
 import { createTurnProvenance } from './provenance';
 import { getIndex, putIndex, trimIndexBelow } from './recordIndex';
 
@@ -129,6 +130,7 @@ class SessionRuntime implements ChatRuntime {
   private readonly tools = new Map<string, ToolCallRecord>();
   private toolIndex: ToolCallIndex | undefined;
   private toolHistoryLoaded = false;
+  private toolHistoryUnavailable = false;
   private connection: ChangeConnection | undefined;
   private connectionController: AbortController | undefined;
   private connectionBinding: { generation: number; doubted: boolean } | undefined;
@@ -251,6 +253,15 @@ class SessionRuntime implements ChatRuntime {
       toolCallsError: errorText(error) });
   }
 
+  private markToolHistoryUnavailable(pendingTools: Iterable<ToolCallRecord> = []): void {
+    this.toolHistoryUnavailable = true;
+    this.toolHistoryLoaded = true;
+    for (const call of pendingTools) this.putTool(call);
+    const floor = this.state.hasOlder ? this.state.records[0]?.seq ?? 0 : 0;
+    this.publish({ toolCallIndex: trimIndexBelow(this.toolIndex, floor), toolCallsLoading: false,
+      toolCallsError: undefined });
+  }
+
   /** Tools are optional to conversation availability, but never silently complete. */
   private async startTools(): Promise<void> {
     this.stopTools();
@@ -264,7 +275,7 @@ class SessionRuntime implements ChatRuntime {
     // Keep the last displayed rows while an optional refresh is in flight. A
     // reconnect or retry must not make the transcript collapse before the
     // separate tool-history request has succeeded.
-    this.publish({ toolCallsLoading: !this.toolHistoryLoaded && !this.state.toolCallsError });
+    this.publish({ toolCallsLoading: !this.toolHistoryLoaded && !this.toolHistoryUnavailable && !this.state.toolCallsError });
     const liveDuringRead = new Map<string, ToolCallRecord>();
     let readingSnapshot = true;
     try {
@@ -293,6 +304,12 @@ class SessionRuntime implements ChatRuntime {
       const connection = await this.toolReadiness;
       if (!current()) { connection.close(); return; }
       this.toolConnection = connection;
+      if (this.toolHistoryUnavailable) {
+        readingSnapshot = false;
+        this.publish({ toolCallsLoading: false, toolCallsError: undefined });
+        this.publishTools();
+        return;
+      }
       const range = { fromInclusive: this.state.records[0]?.seq ?? 0 };
       const calls = await this.transport.readToolCalls(this.sessionKey, range, controller.signal);
       if (!current()) return;
@@ -310,12 +327,17 @@ class SessionRuntime implements ChatRuntime {
       this.publish({ toolCalls: Object.freeze([...this.tools.values()]), toolCallsLoading: false, toolCallsError: undefined });
       this.publishTools();
     } catch (error) {
-      if (current()) this.toolFailure(error, liveDuringRead.values());
+      if (current()) {
+        if (error instanceof ToolHistoryUnavailableError) {
+          readingSnapshot = false;
+          this.markToolHistoryUnavailable(liveDuringRead.values());
+        } else this.toolFailure(error, liveDuringRead.values());
+      }
     }
   }
 
   private async olderTools(page: ConversationPage): Promise<void> {
-    if (!this.state.toolCallsEnabled || !this.transport.readToolCalls || !this.toolController ||
+    if (!this.state.toolCallsEnabled || this.toolHistoryUnavailable || !this.transport.readToolCalls || !this.toolController ||
         !page.records.length || this.state.toolCallsError) return;
     const epoch = this.toolEpoch;
     const range: ToolCallRange = { fromInclusive: page.records[0].seq,
@@ -328,7 +350,10 @@ class SessionRuntime implements ChatRuntime {
       if (epoch !== this.toolEpoch || this.disposed) return;
       for (const call of calls) this.putTool(call);
     } catch (error) {
-      if (epoch === this.toolEpoch && !this.disposed) this.toolFailure(error);
+      if (epoch === this.toolEpoch && !this.disposed) {
+        if (error instanceof ToolHistoryUnavailableError) this.markToolHistoryUnavailable();
+        else this.toolFailure(error);
+      }
     }
   }
 

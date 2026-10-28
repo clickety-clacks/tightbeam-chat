@@ -435,6 +435,32 @@ describe('conversation reading position', () => {
     expect(anchor.getBoundingClientRect().top).toBe(offset);
   });
 
+  it('applies an older-page layout shift to the reader current scroll position', () => {
+    function History({ ids }: { ids: number[] }) {
+      const reading = useReadingPosition(true, ids);
+      return <div ref={reading.viewport} className="tb-chat-viewport" onScroll={reading.onScroll}
+        onWheel={event => { if (event.deltaY !== 0) reading.noteUserScroll(); }}>
+        <div ref={reading.content}>{ids.map((id, index) =>
+          <article ref={element => reading.registerRow(String(id), element)} key={id} data-record-key={id}
+            data-scroll-key={id} data-test-position={index}>{id}</article>)}</div>
+      </div>;
+    }
+    const ids = Array.from({ length: 2000 }, (_, i) => i);
+    const view = render(<History ids={ids} />);
+    const box = document.querySelector<HTMLElement>('.tb-chat-viewport')!;
+    readAt(box, 900);
+    const anchor = box.querySelector<HTMLElement>('[data-record-key="10"]')!;
+    const previousTop = box.scrollTop;
+
+    // Native scrolling can update scrollTop before its scroll handler runs.
+    box.scrollTop = previousTop + 60;
+    const readerPosition = anchor.getBoundingClientRect().top;
+    view.rerender(<History ids={[-2, -1, ...ids]} />);
+
+    expect(anchor.getBoundingClientRect().top).toBe(readerPosition);
+    expect(box.scrollTop).toBe(previousTop + 60 + 2 * 92);
+  });
+
   it.each([40, 2000])('bounds anchor work across message, status and send updates with %i loaded rows', count => {
     const renderMessage = vi.fn((record: ConversationRecord) => record.kind === 'message' ? record.content : undefined);
     const measure = vi.mocked(HTMLElement.prototype.getBoundingClientRect);
