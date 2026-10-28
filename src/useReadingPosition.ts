@@ -185,6 +185,7 @@ export function useReadingPosition(
   };
   const currentUpdate = useRef(updateLayout);
   currentUpdate.current = updateLayout;
+  const reconcileViewportLayout = useCallback(() => currentUpdate.current(), []);
 
   useLayoutEffect(updateLayout, [revision]);
   useLayoutEffect(() => {
@@ -321,5 +322,5 @@ export function useReadingPosition(
   };
 
   return { viewport, content, registerRow, showLatest, onScroll, interrupt, holdPosition,
-    preserveVisiblePosition, scrollBy, scrollToLatest, noteUserScroll };
+    preserveVisiblePosition, scrollBy, scrollToLatest, noteUserScroll, reconcileViewportLayout };
 }
