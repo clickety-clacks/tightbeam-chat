@@ -230,7 +230,7 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     expect(fireEvent.keyDown(transcript, { key: 'u', ctrlKey: true })).toBe(true);
   });
 
-  it('moves a native-composer submission from older history to its visible ghosted prompt', async () => {
+  it('moves a native-composer submission from older history to its visible prompt', async () => {
     const events: HostComposerEvent[] = [];
     const sessionKey = 'native-prompt-submit';
     const transport = new HostComposerTransport();
@@ -262,7 +262,7 @@ describe('versioned host composer seam on the real adapter and surface', () => {
       expect(layout.offset(prompt)).toBeLessThan(180);
       expect(screen.queryByRole('button', { name: 'Scroll to latest messages' })).toBeNull();
       expect(runtimes[0].getSnapshot().sends[0]).toMatchObject({
-        clientMessageId: correlation, content: 'Native host prompt', status: 'pending', reconciled: false,
+        clientMessageId: correlation, content: 'Native host prompt', reconciled: false,
       });
 
       const reply: CanonicalMessage = {
