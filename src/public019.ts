@@ -360,6 +360,7 @@ export function createPublic019Transport(config: Public019Config): { transport: 
       const channel = await config.host.openAuthenticatedChanges(signal);
       let closed = false;
       let ready = false;
+      let railSubscriptionPending = false;
       let lastSeq = 0;
       let stopListening = () => {};
       let readyTimer: ReturnType<typeof setTimeout> | undefined;
@@ -397,6 +398,7 @@ export function createPublic019Transport(config: Public019Config): { transport: 
         try {
           const frame = record(raw);
           if (hasRailSubscription && frame.type === 'subscription_ready' && frame.subscriptionId === railSubscriptionId) {
+            railSubscriptionPending = false;
             watchHeartbeat();
             return;
           }
@@ -411,6 +413,7 @@ export function createPublic019Transport(config: Public019Config): { transport: 
               throw new AuthorizationError('Gateway refused the authenticated change subscription.');
             } else if (frame.type === 'error' && hasRailSubscription && frame.subscriptionId === railSubscriptionId) {
               // Rail activity is optional to the conversation feed, including when its filter is refused.
+              railSubscriptionPending = false;
               return;
             } else if (frame.type === 'error' && authorizationFailureCode(frame.code)) {
               throw new AuthorizationError('Gateway refused the authenticated change subscription.');
@@ -419,7 +422,17 @@ export function createPublic019Transport(config: Public019Config): { transport: 
             }
             return;
           }
-          if (frame.type === 'error' && hasRailSubscription && frame.subscriptionId === railSubscriptionId) return;
+          if (frame.type === 'error' && hasRailSubscription && railSubscriptionPending &&
+              frame.subscriptionId === undefined && frame.code === 'invalid_request') {
+            // Gateway v2 omits subscriptionId on invalid_request. The primary
+            // subscription is already ready, so this is the pending optional rail request.
+            railSubscriptionPending = false;
+            return;
+          }
+          if (frame.type === 'error' && hasRailSubscription && frame.subscriptionId === railSubscriptionId) {
+            railSubscriptionPending = false;
+            return;
+          }
           if ((frame.type === 'auth_result' && frame.success === false) ||
               (frame.type === 'error' && authorizationFailureCode(frame.code))) {
             close();
@@ -470,10 +483,12 @@ export function createPublic019Transport(config: Public019Config): { transport: 
               : ['message.created', 'transition.recorded', 'session.', 'turn.started', 'turn.ended'] } });
         } catch (error) { close(); rejectReady(error); }
         if (hasRailSubscription && !closed) {
+          railSubscriptionPending = true;
           try {
             channel.send({ type: 'subscribe', protocolVersion: 2, subscriptionId: railSubscriptionId,
               filters: { principal: `session:${sessionKey}`, classes: ['rail.denied'] } });
           } catch {
+            railSubscriptionPending = false;
             // The secondary activity category must not disable the primary feed.
           }
         }

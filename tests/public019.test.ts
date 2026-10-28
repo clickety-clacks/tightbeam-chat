@@ -734,6 +734,40 @@ describe('Gateway wire mapping and behavior checks', () => {
       .toThrow(UnsupportedTargetError);
   });
 
+  it('keeps the conversation feed connected when the pending optional rail filter is refused', async () => {
+    const { transport, changes } = setup();
+    const notices: string[] = [];
+    const doubts: string[] = [];
+    const pending = transport.openChanges(sessionKey, {
+      onNotice: (notice) => notices.push(notice.operation), onDoubt: (reason) => doubts.push(reason),
+    }, new AbortController().signal);
+    await vi.waitFor(() => expect(changes.sent).toHaveLength(2));
+    changes.emit({ type: 'subscription_ready', subscriptionId: 'chat:s-public' });
+    const connection = await pending;
+
+    // Gateway v2's invalid_request response has no subscriptionId. Once the
+    // conversation feed is ready, the only pending request is the optional rail.
+    changes.emit({ type: 'error', code: 'invalid_request', message: 'sessionKey must match selected session' });
+    expect(changes.closed).toBe(false);
+    expect(doubts).toEqual([]);
+    changes.emit({ type: 'heartbeat', seq: 0 });
+    changes.emit({ type: 'change', schemaVersion: 2, subscriptionId: 'chat:s-public', seq: 1,
+      class: 'message.created', resource: 'messages', op: 'upsert',
+      refs: { sessionKey, messageId: item.id }, payload: item });
+    expect(notices).toEqual(['upsert']);
+    expect(doubts).toEqual([]);
+    connection.close();
+
+    const primaryRefusal = setup();
+    const refusedPending = primaryRefusal.transport.openChanges(sessionKey, {
+      onNotice: () => {}, onDoubt: () => {},
+    }, new AbortController().signal);
+    await vi.waitFor(() => expect(primaryRefusal.changes.sent).toHaveLength(2));
+    primaryRefusal.changes.emit({ type: 'error', code: 'invalid_request', message: 'primary subscription refused' });
+    await expect(refusedPending).rejects.toThrow('change subscription was refused');
+    expect(primaryRefusal.changes.closed).toBe(true);
+  });
+
   it('subscribes after host auth, waits for readiness, and fails closed on a sequence gap', async () => {
     const { transport, changes } = setup();
     const notices: string[] = [];
