@@ -94,7 +94,7 @@ function gatewayNoticeFoldKind(content: string): string | undefined {
   const text = content.trimStart();
   if (/^\[woke:\s*(?:wait|fact|fallback)\b/i.test(text) ||
     /^Wait finished on its assignment\b/i.test(text)) return 'wake';
-  if (/\bhas had no recorded activity since\b/i.test(text) ||
+  if (/^Assignment\b[^\r\n]*\bhas had no recorded activity since\b/i.test(text) ||
     /^Quiet for \d+\s+(?:s(?:ec(?:ond)?s?)?|min(?:ute)?s?|h(?:r|our)?s?|d(?:ay)?s?)\s*[·•]/i.test(text)) {
     return 'reminder';
   }

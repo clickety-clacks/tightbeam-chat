@@ -98,7 +98,9 @@ describe('activity trail projection', () => {
     }
 
     const uncertain = build({ records: [
-      message('uncertain-1', 2, 'process:events', 'Status changed for requested work', { messageType: 'substrate' }),
+      message('uncertain-1', 2, 'process:events',
+        'Status changed for requested work\nAssignment Beta has had no recorded activity since this morning',
+        { messageType: 'substrate' }),
       message('uncertain-2', 3, 'process:events', 'A helper is now available', { messageType: 'substrate' }),
     ], bubbles: [bubble(prompt, 'human'), bubble(message('uncertain-reply', 4, 'assistant-service', 'Answer',
       { role: 'assistant' }), 'agent')] });
