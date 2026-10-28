@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { TightbeamChat } from '../src/TightbeamChat';
 import { createTightbeamAdapter } from '../src/runtime';
@@ -148,6 +148,38 @@ function openChat(transport: HostComposerTransport, sessionKey: string) {
   return { ...view, adapter, runtimes };
 }
 
+function installSubmitViewportLayout(viewport: HTMLElement) {
+  const content = viewport.querySelector<HTMLElement>('.tb-chat-message-content')!;
+  const rowHeight = 92;
+  let scrollTop = 0;
+  const anchorSpace = () => Number.parseFloat(viewport.style.getPropertyValue('--tb-chat-anchor-space')) || 0;
+  const scrollHeight = () => 32 + content.children.length * rowHeight + anchorSpace();
+  Object.defineProperties(viewport, {
+    clientHeight: { configurable: true, get: () => 180 },
+    scrollHeight: { configurable: true, get: scrollHeight },
+    scrollTop: {
+      configurable: true, get: () => scrollTop,
+      set: (value: number) => { scrollTop = Math.max(0, Math.min(value, scrollHeight() - 180)); },
+    },
+  });
+  Object.defineProperty(viewport, 'scrollTo', { configurable: true, value: (options: ScrollToOptions) => {
+    viewport.scrollTop = options.top ?? 0;
+  } });
+  const originalBounds = HTMLElement.prototype.getBoundingClientRect;
+  const bounds = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+    if (this === viewport) return new DOMRect(0, 100, 320, 180);
+    const index = [...content.children].indexOf(this);
+    if (index >= 0) return new DOMRect(0, 116 + anchorSpace() + index * rowHeight - scrollTop, 320, 80);
+    return originalBounds.call(this);
+  });
+  return {
+    offset(element: HTMLElement) { return element.getBoundingClientRect().top - viewport.getBoundingClientRect().top; },
+    get scrollTop() { return scrollTop; },
+    setScrollTop(value: number) { viewport.scrollTop = value; },
+    restore() { bounds.mockRestore(); },
+  };
+}
+
 afterEach(() => {
   cleanup();
   const page = window as unknown as Record<string, unknown>;
@@ -196,6 +228,53 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     expect(fireEvent.keyDown(transcript, { key: 'Tab' })).toBe(true);
     expect(fireEvent.keyDown(transcript, { key: 'j', ctrlKey: true })).toBe(true);
     expect(fireEvent.keyDown(transcript, { key: 'u', ctrlKey: true })).toBe(true);
+  });
+
+  it('moves a native-composer submission from older history to its visible ghosted prompt', async () => {
+    const events: HostComposerEvent[] = [];
+    const sessionKey = 'native-prompt-submit';
+    const transport = new HostComposerTransport();
+    transport.records.set(sessionKey, Array.from({ length: 8 }, (_, index): CanonicalMessage => ({
+      kind: 'message', id: `history-${index + 1}`, sessionKey, seq: index + 1, rowVersion: 1,
+      role: 'user', sender: 'user:person', content: `Earlier message ${index + 1}`, raw: {},
+    })));
+    installDeclaration(events);
+    const { runtimes } = openChat(transport, sessionKey);
+    const ready = await waitForReady(events, sessionKey);
+    await waitFor(() => expect(runtimes[0].getSnapshot().records).toHaveLength(8));
+
+    const log = screen.getByRole('log');
+    const layout = installSubmitViewportLayout(log);
+    try {
+      layout.setScrollTop(0);
+      fireEvent.wheel(log, { deltaY: -100 });
+      fireEvent.scroll(log);
+      await screen.findByRole('button', { name: 'Scroll to latest messages' });
+
+      act(() => commandEntry()({ type: 'send', lifetimeId: ready.lifetimeId,
+        sessionKey: ready.sessionKey, correlationId: correlation, content: 'Native host prompt' }));
+      await waitFor(() => expect(runtimes[0].getSnapshot().sends).toHaveLength(1));
+
+      const prompt = screen.getByText('Native host prompt').closest('article')!;
+      expect(prompt.classList.contains('tb-chat-bubble-human')).toBe(true);
+      expect(layout.scrollTop).toBeGreaterThan(0);
+      expect(layout.offset(prompt)).toBeGreaterThanOrEqual(0);
+      expect(layout.offset(prompt)).toBeLessThan(180);
+      expect(screen.queryByRole('button', { name: 'Scroll to latest messages' })).toBeNull();
+      expect(runtimes[0].getSnapshot().sends[0]).toMatchObject({
+        clientMessageId: correlation, content: 'Native host prompt', status: 'pending', reconciled: false,
+      });
+
+      const reply: CanonicalMessage = {
+        kind: 'message', id: 'reply-after-native-prompt', sessionKey, seq: 9, rowVersion: 1,
+        role: 'assistant', sender: 'assistant-service', content: 'Reply after the native prompt', raw: {},
+      };
+      act(() => transport.emit(reply));
+      await screen.findByText('Reply after the native prompt');
+      expect(layout.scrollTop).toBe(log.scrollHeight - log.clientHeight);
+    } finally {
+      layout.restore();
+    }
   });
 
   it('keeps the standalone composer and status control for absent or unsupported opt-in', async () => {

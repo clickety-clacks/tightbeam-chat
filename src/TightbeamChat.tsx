@@ -735,6 +735,24 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
   const reading = useReadingPosition(state.status === 'ready', readingRevision, box =>
     state.loadingOlder || (!state.historyError && state.hasOlder && box.scrollTop < olderHistoryPrefetchDistance(box)));
   const { viewport } = reading;
+  const observedHostSendIds = useRef<Set<string> | undefined>(undefined);
+  if (!observedHostSendIds.current) {
+    observedHostSendIds.current = new Set(state.sends
+      .filter((send) => send.hostSend)
+      .map((send) => send.clientMessageId));
+  }
+  const scrollToLatestRef = useRef(reading.scrollToLatest);
+  scrollToLatestRef.current = reading.scrollToLatest;
+  useLayoutEffect(() => {
+    const observed = observedHostSendIds.current!;
+    let submitted = false;
+    for (const send of state.sends) {
+      if (!send.hostSend || observed.has(send.clientMessageId)) continue;
+      observed.add(send.clientMessageId);
+      submitted = true;
+    }
+    if (submitted) scrollToLatestRef.current();
+  }, [state.sends]);
   const root = useRef<HTMLElement>(null);
   const composer = useRef<ComposerHandle>(null);
   const [overlay, setOverlay] = useState<ChatOverlay | null>(null);
