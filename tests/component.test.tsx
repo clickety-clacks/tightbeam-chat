@@ -227,10 +227,10 @@ describe('conversation surface', () => {
 
   it('filters with message provenance and renders safe Markdown without exposing batch wrappers', async () => {
     const sessionKey = 'conversation-a';
-    const human = row(sessionKey, 'human-trigger', 'Could you explain this?', { role: 'user', sender: 'user:person', turnSeq: 1 });
-    const unprovenHuman = row(sessionKey, 'unproven-human', 'A user row with no sender stays visible', { role: 'user' });
+    const human = row(sessionKey, 'human-trigger', 'Could you explain this?', { seq: 1, role: 'user', sender: 'user:person', turnSeq: 1 });
+    const unprovenHuman = row(sessionKey, 'unproven-human', 'A user row with no sender stays visible', { seq: 8, role: 'user' });
     const mismatchedHuman = row(sessionKey, 'mismatched-human', 'A differently marked user row stays visible', {
-      role: 'user', sender: 'user:another-person', messageType: 'chat',
+      seq: 9, role: 'user', sender: 'user:another-person', messageType: 'chat',
     });
     const answer = row(sessionKey, 'selected-answer', [
       '## A **useful** answer', '', '- first item', '- second item', '',
@@ -238,15 +238,15 @@ describe('conversation surface', () => {
       '```ts', 'const value = 1;', '```', '', '> A quotation', '',
       '| Name | Value |', '| --- | --- |', '| count | 2 |', '',
       '<script>window.compromised = true</script>',
-    ].join('\n'), { sender: 'assistant-service', turnSeq: 1, messageType: 'assistant', replyToMessageId: human.id });
+    ].join('\n'), { seq: 2, sender: 'assistant-service', turnSeq: 1, messageType: 'assistant', replyToMessageId: human.id });
     const otherTrigger = row(sessionKey, 'other-trigger', 'An agent sent a wake', {
-      role: 'user', sender: 'agent:external', messageType: 'agent', turnSeq: 2,
+      seq: 5, role: 'user', sender: 'agent:external', messageType: 'agent', turnSeq: 2,
     });
-    const otherAnswer = row(sessionKey, 'other-answer', 'Must remain hidden', {
+    const otherAnswer = row(sessionKey, 'other-answer', 'Must remain hidden', { seq: 6,
       turnSeq: 2, messageType: 'assistant', replyToMessageId: otherTrigger.id,
     });
     const substrateMarker = row(sessionKey, 'substrate-marker', 'A system event marker', {
-      role: 'assistant', sender: 'process:notifications', messageType: 'substrate',
+      seq: 10, role: 'assistant', sender: 'process:notifications', messageType: 'substrate',
     });
     const batchText = [
       '[batched notices: 2]',
@@ -260,13 +260,15 @@ describe('conversation surface', () => {
       'coalesced by notice-batching-v1',
     ].join('\n');
     const batch = row(sessionKey, 'batch-trigger', batchText, {
-      role: 'user', sender: 'process:maintenance', messageType: 'substrate', turnSeq: 3, isBatchCarrier: true,
+      seq: 3, role: 'user', sender: 'process:maintenance', messageType: 'substrate', turnSeq: 3, isBatchCarrier: true,
     });
-    const batchAnswer = row(sessionKey, 'batch-answer', 'Answer to the batch question', {
+    const batchAnswer = row(sessionKey, 'batch-answer', 'Answer to the batch question', { seq: 4,
       sender: 'assistant-service', turnSeq: 3, turnIncludesHuman: true, messageType: 'assistant', replyToMessageId: batch.id,
     });
     const runtime = new FakeRuntime(sessionKey, {
-      records: [human, answer, otherTrigger, otherAnswer, batch, row(sessionKey, 'batch-member', 'Batch question from the person', { role: 'user', sender: 'user:person', turnSeq: 3 }), batchAnswer, unprovenHuman, mismatchedHuman, substrateMarker],
+      records: [human, answer, otherTrigger, otherAnswer, batch,
+        row(sessionKey, 'batch-member', 'Batch question from the person', { seq: 3, role: 'user', sender: 'user:person', turnSeq: 3 }),
+        batchAnswer, unprovenHuman, mismatchedHuman, substrateMarker],
       provenanceAvailable: false,
     });
     render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
@@ -799,10 +801,11 @@ describe('conversation surface', () => {
 
   it('uses a five-second working pulse with a dim floor and a steady reduced-motion state', () => {
     expect(workingStateOpacity(0)).toBeCloseTo(0.4, 3);
-    expect(workingStateOpacity(850)).toBeCloseTo(1, 3);
+    expect(workingStateOpacity(850)).toBeCloseTo(0.7, 3);
+    expect(workingStateOpacity(1700)).toBeCloseTo(1, 3);
     expect(workingStateOpacity(1800)).toBeCloseTo(1, 3);
     expect(workingStateOpacity(3200)).toBeCloseTo(0.7, 3);
-    expect(workingStateOpacity(4500)).toBeCloseTo(0.4, 3);
+    expect(workingStateOpacity(4700)).toBeCloseTo(0.4, 3);
     expect(workingStateOpacity(5000)).toBeCloseTo(0.4, 3);
 
     const original = Object.getOwnPropertyDescriptor(window, 'matchMedia');

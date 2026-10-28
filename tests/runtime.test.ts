@@ -210,7 +210,7 @@ describe('framework-independent runtime', () => {
       runtime.dispose();
     });
 
-  it('keeps the active caption steady through reconnects and ignores the old generation', async () => {
+  it('clears stale caption state on reconnect and restores it from the replacement feed', async () => {
     const transport = new ControlledTransport();
     transport.rows[7] = message(8, { role: 'user', sender: 'user:person', turnSeq: 90 });
     const active: CanonicalTurn = { seq: 90, sessionKey, status: 'running', messageId: 'm8',
@@ -224,8 +224,11 @@ describe('framework-independent runtime', () => {
     const oldCallbacks = transport.callbacks!;
     transport.doubt();
     expect(runtime.getSnapshot().status).toBe('ready');
-    expect(runtime.getSnapshot().activeTurn?.turn.seq).toBe(90);
-    transport.tailHook = undefined;
+    expect(runtime.getSnapshot().activeTurn).toBeUndefined();
+    expect(runtime.getSnapshot().activityTurnStateAvailable).toBe(false);
+    // Freshness loss clears cached caption state. The active turn returns only
+    // when the replacement subscription delivers its current turn records.
+    transport.tailHook = () => transport.callbacks?.onNotice({ operation: 'turn', turn: active });
     await runtime.rebuild();
     expect(runtime.getSnapshot().activeTurn?.turn.seq).toBe(90);
     oldCallbacks.onNotice({ operation: 'turn', turn: active });
