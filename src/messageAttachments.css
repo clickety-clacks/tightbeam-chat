@@ -1,0 +1,78 @@
+.tb-chat-image-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: .55rem;
+  margin-top: .55rem;
+}
+.tb-chat-image-attachment { min-width: 0; max-width: min(100%, 22rem); margin: 0; }
+.tb-chat-image-preview-trigger {
+  display: block;
+  max-width: 100%;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: .6rem;
+  background: transparent;
+  cursor: zoom-in;
+}
+.tb-chat-image-preview-trigger:focus-visible { outline: 2px solid var(--tb-chat-border); outline-offset: 3px; }
+.tb-chat-image-preview {
+  display: block;
+  max-width: 100%;
+  max-height: 22rem;
+  object-fit: contain;
+}
+.tb-chat-image-attachment figcaption { margin-top: .2rem; color: var(--tb-chat-muted); font-size: .78rem; overflow-wrap: anywhere; }
+.tb-chat-image-unavailable {
+  display: flex;
+  min-width: 8rem;
+  min-height: 5rem;
+  align-items: center;
+  justify-content: center;
+  gap: .45rem;
+  padding: .7rem;
+  border: 1px solid var(--tb-chat-border);
+  border-radius: .6rem;
+  color: var(--tb-chat-muted);
+  font-size: .82rem;
+}
+.tb-chat-image-unavailable [aria-hidden="true"] { font-size: 1.6rem; }
+.tb-chat-image-overlay {
+  position: fixed;
+  z-index: 1000;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: max(1rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right))
+    max(1rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
+  background: rgb(0 0 0 / .9);
+  color: #fff;
+  touch-action: manipulation;
+}
+.tb-chat-image-dialog-title {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  clip-path: inset(50%);
+}
+.tb-chat-image-close {
+  position: absolute;
+  z-index: 1;
+  inset-block-start: max(1rem, env(safe-area-inset-top));
+  inset-inline-end: max(1rem, env(safe-area-inset-right));
+  width: 2.75rem;
+  height: 2.75rem;
+  padding: 0;
+  border: 1px solid rgb(255 255 255 / .65);
+  border-radius: 50%;
+  background: rgb(0 0 0 / .45);
+  color: #fff;
+  font-size: 1.8rem;
+  line-height: 1;
+}
+.tb-chat-image-full { max-width: 100%; max-height: 100%; object-fit: contain; }

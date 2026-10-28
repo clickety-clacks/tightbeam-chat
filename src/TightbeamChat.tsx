@@ -9,6 +9,7 @@ import { useReadingPosition } from './useReadingPosition';
 import { firstAfterTime, getIndex, putIndex, type RecordIndex } from './recordIndex';
 import { getHostComposerSnapshot, HostComposerBridge, subscribeHostComposer } from './hostComposer';
 import { ReleaseNotesDialog, type ChatOverlay } from './ReleaseNotesDialog';
+import { MessageAttachments } from './MessageAttachments';
 import { CHAT_RELEASE_VERSION, RELEASE_NOTES, recordSeenReleaseVersion, releaseNotesForBuild, unseenReleaseNotes } from './releaseNotes';
 import { isSettingsCommand } from './settingsCommand';
 import './style.css';
@@ -275,11 +276,7 @@ function markdownBody(content: string): ReactNode {
 }
 
 function attachmentDetails(record: CanonicalMessage): ReactNode {
-  if (!record.attachments?.length) return null;
-  return <details className="tb-chat-attachments">
-    <summary>{record.attachments.length} attachment {record.attachments.length === 1 ? 'detail' : 'details'}</summary>
-    <pre>{JSON.stringify(record.attachments, null, 2)}</pre>
-  </details>;
+  return <MessageAttachments attachments={record.attachments} />;
 }
 
 function defaultBody(record: CanonicalMessage, content = record.content): ReactNode {
