@@ -10,13 +10,16 @@ const panel = document.querySelector<HTMLElement>('.host-composer-panel')!;
 const form = document.querySelector<HTMLFormElement>('#host-composer-form')!;
 const input = document.querySelector<HTMLTextAreaElement>('#host-composer-input')!;
 const targetLabel = document.querySelector<HTMLElement>('.host-composer-target')!;
+const connectionStatus = document.querySelector<HTMLElement>('.host-composer-connection')!;
 const status = document.querySelector<HTMLElement>('.host-composer-status')!;
 const retryButton = document.querySelector<HTMLButtonElement>('#host-composer-retry')!;
+const reconnectButton = document.querySelector<HTMLButtonElement>('#host-composer-reconnect')!;
 
 type ReadyEvent = Extract<HostComposerEvent, { event: 'ready' }>;
 interface LocalSubmission { readonly correlationId: string; readonly sessionKey: string; readonly content: string; state: string }
 let ready: ReadyEvent | undefined;
-let connected = false;
+let sendReady = false;
+let connectionState: Extract<HostComposerEvent, { event: 'connection' }>['state'] | undefined;
 const submissions = new Map<string, LocalSubmission>();
 let retrySubmission: LocalSubmission | undefined;
 
@@ -29,11 +32,17 @@ function updateRetryButton(): void {
   retrySubmission = [...submissions.values()].reverse().find((submission) =>
     ready?.sessionKey === submission.sessionKey && ['failed', 'uncertain'].includes(submission.state));
   retryButton.hidden = !retrySubmission;
-  retryButton.disabled = !connected || !retrySubmission;
+  retryButton.disabled = !sendReady || !retrySubmission;
+}
+
+function updateReconnectButton(): void {
+  const supported = ready?.capabilities.reconnect === true;
+  reconnectButton.hidden = !ready || !supported || !connectionState || connectionState === 'connected';
+  reconnectButton.disabled = !sendReady || !supported || !connectionState || connectionState === 'connected';
 }
 
 function send(content: string, retry = false): void {
-  if (!ready || !connected || !content.trim()) {
+  if (!ready || !sendReady || !content.trim()) {
     status.textContent = 'Chat is not ready. Your draft remains here.';
     return;
   }
@@ -57,37 +66,55 @@ function send(content: string, retry = false): void {
   command(request);
 }
 
+function reconnectLiveUpdates(): void {
+  if (!ready || !sendReady || ready.capabilities.reconnect !== true ||
+      !connectionState || connectionState === 'connected') return;
+  commandEntry()?.({ type: 'reconnect', lifetimeId: ready.lifetimeId, sessionKey: ready.sessionKey });
+}
+
 function handleEvent(event: HostComposerEvent): void {
   switch (event.event) {
     case 'declined':
       status.textContent = `Host composer unavailable (${event.reason}); use Chat's web composer.`;
       return;
     case 'ready':
+      if (ready?.lifetimeId !== event.lifetimeId) connectionState = undefined;
       if (ready?.sessionKey !== event.sessionKey && !input.value) {
         const retainedDraft = [...submissions.values()].reverse().find((submission) =>
           submission.sessionKey !== event.sessionKey && ['failed', 'uncertain'].includes(submission.state));
         if (retainedDraft) input.value = retainedDraft.content;
       }
       ready = event;
-      connected = true;
+      sendReady = true;
       panel.hidden = false;
       document.body.classList.add('host-composer-active');
       targetLabel.textContent = `${event.agentDisplayName || 'Selected agent'} · ${event.sessionKey}`;
       status.textContent = `Chat is ready. Text sending is supported; attachments may be supported in a future version.`;
       form.querySelector<HTMLButtonElement>('button[type="submit"]')!.disabled = false;
       updateRetryButton();
+      updateReconnectButton();
+      return;
+    case 'connection':
+      if (ready?.lifetimeId !== event.lifetimeId) return;
+      connectionState = event.state;
+      connectionStatus.textContent = `Live updates: ${event.state}.`;
+      updateReconnectButton();
       return;
     case 'unavailable':
-      connected = false;
+      sendReady = false;
       status.textContent = `Chat is ${event.reason}. Your draft is retained; sending is paused.`;
       form.querySelector<HTMLButtonElement>('button[type="submit"]')!.disabled = true;
       updateRetryButton();
+      updateReconnectButton();
       return;
     case 'lifetime-ended':
-      connected = false;
+      sendReady = false;
+      ready = undefined;
+      connectionState = undefined;
       status.textContent = 'This conversation selection ended. Waiting for the next ready conversation.';
       form.querySelector<HTMLButtonElement>('button[type="submit"]')!.disabled = true;
       updateRetryButton();
+      updateReconnectButton();
       return;
     case 'accepted':
       {
@@ -141,5 +168,6 @@ form.addEventListener('submit', (event) => {
 retryButton.addEventListener('click', () => {
   if (retrySubmission) send(retrySubmission.content, true);
 });
+reconnectButton.addEventListener('click', reconnectLiveUpdates);
 
 createRoot(document.getElementById('root')!).render(<RuntimeEntry />);

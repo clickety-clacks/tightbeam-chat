@@ -9,12 +9,14 @@
     <div id="root"></div>
     <section class="host-composer-panel" aria-label="Host message composer" hidden>
       <p class="host-composer-target" aria-live="polite">Waiting for Chat…</p>
+      <p class="host-composer-connection" role="status" aria-live="polite">Live updates: waiting for Chat…</p>
       <form id="host-composer-form">
         <label class="host-composer-label" for="host-composer-input">Message</label>
         <textarea id="host-composer-input" rows="2" autocomplete="off" spellcheck></textarea>
         <div class="host-composer-actions">
-          <button type="submit">Send</button>
+          <button type="submit" disabled>Send</button>
           <button id="host-composer-retry" type="button" hidden>Retry last message</button>
+          <button id="host-composer-reconnect" type="button" hidden>Reconnect live updates</button>
         </div>
       </form>
       <p class="host-composer-status" role="status" aria-live="polite"></p>

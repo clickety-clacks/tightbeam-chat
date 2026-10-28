@@ -75,6 +75,9 @@ window.__TIGHTBEAM_CHAT_HOST__ = {
     if (event.event === 'ready') {
       // Show the native composer only now, and retain this lifetime and target.
     }
+    if (event.event === 'connection') {
+      // Update the host's connection indicator independently from Send.
+    }
   },
 };
 ```
@@ -91,7 +94,21 @@ window.__TIGHTBEAM_CHAT_COMMAND__({
 });
 ```
 
-The first `ready` arrives only after the selected-session subscription and canonical history catch-up are ready. Its fields are `version: 1`, `lifetimeId`, `sessionKey`, `gatewayOrigin`, `agentDisplayName`, and `capabilities: { text: true }`. It carries no credential, token, device secret, model or harness detail. V1 accepts text only; attachment composition is not advertised and may be added in a future version.
+When the latest `connection` event says `reconnecting` or `disconnected`, the host may reconnect the live feed without reloading the page:
+
+```js
+window.__TIGHTBEAM_CHAT_COMMAND__({
+  type: 'reconnect',
+  lifetimeId: latestReady.lifetimeId,
+  sessionKey: latestReady.sessionKey,
+});
+```
+
+The first `ready` arrives only after the selected-session subscription and canonical history catch-up are ready. Its fields are `version: 1`, `lifetimeId`, `sessionKey`, `gatewayOrigin`, `agentDisplayName`, and `capabilities: { text: true, reconnect: true }`. It carries no credential, token, device secret, model or harness detail. V1 accepts text only; attachment composition is not advertised and may be added in a future version.
+
+Immediately after each `ready`, Chat sends `connection` with that lifetime and one of `connected`, `reconnecting`, or `disconnected`. It sends another `connection` event only when the live-feed state changes. This is the same state shown by standalone Chat's status dot. Connection events never change send availability or any send attempt. The host keeps sending enabled from `ready` until `unavailable` or `lifetime-ended`, even while updates reconnect or are disconnected.
+
+The `reconnect` command acts only for the current ready lifetime and selected session while the feed is reconnecting or disconnected. It starts the existing in-place recovery immediately, replacing a scheduled retry. It has no effect when connected, not ready, unavailable, or given an old lifetime or session. It preserves the current lifetime, visible messages, and the newest or reader position, and emits progress only through `connection`; it does not change send outcomes or reload the page. While opted in, Chat has no live-feed Reconnect control in the transcript. Feature-specific recovery notices keep their own recovery actions.
 
 `ready` means Chat can accept a host send command for the selected lifetime; it does not guarantee that every message will be accepted. A change-feed disconnect or reconnect alone does not make host sending unavailable: the same lifetime stays ready, Chat emits no `unavailable` event for that feed change, and authorized sends remain usable. Chat emits `unavailable` only when the selected session is missing, authorization is lost, or the send endpoint actually refuses a message. For an endpoint refusal, Chat first reports the attempt as `failed/refused` with the endpoint detail, then reports `unavailable` with reason `send-refused`. If that refusal is specific to the message and the selected session remains ready and authorized, Chat emits `ready` again immediately for the same lifetime so a separate message can be sent without waiting for unrelated activity. A host command rejected as `not-ready` posts nothing; Chat emits `ready` for that lifetime again when it can accept host sends. Feed-only reconnects do not create an unavailable/ready cycle.
 
@@ -101,7 +118,7 @@ Every attempt event carries `lifetimeId`, `correlationId`, and its per-lifetime 
 
 The command rejection reasons are checked in this order: `local-command`, `not-ready`, `target-mismatch`, `invalid-correlation`, `empty`, `attempt-in-flight`, `already-delivered`, and `correlation-conflict`. Each rejection preserves all prior attempt state. A user-requested retry uses `retry: true`, the same correlation and byte-for-byte content. Chat first checks canonical history; it posts again only if the current profile supports the existing human-send deduplication. If a human-send socket drops before acknowledgement, Chat automatically reconnects and re-asks with the same client ID and content when that deduplication capability is present; a failed reconnect does not turn a possibly posted message into a final failure. Chat never creates a new ID or changes content automatically. Edited content is a new logical message with a new correlation.
 
-When a Settings or What's new dialog opens or closes, Chat sends `overlay` with `open: true` or `open: false` for the current ready lifetime. If a dialog is already open when `ready` arrives, Chat sends `overlay` with `open: true` immediately after it. While a dialog is open, the host gives keyboard input to the Chat page; when the last dialog closes, the host returns focus to its composer. Hosts that ignore `overlay` continue to work as before.
+When a Settings or What's new dialog opens or closes, Chat sends `overlay` with `open: true` or `open: false` for the current ready lifetime. If a dialog is already open when `ready` arrives, Chat sends the required `connection` event and then immediately sends `overlay` with `open: true`. While a dialog is open, the host gives keyboard input to the Chat page; when the last dialog closes, the host returns focus to its composer. Hosts that ignore `overlay` continue to work as before.
 
 On `unavailable`, disable host sending and keep the host draft; a feed-only reconnect never triggers it. A later `ready` in that same lifetime re-enables it. If a send is still unresolved, keep its delivery status pending; do not replace the connection dot with a “Not connected” connection-state notice or report a terminal delivery failure unless the Gateway definitely refused the send. On `lifetime-ended`, send nothing until the next `ready`; target or principal changes create a new opaque lifetime. On page reload Chat requires a fresh declaration and fresh `ready` before it hides the HTML composer again. Page hiding, replacement, or process termination alone does not prove a send failed; do not show a delivery warning solely because no terminal event arrived. When Chat returns, settle by the same client ID from the Gateway acknowledgement or canonical history before offering an explicit same-correlation retry. Keep the draft and any correlation still held. If an app restart loses the correlation, a restored draft is sent only after a new user action with a new correlation and without `retry`; that may create a second canonical row, so present it as a new send.
 

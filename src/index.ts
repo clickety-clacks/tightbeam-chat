@@ -8,6 +8,7 @@ export type {
   HostComposerDeclaration,
   HostComposerEvent,
   HostComposerSnapshot,
+  HostConnectionState,
 } from './hostComposer';
 export {
   createPublic019Transport, decodePublic019Message,
