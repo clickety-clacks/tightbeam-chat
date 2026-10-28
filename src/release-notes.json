@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.39",
+    "items": [
+      {
+        "title": "Reconnect history and stable layout",
+        "description": "Reconnects can retrieve messages after the newest loaded message. Activity captions keep a fixed space below the conversation so status changes do not shift the latest bubble."
+      }
+    ]
+  },
+  {
     "version": "v0.1.38",
     "items": [
       {
