@@ -890,26 +890,26 @@ describe('conversation surface', () => {
       expect(expandedRun.lastElementChild?.classList.contains('tb-chat-activity-run-rows')).toBe(true);
       expect(layout.offset(anchor)).toBeCloseTo(anchorBefore, 0);
 
-      const incoming = row(sessionKey, 'reminder-4', 'Quiet for 7 min · Background activity 4', {
+      const incoming = row(sessionKey, 'reminder-7', 'Quiet for 7 min · Background activity 7', {
         seq: 8, role: 'user', sender: 'process:events', messageType: 'substrate',
       });
       records = [question, ...activity, incoming, firstReply, ...laterMessages];
       act(() => runtime.update({ records }));
-      toggle = screen.getByRole('button', { name: /7 entries\. Latest: Quiet for 7 min .*Background activity 4/ });
+      toggle = screen.getByRole('button', { name: /7 entries\. Latest: Quiet for 7 min .*Background activity 7/ });
       expect(toggle.getAttribute('aria-expanded')).toBe('true');
       expect(layout.offset(anchor)).toBeCloseTo(anchorBefore, 0);
 
       fireEvent.click(toggle);
-      toggle = screen.getByRole('button', { name: /7 entries\. Latest: Quiet for 7 min .*Background activity 4/ });
+      toggle = screen.getByRole('button', { name: /7 entries\. Latest: Quiet for 7 min .*Background activity 7/ });
       expect(toggle.getAttribute('aria-expanded')).toBe('false');
       expect(layout.offset(anchor)).toBeCloseTo(anchorBefore, 0);
 
-      const finalReminder = row(sessionKey, 'reminder-5', 'Quiet for 8 min · Background activity 5', {
+      const finalReminder = row(sessionKey, 'reminder-8', 'Quiet for 8 min · Background activity 8', {
         seq: 9, role: 'user', sender: 'process:events', messageType: 'substrate',
       });
       records = [question, ...activity, incoming, finalReminder, firstReply, ...laterMessages];
       act(() => runtime.update({ records }));
-      toggle = screen.getByRole('button', { name: /8 entries\. Latest: Quiet for 8 min .*Background activity 5/ });
+      toggle = screen.getByRole('button', { name: /8 entries\. Latest: Quiet for 8 min .*Background activity 8/ });
       expect(toggle.getAttribute('aria-expanded')).toBe('false');
       expect(layout.offset(anchor)).toBeCloseTo(anchorBefore, 0);
     } finally {

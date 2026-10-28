@@ -60,43 +60,59 @@ describe('activity trail projection', () => {
       '[woke: wait wake-one; assignment alpha; path after-turn]\n\nReview the first result', { messageType: 'substrate' });
     const wake2 = message('wake-2', 5, 'process:events',
       '[woke: fact wake-two; assignment beta; path success]\n\nReview the latest result', { messageType: 'substrate' });
-    const attest = message('attest', 6, 'process:events', 'Attest filed on the assignment', { messageType: 'substrate' });
-    const remedy = message('remedy', 7, 'remedy:review', 'Review requested changes');
-    const decision = message('decision', 8, 'process:events', 'Decision needs a response', { messageType: 'substrate' });
-    const refused = message('refused', 9, 'process:events', 'Completion needs a recorded verification first',
-      { messageType: 'substrate' });
-    const uncertain1 = message('uncertain-1', 10, 'process:events', 'Status changed for requested work',
-      { messageType: 'substrate' });
-    const uncertain2 = message('uncertain-2', 11, 'process:events', 'A helper is now available',
-      { messageType: 'substrate' });
-    const agent1 = message('agent-1', 12, 'agent:helper', 'Helper started', { messageType: 'agent' });
-    const agent2 = message('agent-2', 13, 'agent:helper', 'Helper finished', { messageType: 'agent' });
-    const reply = message('reply', 14, 'assistant-service', 'Answer', { role: 'assistant' });
-    const laterReminder1 = message('later-reminder-1', 15, 'process:events',
-      'Assignment Gamma has had no recorded activity since yesterday', { messageType: 'substrate' });
-    const laterReminder2 = message('later-reminder-2', 16, 'process:events',
-      'Quiet for 5 min · Assignment Delta', { messageType: 'substrate' });
-    const plan = build({ records: [reminder1, reminder2, wake1, wake2, attest, remedy, decision, refused,
-      uncertain1, uncertain2, agent1, agent2, laterReminder1, laterReminder2],
+    const reply = message('reply', 6, 'assistant-service', 'Answer', { role: 'assistant' });
+    const plan = build({ records: [reminder1, reminder2, wake1, wake2],
       bubbles: [bubble(prompt, 'human'), bubble(reply, 'agent')] });
 
     const folds = plan.messageItems.filter((item): item is ActivityFold => item.kind === 'fold');
-    expect(folds).toHaveLength(4);
+    expect(folds).toHaveLength(2);
     expect(folds.map(fold => fold.lines.map(line => line.id))).toEqual([
       ['message:reminder-1', 'message:reminder-2'],
       ['message:wake-1', 'message:wake-2'],
-      ['message:agent-1', 'message:agent-2'],
-      ['message:later-reminder-1', 'message:later-reminder-2'],
     ]);
     expect(folds[0].summary.gist).toBe(reminder2.content);
     expect(folds[1].summary.id).toBe('message:wake-2');
-    expect(folds[2].summary.gist).toBe('Another agent — Helper finished');
-    expect(folds[3].runKey).not.toBe(folds[0].runKey);
-    expect(plan.messageItems.filter((item): item is ActivityLine => item.kind === 'substrate' || item.kind === 'rail')
-      .map(line => line.id)).toEqual([
-        'message:attest', 'message:remedy', 'message:decision', 'message:refused',
-        'message:uncertain-1', 'message:uncertain-2',
-      ]);
+
+    const specialNotices = [
+      message('attest', 3, 'process:events', 'Attest filed on the assignment', { messageType: 'substrate' }),
+      message('remedy', 3, 'remedy:review', 'Review requested changes'),
+      message('decision', 3, 'process:events', 'Decision needs a response', { messageType: 'substrate' }),
+      message('refused', 3, 'process:events', 'Completion needs a recorded verification first',
+        { messageType: 'substrate' }),
+    ];
+    const recognizedKinds = [
+      message('wake', 2, 'process:events',
+        '[woke: fallback deadline]\n\nReview the result', { messageType: 'substrate' }),
+      message('reminder', 2, 'process:events',
+        'Assignment Delta has had no recorded activity since this morning', { messageType: 'substrate' }),
+    ];
+    for (const notice of specialNotices) {
+      for (const recognized of recognizedKinds) {
+        const distinct = build({ records: [recognized, notice], bubbles: [
+          bubble(prompt, 'human'), bubble(message('pair-reply', 4, 'assistant-service', 'Answer',
+            { role: 'assistant' }), 'agent'),
+        ] });
+        expect(distinct.messageItems.some(item => item.kind === 'fold')).toBe(false);
+        expect(distinct.messageItems.filter(item => item.kind === 'substrate' || item.kind === 'rail')).toHaveLength(2);
+      }
+    }
+
+    const uncertain = build({ records: [
+      message('uncertain-1', 2, 'process:events', 'Status changed for requested work', { messageType: 'substrate' }),
+      message('uncertain-2', 3, 'process:events', 'A helper is now available', { messageType: 'substrate' }),
+    ], bubbles: [bubble(prompt, 'human'), bubble(message('uncertain-reply', 4, 'assistant-service', 'Answer',
+      { role: 'assistant' }), 'agent')] });
+    expect(uncertain.messageItems.some(item => item.kind === 'fold')).toBe(false);
+    expect(uncertain.messageItems.filter(item => item.kind === 'substrate')).toHaveLength(2);
+
+    const agents = build({ records: [
+      message('agent-1', 2, 'agent:helper', 'Helper started', { messageType: 'agent' }),
+      message('agent-2', 3, 'agent:helper', 'Helper finished', { messageType: 'agent' }),
+    ], bubbles: [bubble(prompt, 'human'), bubble(message('agent-reply', 4, 'assistant-service', 'Answer',
+      { role: 'assistant' }), 'agent')] });
+    const agentFold = agents.messageItems.find((item): item is ActivityFold => item.kind === 'fold');
+    expect(agentFold?.lines.map(line => line.id)).toEqual(['message:agent-1', 'message:agent-2']);
+    expect(agentFold?.summary.gist).toBe('Another agent — Helper finished');
   });
 
   it('leaves same-kind activity lines separate when a transition falls between them', () => {
