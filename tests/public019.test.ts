@@ -196,7 +196,7 @@ describe('Gateway wire mapping and behavior checks', () => {
       { type: 'subscribe', protocolVersion: 2, subscriptionId: `chat:${sessionKey}`,
         filters: { sessionKey, classes: ['message.created', 'transition.recorded', 'session.', 'turn.started', 'turn.ended'] } },
       { type: 'subscribe', protocolVersion: 2, subscriptionId: `rail:${sessionKey}`,
-        filters: { principal: `session:${sessionKey}`, classes: ['rail.denied'] } },
+        filters: { sessionKey, classes: ['rail.denied'] } },
     ]));
     await vi.waitFor(() => expect(candidate.paths.some(path => path.includes('/messages?'))).toBe(true));
     expect(runtime.getSnapshot().status).toBe('ready');
@@ -267,7 +267,7 @@ describe('Gateway wire mapping and behavior checks', () => {
       filters: { sessionKey, classes: ['message.created', 'transition.recorded', 'session.', 'turn.started', 'turn.ended'] },
     }));
     expect(candidate.changes.sent[1]).toEqual({ type: 'subscribe', protocolVersion: 2,
-      subscriptionId: `rail:${sessionKey}`, filters: { principal: `session:${sessionKey}`, classes: ['rail.denied'] } });
+      subscriptionId: `rail:${sessionKey}`, filters: { sessionKey, classes: ['rail.denied'] } });
     candidate.changes.emit({ type: 'subscription_ready', subscriptionId: `chat:${sessionKey}` });
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
     await vi.waitFor(() => expect(candidate.paths.some(path => path.includes('/tool-calls?'))).toBe(true));
@@ -443,7 +443,7 @@ describe('Gateway wire mapping and behavior checks', () => {
       filters: { sessionKey, classes: ['message.created', 'transition.recorded', 'session.', 'turn.started', 'turn.ended'] },
     });
     expect(candidate.changes.sent[1]).toEqual({ type: 'subscribe', protocolVersion: 2,
-      subscriptionId: `rail:${sessionKey}`, filters: { principal: `session:${sessionKey}`, classes: ['rail.denied'] } });
+      subscriptionId: `rail:${sessionKey}`, filters: { sessionKey, classes: ['rail.denied'] } });
     candidate.changes.emit({ type: 'subscription_ready', subscriptionId: `chat:${sessionKey}` });
     const connection = await pending;
 
@@ -734,7 +734,32 @@ describe('Gateway wire mapping and behavior checks', () => {
       .toThrow(UnsupportedTargetError);
   });
 
-  it('keeps the conversation feed connected when the pending optional rail filter is refused', async () => {
+  it('keeps the conversation feed when an uncorrelated optional rail refusal arrives before readiness', async () => {
+    const { transport, changes } = setup();
+    const notices: string[] = [];
+    const doubts: string[] = [];
+    const pending = transport.openChanges(sessionKey, {
+      onNotice: (notice) => notices.push(notice.operation), onDoubt: (reason) => doubts.push(reason),
+    }, new AbortController().signal);
+    await vi.waitFor(() => expect(changes.sent).toHaveLength(2));
+    // The rail request is pending, but Gateway v2's invalid_request response
+    // has no subscriptionId. Do not tear down the socket before the primary
+    // readiness response can establish which feed was refused.
+    changes.emit({ type: 'error', code: 'invalid_request', message: 'sessionKey must match selected session' });
+    expect(changes.closed).toBe(false);
+    expect(doubts).toEqual([]);
+    changes.emit({ type: 'subscription_ready', subscriptionId: 'chat:s-public' });
+    const connection = await pending;
+    changes.emit({ type: 'heartbeat', seq: 0 });
+    changes.emit({ type: 'change', schemaVersion: 2, subscriptionId: 'chat:s-public', seq: 1,
+      class: 'message.created', resource: 'messages', op: 'upsert',
+      refs: { sessionKey, messageId: item.id }, payload: item });
+    expect(notices).toEqual(['upsert']);
+    expect(doubts).toEqual([]);
+    connection.close();
+  });
+
+  it('keeps the conversation feed when an uncorrelated optional rail refusal arrives after readiness', async () => {
     const { transport, changes } = setup();
     const notices: string[] = [];
     const doubts: string[] = [];
@@ -744,10 +769,7 @@ describe('Gateway wire mapping and behavior checks', () => {
     await vi.waitFor(() => expect(changes.sent).toHaveLength(2));
     changes.emit({ type: 'subscription_ready', subscriptionId: 'chat:s-public' });
     const connection = await pending;
-
-    // Gateway v2's invalid_request response has no subscriptionId. Once the
-    // conversation feed is ready, the only pending request is the optional rail.
-    changes.emit({ type: 'error', code: 'invalid_request', message: 'sessionKey must match selected session' });
+    changes.emit({ type: 'error', code: 'invalid_request', message: 'optional rail refused' });
     expect(changes.closed).toBe(false);
     expect(doubts).toEqual([]);
     changes.emit({ type: 'heartbeat', seq: 0 });
@@ -757,15 +779,26 @@ describe('Gateway wire mapping and behavior checks', () => {
     expect(notices).toEqual(['upsert']);
     expect(doubts).toEqual([]);
     connection.close();
+  });
 
-    const primaryRefusal = setup();
-    const refusedPending = primaryRefusal.transport.openChanges(sessionKey, {
-      onNotice: () => {}, onDoubt: () => {},
-    }, new AbortController().signal);
-    await vi.waitFor(() => expect(primaryRefusal.changes.sent).toHaveLength(2));
-    primaryRefusal.changes.emit({ type: 'error', code: 'invalid_request', message: 'primary subscription refused' });
-    await expect(refusedPending).rejects.toThrow('change subscription was refused');
-    expect(primaryRefusal.changes.closed).toBe(true);
+  it('fails when the conversation subscription is refused and never becomes ready', async () => {
+    vi.useFakeTimers();
+    try {
+      const primaryRefusal = setup();
+      const refusedPending = primaryRefusal.transport.openChanges(sessionKey, {
+        onNotice: () => {}, onDoubt: () => {},
+      }, new AbortController().signal);
+      const rejected = expect(refusedPending).rejects.toThrow('did not become ready after an uncorrelated subscription refusal');
+      await Promise.resolve();
+      expect(primaryRefusal.changes.sent).toHaveLength(2);
+      primaryRefusal.changes.emit({ type: 'error', code: 'invalid_request', message: 'primary subscription refused' });
+      expect(primaryRefusal.changes.closed).toBe(false);
+      await vi.advanceTimersByTimeAsync(1000);
+      await rejected;
+      expect(primaryRefusal.changes.closed).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('subscribes after host auth, waits for readiness, and fails closed on a sequence gap', async () => {
@@ -779,9 +812,10 @@ describe('Gateway wire mapping and behavior checks', () => {
     expect(changes.sent[0]).toEqual({ type: 'subscribe', protocolVersion: 2,
       subscriptionId: 'chat:s-public', filters: { sessionKey, classes: ['message.created', 'transition.recorded', 'session.', 'turn.started', 'turn.ended'] } });
     expect(changes.sent[1]).toEqual({ type: 'subscribe', protocolVersion: 2,
-      subscriptionId: 'rail:s-public', filters: { principal: 'session:s-public', classes: ['rail.denied'] } });
+      subscriptionId: 'rail:s-public', filters: { sessionKey, classes: ['rail.denied'] } });
     changes.emit({ type: 'subscription_ready', subscriptionId: 'chat:s-public' });
     const connection = await pending;
+    changes.emit({ type: 'subscription_ready', subscriptionId: 'rail:s-public' });
     changes.emit({ type: 'change', schemaVersion: 2, subscriptionId: 'rail:s-public', seq: 1,
       class: 'rail.denied', op: 'observe', refs: { principal: 'session:s-public', railDenialId: 8 },
       occurredAt: 120, payload: { verb: 'assign', rule: 'sample-rule' } });
