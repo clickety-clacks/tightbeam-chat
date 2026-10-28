@@ -831,11 +831,13 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
     turnStateAvailable: state.activityTurnStateAvailable === true,
     activeTurnRunning: state.activeTurn?.turn.status === 'running',
     liveActivityIds: new Set(state.liveActivityIds ?? []),
+    liveActivityEligibleIds: new Set(state.liveActivityEligibleIds ?? []),
     railDenials: state.liveRailDenials ?? [],
     shownRuns,
     expandedRuns,
   }), [activityRecords, bubbles, expandedRuns, shownRuns, state.activityTurnStateAvailable, state.activeTurn,
-    state.liveActivityIds, state.liveRailDenials, state.sessionKey, state.toolCallsEnabled, toolRecords]);
+    state.liveActivityIds, state.liveActivityEligibleIds, state.liveRailDenials, state.sessionKey,
+    state.toolCallsEnabled, toolRecords]);
   useLayoutEffect(() => {
     let next: Map<string, string> | undefined;
     for (const [id, runKey] of activityPlan.membership) {

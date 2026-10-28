@@ -114,6 +114,7 @@ class SessionRuntime implements ChatRuntime {
   private readonly rows = new Map<string, ConversationRecord>();
   private readonly tombstones = new Map<string, number>();
   private readonly liveActivityIds = new Set<string>();
+  private readonly liveActivityEligibleIds = new Set<string>();
   private readonly liveRailDenials = new Map<string, LiveRailDenial>();
   private activityTurnStateAvailable = false;
   private railArrivalOrder = 0;
@@ -162,7 +163,8 @@ class SessionRuntime implements ChatRuntime {
       toolCalls: Object.freeze([]), toolCallIndex: undefined,
       hasOlder: false, loadingOlder: false, sends: Object.freeze([]), targetLabel: profile.label,
       targetGateway: transport.targetGateway, provenance: noProvenance, provenanceAvailable: false,
-      activityTurnStateAvailable: false, liveActivityIds: Object.freeze([]), liveRailDenials: Object.freeze([]),
+      activityTurnStateAvailable: false, liveActivityIds: Object.freeze([]),
+      liveActivityEligibleIds: Object.freeze([]), liveRailDenials: Object.freeze([]),
     });
     void this.rebuild();
   }
@@ -192,12 +194,20 @@ class SessionRuntime implements ChatRuntime {
     for (const listener of this.listeners) listener();
   }
 
-  private activityStatePatch(): Pick<RuntimeState, 'activityTurnStateAvailable' | 'liveActivityIds' | 'liveRailDenials'> {
+  private activityStatePatch(): Pick<RuntimeState, 'activityTurnStateAvailable' | 'liveActivityIds' |
+    'liveActivityEligibleIds' | 'liveRailDenials'> {
     return {
       activityTurnStateAvailable: this.activityTurnStateAvailable,
       liveActivityIds: Object.freeze([...this.liveActivityIds]),
+      liveActivityEligibleIds: Object.freeze([...this.liveActivityEligibleIds]),
       liveRailDenials: Object.freeze([...this.liveRailDenials.values()]),
     };
+  }
+
+  private liveTailEligibleAtArrival(): boolean {
+    if (!this.activityTurnStateAvailable) return true;
+    for (const turn of this.turns.values()) if (turn.status === 'running') return true;
+    return false;
   }
 
   private stopTools(): void {
@@ -377,6 +387,7 @@ class SessionRuntime implements ChatRuntime {
     this.rows.clear();
     this.tombstones.clear();
     this.liveActivityIds.clear();
+    this.liveActivityEligibleIds.clear();
     this.liveRailDenials.clear();
     this.activityTurnStateAvailable = false;
     this.railArrivalOrder = 0;
@@ -431,7 +442,9 @@ class SessionRuntime implements ChatRuntime {
         if (record.kind === 'message' && (record.messageType === 'substrate' || record.messageType === 'process' ||
             record.messageType === 'agent' ||
             /^(?:agent|process|remedy|session):/.test(record.sender ?? ''))) {
+          const firstLiveArrival = !this.liveActivityIds.has(record.id);
           this.liveActivityIds.add(record.id);
+          if (firstLiveArrival && this.liveTailEligibleAtArrival()) this.liveActivityEligibleIds.add(record.id);
         }
         return true;
       }
@@ -441,6 +454,7 @@ class SessionRuntime implements ChatRuntime {
         const afterMessageSeq = Math.max(0, ...[...this.rows.values()].map((row) => row.seq));
         this.liveRailDenials.set(notice.id, Object.freeze({ id: notice.id, principal: notice.principal,
           verb: notice.verb, rule: notice.rule, occurredAt: notice.occurredAt,
+          tailEligibleAtArrival: this.liveTailEligibleAtArrival(),
           afterMessageSeq, arrivalOrder: ++this.railArrivalOrder }));
         return true;
       }
@@ -514,6 +528,7 @@ class SessionRuntime implements ChatRuntime {
     this.preserveRowsOnReconnect = true;
     this.turns.clear();
     this.liveActivityIds.clear();
+    this.liveActivityEligibleIds.clear();
     this.activityTurnStateAvailable = false;
     this.connectionController?.abort();
     this.connectionController = undefined;
@@ -569,6 +584,7 @@ class SessionRuntime implements ChatRuntime {
     this.rows.clear();
     this.tombstones.clear();
     this.liveActivityIds.clear();
+    this.liveActivityEligibleIds.clear();
     this.liveRailDenials.clear();
     this.activityTurnStateAvailable = false;
     this.railArrivalOrder = 0;
@@ -636,6 +652,8 @@ class SessionRuntime implements ChatRuntime {
       this.connection = undefined;
       this.connectionBinding = undefined;
       this.turns.clear();
+      this.liveActivityIds.clear();
+      this.liveActivityEligibleIds.clear();
       this.activityTurnStateAvailable = false;
     }
     const controller = new AbortController();

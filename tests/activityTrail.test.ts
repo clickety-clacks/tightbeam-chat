@@ -27,6 +27,7 @@ function build(input: {
   turnStateAvailable?: boolean;
   activeTurnRunning?: boolean;
   liveActivityIds?: ReadonlySet<string>;
+  liveActivityEligibleIds?: ReadonlySet<string>;
   railDenials?: readonly LiveRailDenial[];
   shownRuns?: ReadonlyMap<string, string>;
   expandedRuns?: ReadonlySet<string>;
@@ -36,6 +37,7 @@ function build(input: {
     tools: input.tools ?? [], toolsEnabled: input.toolsEnabled ?? true,
     turnStateAvailable: input.turnStateAvailable ?? true, activeTurnRunning: input.activeTurnRunning ?? true,
     liveActivityIds: input.liveActivityIds ?? new Set(), railDenials: input.railDenials ?? [],
+    liveActivityEligibleIds: input.liveActivityEligibleIds ?? new Set(),
     shownRuns: input.shownRuns ?? new Map(), expandedRuns: input.expandedRuns ?? new Set(),
   });
 }
@@ -100,16 +102,63 @@ describe('activity trail projection', () => {
     expect(withLater.messageItems.some(item => item.kind === 'overflow' && item.runKey === secondRun)).toBe(false);
   });
 
+  it('rebuilds every tail gap with tools and earlier-in-gap activity across reload', () => {
+    const firstPrompt = message('first-prompt', 1, 'user:person');
+    const firstReply = message('first-reply', 3, 'assistant-service', 'First answer', { role: 'assistant' });
+    const nextPrompt = message('next-prompt', 8, 'user:person', 'Another question');
+    const beforeTool = message('before-tool', 4, 'process:work', 'Prepared tool work', { messageType: 'substrate' });
+    const afterTool = message('after-tool', 6, 'agent:helper', 'Later notice', { messageType: 'agent' });
+    const call = { ...tool('middle-tool', 5, 'completed'), afterMessageSeq: 5 };
+    const plan = build({ records: [beforeTool, afterTool], bubbles: [bubble(firstPrompt, 'human'),
+      bubble(firstReply, 'agent'), bubble(nextPrompt, 'human')], tools: [call], activeTurnRunning: false,
+      liveActivityIds: new Set(), liveActivityEligibleIds: new Set() });
+
+    expect(plan.messageItems).toMatchObject([{ id: 'message:before-tool', runKey: 'run:first-reply' }]);
+    expect(plan.messageItems.some(item => item.id === 'message:after-tool')).toBe(false);
+    expect(plan.toolItems.get(call.id)).toMatchObject({ id: `tool:${call.id}`, runKey: 'run:first-reply' });
+  });
+
+  it('keeps reconstructed activity before a tool in the newest tail without turn state', () => {
+    const prompt = message('prompt', 1, 'user:person');
+    const beforeTool = message('before-tool', 2, 'process:work', 'Before tool', { messageType: 'substrate' });
+    const afterTool = message('after-tool', 4, 'agent:helper', 'After tool', { messageType: 'agent' });
+    const call = { ...tool('tool', 3, 'completed'), afterMessageSeq: 3 };
+    const plan = build({ records: [beforeTool, afterTool], bubbles: [bubble(prompt, 'human')], tools: [call],
+      turnStateAvailable: false, activeTurnRunning: false, liveActivityIds: new Set(), liveActivityEligibleIds: new Set() });
+
+    expect(plan.messageItems.map(item => item.id)).toEqual(['message:before-tool']);
+    expect(plan.toolItems.has(call.id)).toBe(true);
+  });
+
+  it('uses the live entry eligibility captured at arrival, not the later turn state', () => {
+    const prompt = message('prompt', 1, 'user:person');
+    const idleMessage = message('idle-message', 2, 'agent:helper', 'Arrived after the reply', { messageType: 'agent' });
+    const liveActivityIds = new Set([idleMessage.id]);
+    const idleArrival = build({ records: [idleMessage], bubbles: [bubble(prompt, 'human')],
+      turnStateAvailable: true, activeTurnRunning: false, liveActivityIds, liveActivityEligibleIds: new Set() });
+    expect(idleArrival.messageItems).toHaveLength(0);
+
+    const turnStartedLater = build({ records: [idleMessage], bubbles: [bubble(prompt, 'human')],
+      turnStateAvailable: true, activeTurnRunning: true, liveActivityIds, liveActivityEligibleIds: new Set() });
+    expect(turnStartedLater.messageItems).toHaveLength(0);
+
+    const arrivedDuringTurn = build({ records: [idleMessage], bubbles: [bubble(prompt, 'human')],
+      turnStateAvailable: true, activeTurnRunning: false, liveActivityIds,
+      liveActivityEligibleIds: new Set([idleMessage.id]) });
+    expect(arrivedDuringTurn.messageItems).toMatchObject([{ id: 'message:idle-message', kind: 'agent' }]);
+  });
+
   it('keeps rail denials scoped to the selected session and live tail eligibility', () => {
     const prompt = message('prompt', 1, 'user:person');
     const denial: LiveRailDenial = { id: 'denial', principal: 'session:session', verb: 'attest',
-      rule: 'sample-rule', afterMessageSeq: 1, arrivalOrder: 1 };
+      rule: 'sample-rule', tailEligibleAtArrival: true, afterMessageSeq: 1, arrivalOrder: 1 };
     const other: LiveRailDenial = { ...denial, id: 'other', principal: 'session:other' };
     const plan = build({ bubbles: [bubble(prompt, 'human')], railDenials: [denial, other] });
     expect(plan.messageItems).toHaveLength(1);
     expect((plan.messageItems[0] as ActivityLine).accessibleText).toBe('Rail: attest refused by sample-rule');
 
-    const ended = build({ bubbles: [bubble(prompt, 'human')], railDenials: [denial], activeTurnRunning: false });
+    const ended = build({ bubbles: [bubble(prompt, 'human')],
+      railDenials: [{ ...denial, tailEligibleAtArrival: false }], activeTurnRunning: false });
     expect(ended.messageItems).toHaveLength(0);
     const noTurnState = build({ bubbles: [bubble(prompt, 'human')], railDenials: [denial], turnStateAvailable: false,
       activeTurnRunning: false });
