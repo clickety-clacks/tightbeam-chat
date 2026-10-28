@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.44",
+    "items": [
+      {
+        "title": "Keep your place as the keyboard moves",
+        "description": "Opening or closing the on-screen keyboard keeps the latest message in view and preserves your place when you are reading older messages."
+      }
+    ]
+  },
+  {
     "version": "v0.1.43",
     "items": [
       {
