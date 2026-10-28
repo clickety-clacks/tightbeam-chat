@@ -172,6 +172,7 @@ afterEach(async () => {
 describe('private direct-entry Chat service bridge', () => {
   it('keeps the credential server-side and maps linked-session REST to detail and transcript operations', async () => {
     const seen = [];
+    const afterCursor = 'opaque / cursor:m_1';
     const gateway = http.createServer(async (request, response) => {
       const chunks = [];
       for await (const chunk of request) chunks.push(chunk);
@@ -216,6 +217,12 @@ describe('private direct-entry Chat service bridge', () => {
         if (messagePath && request.method === 'GET' && parsed.searchParams.get('asUser') === PRINCIPAL) {
           response.writeHead(200, { 'content-type': 'application/json' });
           const sessionKey = decodeURIComponent(messagePath[1]);
+          if (parsed.searchParams.get('after') === afterCursor) {
+            const item = canonicalMessage(sessionKey, 2, { content: 'recovered message' });
+            response.end(JSON.stringify({ schemaVersion: 1, resource: 'transcript messages', items: [item],
+              page: { oldestCursor: 'cursor:m_2', newestCursor: 'cursor:m_2', hasMoreBefore: false, hasMoreAfter: false } }));
+            return;
+          }
           const item = canonicalMessage(sessionKey, 1, { content: 'hello' });
           response.end(JSON.stringify({ schemaVersion: 1, resource: 'transcript messages', items: [item],
             page: { oldestCursor: 'cursor:m_1', newestCursor: 'cursor:m_1', hasMoreBefore: true, hasMoreAfter: false } }));
@@ -313,6 +320,22 @@ describe('private direct-entry Chat service bridge', () => {
     const wrongOrigin = await fetch(`${chatOrigin}/__chat/gateway/version`, { headers: { origin: 'https://elsewhere.example' } });
     expect(wrongOrigin.status).toBe(403);
     expect(seen).toHaveLength(8);
+
+    const afterResponse = await fetch(
+      `${chatOrigin}/__chat/api/sessions/${encodeURIComponent(LINKED_SESSION)}/messages?gateway=${encodeURIComponent(gatewayOrigin)}&limit=50&after=${encodeURIComponent(afterCursor)}`,
+      { headers: { origin: chatOrigin } },
+    );
+    expect(afterResponse.status).toBe(200);
+    const afterPage = await afterResponse.json();
+    expect(afterPage.items).toEqual([canonicalMessage(LINKED_SESSION, 2, { content: 'recovered message' })]);
+    const forwardedAfter = new URL(seen.at(-1).url, 'http://gateway.invalid');
+    expect(forwardedAfter.pathname).toBe(`/api/sessions/${encodeURIComponent(LINKED_SESSION)}/messages`);
+    expect([...forwardedAfter.searchParams.entries()]).toEqual([
+      ['asUser', PRINCIPAL], ['limit', '50'], ['after', afterCursor],
+    ]);
+    expect(seen.at(-1)).toMatchObject({ method: 'GET', authorization: `Bearer ${TOKEN}` });
+    expect(seen).toHaveLength(9);
+
     const toolQuery = 'limit=50&afterMessageSeqFromInclusive=9&afterMessageSeqToExclusive=20&before=opaque-cursor';
     const toolBase = `${chatOrigin}/__chat/api/sessions/${encodeURIComponent(LINKED_SESSION)}/tool-calls`;
     const toolPage = await fetch(`${toolBase}?gateway=${encodeURIComponent(gatewayOrigin)}&${toolQuery}`, { headers: { origin: chatOrigin } });
@@ -327,7 +350,7 @@ describe('private direct-entry Chat service bridge', () => {
     expect(seen.slice(-2).every(row => row.authorization === `Bearer ${TOKEN}` && row.method === 'GET')).toBe(true);
     const unlisted = await fetch(`${toolBase}?limit=50&unlisted=value`, { headers: { origin: chatOrigin } });
     expect(unlisted.status).toBe(404);
-    expect(seen).toHaveLength(10);
+    expect(seen).toHaveLength(11);
   });
 
   it('composes the canonical selected-history route with the real decoder across an agent reset', async () => {

@@ -5,6 +5,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { TightbeamChat, type TightbeamChatProps } from '../src/TightbeamChat';
 import { useReadingPosition } from '../src/useReadingPosition';
 import { createTightbeamAdapter } from '../src/runtime';
+import { createTurnProvenance } from '../src/provenance';
 import { type ChatTransport, type TargetProfile } from '../src/types';
 import type { CanonicalMessage, ChatRuntime, ConversationRecord, RuntimeState } from '../src/types';
 
@@ -38,16 +39,21 @@ let lateLayoutGrowth = 0;
 let scrollTo: ReturnType<typeof vi.fn>;
 let reducedMotion = false;
 let animate: ReturnType<typeof vi.fn>;
+let modelActiveCaptionSlot = false;
 const resizeCallbacks = new Set<ResizeObserverCallback>();
 const rows = () => [...document.querySelectorAll<HTMLElement>('article[data-record-key]')];
 const styleSource = readFileSync(resolve(process.cwd(), 'src/style.css'), 'utf8');
+const hasStableActiveCaptionSlot =
+  /\.tb-chat-message-content\s*\{[^}]*--tb-chat-active-caption-height:\s*1\.1rem;[^}]*padding-block-end:\s*calc\(var\(--tb-chat-active-caption-height\)\s*\+\s*\.8rem\);/s.test(styleSource) &&
+  /\.tb-chat-active-caption\s*\{[^}]*position:\s*absolute;[^}]*height:\s*var\(--tb-chat-active-caption-height\);/s.test(styleSource);
 const keyboardInset = () => Number.parseFloat(document.querySelector<HTMLElement>('.tb-chat')?.style.getPropertyValue('--tb-chat-keyboard-inset') || '0') || 0;
 const followsKeyboardInset = styleSource.includes('max-height: calc(100% - var(--tb-chat-keyboard-inset, 0px));');
 let keyboardViewportSimulation = false;
 const renderedViewportHeight = () => {
   return Math.max(0, viewportHeight - (keyboardViewportSimulation && followsKeyboardInset ? keyboardInset() : 0));
 };
-const scrollHeight = () => 32 + rows().length * 92 + lateLayoutGrowth + Number.parseFloat(document.querySelector<HTMLElement>('.tb-chat-viewport')?.style.getPropertyValue('--tb-chat-anchor-space') || '0');
+const scrollHeight = () => 32 + rows().length * 92 + lateLayoutGrowth + Number.parseFloat(document.querySelector<HTMLElement>('.tb-chat-viewport')?.style.getPropertyValue('--tb-chat-anchor-space') || '0') +
+  (modelActiveCaptionSlot && (hasStableActiveCaptionSlot || document.querySelector('.tb-chat-active-caption')) ? 26 : 0);
 const rect = (top: number, height: number) => ({ top, bottom: top + height, left: 0, right: 400, width: 400, height, x: 0, y: top, toJSON() {} });
 class TestVisualViewport extends EventTarget {
   offsetTop = 0;
@@ -76,6 +82,7 @@ beforeEach(() => {
   viewportHeight = 300;
   lateLayoutGrowth = 0;
   reducedMotion = false;
+  modelActiveCaptionSlot = false;
   animate = vi.fn(() => ({ cancel: vi.fn(), onfinish: null }));
   Object.defineProperty(HTMLElement.prototype, 'animate', { configurable: true, value: animate });
   vi.stubGlobal('matchMedia', () => ({ matches: reducedMotion }));
@@ -492,6 +499,26 @@ describe('conversation reading position', () => {
     act(() => runtime.publish({ records: [...runtime.state.records, message(22)] }));
     expect(scrollTo).toHaveBeenLastCalledWith({ top: box.scrollHeight - box.clientHeight, behavior: 'instant' });
     expect(screen.queryByRole('button', { name: 'Scroll to latest messages' })).toBeNull();
+  });
+
+  it('keeps the newest bubble still while the active-activity caption appears and clears', () => {
+    modelActiveCaptionSlot = true;
+    const { runtime, box } = setup();
+    const newest = rows().at(-1)!;
+    const originalTop = newest.getBoundingClientRect().top;
+    const activeTurn = createTurnProvenance({
+      seq: 21, sessionKey: 'reading', messageId: 'activity-trigger', origin: 'agent:other',
+      status: 'running', triggerSource: 'agent', raw: { seq: 21, origin: 'agent:other' },
+    }, [], 'person', 'person');
+
+    act(() => runtime.publish({ provenanceAvailable: true, activeTurn }));
+    expect(screen.getByRole('status', { name: 'Active turn: Other activity' })).toBeTruthy();
+    expect(newest.getBoundingClientRect().top).toBe(originalTop);
+
+    act(() => runtime.publish({ activeTurn: undefined }));
+    expect(screen.queryByRole('status', { name: 'Active turn: Other activity' })).toBeNull();
+    expect(newest.getBoundingClientRect().top).toBe(originalTop);
+    expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight);
   });
 
   it('lets the reader interrupt following, then uses the button to return to the latest content', () => {

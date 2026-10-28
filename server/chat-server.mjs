@@ -297,6 +297,14 @@ function parseServiceHttpTarget(rawUrl, runtime) {
         path: `/api/sessions/${encodeURIComponent(messageSession)}/messages?${upstreamQuery}`,
       };
     }
+    const after = request.searchParams.get('after');
+    if (after && names.includes('after') && !names.includes('tail') && !names.includes('before')) {
+      upstreamQuery.set('after', after);
+      return {
+        kind: 'transcript', gatewayOrigin,
+        path: `/api/sessions/${encodeURIComponent(messageSession)}/messages?${upstreamQuery}`,
+      };
+    }
     return undefined;
   } catch {
     return undefined;
