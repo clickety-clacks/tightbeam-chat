@@ -815,7 +815,8 @@ describe('conversation surface', () => {
     try {
       const sessionKey = 'reduced-motion-caption';
       const human = row(sessionKey, 'human', 'A question', { role: 'user', sender: 'user:person', turnSeq: 1 });
-      const activeTurn = createTurnProvenance(turn(1, sessionKey, human.id, 'user:person', 'running'), [human], 'person', 'person');
+      const activeTurn = createTurnProvenance({ ...turn(1, sessionKey, human.id, 'user:person', 'running'),
+        triggerSource: 'mike' }, [human], 'person', 'person');
       const runtime = new FakeRuntime(sessionKey, { records: [human], activeTurn, activityTurnStateAvailable: true });
       render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
       expect(screen.getByRole('status', { name: 'Active turn: Replying to you' }).style.opacity).toBe('1');

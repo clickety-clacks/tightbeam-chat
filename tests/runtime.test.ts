@@ -228,8 +228,12 @@ describe('framework-independent runtime', () => {
     expect(runtime.getSnapshot().activityTurnStateAvailable).toBe(false);
     // Freshness loss clears cached caption state. The active turn returns only
     // when the replacement subscription delivers its current turn records.
-    transport.tailHook = () => transport.callbacks?.onNotice({ operation: 'turn', turn: active });
+    transport.tailHook = undefined;
     await runtime.rebuild();
+    const replacementCallbacks = transport.callbacks!;
+    expect(replacementCallbacks).not.toBe(oldCallbacks);
+    expect(runtime.getSnapshot().activeTurn).toBeUndefined();
+    replacementCallbacks.onNotice({ operation: 'turn', turn: active });
     expect(runtime.getSnapshot().activeTurn?.turn.seq).toBe(90);
     oldCallbacks.onNotice({ operation: 'turn', turn: active });
     expect(runtime.getSnapshot().activeTurn?.turn.seq).toBe(90);
