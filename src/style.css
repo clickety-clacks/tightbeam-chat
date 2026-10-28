@@ -53,11 +53,15 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
   padding-bottom: calc(clamp(1rem, 3.5vw, 2rem) + env(safe-area-inset-bottom));
 }
 .tb-chat-message-content {
+  --tb-chat-active-caption-height: 1.1rem;
+  position: relative;
   display: flex;
   flex: 0 0 auto;
   flex-direction: column;
   gap: .8rem;
   min-width: 0;
+  /* Keep the latest bubble's position stable when the active-turn caption clears. */
+  padding-block-end: calc(var(--tb-chat-active-caption-height) + .8rem);
 }
 .tb-chat-runtime-notice {
   position: absolute;
@@ -227,7 +231,22 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
   text-align: center;
 }
 .tb-chat-empty { margin: auto; }
-.tb-chat-active-caption { max-width: 100%; }
+.tb-chat-active-caption {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: var(--tb-chat-active-caption-height);
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.tb-chat-active-caption > .tb-chat-caption-body { flex-wrap: nowrap; overflow: hidden; }
+.tb-chat-active-caption > .tb-chat-caption-body > span:not([aria-hidden="true"]) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .tb-chat-active-caption::before { content: none; }
 .tb-chat-active-caption > .tb-chat-caption-body > span[aria-hidden="true"] { color: var(--tb-chat-ok); }
 .tb-chat-active-caption > span:first-child { font-size: .78rem; line-height: 1; }

@@ -186,7 +186,7 @@ function selectedGatewayOrigin(searchParams, defaultGatewayOrigin) {
   return values.length === 0 ? defaultGatewayOrigin : canonicalOrigin(values[0]);
 }
 
-function parseServiceHttpTarget(rawUrl, runtime) {
+export function parseServiceHttpTarget(rawUrl, runtime) {
   try {
     const request = new URL(rawUrl, 'http://chat-service.invalid');
     if (request.origin !== 'http://chat-service.invalid') return undefined;
@@ -292,6 +292,14 @@ function parseServiceHttpTarget(rawUrl, runtime) {
     const before = request.searchParams.get('before');
     if (before && names.includes('before') && !names.includes('tail')) {
       upstreamQuery.set('before', before);
+      return {
+        kind: 'transcript', gatewayOrigin,
+        path: `/api/sessions/${encodeURIComponent(messageSession)}/messages?${upstreamQuery}`,
+      };
+    }
+    const after = request.searchParams.get('after');
+    if (after && names.includes('after') && !names.includes('tail') && !names.includes('before')) {
+      upstreamQuery.set('after', after);
       return {
         kind: 'transcript', gatewayOrigin,
         path: `/api/sessions/${encodeURIComponent(messageSession)}/messages?${upstreamQuery}`,
