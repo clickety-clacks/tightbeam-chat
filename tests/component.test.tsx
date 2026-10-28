@@ -84,12 +84,12 @@ class FakeRuntime implements ChatRuntime {
 
 function adapterFor(runtime: FakeRuntime): TightbeamAdapter { return { open: () => runtime }; }
 
-function installViewportLayout(viewport: HTMLElement) {
+function installViewportLayout(viewport: HTMLElement, trailingSpace = 200) {
   const content = viewport.querySelector<HTMLElement>('.tb-chat-message-content')!;
   const rowHeight = 92;
   let scrollTop = 0;
   const anchorSpace = () => Number.parseFloat(viewport.style.getPropertyValue('--tb-chat-anchor-space')) || 0;
-  const scrollHeight = () => 32 + content.children.length * rowHeight + anchorSpace() + 200;
+  const scrollHeight = () => 32 + content.children.length * rowHeight + anchorSpace() + trailingSpace;
   Object.defineProperties(viewport, {
     clientHeight: { configurable: true, get: () => 180 },
     scrollHeight: { configurable: true, get: scrollHeight },
@@ -1185,6 +1185,53 @@ describe('conversation surface', () => {
     });
     expect(composer).toHaveProperty('disabled', false);
     expect(screen.getByRole('button', { name: 'Send message' })).toHaveProperty('disabled', true);
+  });
+
+  it('moves a browser submission from older history to the visible newest prompt', async () => {
+    const sessionKey = 'prompt-submit-scroll';
+    const history = Array.from({ length: 6 }, (_, index) => row(
+      sessionKey, `history-${index + 1}`, `History message ${index + 1}`,
+      { seq: index + 1, role: 'user', sender: 'user:person', messageType: 'chat' },
+    ));
+    const runtime = new FakeRuntime(sessionKey, { records: history });
+    runtime.send = (content, clientMessageId) => {
+      runtime.sent.push(content);
+      const id = clientMessageId ?? runtime.sendResult;
+      if (!id) return null;
+      const send: LocalSend = {
+        sessionKey, deviceId: 'device', clientMessageId: id, content,
+        submittedAt: new Date().toISOString(), status: 'pending', reconciled: false,
+      };
+      runtime.update({ sends: [...runtime.state.sends, send] });
+      return id;
+    };
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+    const log = screen.getByRole('log');
+    const layout = installViewportLayout(log, 0);
+    const anchor = within(log).getByText('History message 1').closest('article')!;
+    layout.setScrollTop(0);
+    fireEvent.wheel(log, { deltaY: -100 });
+    fireEvent.scroll(log);
+    await screen.findByRole('button', { name: 'Scroll to latest messages' });
+    const anchorBeforeDraft = layout.offset(anchor);
+
+    try {
+      const composer = screen.getByRole('textbox', { name: 'Message to Research assistant' });
+      fireEvent.change(composer, { target: { value: 'New browser prompt' } });
+      expect(layout.scrollTop).toBe(0);
+      expect(layout.offset(anchor)).toBe(anchorBeforeDraft);
+      fireEvent.submit(composer.closest('form')!);
+
+      await waitFor(() => expect(layout.scrollTop).toBeGreaterThan(0));
+      const prompt = within(log).getByText('New browser prompt').closest('article')!;
+      expect(prompt.classList.contains('tb-chat-bubble-human')).toBe(true);
+      expect(layout.offset(prompt)).toBeGreaterThanOrEqual(0);
+      expect(layout.offset(prompt)).toBeLessThan(180);
+      expect(screen.queryByRole('button', { name: 'Scroll to latest messages' })).toBeNull();
+      expect(runtime.sent).toEqual(['New browser prompt']);
+    } finally {
+      layout.restore();
+    }
   });
 
   it('opens Settings from the composer while disconnected, clears the draft and restores focus on close', async () => {
