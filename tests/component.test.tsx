@@ -1670,6 +1670,12 @@ describe('tool-call and transition display', () => {
     expect(foldedRun.getAttribute('aria-expanded')).toBe('false');
     fireEvent.click(foldedRun);
     expect(view.container.querySelectorAll('details.tb-chat-activity-line.tb-chat-activity-tool')).toHaveLength(2000);
+    const expandedToolTitles = [...view.container.querySelectorAll('.tb-chat-activity-run-rows .tb-chat-activity-gist')]
+      .map(element => element.textContent);
+    expect(expandedToolTitles).toEqual(Array.from({ length: 2000 }, (_, index) =>
+      `Read source ${index + 1} · running`));
+    expect(view.container.querySelector('[data-record-key="tool-tc_1"]')?.getAttribute('aria-label'))
+      .toBe('Tool call: Read source 1 · running');
     const retained = view.container.querySelector<HTMLDetailsElement>('[data-record-key="tool-tc_1000"]')!;
     retained.open = true;
     fireEvent(retained, new Event('toggle'));

@@ -704,14 +704,19 @@ const ToolCallRow = memo(function ToolCallRow({ call, entry, registerRow, preser
   const terminal = call.status === 'completed' || call.status === 'failed';
   if (!entry) return null;
   if (entry.kind === 'overflow') return <ActivityOverflowButton entry={entry} registerRow={registerRow} expand={expandRun} />;
+  const title = call.title.trim() || call.toolName?.trim() || call.kind;
+  const status = call.status === 'pending' || call.status === 'in_progress' ? 'running'
+    : call.status === 'completed' ? 'done' : 'failed';
+  const gist = entry.gist || `${title} · ${status}`;
+  const accessibleText = entry.accessibleText || `Tool call: ${gist}`;
   const key = 'tool-' + call.id;
   return <details ref={element => registerRow(key, element)} tabIndex={-1} data-record-key={key} data-scroll-key={key}
     open={expanded} data-activity-run={entry.runKey} className="tb-chat-activity-line tb-chat-activity-tool"
-    aria-label={entry.accessibleText} onToggle={event => updateExpanded(event.currentTarget.open)}>
-      <summary aria-label={`${entry.accessibleText}. Show input and result`}
+    aria-label={accessibleText} onToggle={event => updateExpanded(event.currentTarget.open)}>
+      <summary aria-label={`${accessibleText}. Show input and result`}
         onClick={preservePosition}>
         <span className="tb-chat-activity-bullet" aria-hidden="true">•</span>
-        <span className="tb-chat-activity-gist">{entry.gist}</span>
+        <span className="tb-chat-activity-gist">{gist}</span>
       </summary>
       {expanded && <div>
         {(['rawInput', 'rawOutput', 'content'] as const).map(field => {
