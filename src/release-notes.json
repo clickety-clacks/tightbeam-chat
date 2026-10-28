@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.46",
+    "items": [
+      {
+        "title": "Handle optional activity refusals during startup",
+        "description": "Optional activity requests now target the selected conversation. A refusal during startup no longer interrupts a conversation feed that becomes ready."
+      }
+    ]
+  },
+  {
     "version": "v0.1.45",
     "items": [
       {
