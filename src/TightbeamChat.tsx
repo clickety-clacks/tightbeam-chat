@@ -981,6 +981,8 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
     if (!element) return;
     let fullHeight = element.clientHeight || window.innerHeight;
     let baselineViewportHeight = window.visualViewport?.height ?? window.innerHeight;
+    let lastRootHeight = element.clientHeight;
+    let lastKeyboardInset = Number.parseFloat(element.style.getPropertyValue('--tb-chat-keyboard-inset')) || 0;
     const update = () => {
       const visual = window.visualViewport;
       const currentHeight = element.clientHeight;
@@ -992,7 +994,14 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
       element.style.setProperty('--tb-chat-full-height', `${fullHeight}px`);
       const visibleBottom = visual ? visual.offsetTop + visual.height : window.innerHeight;
       const bottom = element.getBoundingClientRect().bottom;
-      element.style.setProperty('--tb-chat-keyboard-inset', `${Math.max(0, bottom - visibleBottom)}px`);
+      const keyboardInset = Math.max(0, bottom - visibleBottom);
+      element.style.setProperty('--tb-chat-keyboard-inset', `${keyboardInset}px`);
+      const viewportGeometryChanged = currentHeight !== lastRootHeight || keyboardInset !== lastKeyboardInset;
+      lastRootHeight = currentHeight;
+      lastKeyboardInset = keyboardInset;
+      // The inset changes the transcript's max-height; commit the new scroll
+      // position alongside that geometry change.
+      if (viewportGeometryChanged) reading.reconcileViewportLayout();
     };
     const preventGesture = (event: Event) => event.preventDefault();
     const preventPinch = (event: TouchEvent) => { if (event.touches.length > 1) event.preventDefault(); };

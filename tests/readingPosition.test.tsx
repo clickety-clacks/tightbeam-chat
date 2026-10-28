@@ -42,6 +42,7 @@ let reducedMotion = false;
 let animate: ReturnType<typeof vi.fn>;
 let modelActiveCaptionSlot = false;
 const resizeCallbacks = new Set<ResizeObserverCallback>();
+const resizeTargets = new Map<ResizeObserverCallback, Set<Element>>();
 const rows = () => [...document.querySelectorAll<HTMLElement>('article[data-record-key]')];
 const styleSource = readFileSync(resolve(process.cwd(), 'src/style.css'), 'utf8');
 const hasStableActiveCaptionSlot =
@@ -89,9 +90,12 @@ beforeEach(() => {
   Object.defineProperty(HTMLElement.prototype, 'animate', { configurable: true, value: animate });
   vi.stubGlobal('matchMedia', () => ({ matches: reducedMotion }));
   vi.stubGlobal('ResizeObserver', class {
-    constructor(private callback: ResizeObserverCallback) { resizeCallbacks.add(callback); }
-    observe() {}
-    disconnect() { resizeCallbacks.delete(this.callback); }
+    constructor(private callback: ResizeObserverCallback) {
+      resizeCallbacks.add(callback);
+      resizeTargets.set(callback, new Set());
+    }
+    observe(target: Element) { resizeTargets.get(this.callback)?.add(target); }
+    disconnect() { resizeCallbacks.delete(this.callback); resizeTargets.delete(this.callback); }
     unobserve() {}
   });
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
@@ -125,7 +129,7 @@ beforeEach(() => {
   vi.stubGlobal('cancelAnimationFrame', clearTimeout);
   Object.defineProperty(HTMLElement.prototype, 'scrollTo', { configurable: true, value: scrollTo });
 });
-afterEach(() => { vi.useRealTimers(); cleanup(); restoreVisualViewport?.(); vi.restoreAllMocks(); vi.unstubAllGlobals(); resizeCallbacks.clear(); });
+afterEach(() => { vi.useRealTimers(); cleanup(); restoreVisualViewport?.(); vi.restoreAllMocks(); vi.unstubAllGlobals(); resizeCallbacks.clear(); resizeTargets.clear(); });
 
 function setup(records = initialRows, renderMessage?: TightbeamChatProps['renderMessage']) {
   const runtime = new ReadingRuntime();
@@ -143,6 +147,13 @@ function readAt(box: HTMLElement, position: number) {
 function notifyResizeObservers() {
   act(() => {
     for (const callback of resizeCallbacks) callback([], {} as ResizeObserver);
+  });
+}
+function notifyResizeObserver(target: Element) {
+  act(() => {
+    for (const callback of resizeCallbacks) {
+      if (resizeTargets.get(callback)?.has(target)) callback([], {} as ResizeObserver);
+    }
   });
 }
 
@@ -659,6 +670,58 @@ describe('conversation reading position', () => {
     expect(screen.queryByRole('button', { name: 'Scroll to latest messages' })).toBeNull();
   });
 
+  it('keeps the latest message aligned in the frame that applies a keyboard inset', () => {
+    viewportHeight = 874;
+    const visualViewport = installVisualViewport(874);
+    const { box } = setup();
+    const oldBottom = box.scrollHeight - box.clientHeight;
+
+    act(() => visualViewport.resizeTo(529));
+
+    const newBottom = box.scrollHeight - box.clientHeight;
+    expect(box.clientHeight).toBe(529);
+    expect(newBottom - oldBottom).toBe(345);
+    expect(box.scrollTop).toBe(newBottom);
+    expect(screen.queryByRole('button', { name: 'Scroll to latest messages' })).toBeNull();
+  });
+
+  it('keeps the latest message aligned in the frame the Chat container resizes', () => {
+    viewportHeight = 874;
+    installVisualViewport(874);
+    const { box } = setup();
+    const root = box.closest<HTMLElement>('.tb-chat')!;
+    const oldBottom = box.scrollHeight - box.clientHeight;
+
+    // Model the host reducing the available view by 345 px, before the
+    // transcript's own ResizeObserver is delivered.
+    viewportHeight = 529;
+    notifyResizeObserver(root);
+
+    const newBottom = box.scrollHeight - box.clientHeight;
+    expect(box.clientHeight).toBe(529);
+    expect(newBottom - oldBottom).toBe(345);
+    expect(box.scrollTop).toBe(newBottom);
+    expect(screen.queryByRole('button', { name: 'Scroll to latest messages' })).toBeNull();
+  });
+
+  it('preserves an away reader in the frame the Chat container resizes', () => {
+    viewportHeight = 874;
+    installVisualViewport(874);
+    const { box } = setup();
+    const root = box.closest<HTMLElement>('.tb-chat')!;
+    readAt(box, 700);
+    const anchor = screen.getByText('Message 8').closest('article')!;
+    const scrollTopBefore = box.scrollTop;
+    const anchorTopBefore = anchor.getBoundingClientRect().top;
+
+    viewportHeight = 529;
+    notifyResizeObserver(root);
+
+    expect(box.scrollTop).toBe(scrollTopBefore);
+    expect(anchor.getBoundingClientRect().top).toBe(anchorTopBefore);
+    expect(screen.getByRole('button', { name: 'Scroll to latest messages' })).toBeTruthy();
+  });
+
   it('keeps an away reader anchored while the keyboard moves the visible viewport', () => {
     const visualViewport = installVisualViewport(300);
     const { box } = setup();
@@ -668,6 +731,7 @@ describe('conversation reading position', () => {
 
     for (const height of [260, 220, 180]) {
       act(() => visualViewport.resizeTo(height));
+      expect(anchor.getBoundingClientRect().top).toBe(before);
       notifyResizeObservers();
 
       expect(box.clientHeight).toBe(height);
