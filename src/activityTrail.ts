@@ -1,4 +1,4 @@
-import type { CanonicalMessage, LiveRailDenial, ToolCallRecord } from './types';
+import type { CanonicalMessage, CanonicalTransition, LiveRailDenial, ToolCallRecord } from './types';
 import { parseBatchMembers, type HumanMember } from './messageVisibility';
 
 export type ActivityKind = 'tool' | 'agent' | 'substrate' | 'rail';
@@ -37,8 +37,21 @@ export interface ActivityOverflow {
   readonly sortTime?: number;
 }
 
-export type MessageActivityItem = ActivityLine | ActivityOverflow;
-export type ToolActivityItem = ActivityLine | ActivityOverflow;
+export interface ActivityFold {
+  readonly kind: 'fold';
+  /** Stable as a run grows at its tail: the first row in its activity segment. */
+  readonly id: string;
+  readonly runKey: string;
+  readonly activityKind: ActivityKind;
+  readonly lines: readonly ActivityLine[];
+  readonly summary: ActivityLine;
+  readonly anchorSeq: number;
+  readonly position: Position;
+  readonly sortTime?: number;
+}
+
+export type MessageActivityItem = ActivityLine | ActivityOverflow | ActivityFold;
+export type ToolActivityItem = ActivityLine | ActivityOverflow | ActivityFold;
 
 export interface ActivityTrailPlan {
   readonly messageItems: readonly MessageActivityItem[];
@@ -61,6 +74,12 @@ interface BubbleEvent extends Position {
 interface CandidateEvent extends Position {
   readonly kind: 'candidate';
   readonly candidate: Candidate;
+}
+
+interface EligibleCandidate {
+  readonly candidate: Candidate;
+  /** The current bubble gap, even when membership retains an older gap key. */
+  readonly segmentKey: string;
 }
 
 type TrailEvent = BubbleEvent | CandidateEvent;
@@ -196,6 +215,9 @@ export function buildActivityTrail(input: {
     readonly sender?: string; readonly messageType?: string; readonly role: string; readonly content: string;
     readonly isBatchCarrier?: boolean; readonly raw: Readonly<Record<string, unknown>> }[];
   readonly bubbles: readonly ActivityBubble[];
+  readonly transitions: readonly CanonicalTransition[];
+  /** Unmatched local sends use timestamps to find their place between tool rows. */
+  readonly localSendTimes?: readonly number[];
   readonly tools: readonly ToolCallRecord[];
   readonly toolsEnabled: boolean;
   readonly turnStateAvailable: boolean;
@@ -236,13 +258,13 @@ export function buildActivityTrail(input: {
     })),
   ].sort(comparePosition);
 
-  const eligible = new Map<string, { candidate: Candidate; runKey: string }[]>();
+  const eligible = new Map<string, EligibleCandidate[]>();
   const membership = new Map<string, string>();
   const add = (candidate: Candidate, runKey: string) => {
     const priorRun = input.shownRuns.get(candidate.id);
     const chosenRun = priorRun ?? runKey;
     const rows = eligible.get(chosenRun) ?? [];
-    rows.push({ candidate, runKey: chosenRun });
+    rows.push({ candidate, segmentKey: runKey });
     eligible.set(chosenRun, rows);
     membership.set(candidate.id, chosenRun);
   };
@@ -296,23 +318,86 @@ export function buildActivityTrail(input: {
 
   const messageItems: MessageActivityItem[] = [];
   const toolItems = new Map<string, ToolActivityItem>();
+  const transitionSequences = input.transitions.map((record) => record.seq).sort((a, b) => a - b);
+  const localSendTimes = [...(input.localSendTimes ?? [])].sort((a, b) => a - b);
+  const hasTransitionBetween = (previous: number, next: number) => {
+    let low = 0;
+    let high = transitionSequences.length;
+    while (low < high) {
+      const middle = low + Math.floor((high - low) / 2);
+      if (transitionSequences[middle] <= previous) low = middle + 1;
+      else high = middle;
+    }
+    return low < transitionSequences.length && transitionSequences[low] <= next;
+  };
+  const hasPendingSendBetween = (previous?: number, next?: number) => {
+    if (previous === undefined || next === undefined || previous >= next) return false;
+    let low = 0;
+    let high = localSendTimes.length;
+    while (low < high) {
+      const middle = low + Math.floor((high - low) / 2);
+      if (localSendTimes[middle] <= previous) low = middle + 1;
+      else high = middle;
+    }
+    return low < localSendTimes.length && localSendTimes[low] < next;
+  };
+  const addLine = (line: ActivityLine) => {
+    if (line.kind === 'tool' && line.call) toolItems.set(line.call.id, line);
+    else messageItems.push(line);
+  };
+  const addFold = (id: string, lines: readonly ActivityLine[]) => {
+    const summary = lines[lines.length - 1];
+    const fold: ActivityFold = {
+      kind: 'fold', id, runKey: lines[0].runKey, activityKind: lines[0].kind,
+      lines, summary, anchorSeq: summary.anchorSeq, position: summary.position, sortTime: summary.sortTime,
+    };
+    if (fold.activityKind === 'tool') {
+      for (const line of lines) if (line.call) toolItems.set(line.call.id, fold);
+    } else messageItems.push(fold);
+  };
+
   for (const [runKey, rows] of eligible) {
     rows.sort((left, right) => comparePosition(left.candidate.position, right.candidate.position));
+    const foldGroupByCandidateId = new Map<string, string>();
+    let previousRow: EligibleCandidate | undefined;
+    let groupId = '';
+    for (const row of rows) {
+      if (!previousRow || previousRow.segmentKey !== row.segmentKey || previousRow.candidate.kind !== row.candidate.kind ||
+        hasTransitionBetween(previousRow.candidate.position.sequence, row.candidate.position.sequence) ||
+        hasPendingSendBetween(previousRow.candidate.sortTime, row.candidate.sortTime)) {
+        groupId = row.candidate.id;
+      }
+      foldGroupByCandidateId.set(row.candidate.id, groupId);
+      previousRow = row;
+    }
     const expanded = input.expandedRuns.has(runKey);
     const hiddenCount = expanded ? 0 : Math.max(0, rows.length - 5);
     const visibleRows = hiddenCount ? rows.slice(hiddenCount) : rows;
-    for (const { candidate } of visibleRows) {
-      const line = lineWithRun(candidate, runKey);
-      if (candidate.kind === 'tool') toolItems.set(candidate.call!.id, line);
-      else messageItems.push(line);
-    }
+    let currentLines: ActivityLine[] = [];
+    let currentSegment: string | undefined;
+    const flush = () => {
+      if (currentLines.length > 1) addFold(currentSegment!, currentLines);
+      else if (currentLines.length === 1) addLine(currentLines[0]);
+      currentLines = [];
+      currentSegment = undefined;
+    };
+    const append = (line: ActivityLine, foldGroupId: string) => {
+      if (currentLines.length && currentSegment !== foldGroupId) flush();
+      if (!currentLines.length) currentSegment = foldGroupId;
+      currentLines.push(line);
+    };
     if (hiddenCount) {
+      flush();
       const hidden = rows[0].candidate;
       const overflow: ActivityOverflow = { kind: 'overflow', id: `overflow:${runKey}`,
         runKey, anchorSeq: hidden.anchorSeq, position: hidden.position, sortTime: hidden.sortTime };
       if (hidden.kind === 'tool') toolItems.set(hidden.call!.id, overflow);
       else messageItems.push(overflow);
     }
+    for (const { candidate } of visibleRows) {
+      append(lineWithRun(candidate, runKey), foldGroupByCandidateId.get(candidate.id) ?? candidate.id);
+    }
+    flush();
   }
   messageItems.sort((left, right) => left.anchorSeq - right.anchorSeq ||
     comparePosition(left.position, right.position) || left.id.localeCompare(right.id));

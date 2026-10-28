@@ -5,7 +5,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { ChatRuntime, CanonicalMessage, CanonicalTransition, ToolCallRecord, ToolCallIndex, ConversationRecord, LocalSend, RuntimeState, TightbeamAdapter, TurnProvenance } from './types';
 import { projectMessages, type HumanMember } from './messageVisibility';
-import { buildActivityTrail, type ActivityLine, type ActivityOverflow, type MessageActivityItem, type ToolActivityItem } from './activityTrail';
+import { buildActivityTrail, type ActivityFold, type ActivityLine, type ActivityOverflow, type MessageActivityItem } from './activityTrail';
 import { useReadingPosition } from './useReadingPosition';
 import { firstAfterTime, getIndex, indexValues, putIndex, type RecordIndex } from './recordIndex';
 import { getHostComposerSnapshot, HostComposerBridge, subscribeHostComposer } from './hostComposer';
@@ -50,6 +50,7 @@ type TimelineItem =
   | { readonly kind: 'tool'; readonly call: ToolCallRecord }
   | { readonly kind: 'transition'; readonly record: CanonicalTransition }
   | { readonly kind: 'activity'; readonly entry: ActivityLine }
+  | { readonly kind: 'activity-fold'; readonly entry: ActivityFold }
   | { readonly kind: 'overflow'; readonly entry: ActivityOverflow }
   | { readonly kind: 'bubble'; readonly bubble: Bubble; readonly scrollKey?: string }
   | { readonly kind: 'local'; readonly send: LocalSend; readonly canonical?: CanonicalMessage };
@@ -67,7 +68,7 @@ function canonicalSendIdentity(record: CanonicalMessage): string | undefined {
 
 function itemTime(item: TimelineItem): number | undefined {
   if (item.kind === 'tool') return item.call.startedAt;
-  if (item.kind === 'activity' || item.kind === 'overflow') return undefined;
+  if (item.kind === 'activity' || item.kind === 'activity-fold' || item.kind === 'overflow') return undefined;
   const value = item.kind === 'transition' ? item.record.createdAt
     : item.kind === 'bubble' ? item.bubble.record.createdAt
     : item.canonical?.createdAt ?? item.send.submittedAt;
@@ -118,7 +119,8 @@ function composeTimeline(bubbles: readonly Bubble[], localSends: readonly LocalS
   });
   for (const record of transitions) anchors.push({ item: { kind: 'transition', record }, record, order: anchors.length });
   for (const entry of activityItems) {
-    const item: TimelineItem = entry.kind === 'overflow' ? { kind: 'overflow', entry } : { kind: 'activity', entry };
+    const item: TimelineItem = entry.kind === 'overflow' ? { kind: 'overflow', entry }
+      : entry.kind === 'fold' ? { kind: 'activity-fold', entry } : { kind: 'activity', entry };
     anchors.push({ item, record: { id: entry.id, seq: entry.anchorSeq }, order: anchors.length });
   }
   const unmatched: UnmatchedTimelineItem[] = [];
@@ -203,7 +205,8 @@ function transcriptIndex(timeline: readonly TimelineItem[]) {
     if (item.kind === 'local' && !item.canonical) { pending.push(item); continue; }
     const anchor = item.kind === 'bubble' ? item.bubble.record.seq : item.kind === 'transition'
       ? item.record.seq : item.kind === 'activity' || item.kind === 'overflow' ? item.entry.anchorSeq
-        : item.kind === 'tool' ? item.call.afterMessageSeq : item.canonical!.seq;
+        : item.kind === 'activity-fold' ? item.entry.anchorSeq
+          : item.kind === 'tool' ? item.call.afterMessageSeq : item.canonical!.seq;
     for (const item of pending) placements.push({ item, beforeAnchor: anchor });
     pending = [];
     index = putIndex(index, anchor, [...(getIndex(index, anchor) ?? []), item]);
@@ -671,31 +674,40 @@ function ActivityOverflowButton({ entry, registerRow, expand }: {
     onClick={event => expand(entry.runKey, event.currentTarget)}>…</button>;
 }
 
-function ActivityMessageRow({ entry, registerRow }: {
+function ActivityMessageRow({ entry, registerRow, scrollKey = entry.id }: {
   readonly entry: ActivityLine;
   readonly registerRow: (key: string, element: HTMLElement | null) => void;
+  readonly scrollKey?: string;
 }) {
   return <div role="note" tabIndex={-1} aria-label={entry.accessibleText}
     className={`tb-chat-activity-line tb-chat-activity-${entry.kind}`}
-    ref={element => registerRow(entry.id, element)} data-record-key={entry.id} data-scroll-key={entry.id}
+    ref={element => registerRow(scrollKey, element)} data-record-key={entry.id} data-scroll-key={scrollKey}
     data-activity-run={entry.runKey}>{entry.gist}</div>;
 }
 
-const ToolCallRow = memo(function ToolCallRow({ call, entry, registerRow, preservePosition, expandRun }: {
+const ToolCallRow = memo(function ToolCallRow({ call, entry, registerRow, preservePosition, expandRun,
+  expandedToolCalls, setToolCallExpanded }: {
   call: ToolCallRecord;
-  entry?: ToolActivityItem;
+  entry?: ActivityLine | ActivityOverflow;
   registerRow: (key: string, element: HTMLElement | null) => void;
   preservePosition: () => void;
   expandRun: (runKey: string, control: HTMLButtonElement) => void;
+  expandedToolCalls?: ReadonlySet<string>;
+  setToolCallExpanded?: (id: string, expanded: boolean) => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const [localExpanded, setLocalExpanded] = useState(false);
+  const expanded = expandedToolCalls ? expandedToolCalls.has(call.id) : localExpanded;
+  const updateExpanded = (next: boolean) => {
+    if (expandedToolCalls) setToolCallExpanded?.(call.id, next);
+    else setLocalExpanded(next);
+  };
   const terminal = call.status === 'completed' || call.status === 'failed';
   if (!entry) return null;
   if (entry.kind === 'overflow') return <ActivityOverflowButton entry={entry} registerRow={registerRow} expand={expandRun} />;
   const key = 'tool-' + call.id;
   return <details ref={element => registerRow(key, element)} tabIndex={-1} data-record-key={key} data-scroll-key={key}
-    data-activity-run={entry.runKey} className="tb-chat-activity-line tb-chat-activity-tool"
-    aria-label={entry.accessibleText} onToggle={event => setExpanded(event.currentTarget.open)}>
+    open={expanded} data-activity-run={entry.runKey} className="tb-chat-activity-line tb-chat-activity-tool"
+    aria-label={entry.accessibleText} onToggle={event => updateExpanded(event.currentTarget.open)}>
       <summary aria-label={`${entry.accessibleText}. Show input and result`}
         onClick={preservePosition}>
         <span className="tb-chat-activity-bullet" aria-hidden="true">•</span>
@@ -718,6 +730,41 @@ const ToolCallRow = memo(function ToolCallRow({ call, entry, registerRow, preser
   </details>;
 });
 
+function ActivityRunRow({ entry, expanded, toggle, registerRow, preservePosition, expandHistoryRun,
+  expandedToolCalls, setToolCallExpanded }: {
+  readonly entry: ActivityFold;
+  readonly expanded: boolean;
+  readonly toggle: (id: string) => void;
+  readonly registerRow: (key: string, element: HTMLElement | null) => void;
+  readonly preservePosition: () => void;
+  readonly expandHistoryRun: (runKey: string, control: HTMLButtonElement) => void;
+  readonly expandedToolCalls: ReadonlySet<string>;
+  readonly setToolCallExpanded: (id: string, expanded: boolean) => void;
+}) {
+  const detailLines = entry.activityKind === 'tool' ? entry.lines : entry.lines.slice(0, -1);
+  return <div className={`tb-chat-activity-run tb-chat-activity-${entry.activityKind}`} tabIndex={-1}
+    ref={element => registerRow(entry.id, element)} data-record-key={entry.id} data-scroll-key={entry.id}
+    data-activity-run={entry.runKey} data-activity-fold="true" data-run-expanded={expanded ? 'true' : 'false'}>
+    {expanded && <div className="tb-chat-activity-run-rows">
+      {detailLines.map(line => line.kind === 'tool' && line.call
+        ? <ToolCallRow key={line.id} call={line.call} entry={line} registerRow={registerRow}
+          preservePosition={preservePosition} expandRun={expandHistoryRun}
+          expandedToolCalls={expandedToolCalls} setToolCallExpanded={setToolCallExpanded} />
+        : <ActivityMessageRow key={line.id} entry={line} registerRow={registerRow}
+          scrollKey={`activity-detail:${line.id}`} />)}
+    </div>}
+    <button type="button" className={`tb-chat-activity-run-toggle tb-chat-activity-${entry.activityKind}`}
+      aria-expanded={expanded}
+      aria-label={`${expanded ? 'Collapse' : 'Expand'} ${entry.activityKind} activity run, ${entry.lines.length} entries. Latest: ${entry.summary.gist}`}
+      onClick={() => { preservePosition(); toggle(entry.id); }}>
+      <span className="tb-chat-activity-bullet" aria-hidden="true">•</span>
+      <span className={`tb-chat-activity-run-chevron${expanded ? ' is-expanded' : ''}`} aria-hidden="true" />
+      <span className="tb-chat-activity-gist">{entry.summary.gist}</span>
+      <span className="tb-chat-activity-run-count" aria-hidden="true">×{entry.lines.length}</span>
+    </button>
+  </div>;
+}
+
 function ChatBody({ runtime, renderMessage, className, hostBridge }: {
   runtime: ChatRuntime;
   renderMessage?: TightbeamChatProps['renderMessage'];
@@ -729,9 +776,12 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
   const getHostSnapshot = useCallback(() => getHostComposerSnapshot(hostBridge), [hostBridge]);
   const host = useSyncExternalStore(subscribeHost, getHostSnapshot, getHostSnapshot);
   const [expandedRuns, setExpandedRuns] = useState<ReadonlySet<string>>(() => new Set());
+  const [expandedActivityRuns, setExpandedActivityRuns] = useState<ReadonlySet<string>>(() => new Set());
+  const [expandedToolCalls, setExpandedToolCalls] = useState<ReadonlySet<string>>(() => new Set());
   const [shownRuns, setShownRuns] = useState<ReadonlyMap<string, string>>(() => new Map());
   const focusExpandedRun = useRef<string | undefined>(undefined);
-  const readingRevision = useMemo(() => ({ state, host, expandedRuns }), [state, host, expandedRuns]);
+  const readingRevision = useMemo(() => ({ state, host, expandedRuns, expandedActivityRuns }),
+    [state, host, expandedRuns, expandedActivityRuns]);
   const reading = useReadingPosition(state.status === 'ready', readingRevision, box =>
     state.loadingOlder || (!state.historyError && state.hasOlder && box.scrollTop < olderHistoryPrefetchDistance(box)));
   const { viewport } = reading;
@@ -821,6 +871,10 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
   }, [state.records]);
   const localSends = useMemo(() => state.sends.filter((send) =>
     !visibleSendIdentities.has(sendIdentity(send))), [state.sends, visibleSendIdentities]);
+  const localSendTimes = useMemo(() => localSends.flatMap(send => {
+    const time = Date.parse(send.submittedAt);
+    return Number.isFinite(time) ? [time] : [];
+  }), [localSends]);
   const tools = useMemo(() => {
     if (!state.toolCallsEnabled) return undefined;
     if (state.toolCallIndex) return state.toolCallIndex;
@@ -840,10 +894,13 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
     return calls;
   }, [tools]);
   const activityRecords = useMemo(() => state.records.filter((record): record is CanonicalMessage => record.kind === 'message'), [state.records]);
+  const transitions = useMemo(() => state.records.filter((record): record is CanonicalTransition => record.kind === 'transition'), [state.records]);
   const activityPlan = useMemo(() => buildActivityTrail({
     sessionKey: state.sessionKey,
     records: activityRecords,
     bubbles,
+    transitions,
+    localSendTimes,
     tools: toolRecords,
     toolsEnabled: Boolean(state.toolCallsEnabled),
     turnStateAvailable: state.activityTurnStateAvailable === true,
@@ -853,9 +910,19 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
     railDenials: state.liveRailDenials ?? [],
     shownRuns,
     expandedRuns,
-  }), [activityRecords, bubbles, expandedRuns, shownRuns, state.activityTurnStateAvailable, state.activeTurn,
+  }), [activityRecords, bubbles, transitions, localSendTimes, expandedRuns, shownRuns, state.activityTurnStateAvailable, state.activeTurn,
     state.liveActivityIds, state.liveActivityEligibleIds, state.liveRailDenials, state.sessionKey,
     state.toolCallsEnabled, toolRecords]);
+  const activityFoldIds = useMemo(() => new Set([
+    ...activityPlan.messageItems.filter((item): item is ActivityFold => item.kind === 'fold').map(item => item.id),
+    ...[...activityPlan.toolItems.values()].filter((item): item is ActivityFold => item.kind === 'fold').map(item => item.id),
+  ]), [activityPlan]);
+  useLayoutEffect(() => {
+    setExpandedActivityRuns(prior => {
+      const next = new Set([...prior].filter(id => activityFoldIds.has(id)));
+      return next.size === prior.size ? prior : next;
+    });
+  }, [activityFoldIds]);
   useLayoutEffect(() => {
     let next: Map<string, string> | undefined;
     for (const [id, runKey] of activityPlan.membership) {
@@ -875,6 +942,23 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
       return next;
     });
   }, [reading.preserveVisiblePosition]);
+  const toggleActivityRun = useCallback((id: string) => {
+    setExpandedActivityRuns(prior => {
+      const next = new Set(prior);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+  const setToolCallExpanded = useCallback((id: string, expanded: boolean) => {
+    setExpandedToolCalls(prior => {
+      if (prior.has(id) === expanded) return prior;
+      const next = new Set(prior);
+      if (expanded) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }, []);
   useLayoutEffect(() => {
     const runKey = focusExpandedRun.current;
     if (!runKey) return;
@@ -884,8 +968,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
     first?.focus({ preventScroll: true });
   }, [expandedRuns, viewport]);
   const timeline = useMemo(() => composeTimeline(bubbles, localSends, canonicalSends, sendsByIdentity,
-    state.records.filter((record): record is CanonicalTransition => record.kind === 'transition'),
-    activityPlan.messageItems), [activityPlan.messageItems, bubbles, canonicalSends, localSends, sendsByIdentity, state.records]);
+    transitions, activityPlan.messageItems), [activityPlan.messageItems, bubbles, canonicalSends, localSends, sendsByIdentity, transitions]);
   const transcript = useMemo(() => transcriptIndex(timeline), [timeline]);
   const pending = useMemo(() => placePending(transcript.placements, tools), [transcript, tools]);
   const previousTail = useRef<{ generation: number; ready: boolean; seq: number } | null>(null);
@@ -1071,10 +1154,25 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
         : undefined;
 
   const renderItem = useCallback((item: TimelineItem) => {
-        if (item.kind === 'tool') return <ToolCallRow key={'tool-' + item.call.id} call={item.call}
-          entry={activityPlan.toolItems.get(item.call.id)} registerRow={reading.registerRow}
-          preservePosition={reading.preserveVisiblePosition} expandRun={expandRun} />;
+        if (item.kind === 'tool') {
+          const entry = activityPlan.toolItems.get(item.call.id);
+          if (entry?.kind === 'fold') {
+            if (entry.summary.call?.id !== item.call.id) return null;
+            return <ActivityRunRow key={entry.id} entry={entry} expanded={expandedActivityRuns.has(entry.id)}
+              toggle={toggleActivityRun} registerRow={reading.registerRow}
+              preservePosition={reading.preserveVisiblePosition} expandHistoryRun={expandRun}
+              expandedToolCalls={expandedToolCalls} setToolCallExpanded={setToolCallExpanded} />;
+          }
+          return <ToolCallRow key={'tool-' + item.call.id} call={item.call}
+            entry={entry} registerRow={reading.registerRow}
+            preservePosition={reading.preserveVisiblePosition} expandRun={expandRun}
+            expandedToolCalls={expandedToolCalls} setToolCallExpanded={setToolCallExpanded} />;
+        }
         if (item.kind === 'activity') return <ActivityMessageRow key={item.entry.id} entry={item.entry} registerRow={reading.registerRow} />;
+        if (item.kind === 'activity-fold') return <ActivityRunRow key={item.entry.id} entry={item.entry}
+          expanded={expandedActivityRuns.has(item.entry.id)} toggle={toggleActivityRun}
+          registerRow={reading.registerRow} preservePosition={reading.preserveVisiblePosition}
+          expandHistoryRun={expandRun} expandedToolCalls={expandedToolCalls} setToolCallExpanded={setToolCallExpanded} />;
         if (item.kind === 'overflow') return <ActivityOverflowButton key={item.entry.id} entry={item.entry}
           registerRow={reading.registerRow} expand={expandRun} />;
         if (item.kind === 'transition') {
@@ -1127,7 +1225,8 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
           </div>}
           <time className="tb-chat-time" dateTime={time.dateTime}>{time.text}</time>
         </article>;
-  }, [activityPlan.toolItems, reading.registerRow, reading.preserveVisiblePosition, expandRun,
+  }, [activityPlan.toolItems, expandedActivityRuns, expandedToolCalls, toggleActivityRun, setToolCallExpanded,
+    reading.registerRow, reading.preserveVisiblePosition, expandRun,
     arrivalFloor, renderMessage, agentName, state.status, runtime]);
 
   return <section ref={root} className={`tb-chat ${host.composerHidden ? 'tb-chat-host-composer-hidden' : ''} ${className || ''}`}
