@@ -266,20 +266,18 @@ export function buildActivityTrail(input: {
       for (const event of pending) add(event.candidate, runKey);
     } else if (!nextBubble) {
       for (const candidate of tail) {
-        let allowed = beforeOrAtTool.has(candidate.id);
-        if (input.turnStateAvailable) {
-          allowed ||= candidate.live
-            ? candidate.liveTailEligibleAtArrival
-            : input.activeTurnRunning;
-        } else {
-          allowed ||= candidate.live;
-        }
+        const allowed = candidate.live
+          ? (!input.turnStateAvailable || candidate.liveTailEligibleAtArrival)
+          : (beforeOrAtTool.has(candidate.id) || (input.turnStateAvailable && input.activeTurnRunning));
         if (allowed || input.shownRuns.has(candidate.id)) add(candidate, runKey);
       }
     } else {
       for (const candidate of tail) {
         const oldRun = input.shownRuns.get(candidate.id);
-        if (beforeOrAtTool.has(candidate.id) || candidate.liveTailEligibleAtArrival || oldRun) {
+        const allowed = candidate.live
+          ? (!input.turnStateAvailable || candidate.liveTailEligibleAtArrival)
+          : beforeOrAtTool.has(candidate.id);
+        if (allowed || oldRun) {
           add(candidate, oldRun ?? runKey);
         }
       }

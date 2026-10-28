@@ -142,6 +142,13 @@ describe('activity trail projection', () => {
       turnStateAvailable: true, activeTurnRunning: true, liveActivityIds, liveActivityEligibleIds: new Set() });
     expect(turnStartedLater.messageItems).toHaveLength(0);
 
+    const laterTool = { ...tool('later-tool', 3, 'completed'), afterMessageSeq: 3 };
+    const turnStartedWithTool = build({ records: [idleMessage], bubbles: [bubble(prompt, 'human')],
+      tools: [laterTool], turnStateAvailable: true, activeTurnRunning: true, liveActivityIds,
+      liveActivityEligibleIds: new Set() });
+    expect(turnStartedWithTool.messageItems).toHaveLength(0);
+    expect(turnStartedWithTool.toolItems.has(laterTool.id)).toBe(true);
+
     const arrivedDuringTurn = build({ records: [idleMessage], bubbles: [bubble(prompt, 'human')],
       turnStateAvailable: true, activeTurnRunning: false, liveActivityIds,
       liveActivityEligibleIds: new Set([idleMessage.id]) });
