@@ -12,9 +12,9 @@ const bubble = (record: CanonicalMessage, side: ActivityBubble['side']): Activit
   key: record.id, record, side,
 });
 
-const tool = (id: string, seq: number, status: ToolCallRecord['status']): ToolCallRecord => ({
+const tool = (id: string, seq: number, status: ToolCallRecord['status'], toolName = 'read_file'): ToolCallRecord => ({
   id, seq, sessionKey: 'session', turnSeq: 1, afterMessageSeq: 1, harnessToolCallId: id,
-  title: `Tool ${id}`, kind: 'read', toolName: 'read_file', status, rawInput: null,
+  title: `Tool ${id}`, kind: 'read', toolName, status, rawInput: null,
   rawOutput: null, content: null, truncated: [], startedAt: seq, endedAt: status === 'completed' || status === 'failed' ? seq + 1 : null,
   rowVersion: 1,
 });
@@ -114,7 +114,22 @@ describe('activity trail projection', () => {
     expect(plan.toolItems.get('after-send')?.kind).toBe('tool');
   });
 
-  it('keeps a fold anchor stable as the visible tail advances past the history cap', () => {
+  it('keeps different tool names in separate activity entries', () => {
+    const prompt = message('prompt', 1, 'user:person', 'A question', { role: 'user' });
+    const plan = build({ bubbles: [bubble(prompt, 'human')], tools: [
+      tool('read-one', 1, 'completed', 'Read'), tool('read-two', 2, 'failed', 'Read'),
+      tool('bash', 3, 'completed', 'Bash'), tool('grep', 4, 'completed', 'Grep'),
+    ] });
+
+    const readFold = plan.toolItems.get('read-one');
+    expect(readFold?.kind).toBe('fold');
+    expect(plan.toolItems.get('read-two')).toBe(readFold);
+    expect((readFold as ActivityFold).lines.map(line => line.call?.toolName)).toEqual(['Read', 'Read']);
+    expect(plan.toolItems.get('bash')?.kind).toBe('tool');
+    expect(plan.toolItems.get('grep')?.kind).toBe('tool');
+  });
+
+  it('folds an entire long homogeneous run before applying the display history cap', () => {
     const prompt = message('prompt', 1, 'user:person', 'A question', { role: 'user' });
     const reply = message('reply', 20, 'assistant-service', 'Answer', { role: 'assistant' });
     const reminders = Array.from({ length: 6 }, (_, index) => message(`reminder-${index + 1}`, index + 2,
@@ -123,13 +138,17 @@ describe('activity trail projection', () => {
     const first = build({ records: reminders, bubbles });
     const firstFold = first.messageItems.find((item): item is ActivityFold => item.kind === 'fold')!;
     expect(firstFold.id).toBe('message:reminder-1');
-    expect(first.messageItems.some(item => item.kind === 'overflow')).toBe(true);
+    expect(firstFold.lines).toHaveLength(6);
+    expect(firstFold.summary.gist).toBe('Reminder 6');
+    expect(first.messageItems.some(item => item.kind === 'overflow')).toBe(false);
 
     const later = message('reminder-7', 9, 'process:events', 'Reminder 7', { messageType: 'substrate' });
     const next = build({ records: [...reminders, later], bubbles, shownRuns: first.membership });
     const nextFold = next.messageItems.find((item): item is ActivityFold => item.kind === 'fold')!;
     expect(nextFold.id).toBe(firstFold.id);
     expect(nextFold.summary.gist).toBe('Reminder 7');
+    expect(nextFold.lines).toHaveLength(7);
+    expect(next.messageItems.some(item => item.kind === 'overflow')).toBe(false);
   });
 
   it('places tool, substrate, and other-agent lines in canonical order between prompt and reply', () => {
@@ -146,9 +165,8 @@ describe('activity trail projection', () => {
     expect(ordered.map(item => item.kind)).toEqual(['fold', 'substrate', 'agent']);
     const toolFold = ordered[0] as ActivityFold;
     expect(toolFold.activityKind).toBe('tool');
-    expect(toolFold.lines.map(item => item.gist)).toEqual([
-      'Tool done · done', 'Tool failed · failed', 'Tool running · running',
-    ]);
+    expect(toolFold.lines.map(item => item.call?.id)).toEqual(['done', 'failed', 'running']);
+    expect(toolFold.summary.gist).toBe('Tool running · running');
     const lines = ordered.slice(1) as ActivityLine[];
     expect(lines[0].accessibleText).toBe('Substrate: Assigned a task');
     expect(lines[1].accessibleText).toBe('Other agent: Another agent — Started a helper task');
@@ -159,7 +177,7 @@ describe('activity trail projection', () => {
     expect(build({ records: [hiddenReply], bubbles: [bubble(prompt, 'human')] }).messageItems).toEqual([]);
   });
 
-  it('caps each gap independently and keeps an expanded run expanded when a later entry arrives', () => {
+  it('caps displayed groups per gap and keeps an expanded run expanded when a later entry arrives', () => {
     const prompt = message('prompt', 1, 'user:person');
     const firstReply = message('reply-one', 4, 'assistant-service', 'First answer', { role: 'assistant' });
     const secondReply = message('reply-two', 14, 'assistant-service', 'Second answer', { role: 'assistant' });
@@ -172,9 +190,11 @@ describe('activity trail projection', () => {
     const runItems = (runKey: string) => firstPlan.messageItems.filter(item => item.runKey === runKey);
     expect(runItems(firstRun).map(item => item.kind)).toEqual(['fold']);
     expect((runItems(firstRun)[0] as ActivityFold).lines).toHaveLength(2);
-    expect(runItems(secondRun).filter(item => item.kind === 'overflow')).toHaveLength(1);
+    expect(runItems(secondRun).filter(item => item.kind === 'overflow')).toHaveLength(0);
     const secondFold = runItems(secondRun).find((item): item is ActivityFold => item.kind === 'fold')!;
-    expect(secondFold.lines.map(item => item.gist)).toEqual(['Activity 6', 'Activity 7', 'Activity 8', 'Activity 9', 'Activity 10']);
+    expect(secondFold.lines.map(item => item.gist)).toEqual([
+      'Activity 3', 'Activity 4', 'Activity 5', 'Activity 6', 'Activity 7', 'Activity 8', 'Activity 9', 'Activity 10',
+    ]);
 
     const expanded = build({ records: initial, bubbles, shownRuns: firstPlan.membership,
       expandedRuns: new Set([secondRun]) });
@@ -188,6 +208,23 @@ describe('activity trail projection', () => {
       expandedRuns: new Set([secondRun]) });
     expect((withLater.messageItems.find(item => item.runKey === secondRun) as ActivityFold).lines).toHaveLength(9);
     expect(withLater.messageItems.some(item => item.kind === 'overflow' && item.runKey === secondRun)).toBe(false);
+  });
+
+  it('keeps the five-entry cap when a gap contains more than five distinct display groups', () => {
+    const prompt = message('prompt', 1, 'user:person', 'A question', { role: 'user' });
+    const reply = message('reply', 10, 'assistant-service', 'Answer', { role: 'assistant' });
+    const records = Array.from({ length: 6 }, (_, index) => {
+      const agent = index % 2 === 1;
+      return message(`activity-${index + 1}`, index + 2, agent ? 'agent:helper' : 'process:events',
+        `Activity ${index + 1}`, { messageType: agent ? 'agent' : 'substrate' });
+    });
+    const plan = build({ records, bubbles: [bubble(prompt, 'human'), bubble(reply, 'agent')] });
+
+    expect(plan.messageItems.map(item => item.kind)).toEqual(['overflow', 'agent', 'substrate', 'agent', 'substrate', 'agent']);
+    expect(plan.messageItems[0].id).toBe('overflow:run:prompt');
+    expect(plan.messageItems.map(item => item.id).slice(1)).toEqual([
+      'message:activity-2', 'message:activity-3', 'message:activity-4', 'message:activity-5', 'message:activity-6',
+    ]);
   });
 
   it('rebuilds every tail gap with tools and earlier-in-gap activity across reload', () => {

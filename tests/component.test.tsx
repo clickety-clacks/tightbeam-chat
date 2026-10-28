@@ -838,7 +838,7 @@ describe('conversation surface', () => {
     const question = row(sessionKey, 'question-1', 'Question 1', {
       seq: 1, role: 'user', sender: 'user:person', messageType: 'chat', turnSeq: 1,
     });
-    const activity = [1, 2, 3].map((index) => row(sessionKey, `reminder-${index}`, `Background activity ${index}`, {
+    const activity = [1, 2, 3, 4, 5, 6].map((index) => row(sessionKey, `reminder-${index}`, `Background activity ${index}`, {
       seq: index + 1, role: 'user', sender: 'process:events', messageType: 'substrate',
     }));
     const firstReply = row(sessionKey, 'reply-1', 'Idle answer 1', {
@@ -872,35 +872,39 @@ describe('conversation surface', () => {
       const anchorBefore = layout.offset(anchor);
       expect(anchorBefore).toBeCloseTo(120, 0);
 
-      let toggle = screen.getByRole('button', { name: /3 entries\. Latest: Background activity 3/ });
-      expect(toggle.textContent).toContain('×3');
+      let toggle = screen.getByRole('button', { name: /6 entries\. Latest: Background activity 6/ });
+      expect(toggle.textContent).toContain('×6');
+      expect(screen.queryByRole('button', { name: 'Show earlier activity' })).toBeNull();
       expect(toggle.getAttribute('aria-expanded')).toBe('false');
       fireEvent.click(toggle);
-      toggle = screen.getByRole('button', { name: /3 entries\. Latest: Background activity 3/ });
+      toggle = screen.getByRole('button', { name: /6 entries\. Latest: Background activity 6/ });
       expect(toggle.getAttribute('aria-expanded')).toBe('true');
-      expect(screen.getAllByRole('note').map(note => note.textContent)).toEqual(['Background activity 1', 'Background activity 2']);
+      expect(screen.getAllByRole('note').map(note => note.textContent)).toEqual([
+        'Background activity 1', 'Background activity 2', 'Background activity 3',
+        'Background activity 4', 'Background activity 5',
+      ]);
       expect(layout.offset(anchor)).toBeCloseTo(anchorBefore, 0);
 
       const incoming = row(sessionKey, 'reminder-4', 'Background activity 4', {
-        seq: 5, role: 'user', sender: 'process:events', messageType: 'substrate',
+        seq: 8, role: 'user', sender: 'process:events', messageType: 'substrate',
       });
       records = [question, ...activity, incoming, firstReply, ...laterMessages];
       act(() => runtime.update({ records }));
-      toggle = screen.getByRole('button', { name: /4 entries\. Latest: Background activity 4/ });
+      toggle = screen.getByRole('button', { name: /7 entries\. Latest: Background activity 4/ });
       expect(toggle.getAttribute('aria-expanded')).toBe('true');
       expect(layout.offset(anchor)).toBeCloseTo(anchorBefore, 0);
 
       fireEvent.click(toggle);
-      toggle = screen.getByRole('button', { name: /4 entries\. Latest: Background activity 4/ });
+      toggle = screen.getByRole('button', { name: /7 entries\. Latest: Background activity 4/ });
       expect(toggle.getAttribute('aria-expanded')).toBe('false');
       expect(layout.offset(anchor)).toBeCloseTo(anchorBefore, 0);
 
       const finalReminder = row(sessionKey, 'reminder-5', 'Background activity 5', {
-        seq: 6, role: 'user', sender: 'process:events', messageType: 'substrate',
+        seq: 9, role: 'user', sender: 'process:events', messageType: 'substrate',
       });
       records = [question, ...activity, incoming, finalReminder, firstReply, ...laterMessages];
       act(() => runtime.update({ records }));
-      toggle = screen.getByRole('button', { name: /5 entries\. Latest: Background activity 5/ });
+      toggle = screen.getByRole('button', { name: /8 entries\. Latest: Background activity 5/ });
       expect(toggle.getAttribute('aria-expanded')).toBe('false');
       expect(layout.offset(anchor)).toBeCloseTo(anchorBefore, 0);
     } finally {
@@ -928,10 +932,7 @@ describe('conversation surface', () => {
     fireEvent.change(composer, { target: { value: 'Unsent draft' } });
     composer.focus();
     composer.setSelectionRange(2, 6);
-    const overflow = screen.getByRole('button', { name: 'Show earlier activity' });
     expect(screen.getByRole('separator', { name: 'Transition: Context compacted' })).toBeTruthy();
-    fireEvent.click(overflow);
-
     expect(screen.queryByRole('button', { name: 'Show earlier activity' })).toBeNull();
     expect(screen.getByText('Context compacted')).toBeTruthy();
     expect(Math.abs(layout.offset(replyRow) - before)).toBeLessThanOrEqual(1);
@@ -1612,6 +1613,29 @@ describe('conversation surface', () => {
 });
 
 describe('tool-call and transition display', () => {
+  it('renders one earlier-activity control when the display cap hides distinct tool groups', () => {
+    let index: ToolCallIndex | undefined;
+    const names = ['Bash', 'Read', 'Grep', 'Edit', 'Search', 'Write'];
+    for (let seq = 1; seq <= names.length; seq++) {
+      const toolName = names[seq - 1];
+      const call: ToolCallRecord = { id: `group-${seq}`, seq, sessionKey: 'tool-groups', turnSeq: 1,
+        afterMessageSeq: 1, harnessToolCallId: `call-${seq}`, title: `${toolName} ${seq}`, kind: 'read', toolName,
+        status: 'completed', rawInput: null, rawOutput: null, content: null, truncated: [], startedAt: seq,
+        endedAt: seq + 1, rowVersion: 1 };
+      const group = putIndex(getIndex(index, call.afterMessageSeq), call.seq, call, call.startedAt);
+      index = putIndex(index, call.afterMessageSeq, group, group.maxTime);
+    }
+    const human = row('tool-groups', 'human', 'A question', { seq: 1, role: 'user', sender: 'user:person' });
+    const runtime = new FakeRuntime('tool-groups', { records: [human], toolCallsEnabled: true, toolCallIndex: index });
+    const view = render(<TightbeamChat sessionKey="tool-groups" adapter={adapterFor(runtime)} />);
+
+    expect(view.container.querySelectorAll('.tb-chat-activity-overflow')).toHaveLength(1);
+    expect(view.container.querySelectorAll('details.tb-chat-activity-line.tb-chat-activity-tool')).toHaveLength(5);
+    fireEvent.click(screen.getByRole('button', { name: 'Show earlier activity' }));
+    expect(view.container.querySelectorAll('.tb-chat-activity-overflow')).toHaveLength(0);
+    expect(view.container.querySelectorAll('details.tb-chat-activity-line.tb-chat-activity-tool')).toHaveLength(6);
+  });
+
   it('caps a large tool run and expands its retained details in place', () => {
     let inspected = 0;
     let index: ToolCallIndex | undefined;
@@ -1633,10 +1657,9 @@ describe('tool-call and transition display', () => {
     expect(inspected).toBeLessThan(100);
     expect(view.container.querySelectorAll('.tb-chat-activity-run.tb-chat-activity-tool')).toHaveLength(1);
     expect(view.container.querySelectorAll('details.tb-chat-activity-line.tb-chat-activity-tool')).toHaveLength(0);
-    const overflow = screen.getByRole('button', { name: 'Show earlier activity' });
-    overflow.focus();
-    fireEvent.click(overflow);
     const foldedRun = screen.getByRole('button', { name: /2000 entries\. Latest: Read source 2000/ });
+    foldedRun.focus();
+    expect(screen.queryByRole('button', { name: 'Show earlier activity' })).toBeNull();
     expect(foldedRun.getAttribute('aria-expanded')).toBe('false');
     fireEvent.click(foldedRun);
     expect(view.container.querySelectorAll('details.tb-chat-activity-line.tb-chat-activity-tool')).toHaveLength(2000);

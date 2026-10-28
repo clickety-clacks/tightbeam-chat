@@ -1156,6 +1156,9 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
   const renderItem = useCallback((item: TimelineItem) => {
         if (item.kind === 'tool') {
           const entry = activityPlan.toolItems.get(item.call.id);
+          // The earlier-activity control is indexed once in messageItems. Tool
+          // records hidden behind that control only point to it for filtering.
+          if (entry?.kind === 'overflow') return null;
           if (entry?.kind === 'fold') {
             if (entry.summary.call?.id !== item.call.id) return null;
             return <ActivityRunRow key={entry.id} entry={entry} expanded={expandedActivityRuns.has(entry.id)}

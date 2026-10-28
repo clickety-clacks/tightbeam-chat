@@ -192,9 +192,10 @@ function bubbleEvents(bubbles: readonly ActivityBubble[]): BubbleEvent[] {
   return events;
 }
 
-function lineWithRun(candidate: Candidate, runKey: string): ActivityLine {
+function lineWithRun(candidate: Candidate, runKey: string, includeToolDetails = true): ActivityLine {
   const { live: _live, liveTailEligibleAtArrival: _eligibleAtArrival, ...line } = candidate;
   if (candidate.kind === 'tool' && candidate.call) {
+    if (!includeToolDetails) return { ...line, runKey, gist: '', accessibleText: '' };
     const call = candidate.call;
     const title = call.title.trim() || call.toolName?.trim() || call.kind;
     const status = call.status === 'pending' || call.status === 'in_progress' ? 'running'
@@ -345,39 +346,59 @@ export function buildActivityTrail(input: {
     if (line.kind === 'tool' && line.call) toolItems.set(line.call.id, line);
     else messageItems.push(line);
   };
-  const addFold = (id: string, lines: readonly ActivityLine[]) => {
-    const summary = lines[lines.length - 1];
-    const fold: ActivityFold = {
-      kind: 'fold', id, runKey: lines[0].runKey, activityKind: lines[0].kind,
-      lines, summary, anchorSeq: summary.anchorSeq, position: summary.position, sortTime: summary.sortTime,
-    };
-    if (fold.activityKind === 'tool') {
-      for (const line of lines) if (line.call) toolItems.set(line.call.id, fold);
-    } else messageItems.push(fold);
+  const addCollapsedItem = (item: ActivityLine | ActivityFold) => {
+    if (item.kind === 'fold') {
+      if (item.activityKind === 'tool') {
+        for (const line of item.lines) if (line.call) toolItems.set(line.call.id, item);
+      } else messageItems.push(item);
+    } else addLine(item);
+  };
+
+  const addOverflow = (runKey: string, hiddenItems: readonly (ActivityLine | ActivityFold)[]) => {
+    const first = hiddenItems[0];
+    const firstLine = first.kind === 'fold' ? first.lines[0] : first;
+    const overflow: ActivityOverflow = { kind: 'overflow', id: `overflow:${runKey}`,
+      runKey, anchorSeq: firstLine.anchorSeq, position: firstLine.position, sortTime: firstLine.sortTime };
+    for (const item of hiddenItems) {
+      const lines = item.kind === 'fold' ? item.lines : [item];
+      for (const line of lines) {
+        if (line.kind === 'tool' && line.call) toolItems.set(line.call.id, overflow);
+      }
+    }
+    messageItems.push(overflow);
   };
 
   for (const [runKey, rows] of eligible) {
     rows.sort((left, right) => comparePosition(left.candidate.position, right.candidate.position));
     const foldGroupByCandidateId = new Map<string, string>();
+    const foldGroupCounts = new Map<string, number>();
+    const foldGroupIdentity = (candidate: Candidate) => candidate.kind === 'tool'
+      ? `${candidate.kind}:${candidate.call?.toolName?.trim() || candidate.call?.kind || ''}`
+      : candidate.kind;
     let previousRow: EligibleCandidate | undefined;
     let groupId = '';
     for (const row of rows) {
-      if (!previousRow || previousRow.segmentKey !== row.segmentKey || previousRow.candidate.kind !== row.candidate.kind ||
+      if (!previousRow || previousRow.segmentKey !== row.segmentKey ||
+        foldGroupIdentity(previousRow.candidate) !== foldGroupIdentity(row.candidate) ||
         hasTransitionBetween(previousRow.candidate.position.sequence, row.candidate.position.sequence) ||
         hasPendingSendBetween(previousRow.candidate.sortTime, row.candidate.sortTime)) {
         groupId = row.candidate.id;
       }
       foldGroupByCandidateId.set(row.candidate.id, groupId);
+      foldGroupCounts.set(groupId, (foldGroupCounts.get(groupId) ?? 0) + 1);
       previousRow = row;
     }
     const expanded = input.expandedRuns.has(runKey);
-    const hiddenCount = expanded ? 0 : Math.max(0, rows.length - 5);
-    const visibleRows = hiddenCount ? rows.slice(hiddenCount) : rows;
+    const collapsedItems: (ActivityLine | ActivityFold)[] = [];
     let currentLines: ActivityLine[] = [];
     let currentSegment: string | undefined;
     const flush = () => {
-      if (currentLines.length > 1) addFold(currentSegment!, currentLines);
-      else if (currentLines.length === 1) addLine(currentLines[0]);
+      if (currentLines.length > 1) {
+        const summary = currentLines[currentLines.length - 1];
+        collapsedItems.push({ kind: 'fold', id: currentSegment!, runKey: currentLines[0].runKey,
+          activityKind: currentLines[0].kind, lines: currentLines, summary,
+          anchorSeq: summary.anchorSeq, position: summary.position, sortTime: summary.sortTime });
+      } else if (currentLines.length === 1) collapsedItems.push(currentLines[0]);
       currentLines = [];
       currentSegment = undefined;
     };
@@ -386,18 +407,20 @@ export function buildActivityTrail(input: {
       if (!currentLines.length) currentSegment = foldGroupId;
       currentLines.push(line);
     };
-    if (hiddenCount) {
-      flush();
-      const hidden = rows[0].candidate;
-      const overflow: ActivityOverflow = { kind: 'overflow', id: `overflow:${runKey}`,
-        runKey, anchorSeq: hidden.anchorSeq, position: hidden.position, sortTime: hidden.sortTime };
-      if (hidden.kind === 'tool') toolItems.set(hidden.call!.id, overflow);
-      else messageItems.push(overflow);
-    }
-    for (const { candidate } of visibleRows) {
-      append(lineWithRun(candidate, runKey), foldGroupByCandidateId.get(candidate.id) ?? candidate.id);
+    for (let index = 0; index < rows.length; index++) {
+      const { candidate } = rows[index];
+      const candidateGroup = foldGroupByCandidateId.get(candidate.id) ?? candidate.id;
+      const nextGroup = rows[index + 1] && foldGroupByCandidateId.get(rows[index + 1].candidate.id);
+      const includeToolDetails = expanded || foldGroupCounts.get(candidateGroup) === 1 || nextGroup !== candidateGroup;
+      append(lineWithRun(candidate, runKey, includeToolDetails), candidateGroup);
     }
     flush();
+
+    // Fold first so a long homogeneous run remains one useful ×N entry. The
+    // five-item history cap applies to the displayed groups, not their rows.
+    const hiddenCount = expanded ? 0 : Math.max(0, collapsedItems.length - 5);
+    if (hiddenCount) addOverflow(runKey, collapsedItems.slice(0, hiddenCount));
+    for (const item of collapsedItems.slice(hiddenCount)) addCollapsedItem(item);
   }
   messageItems.sort((left, right) => left.anchorSeq - right.anchorSeq ||
     comparePosition(left.position, right.position) || left.id.localeCompare(right.id));
