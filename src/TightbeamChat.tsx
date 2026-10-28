@@ -741,18 +741,10 @@ function ActivityRunRow({ entry, expanded, toggle, registerRow, preservePosition
   readonly expandedToolCalls: ReadonlySet<string>;
   readonly setToolCallExpanded: (id: string, expanded: boolean) => void;
 }) {
-  const detailLines = entry.activityKind === 'tool' ? entry.lines : entry.lines.slice(0, -1);
+  const detailLines = entry.lines;
   return <div className={`tb-chat-activity-run tb-chat-activity-${entry.activityKind}`} tabIndex={-1}
     ref={element => registerRow(entry.id, element)} data-record-key={entry.id} data-scroll-key={entry.id}
     data-activity-run={entry.runKey} data-activity-fold="true" data-run-expanded={expanded ? 'true' : 'false'}>
-    {expanded && <div className="tb-chat-activity-run-rows">
-      {detailLines.map(line => line.kind === 'tool' && line.call
-        ? <ToolCallRow key={line.id} call={line.call} entry={line} registerRow={registerRow}
-          preservePosition={preservePosition} expandRun={expandHistoryRun}
-          expandedToolCalls={expandedToolCalls} setToolCallExpanded={setToolCallExpanded} />
-        : <ActivityMessageRow key={line.id} entry={line} registerRow={registerRow}
-          scrollKey={`activity-detail:${line.id}`} />)}
-    </div>}
     <button type="button" className={`tb-chat-activity-run-toggle tb-chat-activity-${entry.activityKind}`}
       aria-expanded={expanded}
       aria-label={`${expanded ? 'Collapse' : 'Expand'} ${entry.activityKind} activity run, ${entry.lines.length} entries. Latest: ${entry.summary.gist}`}
@@ -762,6 +754,14 @@ function ActivityRunRow({ entry, expanded, toggle, registerRow, preservePosition
       <span className="tb-chat-activity-gist">{entry.summary.gist}</span>
       <span className="tb-chat-activity-run-count" aria-hidden="true">×{entry.lines.length}</span>
     </button>
+    {expanded && <div className="tb-chat-activity-run-rows">
+      {detailLines.map(line => line.kind === 'tool' && line.call
+        ? <ToolCallRow key={line.id} call={line.call} entry={line} registerRow={registerRow}
+          preservePosition={preservePosition} expandRun={expandHistoryRun}
+          expandedToolCalls={expandedToolCalls} setToolCallExpanded={setToolCallExpanded} />
+        : <ActivityMessageRow key={line.id} entry={line} registerRow={registerRow}
+          scrollKey={`activity-detail:${line.id}`} />)}
+    </div>}
   </div>;
 }
 

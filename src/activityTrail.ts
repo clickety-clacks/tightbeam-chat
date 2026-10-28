@@ -63,6 +63,8 @@ export interface ActivityTrailPlan {
 interface Candidate extends ActivityLine {
   readonly live: boolean;
   readonly liveTailEligibleAtArrival: boolean;
+  /** Present only when the source text identifies a stable foldable notice kind. */
+  readonly semanticFoldKind?: string;
 }
 
 interface BubbleEvent extends Position {
@@ -87,6 +89,17 @@ type TrailEvent = BubbleEvent | CandidateEvent;
 const bodyGist = (body: string): string => body.split(/\r?\n/)
   .map((line) => line.replace(/\s+/g, ' ').trim())
   .find(Boolean) ?? '';
+
+function gatewayNoticeFoldKind(content: string): string | undefined {
+  const text = content.trimStart();
+  if (/^\[woke:\s*(?:wait|fact|fallback)\b/i.test(text) ||
+    /^Wait finished on its assignment\b/i.test(text)) return 'wake';
+  if (/\bhas had no recorded activity since\b/i.test(text) ||
+    /^Quiet for \d+\s+(?:s(?:ec(?:ond)?s?)?|min(?:ute)?s?|h(?:r|our)?s?|d(?:ay)?s?)\s*[·•]/i.test(text)) {
+    return 'reminder';
+  }
+  return undefined;
+}
 
 const rawDisplayName = (message: CanonicalMessage): string | undefined => {
   const value = message.raw.senderDisplayName;
@@ -113,7 +126,8 @@ function messageCandidate(message: CanonicalMessage, live: boolean, liveTailElig
     const gist = bodyGist(message.content) || 'Substrate activity';
     return { id, kind: 'substrate', runKey: '', anchorSeq: message.seq,
       position: { sequence: message.seq, phase: 1, order: 0 }, gist,
-      accessibleText: `Substrate: ${gist}`, sortTime, live, liveTailEligibleAtArrival };
+      accessibleText: `Substrate: ${gist}`, sortTime, live, liveTailEligibleAtArrival,
+      semanticFoldKind: gatewayNoticeFoldKind(message.content) };
   }
   if (message.messageType === 'agent' || sender.startsWith('agent:') || sender.startsWith('session:')) {
     const name = rawDisplayName(message) ?? 'Another agent';
@@ -143,7 +157,8 @@ function memberCandidate(carrier: CanonicalMessage, member: HumanMember, live: b
   if (member.sender.startsWith('process:')) {
     const gist = detail || 'Substrate activity';
     return { id, kind: 'substrate', runKey: '', anchorSeq: carrier.seq, position, gist,
-      accessibleText: `Substrate: ${gist}`, sortTime, live, liveTailEligibleAtArrival };
+      accessibleText: `Substrate: ${gist}`, sortTime, live, liveTailEligibleAtArrival,
+      semanticFoldKind: gatewayNoticeFoldKind(member.content) };
   }
   if (member.sender.startsWith('agent:') || member.sender.startsWith('session:')) {
     const gist = detail ? `Another agent — ${detail}` : 'Another agent';
@@ -193,7 +208,8 @@ function bubbleEvents(bubbles: readonly ActivityBubble[]): BubbleEvent[] {
 }
 
 function lineWithRun(candidate: Candidate, runKey: string, includeToolDetails = true): ActivityLine {
-  const { live: _live, liveTailEligibleAtArrival: _eligibleAtArrival, ...line } = candidate;
+  const { live: _live, liveTailEligibleAtArrival: _eligibleAtArrival,
+    semanticFoldKind: _semanticFoldKind, ...line } = candidate;
   if (candidate.kind === 'tool' && candidate.call) {
     if (!includeToolDetails) return { ...line, runKey, gist: '', accessibleText: '' };
     const call = candidate.call;
@@ -372,9 +388,17 @@ export function buildActivityTrail(input: {
     rows.sort((left, right) => comparePosition(left.candidate.position, right.candidate.position));
     const foldGroupByCandidateId = new Map<string, string>();
     const foldGroupCounts = new Map<string, number>();
-    const foldGroupIdentity = (candidate: Candidate) => candidate.kind === 'tool'
-      ? `${candidate.kind}:${candidate.call?.toolName?.trim() || candidate.call?.kind || ''}`
-      : candidate.kind;
+    const foldGroupIdentity = (candidate: Candidate) => {
+      if (candidate.kind === 'tool') {
+        const toolName = candidate.call?.toolName?.trim();
+        return toolName ? `tool:${toolName}` : `single:${candidate.id}`;
+      }
+      if (candidate.kind === 'agent') return 'agent';
+      if (candidate.kind === 'substrate' && candidate.semanticFoldKind) {
+        return `gateway:${candidate.semanticFoldKind}`;
+      }
+      return `single:${candidate.id}`;
+    };
     let previousRow: EligibleCandidate | undefined;
     let groupId = '';
     for (const row of rows) {

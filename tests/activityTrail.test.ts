@@ -50,35 +50,61 @@ const combined = (items: readonly MessageActivityItem[], tools: ReadonlyMap<stri
     left.position.phase - right.position.phase || left.position.order - right.position.order);
 
 describe('activity trail projection', () => {
-  it('folds consecutive substrate reminders and agent messages to the newest line, with bubbles ending each run', () => {
+  it('folds only clear same-kind reminders and wakes while leaving other notices unfolded', () => {
     const prompt = message('prompt', 1, 'user:person', 'A question', { role: 'user' });
-    const reminder1 = message('reminder-1', 2, 'process:events', '', { messageType: 'substrate' });
-    const reminder2 = message('reminder-2', 3, 'process:events', '  \n ', { messageType: 'substrate' });
-    const wake1 = message('wake-1', 4, 'agent:helper', 'Helper woke', { messageType: 'agent' });
-    const wake2 = message('wake-2', 5, 'agent:helper', 'Helper is working', { messageType: 'agent' });
-    const reply = message('reply', 6, 'assistant-service', 'Answer', { role: 'assistant' });
-    const laterReminder1 = message('later-reminder-1', 7, 'process:events', '', { messageType: 'substrate' });
-    const laterReminder2 = message('later-reminder-2', 8, 'process:events', '', { messageType: 'substrate' });
-    const plan = build({ records: [reminder1, reminder2, wake1, wake2, laterReminder1, laterReminder2],
+    const reminder1 = message('reminder-1', 2, 'process:events',
+      'Quiet for 3 h · Assignment Alpha', { messageType: 'substrate' });
+    const reminder2 = message('reminder-2', 3, 'process:events',
+      'Assignment Beta has had no recorded activity since this morning', { messageType: 'substrate' });
+    const wake1 = message('wake-1', 4, 'process:events',
+      '[woke: wait wake-one; assignment alpha; path after-turn]\n\nReview the first result', { messageType: 'substrate' });
+    const wake2 = message('wake-2', 5, 'process:events',
+      '[woke: fact wake-two; assignment beta; path success]\n\nReview the latest result', { messageType: 'substrate' });
+    const attest = message('attest', 6, 'process:events', 'Attest filed on the assignment', { messageType: 'substrate' });
+    const remedy = message('remedy', 7, 'remedy:review', 'Review requested changes');
+    const decision = message('decision', 8, 'process:events', 'Decision needs a response', { messageType: 'substrate' });
+    const refused = message('refused', 9, 'process:events', 'Completion needs a recorded verification first',
+      { messageType: 'substrate' });
+    const uncertain1 = message('uncertain-1', 10, 'process:events', 'Status changed for requested work',
+      { messageType: 'substrate' });
+    const uncertain2 = message('uncertain-2', 11, 'process:events', 'A helper is now available',
+      { messageType: 'substrate' });
+    const agent1 = message('agent-1', 12, 'agent:helper', 'Helper started', { messageType: 'agent' });
+    const agent2 = message('agent-2', 13, 'agent:helper', 'Helper finished', { messageType: 'agent' });
+    const reply = message('reply', 14, 'assistant-service', 'Answer', { role: 'assistant' });
+    const laterReminder1 = message('later-reminder-1', 15, 'process:events',
+      'Assignment Gamma has had no recorded activity since yesterday', { messageType: 'substrate' });
+    const laterReminder2 = message('later-reminder-2', 16, 'process:events',
+      'Quiet for 5 min · Assignment Delta', { messageType: 'substrate' });
+    const plan = build({ records: [reminder1, reminder2, wake1, wake2, attest, remedy, decision, refused,
+      uncertain1, uncertain2, agent1, agent2, laterReminder1, laterReminder2],
       bubbles: [bubble(prompt, 'human'), bubble(reply, 'agent')] });
 
     const folds = plan.messageItems.filter((item): item is ActivityFold => item.kind === 'fold');
-    expect(folds).toHaveLength(3);
+    expect(folds).toHaveLength(4);
     expect(folds.map(fold => fold.lines.map(line => line.id))).toEqual([
       ['message:reminder-1', 'message:reminder-2'],
       ['message:wake-1', 'message:wake-2'],
+      ['message:agent-1', 'message:agent-2'],
       ['message:later-reminder-1', 'message:later-reminder-2'],
     ]);
-    expect(folds.map(fold => fold.summary.gist)).toEqual([
-      'Substrate activity', 'Another agent — Helper is working', 'Substrate activity',
-    ]);
-    expect(folds[0].runKey).not.toBe(folds[2].runKey);
+    expect(folds[0].summary.gist).toBe(reminder2.content);
+    expect(folds[1].summary.id).toBe('message:wake-2');
+    expect(folds[2].summary.gist).toBe('Another agent — Helper finished');
+    expect(folds[3].runKey).not.toBe(folds[0].runKey);
+    expect(plan.messageItems.filter((item): item is ActivityLine => item.kind === 'substrate' || item.kind === 'rail')
+      .map(line => line.id)).toEqual([
+        'message:attest', 'message:remedy', 'message:decision', 'message:refused',
+        'message:uncertain-1', 'message:uncertain-2',
+      ]);
   });
 
   it('leaves same-kind activity lines separate when a transition falls between them', () => {
     const prompt = message('prompt', 1, 'user:person', 'A question', { role: 'user' });
-    const before = message('before-transition', 2, 'process:events', 'Before reset', { messageType: 'substrate' });
-    const after = message('after-transition', 4, 'process:events', 'After reset', { messageType: 'substrate' });
+    const before = message('before-transition', 2, 'process:events',
+      'Assignment Alpha has had no recorded activity since this morning', { messageType: 'substrate' });
+    const after = message('after-transition', 4, 'process:events',
+      'Assignment Beta has had no recorded activity since this morning', { messageType: 'substrate' });
     const reply = message('reply', 5, 'assistant-service', 'Answer', { role: 'assistant' });
     const transition: CanonicalTransition = { kind: 'transition', id: 'reset', sessionKey: 'session', seq: 3,
       rowVersion: 1, transition: 'restart', content: 'Context reset', raw: {} };
@@ -91,10 +117,10 @@ describe('activity trail projection', () => {
 
   it('ends a same-kind run at an unmatched local message bubble', () => {
     const prompt = message('prompt', 1, 'user:person', 'A question', { role: 'user' });
-    const before = message('before-send', 2, 'process:events', 'Before local message', {
+    const before = message('before-send', 2, 'process:events', 'Assignment Alpha has had no recorded activity since now', {
       messageType: 'substrate', createdAt: new Date(1_000).toISOString(),
     });
-    const after = message('after-send', 3, 'process:events', 'After local message', {
+    const after = message('after-send', 3, 'process:events', 'Assignment Beta has had no recorded activity since now', {
       messageType: 'substrate', createdAt: new Date(3_000).toISOString(),
     });
     const reply = message('reply', 4, 'assistant-service', 'Answer', { role: 'assistant' });
@@ -133,20 +159,21 @@ describe('activity trail projection', () => {
     const prompt = message('prompt', 1, 'user:person', 'A question', { role: 'user' });
     const reply = message('reply', 20, 'assistant-service', 'Answer', { role: 'assistant' });
     const reminders = Array.from({ length: 6 }, (_, index) => message(`reminder-${index + 1}`, index + 2,
-      'process:events', `Reminder ${index + 1}`, { messageType: 'substrate' }));
+      'process:events', `Assignment ${index + 1} has had no recorded activity since now`, { messageType: 'substrate' }));
     const bubbles = [bubble(prompt, 'human'), bubble(reply, 'agent')];
     const first = build({ records: reminders, bubbles });
     const firstFold = first.messageItems.find((item): item is ActivityFold => item.kind === 'fold')!;
     expect(firstFold.id).toBe('message:reminder-1');
     expect(firstFold.lines).toHaveLength(6);
-    expect(firstFold.summary.gist).toBe('Reminder 6');
+    expect(firstFold.summary.gist).toBe('Assignment 6 has had no recorded activity since now');
     expect(first.messageItems.some(item => item.kind === 'overflow')).toBe(false);
 
-    const later = message('reminder-7', 9, 'process:events', 'Reminder 7', { messageType: 'substrate' });
+    const later = message('reminder-7', 9, 'process:events',
+      'Assignment 7 has had no recorded activity since now', { messageType: 'substrate' });
     const next = build({ records: [...reminders, later], bubbles, shownRuns: first.membership });
     const nextFold = next.messageItems.find((item): item is ActivityFold => item.kind === 'fold')!;
     expect(nextFold.id).toBe(firstFold.id);
-    expect(nextFold.summary.gist).toBe('Reminder 7');
+    expect(nextFold.summary.gist).toBe('Assignment 7 has had no recorded activity since now');
     expect(nextFold.lines).toHaveLength(7);
     expect(next.messageItems.some(item => item.kind === 'overflow')).toBe(false);
   });
@@ -182,7 +209,7 @@ describe('activity trail projection', () => {
     const firstReply = message('reply-one', 4, 'assistant-service', 'First answer', { role: 'assistant' });
     const secondReply = message('reply-two', 14, 'assistant-service', 'Second answer', { role: 'assistant' });
     const initial = Array.from({ length: 10 }, (_, index) => message(`activity-${index + 1}`, index + 2,
-      'process:work', `Activity ${index + 1}`, { messageType: 'substrate' }));
+      'process:work', `Assignment ${index + 1} has had no recorded activity since now`, { messageType: 'substrate' }));
     const bubbles = [bubble(prompt, 'human'), bubble(firstReply, 'agent'), bubble(secondReply, 'agent')];
     const firstPlan = build({ records: initial, bubbles });
     const firstRun = 'run:prompt';
@@ -192,9 +219,8 @@ describe('activity trail projection', () => {
     expect((runItems(firstRun)[0] as ActivityFold).lines).toHaveLength(2);
     expect(runItems(secondRun).filter(item => item.kind === 'overflow')).toHaveLength(0);
     const secondFold = runItems(secondRun).find((item): item is ActivityFold => item.kind === 'fold')!;
-    expect(secondFold.lines.map(item => item.gist)).toEqual([
-      'Activity 3', 'Activity 4', 'Activity 5', 'Activity 6', 'Activity 7', 'Activity 8', 'Activity 9', 'Activity 10',
-    ]);
+    expect(secondFold.lines.map(item => item.gist)).toEqual(Array.from({ length: 8 }, (_, index) =>
+      `Assignment ${index + 3} has had no recorded activity since now`));
 
     const expanded = build({ records: initial, bubbles, shownRuns: firstPlan.membership,
       expandedRuns: new Set([secondRun]) });
@@ -203,7 +229,8 @@ describe('activity trail projection', () => {
     expect((expanded.messageItems.find(item => item.runKey === secondRun) as ActivityFold).lines).toHaveLength(8);
     expect(expanded.messageItems.some(item => item.kind === 'overflow' && item.runKey === secondRun)).toBe(false);
 
-    const later = [...initial, message('activity-11', 12, 'process:work', 'Activity 11', { messageType: 'substrate' })];
+    const later = [...initial, message('activity-11', 12, 'process:work',
+      'Assignment 11 has had no recorded activity since now', { messageType: 'substrate' })];
     const withLater = build({ records: later, bubbles, shownRuns: expanded.membership,
       expandedRuns: new Set([secondRun]) });
     expect((withLater.messageItems.find(item => item.runKey === secondRun) as ActivityFold).lines).toHaveLength(9);

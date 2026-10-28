@@ -838,7 +838,8 @@ describe('conversation surface', () => {
     const question = row(sessionKey, 'question-1', 'Question 1', {
       seq: 1, role: 'user', sender: 'user:person', messageType: 'chat', turnSeq: 1,
     });
-    const activity = [1, 2, 3, 4, 5, 6].map((index) => row(sessionKey, `reminder-${index}`, `Background activity ${index}`, {
+    const activity = [1, 2, 3, 4, 5, 6].map((index) => row(sessionKey, `reminder-${index}`,
+      `Quiet for ${index} min · Background activity ${index}`, {
       seq: index + 1, role: 'user', sender: 'process:events', messageType: 'substrate',
     }));
     const firstReply = row(sessionKey, 'reply-1', 'Idle answer 1', {
@@ -872,39 +873,43 @@ describe('conversation surface', () => {
       const anchorBefore = layout.offset(anchor);
       expect(anchorBefore).toBeCloseTo(120, 0);
 
-      let toggle = screen.getByRole('button', { name: /6 entries\. Latest: Background activity 6/ });
+      let toggle = screen.getByRole('button', { name: /6 entries\. Latest: Quiet for .*Background activity 6/ });
       expect(toggle.textContent).toContain('×6');
       expect(screen.queryByRole('button', { name: 'Show earlier activity' })).toBeNull();
       expect(toggle.getAttribute('aria-expanded')).toBe('false');
       fireEvent.click(toggle);
-      toggle = screen.getByRole('button', { name: /6 entries\. Latest: Background activity 6/ });
+      toggle = screen.getByRole('button', { name: /6 entries\. Latest: Quiet for .*Background activity 6/ });
       expect(toggle.getAttribute('aria-expanded')).toBe('true');
       expect(screen.getAllByRole('note').map(note => note.textContent)).toEqual([
-        'Background activity 1', 'Background activity 2', 'Background activity 3',
-        'Background activity 4', 'Background activity 5',
+        'Quiet for 1 min · Background activity 1', 'Quiet for 2 min · Background activity 2',
+        'Quiet for 3 min · Background activity 3', 'Quiet for 4 min · Background activity 4',
+        'Quiet for 5 min · Background activity 5', 'Quiet for 6 min · Background activity 6',
       ]);
+      const expandedRun = toggle.closest<HTMLElement>('.tb-chat-activity-run')!;
+      expect(expandedRun.firstElementChild).toBe(toggle);
+      expect(expandedRun.lastElementChild?.classList.contains('tb-chat-activity-run-rows')).toBe(true);
       expect(layout.offset(anchor)).toBeCloseTo(anchorBefore, 0);
 
-      const incoming = row(sessionKey, 'reminder-4', 'Background activity 4', {
+      const incoming = row(sessionKey, 'reminder-4', 'Quiet for 7 min · Background activity 4', {
         seq: 8, role: 'user', sender: 'process:events', messageType: 'substrate',
       });
       records = [question, ...activity, incoming, firstReply, ...laterMessages];
       act(() => runtime.update({ records }));
-      toggle = screen.getByRole('button', { name: /7 entries\. Latest: Background activity 4/ });
+      toggle = screen.getByRole('button', { name: /7 entries\. Latest: Quiet for 7 min .*Background activity 4/ });
       expect(toggle.getAttribute('aria-expanded')).toBe('true');
       expect(layout.offset(anchor)).toBeCloseTo(anchorBefore, 0);
 
       fireEvent.click(toggle);
-      toggle = screen.getByRole('button', { name: /7 entries\. Latest: Background activity 4/ });
+      toggle = screen.getByRole('button', { name: /7 entries\. Latest: Quiet for 7 min .*Background activity 4/ });
       expect(toggle.getAttribute('aria-expanded')).toBe('false');
       expect(layout.offset(anchor)).toBeCloseTo(anchorBefore, 0);
 
-      const finalReminder = row(sessionKey, 'reminder-5', 'Background activity 5', {
+      const finalReminder = row(sessionKey, 'reminder-5', 'Quiet for 8 min · Background activity 5', {
         seq: 9, role: 'user', sender: 'process:events', messageType: 'substrate',
       });
       records = [question, ...activity, incoming, finalReminder, firstReply, ...laterMessages];
       act(() => runtime.update({ records }));
-      toggle = screen.getByRole('button', { name: /8 entries\. Latest: Background activity 5/ });
+      toggle = screen.getByRole('button', { name: /8 entries\. Latest: Quiet for 8 min .*Background activity 5/ });
       expect(toggle.getAttribute('aria-expanded')).toBe('false');
       expect(layout.offset(anchor)).toBeCloseTo(anchorBefore, 0);
     } finally {
@@ -916,7 +921,8 @@ describe('conversation surface', () => {
     const sessionKey = 'activity-expansion';
     const prompt = row(sessionKey, 'prompt', 'Question', { role: 'user', sender: 'user:person', seq: 1, turnSeq: 1 });
     const activity = Array.from({ length: 8 }, (_, index) => row(sessionKey, `notice-${index + 1}`,
-      `Background event ${index + 1}`, { role: 'user', sender: 'process:events', messageType: 'substrate', seq: index + 2 }));
+      `Quiet for ${index + 1} min · Background event ${index + 1}`,
+      { role: 'user', sender: 'process:events', messageType: 'substrate', seq: index + 2 }));
     const boundary: ConversationRecord = { kind: 'transition', id: 'boundary', seq: 6, rowVersion: 1,
       sessionKey, transition: 'compaction', content: 'Context compacted', raw: {} };
     const reply = row(sessionKey, 'reply', 'Answer', { role: 'assistant', sender: 'assistant-service',
@@ -940,19 +946,20 @@ describe('conversation surface', () => {
     expect(composer.value).toBe('Unsent draft');
     expect([composer.selectionStart, composer.selectionEnd]).toEqual([2, 6]);
 
-    const laterRun = screen.getByRole('button', { name: /4 entries\. Latest: Background event 8/ });
+    const laterRun = screen.getByRole('button', { name: /4 entries\. Latest: Quiet for 8 min .*Background event 8/ });
     fireEvent.click(laterRun);
     expect(laterRun.getAttribute('aria-expanded')).toBe('true');
-    expect(screen.getAllByRole('note')).toHaveLength(3);
+    expect(screen.getAllByRole('note')).toHaveLength(4);
     expect(Math.abs(layout.offset(replyRow) - before)).toBeLessThanOrEqual(1);
 
     const later = row(sessionKey, 'notice-later', 'A later background event', {
       role: 'user', sender: 'process:events', messageType: 'substrate', seq: 15,
     });
-    act(() => runtime.update({ records: [prompt, ...activity, boundary, later, reply] }));
-    const updatedRun = screen.getByRole('button', { name: /5 entries\. Latest: A later background event/ });
+    const laterReminder = { ...later, content: 'Quiet for 9 min · A later background event' };
+    act(() => runtime.update({ records: [prompt, ...activity, boundary, laterReminder, reply] }));
+    const updatedRun = screen.getByRole('button', { name: /5 entries\. Latest: Quiet for 9 min .*A later background event/ });
     expect(updatedRun.getAttribute('aria-expanded')).toBe('true');
-    expect(screen.getAllByRole('note')).toHaveLength(4);
+    expect(screen.getAllByRole('note')).toHaveLength(5);
     expect(screen.queryByRole('button', { name: 'Show earlier activity' })).toBeNull();
     expect(Math.abs(layout.offset(replyRow) - before)).toBeLessThanOrEqual(1);
     expect(composer.value).toBe('Unsent draft');
