@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.38",
+    "items": [
+      {
+        "title": "Conversation stability",
+        "description": "Idle conversations stay visually still. When live updates reconnect, Chat catches up from the newest message it already has instead of reloading settled history."
+      }
+    ]
+  },
+  {
     "version": "v0.1.37",
     "items": [
       {
