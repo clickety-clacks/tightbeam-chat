@@ -1,5 +1,18 @@
 [
   {
+    "version": "v0.1.40",
+    "items": [
+      {
+        "title": "Conversation activity",
+        "description": "Activity between prompts and replies appears in compact lines, with details you can expand."
+      },
+      {
+        "title": "Context changes",
+        "description": "Context resets and changes to assistant settings have clearer markers that are easy to distinguish from messages."
+      }
+    ]
+  },
+  {
     "version": "v0.1.39",
     "items": [
       {
