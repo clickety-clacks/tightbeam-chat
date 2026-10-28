@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.43",
+    "items": [
+      {
+        "title": "Reconnect without losing your place",
+        "description": "Apps that embed Chat can show live-update status and reconnect without reloading the conversation or losing your reading position."
+      }
+    ]
+  },
+  {
     "version": "v0.1.42",
     "items": [
       {
