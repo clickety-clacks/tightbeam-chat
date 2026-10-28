@@ -186,7 +186,7 @@ function selectedGatewayOrigin(searchParams, defaultGatewayOrigin) {
   return values.length === 0 ? defaultGatewayOrigin : canonicalOrigin(values[0]);
 }
 
-function parseServiceHttpTarget(rawUrl, runtime) {
+export function parseServiceHttpTarget(rawUrl, runtime) {
   try {
     const request = new URL(rawUrl, 'http://chat-service.invalid');
     if (request.origin !== 'http://chat-service.invalid') return undefined;
