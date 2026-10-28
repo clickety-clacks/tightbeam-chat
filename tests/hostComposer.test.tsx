@@ -137,6 +137,11 @@ function readyEvent(events: readonly HostComposerEvent[], sessionKey: string) {
     event.event === 'ready' && event.sessionKey === sessionKey);
 }
 
+function connectionEvents(events: readonly HostComposerEvent[]) {
+  return events.filter((event): event is Extract<HostComposerEvent, { event: 'connection' }> =>
+    event.event === 'connection');
+}
+
 async function waitForReady(events: readonly HostComposerEvent[], sessionKey: string) {
   await waitFor(() => expect(readyEvent(events, sessionKey)).toBeDefined());
   return readyEvent(events, sessionKey)!;
@@ -200,6 +205,11 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     await screen.findByRole('textbox');
     expect(screen.queryByRole('button', { name: /Connection status/ })).toBeNull();
     expect(events.some((event) => event.event === 'ready')).toBe(false);
+    const openCount = transport.changeOpenCount;
+    const eventCount = events.length;
+    act(() => commandEntry()({ type: 'reconnect', lifetimeId: 'not-ready', sessionKey: 'conversation-a' }));
+    expect(transport.changeOpenCount).toBe(openCount);
+    expect(events).toHaveLength(eventCount);
     await act(async () => { readGate.resolve(); });
 
     const ready = await waitForReady(events, 'conversation-a');
@@ -207,14 +217,18 @@ describe('versioned host composer seam on the real adapter and surface', () => {
       'agentDisplayName', 'capabilities', 'event', 'gatewayOrigin', 'lifetimeId', 'sessionKey', 'version',
     ].sort());
     expect(ready).toMatchObject({ version: 1, gatewayOrigin: 'https://gateway.example:8443',
-      sessionKey: 'conversation-a', capabilities: { text: true } });
+      sessionKey: 'conversation-a', capabilities: { text: true, reconnect: true } });
     expect('attachments' in ready.capabilities).toBe(false);
     await waitFor(() => expect(screen.queryByRole('textbox')).toBeNull());
     expect(screen.queryByRole('button', { name: /Connection status/ })).toBeNull();
     expect(document.querySelector('.tb-chat-host-composer-hidden .tb-chat-viewport')).not.toBeNull();
     expect(events.filter((event) => event.event === 'ready')).toHaveLength(1);
+    expect(events.slice(-2).map((event) => event.event)).toEqual(['ready', 'connection']);
+    expect(events.at(-1)).toMatchObject({ event: 'connection', state: 'reconnecting', lifetimeId: ready.lifetimeId });
     await act(async () => { transport.readyGate?.resolve(); });
     expect(events.filter((event) => event.event === 'ready')).toHaveLength(1);
+    await waitFor(() => expect(connectionEvents(events).map((event) => event.state))
+      .toEqual(['reconnecting', 'connected']));
   });
 
   it('leaves keyboard navigation to the host after native-composer opt-in', async () => {
@@ -588,8 +602,10 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     await waitFor(() => expect(events.some((event) => event.event === 'overlay' &&
       event.lifetimeId === ready.lifetimeId && event.open)).toBe(true));
     const readyIndex = events.findIndex((event) => event.event === 'ready' && event.lifetimeId === ready.lifetimeId);
+    const connectionIndex = events.findIndex((event) => event.event === 'connection' && event.lifetimeId === ready.lifetimeId);
     const overlayOpenIndex = events.findIndex((event) => event.event === 'overlay' && event.lifetimeId === ready.lifetimeId && event.open);
-    expect(overlayOpenIndex).toBeGreaterThan(readyIndex);
+    expect(connectionIndex).toBe(readyIndex + 1);
+    expect(overlayOpenIndex).toBe(connectionIndex + 1);
 
     fireEvent.keyDown(document, { key: 'Escape' });
     await waitFor(() => expect(events.some((event) => event.event === 'overlay' &&
@@ -638,6 +654,9 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     const first = await waitForReady(events, 'conversation-a');
 
     act(() => transport.callbacks.get('conversation-a')?.onDoubt('connection closed'));
+    act(() => commandEntry()({ type: 'reconnect', lifetimeId: first.lifetimeId, sessionKey: first.sessionKey }));
+    expect(events.some((event) => event.event === 'connection' && event.state === 'reconnecting' &&
+      event.lifetimeId === first.lifetimeId)).toBe(true);
     expect(screen.queryByRole('button', { name: 'Reconnect' })).toBeNull();
     expect(events.filter((event) => event.event === 'ready' && event.lifetimeId === first.lifetimeId)).toHaveLength(1);
     expect(events.some((event) => event.event === 'unavailable' && event.lifetimeId === first.lifetimeId)).toBe(false);
@@ -660,6 +679,79 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     await screen.findByText(reply.content);
     expect(events.filter((event) => event.event === 'ready')).toHaveLength(1);
     expect(readyEvent(events, 'conversation-a')?.lifetimeId).toBe(first.lifetimeId);
+  });
+
+  it('reconnects the live feed in place and preserves the newest view and an older reading anchor', async () => {
+    const events: HostComposerEvent[] = [];
+    const sessionKey = 'reconnect-in-place';
+    const transport = new HostComposerTransport();
+    const history = Array.from({ length: 8 }, (_, index): CanonicalMessage => ({
+      kind: 'message', id: `history-${index + 1}`, sessionKey, seq: index + 1, rowVersion: 1,
+      role: 'user', sender: 'user:person', messageType: 'chat', content: `Earlier message ${index + 1}`, raw: {},
+    }));
+    transport.records.set(sessionKey, history);
+    installDeclaration(events);
+    const { runtimes } = openChat(transport, sessionKey);
+    const ready = await waitForReady(events, sessionKey);
+    const viewport = screen.getByRole('log');
+    const layout = installSubmitViewportLayout(viewport);
+    const reconnect = async () => {
+      const openedBefore = transport.changeOpenCount;
+      const connectedBefore = events.filter((event) => event.event === 'connection' &&
+        event.state === 'connected' && event.lifetimeId === ready.lifetimeId).length;
+      act(() => {
+        transport.callbacks.get(sessionKey)?.onDoubt('live feed dropped');
+        commandEntry()({ type: 'reconnect', lifetimeId: ready.lifetimeId, sessionKey: ready.sessionKey });
+      });
+      expect(transport.changeOpenCount).toBe(openedBefore + 1);
+      await waitFor(() => expect(runtimes[0].getSnapshot().liveError).toBeUndefined());
+      await waitFor(() => expect(events.filter((event) => event.event === 'connection' &&
+        event.state === 'connected' && event.lifetimeId === ready.lifetimeId).length).toBe(connectedBefore + 1));
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 300)); });
+      expect(transport.changeOpenCount).toBe(openedBefore + 1);
+    };
+
+    try {
+      expect(connectionEvents(events).map((event) => event.state)).toEqual(['connected']);
+      const openCount = transport.changeOpenCount;
+      const eventCount = events.length;
+      act(() => {
+        commandEntry()({ type: 'reconnect', lifetimeId: ready.lifetimeId, sessionKey: ready.sessionKey });
+        commandEntry()({ type: 'reconnect', lifetimeId: 'old-lifetime', sessionKey: ready.sessionKey });
+        commandEntry()({ type: 'reconnect', lifetimeId: ready.lifetimeId, sessionKey: 'other-session' });
+      });
+      expect(transport.changeOpenCount).toBe(openCount);
+      expect(events).toHaveLength(eventCount);
+
+      layout.setScrollTop(viewport.scrollHeight - viewport.clientHeight);
+      fireEvent.scroll(viewport);
+      const newest = screen.getByText('Earlier message 8').closest('article')!;
+      const newestBefore = layout.offset(newest);
+      expect(newestBefore).toBeGreaterThanOrEqual(0);
+      expect(newestBefore + 80).toBeLessThanOrEqual(viewport.clientHeight);
+      await reconnect();
+      expect(Math.abs(layout.offset(newest) - newestBefore)).toBeLessThanOrEqual(1);
+
+      fireEvent.wheel(viewport, { deltaY: -100 });
+      layout.setScrollTop(220);
+      fireEvent.scroll(viewport);
+      const anchor = screen.getByText('Earlier message 4').closest('article')!;
+      const anchorBefore = layout.offset(anchor);
+      expect(anchorBefore).toBeGreaterThanOrEqual(0);
+      expect(anchorBefore).toBeLessThan(viewport.clientHeight);
+      await reconnect();
+
+      expect(Math.abs(layout.offset(anchor) - anchorBefore)).toBeLessThanOrEqual(1);
+      for (const record of history) expect(screen.getByText(record.content)).toBeTruthy();
+      expect(runtimes[0].getSnapshot().records.map((record) => record.id)).toEqual(history.map((record) => record.id));
+      expect(events.filter((event) => event.event === 'ready' && event.lifetimeId === ready.lifetimeId)).toHaveLength(1);
+      expect(events.some((event) => event.event === 'unavailable' && event.lifetimeId === ready.lifetimeId)).toBe(false);
+      expect(events.some((event) => event.event === 'lifetime-ended' && event.lifetimeId === ready.lifetimeId)).toBe(false);
+      expect(connectionEvents(events).filter((event) => event.lifetimeId === ready.lifetimeId)
+        .map((event) => event.state)).toEqual(['connected', 'reconnecting', 'connected', 'reconnecting', 'connected']);
+    } finally {
+      layout.restore();
+    }
   });
 
   it('keeps the built-in composer live through reconnect and renders the human and agent rows without reload', async () => {
@@ -845,6 +937,11 @@ describe('versioned host composer seam on the real adapter and surface', () => {
       correlationId: correlation, content: 'authorization expired during send' }));
     await waitFor(() => expect(events.some((event) => event.event === 'unavailable' &&
       event.reason === 'unauthorized' && event.lifetimeId === ready.lifetimeId)).toBe(true));
+    const openCount = transport.changeOpenCount;
+    const eventCount = events.length;
+    act(() => commandEntry()({ type: 'reconnect', lifetimeId: ready.lifetimeId, sessionKey: ready.sessionKey }));
+    expect(transport.changeOpenCount).toBe(openCount);
+    expect(events).toHaveLength(eventCount);
     expect(events.find((event) => event.event === 'failed' && event.correlationId === correlation))
       .toMatchObject({ reason: 'refused', detail: 'unauthorized' });
     expect(events.filter((event) => event.event === 'unavailable')).toHaveLength(1);

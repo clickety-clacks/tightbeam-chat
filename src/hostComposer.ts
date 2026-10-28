@@ -5,10 +5,14 @@ import { isSettingsCommand } from './settingsCommand';
 export const HOST_DECLARATION_NAME = '__TIGHTBEAM_CHAT_HOST__';
 export const HOST_COMMAND_NAME = '__TIGHTBEAM_CHAT_COMMAND__';
 
+export type HostConnectionState = 'connected' | 'reconnecting' | 'disconnected';
+
 export type HostComposerEvent =
   | { readonly event: 'declined'; readonly reason: 'malformed-declaration' | 'unsupported-version' }
   | { readonly event: 'ready'; readonly version: 1; readonly lifetimeId: string; readonly sessionKey: string;
-      readonly gatewayOrigin: string; readonly agentDisplayName: string; readonly capabilities: { readonly text: true } }
+      readonly gatewayOrigin: string; readonly agentDisplayName: string;
+      readonly capabilities: { readonly text: true; readonly reconnect: true } }
+  | { readonly event: 'connection'; readonly version: 1; readonly lifetimeId: string; readonly state: HostConnectionState }
   | { readonly event: 'unavailable'; readonly version: 1; readonly lifetimeId: string; readonly reason: string }
   | { readonly event: 'overlay'; readonly version: 1; readonly lifetimeId: string; readonly open: boolean }
   | { readonly event: 'lifetime-ended'; readonly version: 1; readonly lifetimeId: string;
@@ -28,7 +32,7 @@ export interface HostComposerDeclaration {
   readonly onEvent: (event: HostComposerEvent) => void;
 }
 
-export interface HostComposerCommand {
+export interface HostComposerSendCommand {
   readonly type: 'send';
   readonly lifetimeId: unknown;
   readonly sessionKey: unknown;
@@ -37,6 +41,13 @@ export interface HostComposerCommand {
   readonly retry?: unknown;
 }
 
+export interface HostComposerReconnectCommand {
+  readonly type: 'reconnect';
+  readonly lifetimeId: unknown;
+  readonly sessionKey: unknown;
+}
+
+export type HostComposerCommand = HostComposerSendCommand | HostComposerReconnectCommand;
 export type HostComposerCommandEntry = (command: HostComposerCommand) => void;
 
 export interface HostComposerSnapshot {
@@ -61,6 +72,8 @@ interface Lifetime {
   readonly sessionKey: string;
   readonly attempts: Map<string, Attempt>;
   ready: boolean;
+  hasBeenReady: boolean;
+  connectionState?: HostConnectionState;
   unavailableReason?: string;
   unsubscribe: () => void;
 }
@@ -79,6 +92,12 @@ function runtimeUnavailableReason(state: RuntimeState): string | undefined {
   if (state.sessionNotFound) return 'session-not-found';
   if (state.status === 'unauthorized') return 'unauthorized';
   return undefined;
+}
+
+function liveFeedState(state: RuntimeState): HostConnectionState {
+  if (state.status === 'ready') return state.liveError ? 'reconnecting' : 'connected';
+  if (state.status === 'loading' || state.status === 'stale') return 'reconnecting';
+  return 'disconnected';
 }
 
 function errorSafeEmit(handler: (event: HostComposerEvent) => void, event: HostComposerEvent): void {
@@ -185,6 +204,7 @@ export class HostComposerBridge {
       sessionKey: runtime.getSnapshot().sessionKey,
       attempts: new Map(),
       ready: false,
+      hasBeenReady: false,
       unavailableReason: undefined,
       unsubscribe: () => {},
     };
@@ -225,16 +245,8 @@ export class HostComposerBridge {
       this.detach('identity-changed');
       return;
     }
-    if (state.sessionNotFound) {
-      this.markUnavailable(lifetime, 'session-not-found');
-      return;
-    }
     const unavailableReason = runtimeUnavailableReason(state);
-    if (unavailableReason) {
-      this.markUnavailable(lifetime, unavailableReason);
-      return;
-    }
-    if (state.status === 'ready') {
+    if (state.status === 'ready' && !unavailableReason) {
       lifetime.unavailableReason = undefined;
       if (!lifetime.ready) {
         const gatewayOrigin = this.gatewayOrigin(state.targetGateway);
@@ -243,8 +255,10 @@ export class HostComposerBridge {
         this.emit({
           event: 'ready', version: 1, lifetimeId: lifetime.lifetimeId, sessionKey: lifetime.sessionKey,
           gatewayOrigin, agentDisplayName: state.agentDisplayName ?? state.session?.displayName ?? '',
-          capabilities: Object.freeze({ text: true }),
+          capabilities: Object.freeze({ text: true, reconnect: true }),
         });
+        lifetime.hasBeenReady = true;
+        this.emitConnection(lifetime, state, true);
         if (this.overlayOpen) {
           this.reportedOverlayOpen = true;
           this.emit({ event: 'overlay', version: 1, lifetimeId: lifetime.lifetimeId, open: true });
@@ -259,11 +273,24 @@ export class HostComposerBridge {
         for (const attempt of lifetime.attempts.values()) {
           if (attempt.accepted && state.generation > attempt.lastCheckedGeneration) this.checkAccepted(lifetime, attempt, state.generation);
         }
-      }
+      } else this.emitConnection(lifetime, state);
+      return;
+    }
+    this.emitConnection(lifetime, state);
+    if (unavailableReason) {
+      this.markUnavailable(lifetime, unavailableReason);
       return;
     }
     // A live-feed or snapshot-status change alone does not refuse host sending.
     // Only authorization/session loss or an actual rejected send invalidates it.
+  }
+
+  private emitConnection(lifetime: Lifetime, state: RuntimeState, force = false): void {
+    if (!lifetime.hasBeenReady) return;
+    const next = liveFeedState(state);
+    if (!force && lifetime.connectionState === next) return;
+    lifetime.connectionState = next;
+    this.emit({ event: 'connection', version: 1, lifetimeId: lifetime.lifetimeId, state: next });
   }
 
   setOverlayOpen(open: boolean): void {
@@ -283,7 +310,20 @@ export class HostComposerBridge {
   }
 
   private receive(command: HostComposerCommand): void {
-    if (this.disposed || !isObject(command) || command.type !== 'send') return;
+    if (this.disposed || !isObject(command)) return;
+    if (command.type === 'reconnect') {
+      const lifetime = this.current;
+      if (!lifetime?.ready) return;
+      const state = lifetime.runtime.getSnapshot();
+      if (command.lifetimeId !== lifetime.lifetimeId || command.sessionKey !== lifetime.sessionKey ||
+          state.sessionKey !== lifetime.sessionKey || state.identityChanged || runtimeUnavailableReason(state)) return;
+      if (liveFeedState(state) === 'connected') return;
+      // Explicit recovery supersedes a scheduled retry while keeping this runtime
+      // and its retained transcript in place. Send attempts are owned separately.
+      void lifetime.runtime.rebuild({ restart: true });
+      return;
+    }
+    if (command.type !== 'send') return;
     const correlationId = command.correlationId;
     const reject = (reason: Extract<HostComposerEvent, { event: 'rejected' }>['reason']) => {
       this.emit({ event: 'rejected', lifetimeId: command.lifetimeId, correlationId, reason });

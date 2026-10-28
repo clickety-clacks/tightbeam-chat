@@ -1060,7 +1060,6 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
     : state.conversationError ? `Conversation history could not be loaded: ${state.conversationError}`
       : state.sessionError ? `Some conversation details are unavailable: ${state.sessionError}`
         : undefined;
-  const showHostReconnect = host.optedIn && state.status === 'error';
 
   const renderItem = useCallback((item: TimelineItem) => {
         if (item.kind === 'tool') return <ToolCallRow key={'tool-' + item.call.id} call={item.call}
@@ -1130,13 +1129,13 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
       onPointerDown={reading.interrupt} onPointerMove={(event) => { if (event.buttons !== 0) reading.noteUserScroll(); }}
       onKeyDown={(event) => { if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) { reading.interrupt(); reading.noteUserScroll(); } }}
       aria-label={`${agentName || 'Conversation'} messages`} aria-live="polite" aria-relevant="additions text">
-      {(state.loadingOlder || state.historyError || localNotice || showHostReconnect) && <div className={`tb-chat-runtime-notice ${state.loadingOlder ? 'tb-chat-history-loading ' : ''} tb-chat-caption ${state.historyError || state.sessionNotFound || state.sessionError || state.conversationError || state.status === 'unauthorized' || state.status === 'unsupported'
+      {(state.loadingOlder || state.historyError || localNotice) && <div className={`tb-chat-runtime-notice ${state.loadingOlder ? 'tb-chat-history-loading ' : ''} tb-chat-caption ${state.historyError || state.sessionNotFound || state.sessionError || state.conversationError || state.status === 'unauthorized' || state.status === 'unsupported'
         ? 'tb-chat-caption-danger' : 'tb-chat-caption-neutral'}`} role={state.historyError || state.sessionNotFound || state.conversationError || state.sessionError || state.status === 'unauthorized' || state.status === 'unsupported' ? 'alert' : 'status'}>
         <span className="tb-chat-caption-body">
           {(state.loadingOlder || state.historyError || localNotice) && <span>{state.loadingOlder ? 'Loading earlier messages…'
             : state.historyError ? `Earlier messages could not be loaded: ${state.historyError}` : localNotice}</span>}
           {state.historyError && <button type="button" onClick={loadOlder}>Retry loading messages</button>}
-          {(state.sessionNotFound || state.sessionError || state.conversationError || showHostReconnect) &&
+          {(state.sessionNotFound || state.sessionError || state.conversationError) &&
             <button type="button" onClick={() => void runtime.rebuild({ restart: true })}>Reconnect</button>}
         </span>
       </div>}

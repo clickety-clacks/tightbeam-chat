@@ -32,7 +32,7 @@ After the selected-session subscription is established and canonical history has
   sessionKey: 'selected-session-key',
   gatewayOrigin: 'https://gateway.example',
   agentDisplayName: 'Selected agent',
-  capabilities: { text: true },
+  capabilities: { text: true, reconnect: true },
 }
 ```
 
@@ -42,6 +42,8 @@ Chat sends these lifetime events:
 
 ```ts
 { event: 'declined', reason: 'unsupported-version' | 'malformed-declaration' }
+{ event: 'connection', version: 1, lifetimeId,
+  state: 'connected' | 'reconnecting' | 'disconnected' }
 { event: 'unavailable', version: 1, lifetimeId, reason }
 { event: 'overlay', version: 1, lifetimeId, open }
 { event: 'lifetime-ended', version: 1, lifetimeId,
@@ -51,6 +53,20 @@ Chat sends these lifetime events:
 The HTML composer stays visible until the page's first `ready`. After Chat hides it, it stays hidden for every later lifetime in that page load. `unavailable` disables host Send only when Chat has an actual reason that a send cannot be accepted; a later `ready` re-enables it for the same lifetime when sending can be attempted again. A target or identity change ends the lifetime, and the next `ready` uses a new lifetime ID. A page reload needs a new declaration and a new `ready` before Chat hides the HTML composer again.
 
 `ready` means Chat can accept a host send command for the selected lifetime; it does not promise that the Gateway will accept every message. A live-change-feed disconnect or reconnect by itself does not make host sending unavailable: Chat keeps the same lifetime ready, emits no `unavailable` event for that feed change, and accepts sends while authorized. A missing selected session, loss of authorization, or an actual send-endpoint refusal does make sending unavailable. For a refused send, Chat reports the attempt as `failed/refused` with its endpoint detail, then emits `unavailable` with reason `send-refused`. If that refusal is specific to the message and the selected session remains ready and authorized, Chat emits `ready` again immediately for the same lifetime so another message can be sent without an unrelated runtime update. A command received before sending is ready is rejected as `not-ready` and posts nothing. Once Chat can accept commands again, it emits `ready` for that lifetime; feed-only reconnects do not create an unavailable/ready cycle.
+
+Immediately after each `ready`, Chat sends `connection` for that lifetime with the current live-feed state: `connected`, `reconnecting`, or `disconnected`. It sends one more event only when that state changes. This matches the state shown by standalone Chat's status dot. The `connection` event is independent of send readiness and never changes a send attempt or outcome. Keep the host Send control enabled while the current lifetime is ready, even during a feed reconnect or disconnection.
+
+When the latest connection state is `reconnecting` or `disconnected`, reconnect the live feed in place with the current ready target:
+
+```ts
+window.__TIGHTBEAM_CHAT_COMMAND__({
+  type: 'reconnect',
+  lifetimeId: latestReady.lifetimeId,
+  sessionKey: latestReady.sessionKey,
+});
+```
+
+Chat starts the existing recovery immediately, replacing a scheduled retry. The command has no effect when the feed is already connected, the seam is not ready, the lifetime is unavailable, or either identifier is stale. Recovery keeps the same lifetime, visible messages, and the newest or reader position. Its progress appears only through `connection`; it does not emit `unavailable`, `ready`, `lifetime-ended`, or `overlay`, and does not settle, cancel, or repeat a send. Chat does not reload the page or open a host-send connection for this command.
 
 The host's connection dot is the only connection indicator: green means connected, yellow means reconnecting, and red means disconnected. In standalone Chat, its existing details action continues to offer Reconnect for a disconnected or reconnecting feed. In the Chat surface, connection state is not repeated as text in the conversation or composer. A pending message reads `Sending…` while Chat retries its human-send path; that text does not mean the Gateway acknowledged it. A feed-only reconnect does not change the send state or add a connection notice. If a page lifetime ends before delivery is settled, the host may say that delivery status is unknown while retaining the draft and correlation; it must not present that as a disconnected indicator or a terminal send failure.
 
@@ -111,9 +127,11 @@ The host follows these rules:
 5. After `declined`, no response, or an older Chat version, let Chat's HTML composer serve.
 6. Never automatically submit a new host attempt. Chat may internally re-ask the identical submission after a dropped human-send socket when Gateway deduplication is supported.
 7. Pass no keyboard geometry. Resize the Chat view when the native keyboard or safe area changes; Chat retains the newest or reader position. Keep the host's existing landscape side-inset variables unchanged.
-8. On `overlay` with `open: true`, give the keyboard to the Chat page so the focused dialog receives Escape. On `overlay` with `open: false`, return focus to the host composer. Chat emits this event only for a ready lifetime and sends `open: true` immediately after `ready` if a dialog is already open. Switching between Chat dialogs does not emit a close between them.
+8. On `overlay` with `open: true`, give the keyboard to the Chat page so the focused dialog receives Escape. On `overlay` with `open: false`, return focus to the host composer. Chat emits this event only for a ready lifetime and sends the required `connection` event before `open: true` when a dialog is already open at readiness. Switching between Chat dialogs does not emit a close between them.
 
 The host injects the declaration only into the main frame of the configured private Chat origin and ignores events from any other frame or origin. The seam is top-level and in-page only; Chat accepts no `postMessage` or other cross-window commands. No credentials cross the seam. Existing Chat server origin checks protect the browser service and do not cover this interface. V1 adds no signatures, nonces, replay mechanism or separate origin-verification layer.
+
+The host uses `ready` and `unavailable` for Send readiness, and `connection` for its connection indicator. It may send `reconnect` from that indicator while disconnected or reconnecting. While opted in, Chat shows no live-feed Reconnect action in the transcript; feature-specific recovery notices retain their own recovery actions.
 
 While opted in, Chat removes the composer and its reserved bottom space only after `ready`, preserves the transcript anchor through host resizing, and shows no status dot, popup, connection-state text, or inline Reconnect control for feed-only errors in the transcript. Feature-specific notices remain. Host-originated local bubbles show `Sending…` while pending and show failed or uncertain delivery without Chat retry or text-restore actions. The host owns the connection dot and its recovery action. Standalone Chat keeps its dot and details action; the dot turns yellow while live updates reconnect and green after recovery.
 
