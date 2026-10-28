@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.45",
+    "items": [
+      {
+        "title": "Preserve live conversation updates",
+        "description": "A refusal of an optional activity subscription no longer interrupts a conversation feed that is already ready."
+      }
+    ]
+  },
+  {
     "version": "v0.1.44",
     "items": [
       {
