@@ -30,7 +30,6 @@ export function useReadingPosition(
     if (element) registeredRows.current.set(key, element);
     else registeredRows.current.delete(key);
   }, []);
-  const readingTop = useRef(0);
   const latestReady = useRef(ready);
   const [showLatest, setShowLatest] = useState(false);
   latestReady.current = ready;
@@ -66,7 +65,6 @@ export function useReadingPosition(
     const children = content.current?.children;
     if (!box || !children) return;
     if (box.clientHeight > 0) viewportHeight.current = box.clientHeight;
-    readingTop.current = box.scrollTop;
     lastKnownScrollTop.current = box.scrollTop;
     lastKnownBottom.current = Math.max(0, box.scrollHeight - box.clientHeight);
     anchors.current = [];
@@ -160,7 +158,23 @@ export function useReadingPosition(
         // Retain the next visible row if filtering removed the original anchor.
         box.style.removeProperty('--tb-chat-anchor-space');
         const offset = rows.get(survivor.key)!.getBoundingClientRect().top - box.getBoundingClientRect().top;
-        const wanted = box.scrollTop + offset - (survivor.top - readingTop.current);
+        const currentScrollTop = box.scrollTop;
+        const currentBottom = Math.max(0, box.scrollHeight - box.clientHeight);
+        const previousScrollTop = lastKnownScrollTop.current;
+        const previousBottom = lastKnownBottom.current;
+        // A native scroll can reach scrollTop before its scroll event is
+        // delivered; normally preserve that current position and add only the
+        // content's anchor shift. A shrink can also make the browser clamp
+        // scrollTop to the new bottom before this correction runs. In that
+        // case, reconstruct the pre-clamp position so the same shift is applied
+        // once rather than treating the clamp as reader movement.
+        const wasClampedByShrink = !userScrollIntent.current &&
+          previousScrollTop !== undefined && previousBottom !== undefined &&
+          previousBottom > currentBottom + .5 && previousScrollTop > currentBottom + .5 &&
+          currentScrollTop >= currentBottom - .5;
+        const scrollBase = wasClampedByShrink ? previousScrollTop! : currentScrollTop;
+        const anchorShift = currentScrollTop + offset - survivor.top;
+        const wanted = scrollBase + anchorShift;
         // A removed first row can require negative scrollTop; browsers clamp it.
         if (wanted < 0) box.style.setProperty('--tb-chat-anchor-space', `${-wanted}px`);
         if (Math.abs(box.scrollTop - Math.max(0, wanted)) > .5) box.scrollTop = Math.max(0, wanted);

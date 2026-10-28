@@ -1123,6 +1123,20 @@ describe('conversation surface', () => {
     expect(retry.closest('.tb-chat-caption-body')).toBeTruthy();
   });
 
+  it('keeps the transcript usable when optional tool history is absent', () => {
+    const runtime = new FakeRuntime('tool-history-unavailable', {
+      records: [row('tool-history-unavailable', 'visible-message', 'Visible conversation message')],
+      toolCallsEnabled: true,
+      toolCallsLoading: false,
+    });
+    render(<TightbeamChat sessionKey="tool-history-unavailable" adapter={adapterFor(runtime)} />);
+
+    expect(screen.getByText('Visible conversation message')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Tool calls' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Retry tool history' })).toBeNull();
+    expect(screen.queryByText(/Tool history is not current/)).toBeNull();
+  });
+
   it('renders and copies canonical human member rows without exposing a carrier or sibling', () => {
     const sessionKey = 'member-rendering';
     const carrier = row(sessionKey, 'carrier', 'Hidden wrapper and nonhuman content', {
