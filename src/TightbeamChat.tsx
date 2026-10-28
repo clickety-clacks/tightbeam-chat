@@ -5,8 +5,9 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { ChatRuntime, CanonicalMessage, CanonicalTransition, ToolCallRecord, ToolCallIndex, ConversationRecord, LocalSend, RuntimeState, TightbeamAdapter, TurnProvenance } from './types';
 import { projectMessages, type HumanMember } from './messageVisibility';
+import { buildActivityTrail, type ActivityLine, type ActivityOverflow, type MessageActivityItem, type ToolActivityItem } from './activityTrail';
 import { useReadingPosition } from './useReadingPosition';
-import { firstAfterTime, getIndex, putIndex, type RecordIndex } from './recordIndex';
+import { firstAfterTime, getIndex, indexValues, putIndex, type RecordIndex } from './recordIndex';
 import { getHostComposerSnapshot, HostComposerBridge, subscribeHostComposer } from './hostComposer';
 import { ReleaseNotesDialog, type ChatOverlay } from './ReleaseNotesDialog';
 import { CHAT_RELEASE_VERSION, RELEASE_NOTES, recordSeenReleaseVersion, releaseNotesForBuild, unseenReleaseNotes } from './releaseNotes';
@@ -48,6 +49,8 @@ const olderHistoryPrefetchDistance = (viewport: HTMLElement) => Math.max(80, vie
 type TimelineItem =
   | { readonly kind: 'tool'; readonly call: ToolCallRecord }
   | { readonly kind: 'transition'; readonly record: CanonicalTransition }
+  | { readonly kind: 'activity'; readonly entry: ActivityLine }
+  | { readonly kind: 'overflow'; readonly entry: ActivityOverflow }
   | { readonly kind: 'bubble'; readonly bubble: Bubble; readonly scrollKey?: string }
   | { readonly kind: 'local'; readonly send: LocalSend; readonly canonical?: CanonicalMessage };
 
@@ -64,6 +67,7 @@ function canonicalSendIdentity(record: CanonicalMessage): string | undefined {
 
 function itemTime(item: TimelineItem): number | undefined {
   if (item.kind === 'tool') return item.call.startedAt;
+  if (item.kind === 'activity' || item.kind === 'overflow') return undefined;
   const value = item.kind === 'transition' ? item.record.createdAt
     : item.kind === 'bubble' ? item.bubble.record.createdAt
     : item.canonical?.createdAt ?? item.send.submittedAt;
@@ -103,7 +107,7 @@ function upperBoundByTime(items: readonly TimedTimelineAnchor[], time: number): 
 function composeTimeline(bubbles: readonly Bubble[], localSends: readonly LocalSend[],
   canonicalSends: ReadonlyMap<string, CanonicalMessage>,
   sendsByIdentity: ReadonlyMap<string, LocalSend>,
-  transitions: readonly CanonicalTransition[]): TimelineItem[] {
+  transitions: readonly CanonicalTransition[], activityItems: readonly MessageActivityItem[]): TimelineItem[] {
   const anchoredSendIdentities = new Set<string>();
   const anchors: TimelineAnchor[] = bubbles.map((bubble, order) => {
     const identity = bubble.derived ? undefined : canonicalSendIdentity(bubble.record);
@@ -113,6 +117,10 @@ function composeTimeline(bubbles: readonly Bubble[], localSends: readonly LocalS
     return { item, record: bubble.record, order };
   });
   for (const record of transitions) anchors.push({ item: { kind: 'transition', record }, record, order: anchors.length });
+  for (const entry of activityItems) {
+    const item: TimelineItem = entry.kind === 'overflow' ? { kind: 'overflow', entry } : { kind: 'activity', entry };
+    anchors.push({ item, record: { id: entry.id, seq: entry.anchorSeq }, order: anchors.length });
+  }
   const unmatched: UnmatchedTimelineItem[] = [];
   let order = anchors.length;
   for (const send of localSends) {
@@ -127,9 +135,11 @@ function composeTimeline(bubbles: readonly Bubble[], localSends: readonly LocalS
     order++;
   }
 
+  const anchorPriority = (item: TimelineItem) => item.kind === 'bubble' || (item.kind === 'local' && item.canonical) ? 0
+    : item.kind === 'transition' ? 1 : 2;
   anchors.sort((left, right) => left.record.seq - right.record.seq ||
-    left.record.id.localeCompare(right.record.id) ||
-    Number(left.item.kind !== 'bubble') - Number(right.item.kind !== 'bubble') || left.order - right.order);
+    anchorPriority(left.item) - anchorPriority(right.item) || left.order - right.order ||
+    left.record.id.localeCompare(right.record.id));
 
   const timedAnchors: TimedTimelineAnchor[] = [];
   const earliestBubbleAtTime = new Map<number, number>();
@@ -192,7 +202,8 @@ function transcriptIndex(timeline: readonly TimelineItem[]) {
   for (const item of timeline) {
     if (item.kind === 'local' && !item.canonical) { pending.push(item); continue; }
     const anchor = item.kind === 'bubble' ? item.bubble.record.seq : item.kind === 'transition'
-      ? item.record.seq : item.kind === 'tool' ? item.call.afterMessageSeq : item.canonical!.seq;
+      ? item.record.seq : item.kind === 'activity' || item.kind === 'overflow' ? item.entry.anchorSeq
+        : item.kind === 'tool' ? item.call.afterMessageSeq : item.canonical!.seq;
     for (const item of pending) placements.push({ item, beforeAnchor: anchor });
     pending = [];
     index = putIndex(index, anchor, [...(getIndex(index, anchor) ?? []), item]);
@@ -330,23 +341,96 @@ function statusIndicatorState(state: RuntimeState): RuntimeState['status'] {
   return state.status === 'ready' && state.liveError ? 'stale' : state.status;
 }
 
-function activeCaption(provenance?: TurnProvenance): { icon: string; text: string } | undefined {
+type ActiveIcon = 'person' | 'batch' | 'chat' | 'gear';
+
+function activeCaption(provenance?: TurnProvenance): { icon: ActiveIcon; text: string } | undefined {
   if (!provenance || provenance.turn.status !== 'running') return undefined;
-  if (provenance.batchCount !== undefined && provenance.batchCount > 1) return { icon: '▣', text: 'Processing message batch' };
+  if (provenance.batchCount !== undefined && provenance.batchCount > 1) return { icon: 'batch', text: 'Processing message batch' };
   if (provenance.turn.triggerSource === 'batch' && provenance.batchCount !== 1) return undefined;
   const kind = provenance.sourceKind;
-  if (kind === 'human') return { icon: '●', text: 'Replying to you' };
+  if (kind === 'human') return { icon: 'person', text: 'Replying to you' };
   if (kind === 'agent') {
-    if (provenance.sourceDisplayName) return { icon: '◌', text: provenance.sourceDisplayName };
-    return provenance.batchCount !== undefined ? undefined : { icon: '⚙', text: 'Other activity' };
+    if (provenance.sourceDisplayName) return { icon: 'chat', text: provenance.sourceDisplayName };
+    return provenance.batchCount !== undefined ? undefined : { icon: 'gear', text: 'Other activity' };
   }
   if (kind === 'substrate') {
     const messageType = provenance.sourceMessageType?.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/[._-]+/g, ' ').trim();
-    if (messageType) return { icon: '⚙', text: messageType };
-    return provenance.batchCount !== undefined ? undefined : { icon: '⚙', text: 'Other activity' };
+    if (messageType) return { icon: 'gear', text: messageType };
+    return provenance.batchCount !== undefined ? undefined : { icon: 'gear', text: 'Other activity' };
   }
   if (provenance.batchCount !== undefined) return undefined;
-  return { icon: '⚙', text: 'Other activity' };
+  return { icon: 'gear', text: 'Other activity' };
+}
+
+export function workingStateOpacity(elapsedMs: number): number {
+  const phase = ((Math.max(0, elapsedMs) % 5000) + 5000) % 5000 / 1000;
+  let brightness: number;
+  if (phase < 1.7) brightness = (1 - Math.cos(Math.PI * phase / 1.7)) / 2;
+  else if (phase < 1.9) brightness = 1;
+  else if (phase < 4.5) brightness = (1 + Math.cos(Math.PI * (phase - 1.9) / 2.6)) / 2;
+  else brightness = 0;
+  return 0.4 + 0.6 * brightness;
+}
+
+function ActiveTurnIcon({ icon }: { readonly icon: ActiveIcon }) {
+  if (icon === 'person') return <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <circle cx="12" cy="7.5" r="4" fill="currentColor" />
+    <path d="M4.5 22c.7-5.1 3.2-8 7.5-8s6.8 2.9 7.5 8" fill="currentColor" />
+  </svg>;
+  if (icon === 'chat') return <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <path d="M4 5.5A3.5 3.5 0 0 1 7.5 2h9A3.5 3.5 0 0 1 20 5.5v7a3.5 3.5 0 0 1-3.5 3.5H12l-5.5 4v-4h-1A3.5 3.5 0 0 1 2 12.5v-7" fill="none" stroke="currentColor" strokeWidth="2" strokeLinejoin="round" />
+  </svg>;
+  return <span aria-hidden="true">{icon === 'batch' ? '▣' : '⚙'}</span>;
+}
+
+function WorkingStateCaption({ caption, turnSeq }: {
+  readonly caption: { readonly icon: ActiveIcon; readonly text: string };
+  readonly turnSeq: number;
+}) {
+  const element = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const node = element.current;
+    if (!node || typeof window === 'undefined') return;
+    const preference = window.matchMedia?.('(prefers-reduced-motion: reduce)');
+    const startedAt = performance.now();
+    let frame: number | undefined;
+    let stopped = false;
+    const draw = (now: number) => {
+      if (stopped) return;
+      const reduced = preference?.matches ?? false;
+      node.style.opacity = reduced ? '1' : workingStateOpacity(now - startedAt).toFixed(3);
+      if (!reduced) frame = window.requestAnimationFrame(draw);
+    };
+    const onPreferenceChange = () => {
+      if (frame !== undefined) window.cancelAnimationFrame(frame);
+      frame = undefined;
+      draw(performance.now());
+    };
+    draw(startedAt);
+    preference?.addEventListener?.('change', onPreferenceChange);
+    return () => {
+      stopped = true;
+      if (frame !== undefined) window.cancelAnimationFrame(frame);
+      preference?.removeEventListener?.('change', onPreferenceChange);
+    };
+  }, [turnSeq]);
+  return <div ref={element} className="tb-chat-active-caption tb-chat-caption tb-chat-caption-neutral" role="status"
+    aria-label={`Active turn: ${caption.text}`}>
+    <span className="tb-chat-caption-body"><span className="tb-chat-active-caption-icon"><ActiveTurnIcon icon={caption.icon} /></span>
+      <span>{caption.text}</span></span>
+  </div>;
+}
+
+function transitionGist(record: CanonicalTransition): string {
+  if (record.transition === 'restart') return 'Context reset';
+  if (record.transition === 'compaction') return 'Context compacted';
+  if (record.transition === 'model' && record.from && record.to) {
+    return `Model settings changed: ${record.from} → ${record.to}`;
+  }
+  if (record.transition === 'harness' && record.from && record.to) {
+    return `Harness changed: ${record.from} → ${record.to}`;
+  }
+  return record.content ?? '';
 }
 
 function StatusIcon({ state }: { state: RuntimeState }) {
@@ -576,20 +660,47 @@ const Composer = forwardRef<ComposerHandle, {
   </form>;
 });
 
-const ToolCallRow = memo(function ToolCallRow({ call, registerRow }: {
+function ActivityOverflowButton({ entry, registerRow, expand }: {
+  readonly entry: ActivityOverflow;
+  readonly registerRow: (key: string, element: HTMLElement | null) => void;
+  readonly expand: (runKey: string, control: HTMLButtonElement) => void;
+}) {
+  return <button type="button" className="tb-chat-activity-overflow" aria-label="Show earlier activity"
+    key={entry.id} ref={element => registerRow(entry.id, element)} data-record-key={entry.id}
+    data-scroll-key={entry.id} data-activity-run={entry.runKey}
+    onClick={event => expand(entry.runKey, event.currentTarget)}>…</button>;
+}
+
+function ActivityMessageRow({ entry, registerRow }: {
+  readonly entry: ActivityLine;
+  readonly registerRow: (key: string, element: HTMLElement | null) => void;
+}) {
+  return <div role="note" tabIndex={-1} aria-label={entry.accessibleText}
+    className={`tb-chat-activity-line tb-chat-activity-${entry.kind}`}
+    ref={element => registerRow(entry.id, element)} data-record-key={entry.id} data-scroll-key={entry.id}
+    data-activity-run={entry.runKey}>{entry.gist}</div>;
+}
+
+const ToolCallRow = memo(function ToolCallRow({ call, entry, registerRow, preservePosition, expandRun }: {
   call: ToolCallRecord;
+  entry?: ToolActivityItem;
   registerRow: (key: string, element: HTMLElement | null) => void;
+  preservePosition: () => void;
+  expandRun: (runKey: string, control: HTMLButtonElement) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const terminal = call.status === 'completed' || call.status === 'failed';
-  const status = call.status === 'in_progress' ? 'Running' : call.status === 'pending' ? 'Pending' : call.status === 'completed' ? 'Completed' : 'Failed';
+  if (!entry) return null;
+  if (entry.kind === 'overflow') return <ActivityOverflowButton entry={entry} registerRow={registerRow} expand={expandRun} />;
   const key = 'tool-' + call.id;
-  return <article ref={element => registerRow(key, element)} data-record-key={key} data-scroll-key={key}
-    className="tb-chat-tool" aria-label={'Tool call: ' + (call.toolName || call.kind) + ', ' + status}>
-    <div className="tb-chat-tool-heading"><strong>{call.toolName || call.kind}</strong><span>{status}</span></div>
-    {call.title && <p>{call.title}</p>}
-    <details onToggle={event => setExpanded(event.currentTarget.open)}>
-      <summary>Input and result</summary>
+  return <details ref={element => registerRow(key, element)} tabIndex={-1} data-record-key={key} data-scroll-key={key}
+    data-activity-run={entry.runKey} className="tb-chat-activity-line tb-chat-activity-tool"
+    aria-label={entry.accessibleText} onToggle={event => setExpanded(event.currentTarget.open)}>
+      <summary aria-label={`${entry.accessibleText}. Show input and result`}
+        onClick={preservePosition}>
+        <span className="tb-chat-activity-bullet" aria-hidden="true">•</span>
+        <span className="tb-chat-activity-gist">{entry.gist}</span>
+      </summary>
       {expanded && <div>
         {(['rawInput', 'rawOutput', 'content'] as const).map(field => {
           const label = field === 'rawInput' ? 'Input' : field === 'rawOutput' ? 'Result' : 'Result content';
@@ -604,8 +715,7 @@ const ToolCallRow = memo(function ToolCallRow({ call, registerRow }: {
           </section>;
         })}
       </div>}
-    </details>
-  </article>;
+  </details>;
 });
 
 function ChatBody({ runtime, renderMessage, className, hostBridge }: {
@@ -618,7 +728,10 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
   const subscribeHost = useCallback((listener: () => void) => subscribeHostComposer(hostBridge, listener), [hostBridge]);
   const getHostSnapshot = useCallback(() => getHostComposerSnapshot(hostBridge), [hostBridge]);
   const host = useSyncExternalStore(subscribeHost, getHostSnapshot, getHostSnapshot);
-  const readingRevision = useMemo(() => ({ state, host }), [state, host]);
+  const [expandedRuns, setExpandedRuns] = useState<ReadonlySet<string>>(() => new Set());
+  const [shownRuns, setShownRuns] = useState<ReadonlyMap<string, string>>(() => new Map());
+  const focusExpandedRun = useRef<string | undefined>(undefined);
+  const readingRevision = useMemo(() => ({ state, host, expandedRuns }), [state, host, expandedRuns]);
   const reading = useReadingPosition(state.status === 'ready', readingRevision, box =>
     state.loadingOlder || (!state.historyError && state.hasOlder && box.scrollTop < olderHistoryPrefetchDistance(box)));
   const { viewport } = reading;
@@ -672,7 +785,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
       sender: message.senderLabel ?? sourceLabel(message.side, agentName), derived: Boolean(message.member),
       displayContent: message.member?.content, member: message.member,
     })), [projection, agentName]);
-  const caption = state.provenanceAvailable === false ? undefined : activeCaption(state.activeTurn);
+  const caption = state.activityTurnStateAvailable === true ? activeCaption(state.activeTurn) : undefined;
   const visibleSendIdentities = useMemo(() => new Set(bubbles.flatMap((bubble) => {
     const identity = bubble.derived ? undefined : canonicalSendIdentity(bubble.record);
     return identity ? [identity] : [];
@@ -690,11 +803,6 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
   }, [state.records]);
   const localSends = useMemo(() => state.sends.filter((send) =>
     !visibleSendIdentities.has(sendIdentity(send))), [state.sends, visibleSendIdentities]);
-  const timeline = useMemo(() => {
-    return composeTimeline(bubbles, localSends, canonicalSends, sendsByIdentity,
-      state.records.filter((record): record is CanonicalTransition => record.kind === 'transition'));
-  }, [bubbles, canonicalSends, localSends, sendsByIdentity, state.records]);
-  const transcript = useMemo(() => transcriptIndex(timeline), [timeline]);
   const tools = useMemo(() => {
     if (!state.toolCallsEnabled) return undefined;
     if (state.toolCallIndex) return state.toolCallIndex;
@@ -707,6 +815,60 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
     }
     return index;
   }, [state.toolCallsEnabled, state.toolCallIndex, state.toolCalls]);
+  const toolRecords = useMemo(() => {
+    if (!tools) return [];
+    const calls: ToolCallRecord[] = [];
+    for (const byAnchor of indexValues(tools)) calls.push(...indexValues(byAnchor));
+    return calls;
+  }, [tools]);
+  const activityRecords = useMemo(() => state.records.filter((record): record is CanonicalMessage => record.kind === 'message'), [state.records]);
+  const activityPlan = useMemo(() => buildActivityTrail({
+    sessionKey: state.sessionKey,
+    records: activityRecords,
+    bubbles,
+    tools: toolRecords,
+    toolsEnabled: Boolean(state.toolCallsEnabled),
+    turnStateAvailable: state.activityTurnStateAvailable === true,
+    activeTurnRunning: state.activeTurn?.turn.status === 'running',
+    liveActivityIds: new Set(state.liveActivityIds ?? []),
+    liveActivityEligibleIds: new Set(state.liveActivityEligibleIds ?? []),
+    railDenials: state.liveRailDenials ?? [],
+    shownRuns,
+    expandedRuns,
+  }), [activityRecords, bubbles, expandedRuns, shownRuns, state.activityTurnStateAvailable, state.activeTurn,
+    state.liveActivityIds, state.liveActivityEligibleIds, state.liveRailDenials, state.sessionKey,
+    state.toolCallsEnabled, toolRecords]);
+  useLayoutEffect(() => {
+    let next: Map<string, string> | undefined;
+    for (const [id, runKey] of activityPlan.membership) {
+      if (shownRuns.has(id)) continue;
+      next ??= new Map(shownRuns);
+      next.set(id, runKey);
+    }
+    if (next) setShownRuns(next);
+  }, [activityPlan.membership, shownRuns]);
+  const expandRun = useCallback((runKey: string, control: HTMLButtonElement) => {
+    reading.preserveVisiblePosition();
+    focusExpandedRun.current = typeof document !== 'undefined' && document.activeElement === control ? runKey : undefined;
+    setExpandedRuns((prior) => {
+      if (prior.has(runKey)) return prior;
+      const next = new Set(prior);
+      next.add(runKey);
+      return next;
+    });
+  }, [reading.preserveVisiblePosition]);
+  useLayoutEffect(() => {
+    const runKey = focusExpandedRun.current;
+    if (!runKey) return;
+    focusExpandedRun.current = undefined;
+    const rows = viewport.current?.querySelectorAll<HTMLElement>('[data-activity-run]');
+    const first = rows && [...rows].find((row) => row.dataset.activityRun === runKey);
+    first?.focus({ preventScroll: true });
+  }, [expandedRuns, viewport]);
+  const timeline = useMemo(() => composeTimeline(bubbles, localSends, canonicalSends, sendsByIdentity,
+    state.records.filter((record): record is CanonicalTransition => record.kind === 'transition'),
+    activityPlan.messageItems), [activityPlan.messageItems, bubbles, canonicalSends, localSends, sendsByIdentity, state.records]);
+  const transcript = useMemo(() => transcriptIndex(timeline), [timeline]);
   const pending = useMemo(() => placePending(transcript.placements, tools), [transcript, tools]);
   const previousTail = useRef<{ generation: number; ready: boolean; seq: number } | null>(null);
   // Canonical records are ordered by sequence. A high-water mark excludes old
@@ -883,13 +1045,20 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
   const showHostReconnect = host.optedIn && state.status === 'error';
 
   const renderItem = useCallback((item: TimelineItem) => {
-        if (item.kind === 'tool') return <ToolCallRow key={'tool-' + item.call.id} call={item.call} registerRow={reading.registerRow} />;
+        if (item.kind === 'tool') return <ToolCallRow key={'tool-' + item.call.id} call={item.call}
+          entry={activityPlan.toolItems.get(item.call.id)} registerRow={reading.registerRow}
+          preservePosition={reading.preserveVisiblePosition} expandRun={expandRun} />;
+        if (item.kind === 'activity') return <ActivityMessageRow key={item.entry.id} entry={item.entry} registerRow={reading.registerRow} />;
+        if (item.kind === 'overflow') return <ActivityOverflowButton key={item.entry.id} entry={item.entry}
+          registerRow={reading.registerRow} expand={expandRun} />;
         if (item.kind === 'transition') {
           const record = item.record;
-          return <article key={record.id} ref={element => reading.registerRow(record.id, element)}
-            data-record-key={record.id} data-scroll-key={record.id} className="tb-chat-transition tb-chat-caption tb-chat-caption-neutral" aria-label="Session transition">
-            {record.content || [record.from, record.to].filter(Boolean).join(' → ')}
-          </article>;
+          const gist = transitionGist(record);
+          return <div role="separator" aria-orientation="horizontal" key={record.id} ref={element => reading.registerRow(record.id, element)}
+            data-record-key={record.id} data-scroll-key={record.id}
+            className="tb-chat-transition tb-chat-transition-marker" aria-label={`Transition: ${gist}`}>
+            {gist}
+          </div>;
         }
         if (item.kind === 'bubble') {
           const { bubble } = item;
@@ -932,7 +1101,8 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
           </div>}
           <time className="tb-chat-time" dateTime={time.dateTime}>{time.text}</time>
         </article>;
-  }, [reading.registerRow, arrivalFloor, renderMessage, agentName, state.status, runtime]);
+  }, [activityPlan.toolItems, reading.registerRow, reading.preserveVisiblePosition, expandRun,
+    arrivalFloor, renderMessage, agentName, state.status, runtime]);
 
   return <section ref={root} className={`tb-chat ${host.composerHidden ? 'tb-chat-host-composer-hidden' : ''} ${className || ''}`}
     aria-label={agentName ? `${agentName} conversation` : 'Conversation'}>
@@ -969,12 +1139,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
       </div>}
       <IndexedTimeline messages={transcript.index} tools={tools} pending={pending.index} render={renderItem} />
       {pending.tail.map(renderItem)}
-      {caption && <div className="tb-chat-active-caption tb-chat-caption tb-chat-caption-neutral" role="status" aria-label={`Active turn: ${caption.text}`}>
-        <span className="tb-chat-caption-body"><span aria-hidden="true">{caption.icon}</span><span>{caption.text}</span></span>
-      </div>}
-      {!caption && state.activeTurnError && <div className="tb-chat-active-caption tb-chat-caption tb-chat-caption-caution" role="status">
-        <span className="tb-chat-caption-body">Activity status could not be loaded.</span>
-      </div>}
+      {caption && state.activeTurn && <WorkingStateCaption caption={caption} turnSeq={state.activeTurn.turn.seq} />}
       {state.status === 'ready' && !state.conversationError && !state.sessionNotFound &&
         state.records.length === 0 && localSends.length === 0 && !state.hasOlder &&
         <p className="tb-chat-empty">No messages yet.</p>}

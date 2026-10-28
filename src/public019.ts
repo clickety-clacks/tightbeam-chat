@@ -120,16 +120,16 @@ export function decodePublic019Message(value: unknown, sessionKey: string): Conv
     throw new UnsupportedTargetError('Message belongs to a different session.');
   }
   if (row.messageType === 'marker') {
-    const marker = record(row.marker);
-    const kind = requiredString(marker, 'kind');
+    const marker = row.marker === undefined || row.marker === null ? {} : record(row.marker);
+    const kind = typeof marker.kind === 'string' ? marker.kind : undefined;
     return Object.freeze({
       kind: 'transition', id: requiredString(row, 'id'), sessionKey,
       seq: positiveInteger(row, 'seq'), rowVersion: positiveInteger(row, 'rowVersion'),
       transition: kind === 'harness-switch' ? 'harness' : kind === 'model-retune' ? 'model'
         : kind === 'session-restart' ? 'restart' : kind === 'context-compacted' ? 'compaction' : 'unknown',
       content: typeof row.content === 'string' ? row.content : requiredString(row, 'content'),
-      from: typeof marker.from === 'string' ? marker.from : requiredString(marker, 'from'),
-      to: typeof marker.to === 'string' ? marker.to : requiredString(marker, 'to'),
+      from: typeof marker.from === 'string' ? marker.from : undefined,
+      to: typeof marker.to === 'string' ? marker.to : undefined,
       createdAt: messageTime(row), raw: Object.freeze({ ...row }),
     });
   }
@@ -225,10 +225,32 @@ export function decodePublic019Notice(value: unknown, sessionKey: string): Chang
   if (frame.type !== 'change' || frame.schemaVersion !== 2 || typeof frame.class !== 'string') {
     throw new UnsupportedTargetError('Invalid protocol-2 change frame.');
   }
+  if (frame.class === 'rail.denied') {
+    const refs = frame.refs && typeof frame.refs === 'object' && !Array.isArray(frame.refs)
+      ? frame.refs as Record<string, unknown> : {};
+    const payload = frame.payload && typeof frame.payload === 'object' && !Array.isArray(frame.payload)
+      ? frame.payload as Record<string, unknown> : {};
+    const principal = typeof refs.principal === 'string' ? refs.principal : undefined;
+    const verb = typeof payload.verb === 'string' ? payload.verb.trim() : '';
+    const rule = typeof payload.rule === 'string' ? payload.rule.trim() : '';
+    // Rule denials are a live-only exception until Gateway history is served
+    // and paired acceptance establishes that it can be read safely.
+    if (frame.op === 'observe' && frame.resource === undefined &&
+        principal === `session:${sessionKey}` && verb && rule) {
+      const id = Number.isSafeInteger(refs.railDenialId) && (refs.railDenialId as number) > 0
+        ? `rail:${refs.railDenialId}`
+        : `notice:${JSON.stringify({ principal, verb, rule, occurredAt: frame.occurredAt,
+          origin: refs.origin, sessionKey: refs.sessionKey, payload })}`;
+      return { operation: 'rail-denial', id, principal, verb, rule,
+        ...(Number.isSafeInteger(frame.occurredAt) && (frame.occurredAt as number) >= 0
+          ? { occurredAt: frame.occurredAt as number } : {}) };
+    }
+    return { operation: 'unknown', sessionKey, resource: frame.class };
+  }
   const refs = record(frame.refs);
   if (refs.sessionKey !== sessionKey) throw new UnsupportedTargetError('Change frame has a different session reference.');
-  if (frame.class === 'message.created' && ['messages', 'transcript messages'].includes(String(frame.resource)) &&
-      frame.op === 'upsert') {
+  if ((frame.class === 'message.created' || frame.class === 'transition.recorded') &&
+      ['messages', 'transcript messages'].includes(String(frame.resource)) && frame.op === 'upsert') {
     return { operation: 'upsert', record: decodePublic019Message(frame.payload, sessionKey) };
   }
   if (['tool_call.started', 'tool_call.ended'].includes(frame.class) &&
@@ -334,6 +356,8 @@ export function createPublic019Transport(config: Public019Config): { transport: 
       let readyTimer: ReturnType<typeof setTimeout> | undefined;
       let heartbeatTimer: ReturnType<typeof setTimeout> | undefined;
       const subscriptionId = (tools ? 'tools:' : 'chat:') + sessionKey;
+      const railSubscriptionId = `rail:${sessionKey}`;
+      const hasRailSubscription = !tools;
       const close = () => {
         if (closed) return;
         closed = true;
@@ -363,6 +387,10 @@ export function createPublic019Transport(config: Public019Config): { transport: 
         if (closed) return;
         try {
           const frame = record(raw);
+          if (hasRailSubscription && frame.type === 'subscription_ready' && frame.subscriptionId === railSubscriptionId) {
+            watchHeartbeat();
+            return;
+          }
           if (!ready) {
             if (frame.type === 'subscription_ready' && frame.subscriptionId === subscriptionId) {
               ready = true;
@@ -372,6 +400,9 @@ export function createPublic019Transport(config: Public019Config): { transport: 
               resolveReady();
             } else if (frame.type === 'auth_result' && frame.success === false) {
               throw new AuthorizationError('Gateway refused the authenticated change subscription.');
+            } else if (frame.type === 'error' && hasRailSubscription && frame.subscriptionId === railSubscriptionId) {
+              // Rail activity is optional to the conversation feed, including when its filter is refused.
+              return;
             } else if (frame.type === 'error' && authorizationFailureCode(frame.code)) {
               throw new AuthorizationError('Gateway refused the authenticated change subscription.');
             } else if (frame.type === 'error' || frame.type === 'auth_result') {
@@ -379,12 +410,15 @@ export function createPublic019Transport(config: Public019Config): { transport: 
             }
             return;
           }
+          if (frame.type === 'error' && hasRailSubscription && frame.subscriptionId === railSubscriptionId) return;
           if ((frame.type === 'auth_result' && frame.success === false) ||
               (frame.type === 'error' && authorizationFailureCode(frame.code))) {
             close();
             callbacks.onAuthorizationLost?.('Gateway refused the authenticated change subscription.');
             return;
           }
+          if (frame.type === 'subscription_ready' &&
+              (frame.subscriptionId === subscriptionId || (hasRailSubscription && frame.subscriptionId === railSubscriptionId))) return;
           if (frame.type !== 'change' && frame.type !== 'heartbeat') {
             doubt('Unexpected Firehose frame after subscription readiness.');
             return;
@@ -397,7 +431,10 @@ export function createPublic019Transport(config: Public019Config): { transport: 
           }
           lastSeq = frame.seq as number;
           if (frame.type === 'change') {
-            if (frame.subscriptionId !== subscriptionId) throw new UnsupportedTargetError('Wrong Firehose subscription.');
+            if (frame.subscriptionId !== subscriptionId &&
+                !(hasRailSubscription && frame.subscriptionId === railSubscriptionId)) {
+              throw new UnsupportedTargetError('Wrong Firehose subscription.');
+            }
             callbacks.onNotice(decodePublic019Notice(frame, sessionKey));
           }
           watchHeartbeat();
@@ -421,8 +458,16 @@ export function createPublic019Transport(config: Public019Config): { transport: 
         readyTimer = setTimeout(() => { close(); rejectReady(new Error('Firehose subscription readiness timed out.')); }, timeoutMs);
         try {
           channel.send({ type: 'subscribe', protocolVersion: 2, subscriptionId, filters: { sessionKey, classes: tools ? ['tool_call.']
-            : ['message.created', 'session.', 'turn.started', 'turn.ended'] } });
+              : ['message.created', 'transition.recorded', 'session.', 'turn.started', 'turn.ended'] } });
         } catch (error) { close(); rejectReady(error); }
+        if (hasRailSubscription && !closed) {
+          try {
+            channel.send({ type: 'subscribe', protocolVersion: 2, subscriptionId: railSubscriptionId,
+              filters: { principal: `session:${sessionKey}`, classes: ['rail.denied'] } });
+          } catch {
+            // The secondary activity category must not disable the primary feed.
+          }
+        }
       }
       await readyPromise;
       return { close };
@@ -450,17 +495,6 @@ export function createPublic019Transport(config: Public019Config): { transport: 
         throw new UnsupportedTargetError('Unexpected transcript message detail envelope.');
       }
       return decodePublic019Message(body.item, sessionKey);
-    },
-    async readRecentTurns(sessionKey, signal) {
-      const body = await get(`/api/sessions/${encodeURIComponent(sessionKey)}/turns?limit=50&tail=true`, signal);
-      if (body.schemaVersion !== 1 || body.resource !== 'turns' || !Array.isArray(body.items)) {
-        throw new UnsupportedTargetError('Unexpected recent-turn collection envelope.');
-      }
-      const page = record(body.page);
-      if (typeof page.hasMoreBefore !== 'boolean') {
-        throw new UnsupportedTargetError('Invalid recent-turn page metadata.');
-      }
-      return body.items.map((turn) => decodePublic019Turn(turn, sessionKey));
     },
     readTail: (sessionKey, signal) => readPage(sessionKey, 'tail=true', signal),
     readOlder: (sessionKey, before, signal) => readPage(sessionKey, `before=${encodeURIComponent(before)}`, signal),

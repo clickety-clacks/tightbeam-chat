@@ -1,7 +1,7 @@
 import { getIndex, putIndex } from '../src/recordIndex';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { TightbeamChat } from '../src/TightbeamChat';
+import { TightbeamChat, workingStateOpacity } from '../src/TightbeamChat';
 import type { RenderContext } from '../src/TightbeamChat';
 import { createTurnProvenance } from '../src/provenance';
 import type {
@@ -227,10 +227,10 @@ describe('conversation surface', () => {
 
   it('filters with message provenance and renders safe Markdown without exposing batch wrappers', async () => {
     const sessionKey = 'conversation-a';
-    const human = row(sessionKey, 'human-trigger', 'Could you explain this?', { role: 'user', sender: 'user:person', turnSeq: 1 });
-    const unprovenHuman = row(sessionKey, 'unproven-human', 'A user row with no sender stays visible', { role: 'user' });
+    const human = row(sessionKey, 'human-trigger', 'Could you explain this?', { seq: 1, role: 'user', sender: 'user:person', turnSeq: 1 });
+    const unprovenHuman = row(sessionKey, 'unproven-human', 'A user row with no sender stays visible', { seq: 8, role: 'user' });
     const mismatchedHuman = row(sessionKey, 'mismatched-human', 'A differently marked user row stays visible', {
-      role: 'user', sender: 'user:another-person', messageType: 'chat',
+      seq: 9, role: 'user', sender: 'user:another-person', messageType: 'chat',
     });
     const answer = row(sessionKey, 'selected-answer', [
       '## A **useful** answer', '', '- first item', '- second item', '',
@@ -238,15 +238,15 @@ describe('conversation surface', () => {
       '```ts', 'const value = 1;', '```', '', '> A quotation', '',
       '| Name | Value |', '| --- | --- |', '| count | 2 |', '',
       '<script>window.compromised = true</script>',
-    ].join('\n'), { sender: 'assistant-service', turnSeq: 1, messageType: 'assistant', replyToMessageId: human.id });
+    ].join('\n'), { seq: 2, sender: 'assistant-service', turnSeq: 1, messageType: 'assistant', replyToMessageId: human.id });
     const otherTrigger = row(sessionKey, 'other-trigger', 'An agent sent a wake', {
-      role: 'user', sender: 'agent:external', messageType: 'agent', turnSeq: 2,
+      seq: 5, role: 'user', sender: 'agent:external', messageType: 'agent', turnSeq: 2,
     });
-    const otherAnswer = row(sessionKey, 'other-answer', 'Must remain hidden', {
+    const otherAnswer = row(sessionKey, 'other-answer', 'Must remain hidden', { seq: 6,
       turnSeq: 2, messageType: 'assistant', replyToMessageId: otherTrigger.id,
     });
     const substrateMarker = row(sessionKey, 'substrate-marker', 'A system event marker', {
-      role: 'assistant', sender: 'process:notifications', messageType: 'substrate',
+      seq: 10, role: 'assistant', sender: 'process:notifications', messageType: 'substrate',
     });
     const batchText = [
       '[batched notices: 2]',
@@ -260,13 +260,15 @@ describe('conversation surface', () => {
       'coalesced by notice-batching-v1',
     ].join('\n');
     const batch = row(sessionKey, 'batch-trigger', batchText, {
-      role: 'user', sender: 'process:maintenance', messageType: 'substrate', turnSeq: 3, isBatchCarrier: true,
+      seq: 3, role: 'user', sender: 'process:maintenance', messageType: 'substrate', turnSeq: 3, isBatchCarrier: true,
     });
-    const batchAnswer = row(sessionKey, 'batch-answer', 'Answer to the batch question', {
+    const batchAnswer = row(sessionKey, 'batch-answer', 'Answer to the batch question', { seq: 4,
       sender: 'assistant-service', turnSeq: 3, turnIncludesHuman: true, messageType: 'assistant', replyToMessageId: batch.id,
     });
     const runtime = new FakeRuntime(sessionKey, {
-      records: [human, answer, otherTrigger, otherAnswer, batch, row(sessionKey, 'batch-member', 'Batch question from the person', { role: 'user', sender: 'user:person', turnSeq: 3 }), batchAnswer, unprovenHuman, mismatchedHuman, substrateMarker],
+      records: [human, answer, otherTrigger, otherAnswer, batch,
+        row(sessionKey, 'batch-member', 'Batch question from the person', { seq: 3, role: 'user', sender: 'user:person', turnSeq: 3 }),
+        batchAnswer, unprovenHuman, mismatchedHuman, substrateMarker],
       provenanceAvailable: false,
     });
     render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
@@ -284,7 +286,9 @@ describe('conversation surface', () => {
     expect(batchBubble?.classList.contains('tb-chat-bubble-human')).toBe(true);
     expect(batchBubble?.getAttribute('aria-label')).toBe('Message from You');
     expect(batchBubble?.textContent).not.toContain('coalesced by');
-    expect(within(log).queryByText('Substrate payload must stay hidden')).toBeNull();
+    const substrateLine = within(log).getByRole('note', { name: 'Substrate: Substrate payload must stay hidden' });
+    expect(substrateLine.classList.contains('tb-chat-activity-substrate')).toBe(true);
+    expect(substrateLine.closest('article')?.classList.contains('tb-chat-bubble')).not.toBe(true);
     expect(batch.content).toBe(batchText);
     expect(within(log).getByText('Answer to the batch question')).toBeTruthy();
     expect(within(log).queryByText('A system event marker')).toBeNull();
@@ -750,14 +754,15 @@ describe('conversation surface', () => {
     field.focus(); field.setSelectionRange(3, 5);
     const show = (patch: Partial<CanonicalTurn>, records: ConversationRecord[] = [human]) => {
       const active = createTurnProvenance({ ...turn(20, sessionKey, human.id, 'user:unrelated', 'running'), ...patch }, records, 'person', 'person');
-      act(() => runtime.update({ activeTurn: active, provenanceAvailable: true }));
+      act(() => runtime.update({ activeTurn: active, activityTurnStateAvailable: true }));
     };
     show({ triggerSource: 'mike' });
     const activeCaption = screen.getByRole('status', { name: 'Active turn: Replying to you' });
     expect(activeCaption.classList.contains('tb-chat-caption-neutral')).toBe(true);
-    expect(activeCaption.querySelector('[aria-hidden="true"]')?.textContent).toBe('●');
+    expect(activeCaption.querySelector('.tb-chat-active-caption-icon svg')).toBeTruthy();
+    expect(activeCaption.textContent).toContain('Replying to you');
     show({ triggerSource: 'mike', messageId: 'unloaded' }, []);
-    expect(screen.queryByRole('status', { name: 'Active turn: Replying to you' })).toBeNull();
+    expect(screen.getByRole('status', { name: 'Active turn: Replying to you' })).toBeTruthy();
     show({ triggerSource: 'batch', batchMemberCount: 2 });
     expect(screen.getByRole('status', { name: 'Active turn: Processing message batch' })).toBeTruthy();
     show({ triggerSource: 'batch', batchMemberCount: 1 });
@@ -768,6 +773,23 @@ describe('conversation surface', () => {
       show({ triggerSource });
       expect(screen.getByRole('status', { name: 'Active turn: Other activity' })).toBeTruthy();
     }
+    const agentTrigger = row(sessionKey, 'agent-trigger', 'A task', { role: 'user', sender: 'agent:researcher',
+      messageType: 'agent', raw: { senderDisplayName: 'Researcher' } });
+    const namedAgent = createTurnProvenance({ ...turn(21, sessionKey, agentTrigger.id, 'untrusted-origin', 'running'),
+      triggerSource: 'agent' }, [agentTrigger], 'person', 'person');
+    act(() => runtime.update({ activeTurn: namedAgent }));
+    expect(screen.getByRole('status', { name: 'Active turn: Researcher' })).toBeTruthy();
+    const processTrigger = row(sessionKey, 'process-trigger', 'An event', { role: 'user', sender: 'process:events',
+      messageType: 'queue.waiting' });
+    const typedProcess = createTurnProvenance({ ...turn(22, sessionKey, processTrigger.id, 'untrusted-origin', 'running'),
+      triggerSource: 'process' }, [processTrigger], 'person', 'person');
+    act(() => runtime.update({ activeTurn: typedProcess }));
+    expect(screen.getByRole('status', { name: 'Active turn: queue waiting' })).toBeTruthy();
+    const genericProcess = { ...processTrigger, messageType: 'substrate' };
+    const untypedProcess = createTurnProvenance({ ...turn(23, sessionKey, genericProcess.id, 'untrusted-origin', 'running'),
+      triggerSource: 'process' }, [genericProcess], 'person', 'person');
+    act(() => runtime.update({ activeTurn: untypedProcess }));
+    expect(screen.getByRole('status', { name: 'Active turn: Other activity' })).toBeTruthy();
     for (const status of ['queued', 'completed', 'failed', 'canceled']) {
       show({ triggerSource: 'mike', status });
       expect(screen.queryByRole('status', { name: /^Active turn:/ })).toBeNull();
@@ -775,6 +797,78 @@ describe('conversation surface', () => {
     expect(field.value).toBe('Draft remains');
     expect(document.activeElement).toBe(field);
     expect([field.selectionStart, field.selectionEnd]).toEqual([3, 5]);
+  });
+
+  it('uses a five-second working pulse with a dim floor and a steady reduced-motion state', () => {
+    expect(workingStateOpacity(0)).toBeCloseTo(0.4, 3);
+    expect(workingStateOpacity(850)).toBeCloseTo(0.7, 3);
+    expect(workingStateOpacity(1700)).toBeCloseTo(1, 3);
+    expect(workingStateOpacity(1800)).toBeCloseTo(1, 3);
+    expect(workingStateOpacity(3200)).toBeCloseTo(0.7, 3);
+    expect(workingStateOpacity(4700)).toBeCloseTo(0.4, 3);
+    expect(workingStateOpacity(5000)).toBeCloseTo(0.4, 3);
+
+    const original = Object.getOwnPropertyDescriptor(window, 'matchMedia');
+    Object.defineProperty(window, 'matchMedia', { configurable: true, value: () => ({
+      matches: true, addEventListener() {}, removeEventListener() {},
+    }) });
+    try {
+      const sessionKey = 'reduced-motion-caption';
+      const human = row(sessionKey, 'human', 'A question', { role: 'user', sender: 'user:person', turnSeq: 1 });
+      const activeTurn = createTurnProvenance({ ...turn(1, sessionKey, human.id, 'user:person', 'running'),
+        triggerSource: 'mike' }, [human], 'person', 'person');
+      const runtime = new FakeRuntime(sessionKey, { records: [human], activeTurn, activityTurnStateAvailable: true });
+      render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+      expect(screen.getByRole('status', { name: 'Active turn: Replying to you' }).style.opacity).toBe('1');
+    } finally {
+      if (original) Object.defineProperty(window, 'matchMedia', original);
+      else Reflect.deleteProperty(window, 'matchMedia');
+    }
+  });
+
+  it('expands one activity gap in place and keeps it expanded for later entries', () => {
+    const sessionKey = 'activity-expansion';
+    const prompt = row(sessionKey, 'prompt', 'Question', { role: 'user', sender: 'user:person', seq: 1, turnSeq: 1 });
+    const activity = Array.from({ length: 8 }, (_, index) => row(sessionKey, `notice-${index + 1}`,
+      `Background event ${index + 1}`, { role: 'user', sender: 'process:events', messageType: 'substrate', seq: index + 2 }));
+    const boundary: ConversationRecord = { kind: 'transition', id: 'boundary', seq: 6, rowVersion: 1,
+      sessionKey, transition: 'compaction', content: 'Context compacted', raw: {} };
+    const reply = row(sessionKey, 'reply', 'Answer', { role: 'assistant', sender: 'assistant-service',
+      replyToMessageId: prompt.id, turnSeq: 1, seq: 20 });
+    const runtime = new FakeRuntime(sessionKey, { records: [prompt, ...activity, boundary, reply] });
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+    const viewport = screen.getByRole('log');
+    const layout = installViewportLayout(viewport);
+    act(() => runtime.update({}));
+    const replyRow = screen.getByText('Answer').closest('[data-record-key]') as HTMLElement;
+    const before = layout.offset(replyRow);
+    const composer = screen.getByRole('textbox') as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: 'Unsent draft' } });
+    composer.focus();
+    composer.setSelectionRange(2, 6);
+    const overflow = screen.getByRole('button', { name: 'Show earlier activity' });
+    expect(screen.getByRole('separator', { name: 'Transition: Context compacted' })).toBeTruthy();
+    fireEvent.click(overflow);
+
+    expect(screen.getAllByRole('note')).toHaveLength(8);
+    expect(screen.queryByRole('button', { name: 'Show earlier activity' })).toBeNull();
+    expect(screen.getByText('Context compacted')).toBeTruthy();
+    expect(Math.abs(layout.offset(replyRow) - before)).toBeLessThanOrEqual(1);
+    expect(document.activeElement).toBe(composer);
+    expect(composer.value).toBe('Unsent draft');
+    expect([composer.selectionStart, composer.selectionEnd]).toEqual([2, 6]);
+
+    const later = row(sessionKey, 'notice-later', 'A later background event', {
+      role: 'user', sender: 'process:events', messageType: 'substrate', seq: 15,
+    });
+    act(() => runtime.update({ records: [prompt, ...activity, boundary, later, reply] }));
+    expect(screen.getAllByRole('note')).toHaveLength(9);
+    expect(screen.getByText('A later background event')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Show earlier activity' })).toBeNull();
+    expect(Math.abs(layout.offset(replyRow) - before)).toBeLessThanOrEqual(1);
+    expect(composer.value).toBe('Unsent draft');
+    expect([composer.selectionStart, composer.selectionEnd]).toEqual([2, 6]);
+    layout.restore();
   });
 
   it('shows a friendly timestamp for recent messages and a fallback when time is missing', () => {
@@ -799,6 +893,31 @@ describe('conversation surface', () => {
     expect(timestamps[0]).not.toBe('Time unavailable');
     expect(timestamps[1]).toMatch(/^Yesterday\b/);
     expect(timestamps[2]).toBe('Time unavailable');
+  });
+
+  it('renders model, harness, reset, and compaction transitions as labeled separators', () => {
+    const sessionKey = 'transition-boundaries';
+    const human = row(sessionKey, 'prompt', 'Question', { role: 'user', sender: 'user:person', seq: 1 });
+    const transitions: ConversationRecord[] = [
+      { kind: 'transition', id: 'model', sessionKey, seq: 2, rowVersion: 1, transition: 'model',
+        from: 'Model A', to: 'Model B', content: 'Model changed', raw: {} },
+      { kind: 'transition', id: 'harness', sessionKey, seq: 3, rowVersion: 1, transition: 'harness',
+        from: 'Harness A', to: 'Harness B', content: 'Harness changed', raw: {} },
+      { kind: 'transition', id: 'reset', sessionKey, seq: 4, rowVersion: 1, transition: 'restart',
+        content: 'Reset', raw: {} },
+      { kind: 'transition', id: 'compaction', sessionKey, seq: 5, rowVersion: 1, transition: 'compaction',
+        content: 'Compacted', raw: {} },
+    ];
+    const runtime = new FakeRuntime(sessionKey, { records: [human, ...transitions] });
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+
+    expect(screen.getAllByRole('separator').map((element) => element.getAttribute('aria-label'))).toEqual([
+      'Transition: Model settings changed: Model A → Model B',
+      'Transition: Harness changed: Harness A → Harness B',
+      'Transition: Context reset',
+      'Transition: Context compacted',
+    ]);
+    expect(screen.queryByRole('article', { name: /transition/i })).toBeNull();
   });
 
   it('automatically follows hidden-only older pages until a displayable human message arrives', async () => {
@@ -1344,7 +1463,7 @@ describe('conversation surface', () => {
 });
 
 describe('tool-call and transition display', () => {
-  it('updates only indexed tool paths in a large history and preserves expanded rows during insertion', () => {
+  it('caps a large tool run and expands its retained details in place', () => {
     let inspected = 0;
     let index: ToolCallIndex | undefined;
     const tool = (seq: number): ToolCallRecord => ({ id: 'tc_' + seq, seq, sessionKey: 'indexed',
@@ -1362,23 +1481,20 @@ describe('tool-call and transition display', () => {
     const human = row('indexed', 'human', 'Read source', { seq: 1, role: 'user', sender: 'user:person' });
     const runtime = new FakeRuntime('indexed', { records: [human], toolCallsEnabled: true, toolCallIndex: index });
     const view = render(<TightbeamChat sessionKey="indexed" adapter={adapterFor(runtime)} />);
-    const retained = view.container.querySelector('[data-record-key="tool-tc_1000"]')!;
-    const details = retained.querySelector('details')!;
-    details.open = true;
-    fireEvent(details, new Event('toggle'));
-    inspected = 0;
-    for (let seq = 1; seq <= 25; seq++) {
-      insert({ ...tool(seq), status: 'completed', rowVersion: 2, endedAt: 3000 });
-      act(() => runtime.update({ toolCallIndex: index }));
-      insert(tool(2000 + seq));
-      act(() => runtime.update({ toolCallIndex: index }));
-    }
     expect(inspected).toBeLessThan(100);
+    expect(view.container.querySelectorAll('.tb-chat-activity-tool')).toHaveLength(5);
+    const overflow = screen.getByRole('button', { name: 'Show earlier activity' });
+    overflow.focus();
+    fireEvent.click(overflow);
+    expect(view.container.querySelectorAll('.tb-chat-activity-tool')).toHaveLength(2000);
+    const retained = view.container.querySelector<HTMLDetailsElement>('[data-record-key="tool-tc_1000"]')!;
+    retained.open = true;
+    fireEvent(retained, new Event('toggle'));
+    insert(tool(2001));
+    act(() => runtime.update({ toolCallIndex: index }));
     expect(view.container.querySelector('[data-record-key="tool-tc_1000"]')).toBe(retained);
-    expect(details.open).toBe(true);
-    expect(view.container.querySelectorAll('.tb-chat-tool')).toHaveLength(2025);
-    expect(view.container.querySelector('.tb-chat-tool')?.classList.contains('tb-chat-caption')).toBe(false);
-    expect(view.container.querySelector('[data-record-key="tool-tc_1"]')?.textContent).toContain('Completed');
+    expect(retained.open).toBe(true);
+    expect(view.container.querySelectorAll('.tb-chat-activity-tool')).toHaveLength(2001);
   });
 
   it('keeps an unmatched send at submission time among tools, then uses its canonical anchor with the same scroll key', () => {
@@ -1397,7 +1513,7 @@ describe('tool-call and transition display', () => {
       content: 'Follow-up', submittedAt: new Date(3000).toISOString(), status: 'pending', reconciled: false };
     const runtime = new FakeRuntime('ordered-tools', { records: [human, reply], sends: [send], toolCallsEnabled: true, toolCallIndex: index });
     const view = render(<TightbeamChat sessionKey="ordered-tools" adapter={adapterFor(runtime)} />);
-    const keys = () => [...view.container.querySelectorAll('article[data-scroll-key]')].map(node => node.getAttribute('data-scroll-key'));
+    const keys = () => [...view.container.querySelectorAll('[data-scroll-key]')].map(node => node.getAttribute('data-scroll-key'));
     expect(keys()).toEqual(['human', 'tool-tc_201', 'local-c_pending', 'tool-tc_202', 'reply']);
     const canonical = row('ordered-tools', 'canonical-send', send.content, { seq: 11, role: 'user', sender: 'user:person',
       createdAt: send.submittedAt, clientMessageId: send.clientMessageId, deviceId: send.deviceId });
@@ -1417,10 +1533,10 @@ describe('tool-call and transition display', () => {
       sessionKey: 'tools', transition: 'unknown', from: 'old', to: 'new', content: 'A new boundary kind', raw: {} };
     const runtime = new FakeRuntime('tools', { records: [human, marker, reply], toolCallsEnabled: true, toolCalls: [call] });
     const view = render(<TightbeamChat sessionKey="tools" adapter={adapterFor(runtime)} />);
-    expect([...view.container.querySelectorAll('article[data-record-key]')].map(node => node.getAttribute('data-record-key')))
+    expect([...view.container.querySelectorAll('[data-record-key]')].map(node => node.getAttribute('data-record-key')))
       .toEqual(['human', 'tool-tc_read', 'boundary', 'reply']);
     expect(screen.getByText('A new boundary kind')).toBeTruthy();
-    expect(screen.getByText('A new boundary kind').closest('.tb-chat-transition')?.classList.contains('tb-chat-caption-neutral')).toBe(true);
+    expect(screen.getByText('A new boundary kind').closest('.tb-chat-transition-marker')?.getAttribute('role')).toBe('separator');
     expect(screen.queryByText('source.ts')).toBeNull();
     const detail = view.container.querySelector('details')!;
     detail.open = true;
@@ -1431,14 +1547,14 @@ describe('tool-call and transition display', () => {
     fireEvent.change(editor, { target: { value: 'draft kept' } });
     act(() => runtime.update({ toolCalls: [{ ...call, status: 'completed', rowVersion: 2,
       rawOutput: '{"prefix":', truncated: [{ field: 'rawOutput', originalBytes: 20000 }], endedAt: 2000 }] }));
-    expect(screen.getByText('Completed')).toBeTruthy();
+    expect(screen.getByText('Read the source file · done')).toBeTruthy();
     expect(screen.getByText('Result truncated — original size 20000 bytes.')).toBeTruthy();
     expect(screen.getByText('{"prefix":')).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Tool calls' }));
-    expect(screen.queryByText('Read the source file')).toBeNull();
+    expect(screen.queryByText(/Read the source file/)).toBeNull();
     expect(screen.getByText('A new boundary kind')).toBeTruthy();
     expect((editor as HTMLTextAreaElement).value).toBe('draft kept');
     fireEvent.click(screen.getByRole('button', { name: 'Tool calls' }));
-    expect(screen.getByText('Read the source file')).toBeTruthy();
+    expect(screen.getByText('Read the source file · done')).toBeTruthy();
   });
 });
