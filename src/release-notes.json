@@ -1,5 +1,32 @@
 [
   {
+    "version": "v0.1.56",
+    "items": [
+      {
+        "title": "Remove the Tool calls button",
+        "description": "Chat no longer shows a Tool calls button. Available tool calls appear automatically, and tool-history loading and retry notices remain."
+      }
+    ]
+  },
+  {
+    "version": "v0.1.55",
+    "items": [
+      {
+        "title": "Send a keepalive on idle live updates",
+        "description": "The live updates connection now sends a small keepalive while idle, without changing the connection used to send messages."
+      }
+    ]
+  },
+  {
+    "version": "v0.1.54",
+    "items": [
+      {
+        "title": "Keep your place through brief reconnects",
+        "description": "Scrolling up in a short conversation keeps your place during reconnects. Brief tool-history interruptions no longer shift the conversation, while persistent errors still offer Retry."
+      }
+    ]
+  },
+  {
     "version": "v0.1.53",
     "items": [
       {

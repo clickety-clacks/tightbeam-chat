@@ -551,6 +551,42 @@ describe('conversation reading position', () => {
     expect(animate).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps an explicit short-range upward scroll away through a reconnect publication', () => {
+    viewportHeight = 250;
+    const { runtime, box } = setup(initialRows.slice(0, 3));
+    expect(box.scrollHeight - box.clientHeight).toBe(58);
+
+    readAt(box, 0);
+
+    expect(box.scrollTop).toBe(0);
+    scrollTo.mockClear();
+    act(() => runtime.publish({ liveError: 'Firehose disconnected (close code 1002).', liveConnectionState: 'connected' }));
+    expect(box.scrollTop).toBe(0);
+    act(() => runtime.publish({ liveError: undefined, liveConnectionState: 'connected' }));
+
+    expect(box.scrollTop).toBe(0);
+    expect(screen.getByRole('button', { name: 'Scroll to latest messages' })).toBeTruthy();
+    expect(scrollTo).not.toHaveBeenCalled();
+  });
+
+  it('keeps a short-range keyboard page-up away after its smooth target completes', () => {
+    viewportHeight = 250;
+    const { runtime, box } = setup(initialRows.slice(0, 3));
+    expect(box.scrollHeight - box.clientHeight).toBe(58);
+
+    fireEvent.keyDown(box, { key: 'k', ctrlKey: true });
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: 0, behavior: 'smooth' });
+    box.scrollTop = 0;
+    fireEvent.scroll(box);
+    scrollTo.mockClear();
+
+    act(() => runtime.publish({ liveError: 'Firehose disconnected (close code 1002).', liveConnectionState: 'connected' }));
+
+    expect(box.scrollTop).toBe(0);
+    expect(screen.getByRole('button', { name: 'Scroll to latest messages' })).toBeTruthy();
+    expect(scrollTo).not.toHaveBeenCalled();
+  });
+
   it('releases a finished entrance without replaying it on ordinary rerenders', () => {
     const { runtime } = setup();
     act(() => runtime.publish({ records: [...initialRows, message(20)] }));

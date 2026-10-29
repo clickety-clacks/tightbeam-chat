@@ -11,6 +11,7 @@ import type {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
 });
 
 function row(sessionKey: string, id: string, content: string, extra: Partial<CanonicalMessage> = {}): CanonicalMessage {
@@ -1419,13 +1420,14 @@ describe('conversation surface', () => {
     await waitFor(() => expect(runtime.loadOlderCalls).toBe(1));
   });
 
-  it('keeps linked-target recovery and Tool calls reachable without shifting history', () => {
+  it('keeps linked-target recovery reachable without a Tool calls control or shifting history', () => {
     const sessionKey = 'linked-target-error-controls';
     const records = Array.from({ length: 6 }, (_, index) => row(sessionKey, `message-${index + 1}`,
       `History message ${index + 1}`, { seq: index + 1 }));
     const runtime = new FakeRuntime(sessionKey, {
       records,
       toolCallsEnabled: true,
+      toolCallsLoading: true,
     });
     render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)}
       configuredConversationHref="/" />);
@@ -1433,8 +1435,8 @@ describe('conversation surface', () => {
     const viewport = screen.getByRole('log');
     act(() => runtime.update({ loadingOlder: true }));
     expect(viewport.querySelector('.tb-chat-history-loading')?.textContent).toBe('Loading earlier messages…');
-    expect(viewport.querySelector('.tb-chat-tool-controls-placeholder')).toBeNull();
-    expect(screen.getByRole('button', { name: 'Tool calls' }).hasAttribute('disabled')).toBe(false);
+    expect(viewport.querySelector('.tb-chat-tool-history-status-placeholder')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Tool calls' })).toBeNull();
     act(() => runtime.update({ loadingOlder: false }));
 
     const layout = installViewportLayout(viewport);
@@ -1451,17 +1453,14 @@ describe('conversation surface', () => {
       const alert = screen.getByRole('alert');
       const reconnect = within(alert).getByRole('button', { name: 'Reconnect' });
       const recovery = within(alert).getByRole('link', { name: 'Open the configured conversation' });
-      const tools = within(alert).getByRole('group', { name: 'Tool history controls' });
-      const toggle = within(tools).getByRole('button', { name: 'Tool calls' });
-      expect(alert.classList.contains('tb-chat-runtime-notice-with-tools')).toBe(true);
+      expect(alert.classList.contains('tb-chat-runtime-notice-with-tool-history')).toBe(true);
       expect(recovery.getAttribute('href')).toBe('/');
-      expect(toggle.getAttribute('aria-pressed')).toBe('true');
-      expect(screen.getAllByRole('button', { name: 'Tool calls' })).toHaveLength(1);
-      expect(viewport.querySelector('.tb-chat-tool-controls-placeholder')?.getAttribute('aria-hidden')).toBe('true');
+      expect(screen.queryByRole('button', { name: 'Tool calls' })).toBeNull();
+      expect(screen.queryByText('Tool calls')).toBeNull();
+      expect(within(alert).getByText('Loading tool history…')).toBeTruthy();
+      expect(viewport.querySelector('.tb-chat-tool-history-status-placeholder')?.getAttribute('aria-hidden')).toBe('true');
       expect(screen.getByText('History message 4')).toBeTruthy();
 
-      fireEvent.click(toggle);
-      expect(within(alert).getByRole('button', { name: 'Tool calls' }).getAttribute('aria-pressed')).toBe('false');
       fireEvent.click(reconnect);
       expect(runtime.rebuildCalls).toBe(1);
 
@@ -1470,24 +1469,27 @@ describe('conversation surface', () => {
       expect(layout.offset(anchor)).toBeCloseTo(before, 0);
       expect(screen.queryByRole('alert')).toBeNull();
       expect(screen.queryByRole('link', { name: 'Open the configured conversation' })).toBeNull();
-      expect(screen.getByRole('button', { name: 'Tool calls' }).getAttribute('aria-pressed')).toBe('false');
+      expect(screen.queryByRole('button', { name: 'Tool calls' })).toBeNull();
     } finally {
       layout.restore();
     }
   });
 
-  it('renders tool history updates as captions without restyling the toggle', () => {
+  it('keeps tool history loading and retry notices without a Tool calls control', () => {
+    vi.useFakeTimers();
     const runtime = new FakeRuntime('tool-history-caption', { toolCallsEnabled: true, toolCallsLoading: true });
     const view = render(<TightbeamChat sessionKey="tool-history-caption" adapter={adapterFor(runtime)} />);
 
-    const toggle = screen.getByRole('button', { name: 'Tool calls' });
-    expect(toggle.classList.contains('tb-chat-caption')).toBe(false);
+    expect(screen.queryByRole('button', { name: 'Tool calls' })).toBeNull();
+    expect(screen.queryByText('Tool calls')).toBeNull();
     const loading = screen.getByText('Loading tool history…');
     expect(loading.getAttribute('role')).toBe('status');
     expect(loading.classList.contains('tb-chat-caption-neutral')).toBe(true);
 
     act(() => runtime.update({ toolCallsLoading: false, toolCallsError: 'Connection unavailable' }));
-    const status = view.container.querySelector<HTMLElement>('.tb-chat-tool-controls > .tb-chat-caption-danger');
+    expect(view.container.querySelector('.tb-chat-tool-history-status > .tb-chat-caption-danger')).toBeNull();
+    act(() => { vi.advanceTimersByTime(1000); });
+    const status = view.container.querySelector<HTMLElement>('.tb-chat-tool-history-status > .tb-chat-caption-danger');
     expect(status?.getAttribute('role')).toBe('status');
     expect(status?.textContent).toBe('Tool history is not current: Connection unavailable Retry tool history');
     const retry = within(status!).getByRole('button', { name: 'Retry tool history' });
@@ -1495,16 +1497,34 @@ describe('conversation surface', () => {
     expect(retry.closest('.tb-chat-caption-body')).toBeTruthy();
   });
 
-  it('keeps the transcript usable when optional tool history is absent', () => {
+  it('does not render a tool-history warning for a subsecond feed blip that recovers', () => {
+    vi.useFakeTimers();
+    const runtime = new FakeRuntime('tool-history-blip', { toolCallsEnabled: true, toolCallsLoading: false });
+    const view = render(<TightbeamChat sessionKey="tool-history-blip" adapter={adapterFor(runtime)} />);
+
+    act(() => runtime.update({ toolCallsError: 'Firehose disconnected (close code 1000).' }));
+    expect(view.container.querySelector('.tb-chat-tool-history-status > .tb-chat-caption-danger')).toBeNull();
+    act(() => { vi.advanceTimersByTime(350); });
+    act(() => runtime.update({ toolCallsError: undefined }));
+    act(() => { vi.advanceTimersByTime(1000); });
+
+    expect(view.container.querySelector('.tb-chat-tool-history-status > .tb-chat-caption-danger')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Retry tool history' })).toBeNull();
+  });
+
+  it('keeps the transcript usable when tool-call support is absent', () => {
     const runtime = new FakeRuntime('tool-history-unavailable', {
       records: [row('tool-history-unavailable', 'visible-message', 'Visible conversation message')],
-      toolCallsEnabled: true,
+      toolCallsEnabled: undefined,
       toolCallsLoading: false,
     });
-    render(<TightbeamChat sessionKey="tool-history-unavailable" adapter={adapterFor(runtime)} />);
+    const view = render(<TightbeamChat sessionKey="tool-history-unavailable" adapter={adapterFor(runtime)} />);
 
     expect(screen.getByText('Visible conversation message')).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Tool calls' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Tool calls' })).toBeNull();
+    expect(screen.queryByText('Tool calls')).toBeNull();
+    expect(view.container.querySelector('.tb-chat-tool-controls')).toBeNull();
+    expect(view.container.querySelector('.tb-chat-tool-history-status')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Retry tool history' })).toBeNull();
     expect(screen.queryByText(/Tool history is not current/)).toBeNull();
   });
@@ -1988,7 +2008,7 @@ describe('tool-call and transition display', () => {
     expect(screen.getAllByText('Follow-up')).toHaveLength(1);
   });
 
-  it('anchors tools between messages, expands input/results with truthful truncation, and keeps the draft while toggling', async () => {
+  it('displays served tool calls automatically and keeps their details and the draft intact', async () => {
     const call: ToolCallRecord = { id: 'tc_read', seq: 500, sessionKey: 'tools', turnSeq: 7, afterMessageSeq: 1,
       harnessToolCallId: 'read-1', title: 'Read the source file', kind: 'read', toolName: 'read_file',
       status: 'in_progress', rawInput: { path: 'source.ts' }, rawOutput: null, content: null,
@@ -1999,6 +2019,8 @@ describe('tool-call and transition display', () => {
       sessionKey: 'tools', transition: 'unknown', from: 'old', to: 'new', content: 'A new boundary kind', raw: {} };
     const runtime = new FakeRuntime('tools', { records: [human, marker, reply], toolCallsEnabled: true, toolCalls: [call] });
     const view = render(<TightbeamChat sessionKey="tools" adapter={adapterFor(runtime)} />);
+    expect(screen.queryByRole('button', { name: 'Tool calls' })).toBeNull();
+    expect(screen.queryByText('Tool calls')).toBeNull();
     expect([...view.container.querySelectorAll('[data-record-key]')].map(node => node.getAttribute('data-record-key')))
       .toEqual(['human', 'tool-tc_read', 'boundary', 'reply']);
     expect(screen.getByText('A new boundary kind')).toBeTruthy();
@@ -2016,11 +2038,8 @@ describe('tool-call and transition display', () => {
     expect(screen.getByText('Read the source file · done')).toBeTruthy();
     expect(screen.getByText('Result truncated — original size 20000 bytes.')).toBeTruthy();
     expect(screen.getByText('{"prefix":')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Tool calls' }));
-    expect(screen.queryByText(/Read the source file/)).toBeNull();
     expect(screen.getByText('A new boundary kind')).toBeTruthy();
     expect((editor as HTMLTextAreaElement).value).toBe('draft kept');
-    fireEvent.click(screen.getByRole('button', { name: 'Tool calls' }));
     expect(screen.getByText('Read the source file · done')).toBeTruthy();
   });
 });
