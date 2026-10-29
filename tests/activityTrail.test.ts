@@ -412,6 +412,8 @@ describe('activity trail projection', () => {
     expect(history.filter(record => record.isBatchCarrier).map(record => record.turnSeq)).toEqual([77, 77, 77, 77, 77]);
     expect(history.filter(record => record.id.startsWith('history-prompt') || record.id.startsWith('history-reply'))
       .map(record => record.turnSeq)).toEqual([1, 1, 2, 2]);
+    const ineligibleBatch = history.find(record => record.id === 'history-older-non-owner')!;
+    expect(historyBackedActivityHasOwnerScope(ineligibleBatch, history, 'person', undefined, false)).toBe(false);
     const beforeLeave = project(history, true);
     const afterReturn = project(readHistory());
     const afterReload = project(readHistory());

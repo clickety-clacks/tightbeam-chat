@@ -142,7 +142,7 @@ function visibilityMix(sessionKey: string, prefix: string): readonly CanonicalMe
     sender: 'assistant-service', messageType: 'assistant', replyToMessageId: batch.id, turnSeq: 2, turnIncludesHuman: true,
   });
   const marker = row(sessionKey, `${prefix}-marker`, `Hidden assistant substrate marker ${prefix}`, {
-    sender: 'process:notifications', messageType: 'substrate', turnSeq: 5,
+    sender: 'process:notifications', messageType: 'substrate', turnSeq: 77,
   });
   const agentWake = row(sessionKey, `${prefix}-agent-wake`, `Hidden agent wake ${prefix}`, {
     role: 'user', sender: 'agent:external', messageType: 'agent', turnSeq: 3,
@@ -293,7 +293,9 @@ describe('conversation surface', () => {
       provenanceAvailable: false,
       activityTurnStateAvailable: true,
       liveActivityIds: [otherTrigger.id, otherAnswer.id, batch.id, substrateMarker.id],
-      liveActivityEligibleIds: [batch.id],
+      // Simulate an over-broad live arrival flag; owner-scoped projection must
+      // still keep unrelated activity hidden and match its reloaded history.
+      liveActivityEligibleIds: [otherTrigger.id, otherAnswer.id, batch.id, substrateMarker.id],
     });
     render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
 
