@@ -249,6 +249,10 @@ describe('conversation surface', () => {
   it('keeps owner-scoped activity pills while filtering other history and rendering safe Markdown', async () => {
     const sessionKey = 'conversation-a';
     const human = row(sessionKey, 'human-trigger', 'Could you explain this?', { seq: 1, role: 'user', sender: 'user:person', turnSeq: 1 });
+    const interleavedMarker = row(sessionKey, 'interleaved-non-owner-marker',
+      'A non-owner system marker between the prompt and reply', {
+        seq: 2, role: 'assistant', sender: 'process:notifications', messageType: 'substrate', turnSeq: 77,
+      });
     const unprovenHuman = row(sessionKey, 'unproven-human', 'A user row with no sender stays visible', { seq: 8, role: 'user' });
     const mismatchedHuman = row(sessionKey, 'mismatched-human', 'A differently marked user row stays visible', {
       seq: 9, role: 'user', sender: 'user:another-person', messageType: 'chat',
@@ -259,11 +263,11 @@ describe('conversation surface', () => {
       '```ts', 'const value = 1;', '```', '', '> A quotation', '',
       '| Name | Value |', '| --- | --- |', '| count | 2 |', '',
       '<script>window.compromised = true</script>',
-    ].join('\n'), { seq: 2, sender: 'assistant-service', turnSeq: 1, messageType: 'assistant', replyToMessageId: human.id });
+    ].join('\n'), { seq: 3, sender: 'assistant-service', turnSeq: 1, messageType: 'assistant', replyToMessageId: human.id });
     const otherTrigger = row(sessionKey, 'other-trigger', 'An agent sent a wake', {
-      seq: 5, role: 'user', sender: 'agent:external', messageType: 'agent', turnSeq: 2,
+      seq: 6, role: 'user', sender: 'agent:external', messageType: 'agent', turnSeq: 2,
     });
-    const otherAnswer = row(sessionKey, 'other-answer', 'Must remain hidden', { seq: 6,
+    const otherAnswer = row(sessionKey, 'other-answer', 'Must remain hidden', { seq: 7,
       turnSeq: 2, messageType: 'assistant', replyToMessageId: otherTrigger.id,
     });
     const substrateMarker = row(sessionKey, 'substrate-marker', 'A system event marker', {
@@ -281,21 +285,21 @@ describe('conversation surface', () => {
       'coalesced by notice-batching-v1',
     ].join('\n');
     const batch = row(sessionKey, 'batch-trigger', batchText, {
-      seq: 3, role: 'user', sender: 'process:maintenance', messageType: 'substrate', turnSeq: 3, isBatchCarrier: true,
+      seq: 4, role: 'user', sender: 'process:maintenance', messageType: 'substrate', turnSeq: 3, isBatchCarrier: true,
     });
-    const batchAnswer = row(sessionKey, 'batch-answer', 'Answer to the batch question', { seq: 4,
+    const batchAnswer = row(sessionKey, 'batch-answer', 'Answer to the batch question', { seq: 5,
       sender: 'assistant-service', turnSeq: 3, turnIncludesHuman: true, messageType: 'assistant', replyToMessageId: batch.id,
     });
     const runtime = new FakeRuntime(sessionKey, {
-      records: [human, answer, otherTrigger, otherAnswer, batch,
-        row(sessionKey, 'batch-member', 'Batch question from the person', { seq: 3, role: 'user', sender: 'user:person', turnSeq: 3 }),
+      records: [human, interleavedMarker, answer, otherTrigger, otherAnswer, batch,
+        row(sessionKey, 'batch-member', 'Batch question from the person', { seq: 4, role: 'user', sender: 'user:person', turnSeq: 3 }),
         batchAnswer, unprovenHuman, mismatchedHuman, substrateMarker],
       provenanceAvailable: false,
       activityTurnStateAvailable: true,
-      liveActivityIds: [otherTrigger.id, otherAnswer.id, batch.id, substrateMarker.id],
+      liveActivityIds: [interleavedMarker.id, otherTrigger.id, otherAnswer.id, batch.id, substrateMarker.id],
       // Simulate an over-broad live arrival flag; owner-scoped projection must
       // still keep unrelated activity hidden and match its reloaded history.
-      liveActivityEligibleIds: [otherTrigger.id, otherAnswer.id, batch.id, substrateMarker.id],
+      liveActivityEligibleIds: [interleavedMarker.id, otherTrigger.id, otherAnswer.id, batch.id, substrateMarker.id],
     });
     render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
 
@@ -322,6 +326,7 @@ describe('conversation surface', () => {
     expect(batch.content).toBe(batchText);
     expect(within(log).getByText('Answer to the batch question')).toBeTruthy();
     expect(within(log).queryByText('A system event marker')).toBeNull();
+    expect(within(log).queryByText('A non-owner system marker between the prompt and reply')).toBeNull();
     expect(within(log).queryByText('An agent sent a wake')).toBeNull();
     expectActivityText(log, 'A process notice in the batch');
     expect(within(log).queryByText('Must remain hidden')).toBeNull();

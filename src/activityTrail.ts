@@ -265,10 +265,15 @@ function belongsToOwnerTurn(candidate: Candidate, retainedTurnSequences: Readonl
 function belongsToOwnerConversation(candidate: Candidate, precedingBubble: BubbleEvent,
   nextBubble: BubbleEvent | undefined, retainedTurnSequences: ReadonlySet<number>, activeOwnerTurnRunning: boolean): boolean {
   if (!candidate.historyBacked || !precedingBubble.ownerTurnScoped) return false;
+  // An ordinary message with an explicit turn sequence belongs to that turn.
+  // Batch members intentionally have no row-level turn sequence: their carrier
+  // has a separate notices-only turn, so their delivered history position is
+  // the available owner-boundary evidence.
+  if (candidate.sourceTurnSeq !== undefined) return belongsToOwnerTurn(candidate, retainedTurnSequences);
   const betweenOwnerPromptAndReply = !!nextBubble && nextBubble.ownerTurnScoped &&
     nextBubble.bubble.side === 'agent' && nextBubble.spanKey === precedingBubble.spanKey;
   const activeOwnerTail = !nextBubble && activeOwnerTurnRunning && precedingBubble.bubble.side === 'human';
-  return belongsToOwnerTurn(candidate, retainedTurnSequences) || betweenOwnerPromptAndReply || activeOwnerTail;
+  return betweenOwnerPromptAndReply || activeOwnerTail;
 }
 
 /** Apply the same delivered-history owner boundary when admitting a live message. */

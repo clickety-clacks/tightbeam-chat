@@ -370,6 +370,12 @@ describe('activity trail projection', () => {
       storeRow('history-older-page-process', 1, 'user', 'process:events', 'Older process notice', 'process', { turnSeq: 77 }),
       storeRow('history-prompt-one', 2, 'user', 'user:person', 'First question', 'chat', { turnSeq: 1 }),
       carrier('history-gap-first', 3, 3, 'asg_12345678', 'review'),
+      storeRow('history-interleaved-marker', 3, 'assistant', 'process:notifications',
+        'Non-owner marker between owner messages', 'substrate', { turnSeq: 77 }),
+      storeRow('history-interleaved-agent-wake', 3, 'user', 'agent:helper',
+        '[woke: fallback deadline]\nWake from another agent between owner messages', 'agent', { turnSeq: 77 }),
+      storeRow('history-interleaved-process-notice', 3, 'user', 'process:events',
+        'Process notice between owner messages', 'process', { turnSeq: 77 }),
       carrier('history-gap-second', 4, 5567, 'asg_abcdef12', 'build'),
       storeRow('history-reply-one', 5, 'assistant', 'assistant-service', 'First answer', 'assistant', { turnSeq: 1 }),
       laterOwnerActivity,
@@ -396,6 +402,7 @@ describe('activity trail projection', () => {
       const byId = new Map(records.map(record => [record.id, record]));
       const activity = records.filter(record => record.isBatchCarrier === true ||
         record.id.startsWith('history-older-page') || record.id === 'history-owner-gap' ||
+        record.id.startsWith('history-interleaved-') ||
         record.id.startsWith('history-other-agent') || record.id === 'history-process-notice' ||
         record.id === 'history-external-reply' || record.id === 'history-unrelated-marker');
       const liveIds = live ? new Set(activity.map(record => record.id)) : new Set<string>();
@@ -414,6 +421,11 @@ describe('activity trail projection', () => {
       .map(record => record.turnSeq)).toEqual([1, 1, 2, 2]);
     const ineligibleBatch = history.find(record => record.id === 'history-older-non-owner')!;
     expect(historyBackedActivityHasOwnerScope(ineligibleBatch, history, 'person', undefined, false)).toBe(false);
+    for (const id of ['history-interleaved-marker', 'history-interleaved-agent-wake',
+      'history-interleaved-process-notice']) {
+      const row = history.find(record => record.id === id)!;
+      expect(historyBackedActivityHasOwnerScope(row, history, 'person', undefined, true)).toBe(false);
+    }
     const beforeLeave = project(history, true);
     const afterReturn = project(readHistory());
     const afterReload = project(readHistory());
@@ -423,7 +435,8 @@ describe('activity trail projection', () => {
     expect(beforeLeave.messageItems.some(item => item.id.includes('member:history-older-non-owner'))).toBe(false);
     const renderedIds = beforeLeave.messageItems.flatMap(item => item.kind === 'fold' ? item.lines.map(line => line.id) : [item.id]);
     for (const hiddenId of ['history-older-page-process', 'history-older-non-owner', 'history-other-agent-wake',
-      'history-process-notice', 'history-external-reply', 'history-unrelated-marker']) {
+      'history-process-notice', 'history-external-reply', 'history-unrelated-marker',
+      'history-interleaved-marker', 'history-interleaved-agent-wake', 'history-interleaved-process-notice']) {
       expect(renderedIds.some(id => id.includes(hiddenId))).toBe(false);
     }
     expect(afterReturn.messageItems).toMatchObject([

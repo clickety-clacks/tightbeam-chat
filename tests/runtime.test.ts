@@ -179,7 +179,20 @@ describe('framework-independent runtime', () => {
     const ownerTurn: CanonicalTurn = { ...settledTurn, seq: 82, status: 'running', messageId: ownerPrompt.id,
       raw: { rowVersion: 1 } };
     transport.callbacks?.onNotice({ operation: 'turn', turn: ownerTurn });
-    const ownerActivity = message(21, { role: 'user', sender: 'process:work', messageType: 'substrate' });
+    const interleavedNonOwnerActivity = [
+      message(21, { role: 'assistant', sender: 'process:notifications', messageType: 'substrate', turnSeq: 77 }),
+      message(22, { role: 'user', sender: 'agent:helper', messageType: 'agent', turnSeq: 77,
+        content: '[woke: fallback deadline]\nWake from another agent during the selected user's turn' }),
+      message(23, { role: 'user', sender: 'process:events', messageType: 'process', turnSeq: 77,
+        content: 'Process notice during the selected user\'s turn' }),
+    ];
+    for (const activity of interleavedNonOwnerActivity) {
+      transport.emit(activity);
+      expect(runtime.getSnapshot().liveActivityIds).toContain(activity.id);
+      expect(runtime.getSnapshot().liveActivityEligibleIds).not.toContain(activity.id);
+    }
+
+    const ownerActivity = message(24, { role: 'user', sender: 'process:work', messageType: 'substrate' });
     transport.emit(ownerActivity);
     expect(runtime.getSnapshot().liveActivityEligibleIds).toContain(ownerActivity.id);
 
@@ -191,7 +204,7 @@ describe('framework-independent runtime', () => {
     const ownerReply = message(30, { role: 'assistant', sender: 'assistant-service', messageType: 'assistant',
       turnSeq: 82, replyToMessageId: ownerPrompt.id });
     transport.emit(ownerReply);
-    const delayedOwnerActivity = message(22, { role: 'user', sender: 'process:work', messageType: 'substrate', turnSeq: 82 });
+    const delayedOwnerActivity = message(31, { role: 'user', sender: 'process:work', messageType: 'substrate', turnSeq: 82 });
     transport.emit(delayedOwnerActivity);
     expect(runtime.getSnapshot().liveActivityEligibleIds).toContain(delayedOwnerActivity.id);
 
@@ -204,7 +217,7 @@ describe('framework-independent runtime', () => {
     transport.emit(laterBatch);
     expect(runtime.getSnapshot().liveActivityEligibleIds).toContain(laterBatch.id);
 
-    const outsideOwnerTurn = message(31, { role: 'user', sender: 'process:events', messageType: 'substrate', turnSeq: 77 });
+    const outsideOwnerTurn = message(33, { role: 'user', sender: 'process:events', messageType: 'substrate', turnSeq: 77 });
     transport.emit(outsideOwnerTurn);
     expect(runtime.getSnapshot().liveActivityEligibleIds).not.toContain(outsideOwnerTurn.id);
     runtime.dispose();
