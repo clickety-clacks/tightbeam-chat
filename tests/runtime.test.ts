@@ -624,7 +624,7 @@ describe('framework-independent runtime', () => {
     liveReady.resolve();
     await vi.waitFor(() => expect(runtime.getSnapshot().liveError).toBeUndefined(), { timeout: 1500 });
     expect(runtime.getSnapshot().status).toBe('ready');
-    expect(transport.readSessionCalls).toBe(2);
+    expect(transport.readSessionCalls).toBe(1);
     expect(transport.readTailCalls).toBe(1);
     expect(transport.readAfterCalls).toEqual(['after:8']);
     runtime.dispose();
@@ -632,6 +632,13 @@ describe('framework-independent runtime', () => {
 
   it('catches up rows committed before initial feed readiness and restores older history', async () => {
     const transport = new ControlledTransport();
+    const catchUpStarted = deferred<void>();
+    const catchUpResponse = deferred<ConversationPage>();
+    transport.afterHook = (cursor) => {
+      expect(cursor).toBe('after:8');
+      catchUpStarted.resolve();
+      return catchUpResponse.promise;
+    };
     transport.readyGate = deferred<void>();
     const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
@@ -643,9 +650,18 @@ describe('framework-independent runtime', () => {
     // the server cannot replay it as a change frame, so cursor catch-up must.
     transport.rows.push(message(9, { content: 'committed during initial feed open' }));
     transport.readyGate.resolve();
+    await catchUpStarted.promise;
+    expect(runtime.getSnapshot().records.map((row) => row.id)).toEqual(['t6', 'm7', 'm8']);
+    expect(runtime.getSnapshot().liveError).toBe('Live updates are connecting.');
+    expect(transport.readSessionCalls).toBe(1);
+    expect(transport.readTailCalls).toBe(1);
+
+    const appended = message(9, { content: 'committed during initial feed open' });
+    catchUpResponse.resolve({ records: [appended], oldestCursor: 'm9', newestCursor: 'after:9',
+      hasOlder: false, hasNewer: false, coverage: 'controlled-fixture' });
     await vi.waitFor(() => expect(runtime.getSnapshot().records.some((row) => row.id === 'm9')).toBe(true));
     await vi.waitFor(() => expect(runtime.getSnapshot().liveError).toBeUndefined(), { timeout: 1500 });
-    expect(transport.readSessionCalls).toBe(2);
+    expect(transport.readSessionCalls).toBe(1);
     expect(transport.readTailCalls).toBe(1);
     expect(transport.readAfterCalls).toEqual(['after:8']);
     expect(runtime.getSnapshot().session?.raw.clearedThroughSeq).toBe(0);

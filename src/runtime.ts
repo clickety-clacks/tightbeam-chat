@@ -155,6 +155,7 @@ class SessionRuntime implements ChatRuntime {
     appliedNotices: Set<ChangeNotice>;
   } | undefined;
   private catchUpConnection: ChangeConnection | undefined;
+  private catchUpAfterCursor: string | null | undefined;
   private generation = 0;
   private disposed = false;
   private initializing = false;
@@ -585,6 +586,7 @@ class SessionRuntime implements ChatRuntime {
     this.preserveRowsOnReconnect = true;
     this.pendingFeedCoverage = undefined;
     this.catchUpConnection = undefined;
+    this.catchUpAfterCursor = undefined;
     this.turns.clear();
     this.liveActivityIds.clear();
     this.liveActivityEligibleIds.clear();
@@ -691,25 +693,83 @@ class SessionRuntime implements ChatRuntime {
     }, delay);
   }
 
-  private catchUpAfterFeedOpens(connection: ChangeConnection): void {
-    if (this.catchUpConnection === connection) return;
+  private catchUpAfterFeedOpens(connection: ChangeConnection, afterCursor?: string | null): void {
+    if (this.catchUpConnection === connection) {
+      if (afterCursor !== undefined) this.catchUpAfterCursor = afterCursor;
+      return;
+    }
     this.catchUpConnection = connection;
+    this.catchUpAfterCursor = afterCursor;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = undefined;
     this.retryDelayMs = 250;
     if (this.rows.size > 0) this.preserveRowsOnReconnect = true;
 
-    const rebuild = () => {
+    const recover = () => {
       if (this.disposed || this.connection !== connection) return;
       const current = this.rebuildPromise;
       if (current) {
-        void current.then(rebuild, rebuild);
+        void current.then(recover, recover);
         return;
       }
+
+      const pending = this.pendingFeedCoverage;
+      const pendingCursor = pending?.generation === this.generation &&
+        !pending.feedReadyBeforeHistoryRead ? pending.page.newestCursor : undefined;
+      const cursor = this.catchUpAfterCursor ?? pendingCursor;
+      if (typeof cursor === 'string' && this.transport.readAfter) {
+        void this.catchUpFromCursor(connection, cursor, this.generation, this.controller?.signal);
+        return;
+      }
+
+      this.catchUpAfterCursor = undefined;
       this.connectionForRebuild = connection;
       void this.rebuild();
     };
-    rebuild();
+    recover();
+  }
+
+  private async catchUpFromCursor(
+    connection: ChangeConnection,
+    after: string,
+    generation: number,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const pending = this.pendingFeedCoverage;
+    const buffered = this.buffered.splice(0);
+    for (const notice of buffered) {
+      if (!pending?.appliedNotices.has(notice)) this.apply(notice);
+    }
+    this.bufferedSession = undefined;
+    this.pendingFeedCoverage = undefined;
+
+    try {
+      const controllerSignal = signal ?? new AbortController().signal;
+      const page = await this.readAfterPages(after, controllerSignal);
+      if (!this.isCurrent(generation) || controllerSignal.aborted || this.connection !== connection) return;
+
+      for (const record of page.records) this.put(record);
+      if (page.newestCursor) this.newestCursor = page.newestCursor;
+      this.preserveRowsOnReconnect = false;
+      this.catchUpAfterCursor = undefined;
+      this.connectionForRebuild = connection;
+      this.retryDelayMs = 250;
+      this.publish({ status: 'ready', liveError: undefined, records: recordsFrom(this.rows),
+        ...this.activityStatePatch() });
+      this.noteLiveFeedRecovered();
+    } catch (error) {
+      if (!this.isCurrent(generation) || signal?.aborted || this.connection !== connection) return;
+      if (error instanceof AuthorizationError) {
+        this.failClosed(errorText(error));
+        return;
+      }
+
+      // Keep the current conversation visible and let the established recovery
+      // path retry if the bounded cursor endpoint is temporarily unavailable.
+      this.catchUpAfterCursor = undefined;
+      this.connectionForRebuild = connection;
+      void this.rebuild();
+    }
   }
 
   private completePendingFeedCoverage(connection: ChangeConnection): boolean {
@@ -758,6 +818,7 @@ class SessionRuntime implements ChatRuntime {
     this.initializing = false;
     this.pendingFeedCoverage = undefined;
     this.catchUpConnection = undefined;
+    this.catchUpAfterCursor = undefined;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = undefined;
     this.clearLiveFeedStatusTimers();
@@ -1071,6 +1132,7 @@ class SessionRuntime implements ChatRuntime {
         this.connection?.close();
         this.connection = undefined;
         this.catchUpConnection = undefined;
+        this.catchUpAfterCursor = undefined;
         if (sessionNotFound) {
           this.connectionController?.abort();
           this.connectionController = undefined;
@@ -1122,6 +1184,7 @@ class SessionRuntime implements ChatRuntime {
             this.connection?.close();
             this.connection = undefined;
             this.catchUpConnection = undefined;
+            this.catchUpAfterCursor = undefined;
             this.connectionController?.abort();
             this.connectionController = undefined;
             this.connectionBinding = undefined;
@@ -1172,12 +1235,11 @@ class SessionRuntime implements ChatRuntime {
       if (((liveError && liveAttemptSettled) || sessionError || conversationError) && !sessionNotFound) {
         this.scheduleRebuild();
       }
-      // The feed can resolve after the snapshot has already made its connection
-      // decision but just before this rebuild publishes. Verify the captured
-      // feed prefix against this snapshot before scheduling a cursor catch-up.
+      // The feed may become ready after the history request started. It cannot
+      // replay changes from that interval, so read forward from this snapshot's
+      // cursor before reporting the feed as recovered.
       if (this.connection && lateFeedNeedsCatchUp) {
-        this.connectionForRebuild = this.connection;
-        this.catchUpAfterFeedOpens(this.connection);
+        this.catchUpAfterFeedOpens(this.connection, tail?.newestCursor);
       } else if (this.connection && liveError === 'Live updates are connecting.') {
         if (this.completePendingFeedCoverage(this.connection)) liveError = undefined;
         else {
@@ -1510,6 +1572,7 @@ class SessionRuntime implements ChatRuntime {
     this.generation++;
     this.pendingFeedCoverage = undefined;
     this.catchUpConnection = undefined;
+    this.catchUpAfterCursor = undefined;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.clearLiveFeedStatusTimers();
     this.stopTools();
