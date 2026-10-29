@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.50",
+    "items": [
+      {
+        "title": "Recognize conversation activity at a glance",
+        "description": "Activity lines now show colored pills with an icon, readable kind and short identifier or status. Folded groups keep their count and show the newest entry, updating in place while you read."
+      }
+    ]
+  },
+  {
     "version": "v0.1.49",
     "items": [
       {
