@@ -350,8 +350,8 @@ export function buildActivityTrail(input: {
         const allowed = candidate.live
           ? (!input.turnStateAvailable || candidate.liveTailEligibleAtArrival)
           : (beforeOrAtTool.has(candidate.id) || (input.turnStateAvailable && input.activeTurnRunning));
-        const historyAllowed = historyInOwnerConversation(candidate, previousBubble) ||
-          (candidate.live && allowed) || input.shownRuns.has(candidate.id);
+        const historyAllowed = (!candidate.live && historyInOwnerConversation(candidate, previousBubble)) ||
+          (candidate.live && (allowed || belongsToOwnerTurn(candidate))) || input.shownRuns.has(candidate.id);
         if (candidate.historyBacked ? historyAllowed : allowed || input.shownRuns.has(candidate.id)) add(candidate, runKey);
       }
     } else {
@@ -360,7 +360,8 @@ export function buildActivityTrail(input: {
         const allowed = candidate.live
           ? (!input.turnStateAvailable || candidate.liveTailEligibleAtArrival)
           : beforeOrAtTool.has(candidate.id);
-        const historyAllowed = historyInOwnerConversation(candidate, previousBubble) || (candidate.live && allowed) || oldRun;
+        const historyAllowed = (!candidate.live && historyInOwnerConversation(candidate, previousBubble)) ||
+          (candidate.live && (allowed || belongsToOwnerTurn(candidate))) || oldRun;
         if (candidate.historyBacked ? historyAllowed : allowed || oldRun) {
           add(candidate, oldRun ?? runKey);
         }

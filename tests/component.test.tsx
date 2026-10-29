@@ -142,7 +142,7 @@ function visibilityMix(sessionKey: string, prefix: string): readonly CanonicalMe
     sender: 'assistant-service', messageType: 'assistant', replyToMessageId: batch.id, turnSeq: 2, turnIncludesHuman: true,
   });
   const marker = row(sessionKey, `${prefix}-marker`, `Hidden assistant substrate marker ${prefix}`, {
-    sender: 'process:notifications', messageType: 'substrate',
+    sender: 'process:notifications', messageType: 'substrate', turnSeq: 5,
   });
   const agentWake = row(sessionKey, `${prefix}-agent-wake`, `Hidden agent wake ${prefix}`, {
     role: 'user', sender: 'agent:external', messageType: 'agent', turnSeq: 3,
