@@ -226,7 +226,7 @@ describe('activity trail projection', () => {
     const prompt = message('prompt', 1, 'user:person', 'A question', { role: 'user' });
     const carrier = (id: string, seq: number, members: Array<{ index: number; detail: string }>) => message(id, seq,
       'process:notifications', [
-        '[from process:tightbeam]', '', `[batched notices: ${members.length}]`, `batchId=${id}`, 'release=example',
+        '[from process:notifications]', '', `[batched notices: ${members.length}]`, `batchId=${id}`, 'release=example',
         ...members.flatMap(({ index, detail }) => [
           `[${index}] source=agent:helper sender=agent:helper:main session cause=notice class=fyi`, detail, '',
         ]),
