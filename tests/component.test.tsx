@@ -142,7 +142,7 @@ function visibilityMix(sessionKey: string, prefix: string): readonly CanonicalMe
     sender: 'assistant-service', messageType: 'assistant', replyToMessageId: batch.id, turnSeq: 2, turnIncludesHuman: true,
   });
   const marker = row(sessionKey, `${prefix}-marker`, `Hidden assistant substrate marker ${prefix}`, {
-    sender: 'process:notifications', messageType: 'substrate', turnSeq: 5,
+    sender: 'process:notifications', messageType: 'substrate',
   });
   const agentWake = row(sessionKey, `${prefix}-agent-wake`, `Hidden agent wake ${prefix}`, {
     role: 'user', sender: 'agent:external', messageType: 'agent', turnSeq: 3,
@@ -170,8 +170,15 @@ function expectVisibilityMix(log: HTMLElement, prefix: string): void {
   expect(batchBubble?.textContent).not.toContain('coalesced by');
   for (const label of [
     `Hidden assistant substrate marker ${prefix}`, `Hidden agent wake ${prefix}`,
-    `Hidden reply to agent wake ${prefix}`, `Hidden process notice ${prefix}`,
-    `Hidden reply to process notice ${prefix}`,
+    `Hidden process notice ${prefix}`,
+  ]) {
+    const rows = [...log.querySelectorAll<HTMLElement>('.tb-chat-activity-line')]
+      .filter(element => element.textContent?.includes(label));
+    expect(rows).toHaveLength(1);
+    expect(rows[0].closest('.tb-chat-bubble')).toBeNull();
+  }
+  for (const label of [
+    `Hidden reply to agent wake ${prefix}`, `Hidden reply to process notice ${prefix}`,
   ]) expect(within(log).queryByText(label)).toBeNull();
 }
 

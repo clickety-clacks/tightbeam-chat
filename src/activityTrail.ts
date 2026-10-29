@@ -314,8 +314,6 @@ export function buildActivityTrail(input: {
     .filter((turnSeq): turnSeq is number => Number.isSafeInteger(turnSeq)));
   const belongsToOwnerTurn = (candidate: Candidate) => candidate.sourceTurnSeq !== undefined &&
     retainedTurnSequences.has(candidate.sourceTurnSeq);
-  const historyInOwnerConversation = (candidate: Candidate, precedingBubble: BubbleEvent) => candidate.historyBacked &&
-    (candidate.sourceTurnSeq === undefined ? precedingBubble.bubble.ownerScoped : belongsToOwnerTurn(candidate));
 
   const eligible = new Map<string, EligibleCandidate[]>();
   const membership = new Map<string, string>();
@@ -350,7 +348,7 @@ export function buildActivityTrail(input: {
         const allowed = candidate.live
           ? (!input.turnStateAvailable || candidate.liveTailEligibleAtArrival)
           : (beforeOrAtTool.has(candidate.id) || (input.turnStateAvailable && input.activeTurnRunning));
-        const historyAllowed = (!candidate.live && historyInOwnerConversation(candidate, previousBubble)) ||
+        const historyAllowed = (!candidate.live && candidate.historyBacked) ||
           (candidate.live && (allowed || belongsToOwnerTurn(candidate))) || input.shownRuns.has(candidate.id);
         if (candidate.historyBacked ? historyAllowed : allowed || input.shownRuns.has(candidate.id)) add(candidate, runKey);
       }
@@ -360,7 +358,7 @@ export function buildActivityTrail(input: {
         const allowed = candidate.live
           ? (!input.turnStateAvailable || candidate.liveTailEligibleAtArrival)
           : beforeOrAtTool.has(candidate.id);
-        const historyAllowed = (!candidate.live && historyInOwnerConversation(candidate, previousBubble)) ||
+        const historyAllowed = (!candidate.live && candidate.historyBacked) ||
           (candidate.live && (allowed || belongsToOwnerTurn(candidate))) || oldRun;
         if (candidate.historyBacked ? historyAllowed : allowed || oldRun) {
           add(candidate, oldRun ?? runKey);

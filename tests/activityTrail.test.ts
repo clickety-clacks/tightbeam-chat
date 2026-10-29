@@ -348,7 +348,7 @@ describe('activity trail projection', () => {
     }]);
   });
 
-  it('keeps history-backed later-gap and tail folds in canonical order after reload without turn metadata', () => {
+  it('keeps history-backed later-gap and tail folds in canonical order after reload across non-owner turns', () => {
     const storeRow = (id: string, seq: number, role: string, sender: string, content: string,
       messageType: string, extra: Record<string, unknown> = {}) => ({
       id, sessionKey: 'session', seq, rowVersion: 1, role, sender, content, messageType,
@@ -360,14 +360,14 @@ describe('activity trail projection', () => {
         `[${memberIndex}] source=process:events sender=process:events cause=notice class=fyi`,
         `Assignment ${assignment} (Background ${task}) has had no recorded activity since 12`, '',
         'coalesced by notices',
-      ].join('\n'), 'substrate', { isBatchCarrier: true });
+      ].join('\n'), 'substrate', { isBatchCarrier: true, turnSeq: 77 });
     const storedRows = [
-      storeRow('history-prompt-one', 1, 'user', 'user:person', 'First question', 'chat'),
-      storeRow('history-reply-one', 2, 'assistant', 'assistant-service', 'First answer', 'assistant'),
+      storeRow('history-prompt-one', 1, 'user', 'user:person', 'First question', 'chat', { turnSeq: 1 }),
+      storeRow('history-reply-one', 2, 'assistant', 'assistant-service', 'First answer', 'assistant', { turnSeq: 1 }),
       carrier('history-gap-first', 3, 3, 'asg_12345678', 'review'),
       carrier('history-gap-second', 4, 5567, 'asg_abcdef12', 'build'),
-      storeRow('history-prompt-two', 7, 'user', 'user:person', 'Second question', 'chat'),
-      storeRow('history-reply-two', 8, 'assistant', 'assistant-service', 'Second answer', 'assistant'),
+      storeRow('history-prompt-two', 7, 'user', 'user:person', 'Second question', 'chat', { turnSeq: 2 }),
+      storeRow('history-reply-two', 8, 'assistant', 'assistant-service', 'Second answer', 'assistant', { turnSeq: 2 }),
       carrier('history-tail-first', 9, 5568, 'asg_23456789', 'test'),
       carrier('history-tail-second', 10, 5569, 'asg_bcdef123', 'review'),
     ];
@@ -386,7 +386,9 @@ describe('activity trail projection', () => {
       ], liveActivityIds: liveIds, liveActivityEligibleIds: liveIds, activeTurnRunning: false });
     };
     const history = readHistory();
-    expect(history.every(record => record.turnSeq === undefined)).toBe(true);
+    expect(history.filter(record => record.isBatchCarrier).map(record => record.turnSeq)).toEqual([77, 77, 77, 77]);
+    expect(history.filter(record => record.id.startsWith('history-prompt') || record.id.startsWith('history-reply'))
+      .map(record => record.turnSeq)).toEqual([1, 1, 2, 2]);
     const beforeLeave = project(history, true);
     const afterReturn = project(readHistory());
     const afterReload = project(readHistory());
