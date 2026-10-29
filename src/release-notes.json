@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.53",
+    "items": [
+      {
+        "title": "Activity snapshot compatibility",
+        "description": "The deprecated liveActivityIds and liveActivityEligibleIds snapshot fields remain in the public types but are no longer populated at runtime."
+      }
+    ]
+  },
+  {
     "version": "v0.1.52",
     "items": [
       {
