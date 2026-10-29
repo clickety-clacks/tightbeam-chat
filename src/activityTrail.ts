@@ -250,12 +250,19 @@ function bubbleEvents(bubbles: readonly ActivityBubble[]): BubbleEvent[] {
 }
 
 function belongsToOwnerConversation(candidate: Candidate, precedingBubble: BubbleEvent,
-  nextBubble: BubbleEvent | undefined, activeOwnerTurnRunning: boolean): boolean {
+  nextBubble: BubbleEvent | undefined, activeOwnerTurnRunning: boolean,
+  ownerReplySpanKeys: ReadonlySet<string>): boolean {
   if (!candidate.historyBacked || !precedingBubble.ownerTurnScoped) return false;
   const betweenOwnerPromptAndReply = !!nextBubble && nextBubble.ownerTurnScoped &&
     nextBubble.bubble.side === 'agent' && nextBubble.spanKey === precedingBubble.spanKey;
+  // A follow-up owner prompt can arrive before the reply that closes the
+  // current gap. Keep the gap while that owner turn runs, and retain it after
+  // completion when an owner reply in the prompt's span is present in history.
+  const beforeOwnerFollowUp = !!nextBubble && nextBubble.ownerTurnScoped &&
+    nextBubble.bubble.side === 'human' && !!nextBubble.spanKey &&
+    (activeOwnerTurnRunning || ownerReplySpanKeys.has(nextBubble.spanKey));
   const activeOwnerTail = !nextBubble && activeOwnerTurnRunning && !!precedingBubble.spanKey;
-  return betweenOwnerPromptAndReply || activeOwnerTail;
+  return betweenOwnerPromptAndReply || beforeOwnerFollowUp || activeOwnerTail;
 }
 
 function lineWithRun(candidate: Candidate, runKey: string, includeToolDetails = true): ActivityLine {
@@ -325,12 +332,17 @@ export function buildActivityTrail(input: {
       kind: 'candidate', candidate, ...candidate.position,
     })),
   ].sort(comparePosition);
-  // Canonical activity persists only inside an ordered owner prompt/reply span.
-  // During a running owner turn, its live tail also remains visible after an
-  // interim reply. A matching row turnSeq does not invent a missing turn end.
+  const ownerReplySpanKeys = new Set(orderedBubbles
+    .filter((bubble) => bubble.ownerTurnScoped && bubble.bubble.side === 'agent' && bubble.spanKey)
+    .map((bubble) => bubble.spanKey!));
+  // Canonical activity persists inside an ordered owner prompt/reply span,
+  // including gaps that cross a follow-up prompt. During a running owner turn,
+  // its tail remains visible after an interim reply. A matching row turnSeq
+  // does not invent a missing turn end.
   const historyInOwnerConversation = (candidate: Candidate, precedingBubble: BubbleEvent,
     nextBubble?: BubbleEvent) => {
-    return belongsToOwnerConversation(candidate, precedingBubble, nextBubble, input.activeOwnerTurnRunning);
+    return belongsToOwnerConversation(candidate, precedingBubble, nextBubble, input.activeOwnerTurnRunning,
+      ownerReplySpanKeys);
   };
 
   const eligible = new Map<string, EligibleCandidate[]>();

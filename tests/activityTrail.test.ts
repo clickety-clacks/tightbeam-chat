@@ -345,6 +345,50 @@ describe('activity trail projection', () => {
     }]);
   });
 
+  it('keeps an owner-turn gap across a follow-up prompt when a later reply closes the span', () => {
+    const prompt = message('follow-up-gap-prompt', 1, 'user:person', 'First question', { role: 'user' });
+    const activity = message('follow-up-gap-activity', 2, 'process:events', 'Owner-turn activity', {
+      messageType: 'substrate',
+    });
+    const followUp = message('follow-up-gap-next-prompt', 3, 'user:person', 'Follow-up question', { role: 'user' });
+    const reply = message('follow-up-gap-reply', 4, 'assistant-service', 'The answer', {
+      role: 'assistant', replyToMessageId: followUp.id,
+    });
+    const duringTurn = build({ records: [activity], bubbles: [
+      bubble(prompt, 'human'), bubble(followUp, 'human'),
+    ], activeTurnRunning: true, activeOwnerTurnRunning: true });
+    const completedTurn = build({ records: [activity], bubbles: [
+      bubble(prompt, 'human'), bubble(followUp, 'human'), bubble(reply, 'agent'),
+    ], activeTurnRunning: false, activeOwnerTurnRunning: false });
+    const afterReload = build({ records: [activity], bubbles: [
+      bubble(prompt, 'human'), bubble(followUp, 'human'), bubble(reply, 'agent'),
+    ], activeTurnRunning: false, activeOwnerTurnRunning: false });
+
+    expect(duringTurn.messageItems.map(item => item.id)).toContain('message:follow-up-gap-activity');
+    expect(completedTurn.messageItems.map(item => item.id)).toContain('message:follow-up-gap-activity');
+    expect(afterReload.messageItems).toEqual(completedTurn.messageItems);
+  });
+
+  it('keeps activity after an interim reply while the follow-up owner turn runs, then drops its unclosed tail', () => {
+    const prompt = message('interim-gap-prompt', 1, 'user:person', 'First question', { role: 'user' });
+    const interimReply = message('interim-gap-reply', 2, 'assistant-service', 'Partial answer', {
+      role: 'assistant', replyToMessageId: prompt.id,
+    });
+    const activity = message('interim-gap-activity', 3, 'process:events', 'Activity after interim reply', {
+      messageType: 'substrate',
+    });
+    const followUp = message('interim-gap-next-prompt', 4, 'user:person', 'Continue the answer', { role: 'user' });
+    const runningTurn = build({ records: [activity], bubbles: [
+      bubble(prompt, 'human'), bubble(interimReply, 'agent'), bubble(followUp, 'human'),
+    ], activeTurnRunning: true, activeOwnerTurnRunning: true });
+    const endedWithoutReply = build({ records: [activity], bubbles: [
+      bubble(prompt, 'human'), bubble(interimReply, 'agent'), bubble(followUp, 'human'),
+    ], activeTurnRunning: false, activeOwnerTurnRunning: false });
+
+    expect(runningTurn.messageItems.map(item => item.id)).toContain('message:interim-gap-activity');
+    expect(endedWithoutReply.messageItems.map(item => item.id)).not.toContain('message:interim-gap-activity');
+  });
+
   it('matches live and reloaded pills while excluding non-owner activity on every page', () => {
     const storeRow = (id: string, seq: number, role: string, sender: string, content: string,
       messageType: string, extra: Record<string, unknown> = {}) => ({
