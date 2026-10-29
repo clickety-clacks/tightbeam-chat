@@ -31,16 +31,22 @@ function build(input: {
   turnStateAvailable?: boolean;
   activeTurnRunning?: boolean;
   activeOwnerTurnRunning?: boolean;
+  activeOwnerTurnSeq?: number;
+  activeOwnerTurnMessageId?: string;
   railDenials?: readonly LiveRailDenial[];
   shownRuns?: ReadonlyMap<string, string>;
   expandedRuns?: ReadonlySet<string>;
 }) {
+  const activeOwnerPrompt = [...(input.bubbles ?? [])].reverse().find(candidate =>
+    candidate.side === 'human' && candidate.ownerScoped);
   return buildActivityTrail({
     sessionKey: 'session', records: input.records ?? [], bubbles: input.bubbles ?? [], transitions: input.transitions ?? [],
     localSendTimes: input.localSendTimes,
     tools: input.tools ?? [], toolsEnabled: input.toolsEnabled ?? true,
     turnStateAvailable: input.turnStateAvailable ?? true, activeTurnRunning: input.activeTurnRunning ?? true,
     activeOwnerTurnRunning: input.activeOwnerTurnRunning ?? input.activeTurnRunning ?? true,
+    activeOwnerTurnSeq: input.activeOwnerTurnSeq ?? activeOwnerPrompt?.record.turnSeq,
+    activeOwnerTurnMessageId: input.activeOwnerTurnMessageId ?? activeOwnerPrompt?.record.id,
     railDenials: input.railDenials ?? [],
     shownRuns: input.shownRuns ?? new Map(), expandedRuns: input.expandedRuns ?? new Set(),
   });
@@ -606,7 +612,7 @@ describe('activity trail projection', () => {
     expect(reloadedOlderPage.messageItems).toEqual(liveOlderPage.messageItems);
   });
 
-  it('shows activity after an interim reply during a running owner turn and applies the no-later-reply limit consistently', () => {
+  it('keeps the active owner-turn gap after a follow-up prompt and applies the no-later-reply limit', () => {
     const prompt = message('prompt', 1, 'user:person', 'Question', { role: 'user', turnSeq: 1 });
     const interimReply = message('interim-reply', 2, 'assistant-service', 'First part of the answer', {
       role: 'assistant', turnSeq: 1, replyToMessageId: prompt.id,
@@ -614,11 +620,14 @@ describe('activity trail projection', () => {
     const activity = message('after-interim', 3, 'process:work', 'A notice during the running owner turn', {
       messageType: 'substrate', turnSeq: 1,
     });
-    const bubbles = [bubble(prompt, 'human'), bubble(interimReply, 'agent')];
+    const followUp = message('follow-up', 4, 'user:person', 'Continue the answer', { role: 'user', turnSeq: 1 });
+    const bubbles = [bubble(prompt, 'human'), bubble(interimReply, 'agent'), bubble(followUp, 'human')];
     const liveWhileRunning = build({ records: [activity], bubbles, turnStateAvailable: true,
-      activeTurnRunning: true, activeOwnerTurnRunning: true });
+      activeTurnRunning: true, activeOwnerTurnRunning: true, activeOwnerTurnSeq: 1,
+      activeOwnerTurnMessageId: prompt.id });
     const reloadedWhileRunning = build({ records: [activity], bubbles, turnStateAvailable: true,
-      activeTurnRunning: true, activeOwnerTurnRunning: true });
+      activeTurnRunning: true, activeOwnerTurnRunning: true, activeOwnerTurnSeq: 1,
+      activeOwnerTurnMessageId: prompt.id });
 
     expect(liveWhileRunning.messageItems).toEqual(reloadedWhileRunning.messageItems);
     expect(reloadedWhileRunning.messageItems).toMatchObject([{ id: 'message:after-interim', kind: 'substrate' }]);
@@ -632,12 +641,60 @@ describe('activity trail projection', () => {
     expect(liveAfterTurnEnds.messageItems).toEqual(reloadedAfterTurnEnds.messageItems);
     expect(reloadedAfterTurnEnds.messageItems).toEqual([]);
 
-    const finalReply = message('final-reply', 4, 'assistant-service', 'The answer is complete', {
-      role: 'assistant', turnSeq: 1, replyToMessageId: prompt.id,
+    const finalReply = message('final-reply', 5, 'assistant-service', 'The answer is complete', {
+      role: 'assistant', turnSeq: 1, replyToMessageId: followUp.id,
     });
     const closedByReply = build({ records: [activity], bubbles: [...bubbles, bubble(finalReply, 'agent')],
       turnStateAvailable: true, activeTurnRunning: false, activeOwnerTurnRunning: false });
     expect(closedByReply.messageItems).toMatchObject([{ id: 'message:after-interim', kind: 'substrate' }]);
+  });
+
+  it('persists a gap closed by a later reply across owner follow-up prompts but excludes older completed gaps', () => {
+    const prompt = message('span-prompt', 1, 'user:person', 'Question', { role: 'user', turnSeq: 11 });
+    const activity = message('span-activity', 2, 'process:work', 'Activity in the owner span', {
+      messageType: 'substrate', turnSeq: 77,
+    });
+    const followUp = message('span-follow-up', 3, 'user:person', 'Add a detail', { role: 'user', turnSeq: 11 });
+    const laterPrompt = message('span-later-prompt', 4, 'user:person', 'One more detail', {
+      role: 'user', turnSeq: 11,
+    });
+    const finalReply = message('span-final-reply', 5, 'assistant-service', 'Completed answer', {
+      role: 'assistant', turnSeq: 11, replyToMessageId: laterPrompt.id,
+    });
+    const closedBubbles = [prompt, followUp, laterPrompt, finalReply].map((record, index) =>
+      bubble(record, index === 3 ? 'agent' : 'human'));
+    const liveClosed = build({ records: [activity], bubbles: closedBubbles, activeTurnRunning: false,
+      activeOwnerTurnRunning: false });
+    const reloadedClosed = build({ records: [activity], bubbles: closedBubbles, activeTurnRunning: false,
+      activeOwnerTurnRunning: false });
+    expect(liveClosed.messageItems).toEqual(reloadedClosed.messageItems);
+    expect(reloadedClosed.messageItems).toMatchObject([{ id: 'message:span-activity', kind: 'substrate' }]);
+
+    const firstPrompt = message('finished-prompt', 10, 'user:person', 'Earlier question', {
+      role: 'user', turnSeq: 21,
+    });
+    const firstReply = message('finished-reply', 11, 'assistant-service', 'Earlier answer', {
+      role: 'assistant', turnSeq: 21,
+    });
+    const staleActivity = message('finished-activity', 12, 'process:work', 'From the finished exchange', {
+      messageType: 'substrate', turnSeq: 21,
+    });
+    const currentPrompt = message('current-prompt', 13, 'user:person', 'New question', {
+      role: 'user', turnSeq: 22,
+    });
+    const currentFollowUp = message('current-follow-up', 14, 'user:person', 'Still working', {
+      role: 'user', turnSeq: 22,
+    });
+    const currentBubbles = [firstPrompt, firstReply, currentPrompt, currentFollowUp].map((record, index) =>
+      bubble(record, index === 1 ? 'agent' : 'human'));
+    const liveWhileNewTurnRuns = build({ records: [staleActivity], bubbles: currentBubbles,
+      activeTurnRunning: true, activeOwnerTurnRunning: true, activeOwnerTurnSeq: 22,
+      activeOwnerTurnMessageId: currentPrompt.id });
+    const reloadedWhileNewTurnRuns = build({ records: [staleActivity], bubbles: currentBubbles,
+      activeTurnRunning: true, activeOwnerTurnRunning: true, activeOwnerTurnSeq: 22,
+      activeOwnerTurnMessageId: currentPrompt.id });
+    expect(liveWhileNewTurnRuns.messageItems).toEqual(reloadedWhileNewTurnRuns.messageItems);
+    expect(reloadedWhileNewTurnRuns.messageItems).toEqual([]);
   });
 
   it('does not admit unrelated activity just because another turn is running', () => {

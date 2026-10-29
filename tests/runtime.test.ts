@@ -125,6 +125,46 @@ class ControlledTransport implements ChatTransport {
 async function settle() { await vi.waitFor(() => {}, { timeout: 50 }); }
 
 describe('framework-independent runtime', () => {
+  it('preserves the public live-activity snapshot fields and arrival-time eligibility', async () => {
+    const transport = new ControlledTransport();
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await runtime.rebuild();
+
+    expect(runtime.getSnapshot().liveActivityIds).toEqual([]);
+    expect(runtime.getSnapshot().liveActivityEligibleIds).toEqual([]);
+    expect(Object.isFrozen(runtime.getSnapshot().liveActivityIds)).toBe(true);
+    expect(Object.isFrozen(runtime.getSnapshot().liveActivityEligibleIds)).toBe(true);
+
+    const unknownActivity = message(9, { sender: 'agent:helper', messageType: 'agent' });
+    transport.emit(unknownActivity);
+    expect(runtime.getSnapshot().liveActivityIds).toEqual([unknownActivity.id]);
+    expect(runtime.getSnapshot().liveActivityEligibleIds).toEqual([unknownActivity.id]);
+
+    const completedTurn: CanonicalTurn = { seq: 80, sessionKey, status: 'completed', messageId: 'm8',
+      origin: 'user:person', triggerSource: 'mike', raw: { rowVersion: 1 } };
+    transport.callbacks?.onNotice({ operation: 'turn', turn: completedTurn });
+    const idleActivity = message(10, { sender: 'process:worker', messageType: 'process' });
+    transport.emit(idleActivity);
+    expect(runtime.getSnapshot().liveActivityIds).toEqual([unknownActivity.id, idleActivity.id]);
+    expect(runtime.getSnapshot().liveActivityEligibleIds).toEqual([unknownActivity.id]);
+
+    const runningTurn: CanonicalTurn = { ...completedTurn, seq: 81, status: 'running', messageId: 'm9' };
+    transport.callbacks?.onNotice({ operation: 'turn', turn: runningTurn });
+    const runningActivity = message(11, { sender: 'session:worker', messageType: undefined });
+    transport.emit(runningActivity);
+    expect(runtime.getSnapshot().liveActivityIds).toEqual([unknownActivity.id, idleActivity.id, runningActivity.id]);
+    expect(runtime.getSnapshot().liveActivityEligibleIds).toEqual([unknownActivity.id, runningActivity.id]);
+
+    transport.callbacks?.onNotice({ operation: 'turn', turn: { ...runningTurn, status: 'completed',
+      raw: { rowVersion: 2 } } });
+    expect(runtime.getSnapshot().liveActivityEligibleIds).toEqual([unknownActivity.id, runningActivity.id]);
+
+    await runtime.rebuild({ restart: true });
+    expect(runtime.getSnapshot().liveActivityIds).toEqual([]);
+    expect(runtime.getSnapshot().liveActivityEligibleIds).toEqual([]);
+    runtime.dispose();
+  });
+
   it('treats retained rows as history after opening a replacement live subscription', async () => {
     const transport = new ControlledTransport();
     const settledTurn: CanonicalTurn = { seq: 80, sessionKey, status: 'completed', messageId: 'm8',

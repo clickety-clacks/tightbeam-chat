@@ -78,6 +78,8 @@ interface BubbleEvent extends Position {
   readonly kind: 'bubble';
   readonly bubble: ActivityBubble;
   readonly spanKey?: string;
+  readonly spanRootMessageId?: string;
+  readonly ownerTurnSeq?: number;
   /** True only when this bubble belongs to a span opened by the selected user's prompt. */
   readonly ownerTurnScoped: boolean;
 }
@@ -230,6 +232,8 @@ function bubbleEvents(bubbles: readonly ActivityBubble[]): BubbleEvent[] {
     left.key.localeCompare(right.key));
   const events: BubbleEvent[] = [];
   let spanKey: string | undefined;
+  let spanRootMessageId: string | undefined;
+  let spanRootTurnSeq: number | undefined;
   let ownerTurnScoped = false;
   let hasReply = false;
   for (let order = 0; order < ordered.length; order++) {
@@ -237,34 +241,41 @@ function bubbleEvents(bubbles: readonly ActivityBubble[]): BubbleEvent[] {
     if (bubble.side === 'human') {
       if (!spanKey || hasReply || ownerTurnScoped !== bubble.ownerScoped) {
         spanKey = `prompt:${bubble.key}`;
+        spanRootMessageId = bubble.record.id;
+        spanRootTurnSeq = bubble.record.turnSeq;
         ownerTurnScoped = bubble.ownerScoped;
       }
       hasReply = false;
     } else if (spanKey) {
       hasReply = true;
     }
-    events.push({ kind: 'bubble', bubble, spanKey, ownerTurnScoped,
+    events.push({ kind: 'bubble', bubble, spanKey, spanRootMessageId,
+      ownerTurnSeq: bubble.record.turnSeq ?? spanRootTurnSeq, ownerTurnScoped,
       sequence: bubble.record.seq, phase: 0, order });
   }
   return events;
 }
 
 function belongsToOwnerConversation(candidate: Candidate, precedingBubble: BubbleEvent,
-  nextBubble: BubbleEvent | undefined, activeOwnerTurnRunning: boolean,
-  ownerReplySpanKeys: ReadonlySet<string>): boolean {
+  nextBubble: BubbleEvent | undefined, activeOwnerTurnRunning: boolean, activeOwnerTurnSeq: number | undefined,
+  activeOwnerTurnMessageId: string | undefined, ownerReplyByTurn: ReadonlyMap<number, BubbleEvent>,
+  ownerReplyBySpan: ReadonlyMap<string, BubbleEvent>): boolean {
   if (!candidate.historyBacked || !precedingBubble.ownerTurnScoped) return false;
-  const betweenOwnerPromptAndReply = !!nextBubble && nextBubble.ownerTurnScoped &&
-    nextBubble.bubble.side === 'agent' && nextBubble.spanKey === precedingBubble.spanKey;
-  // Several owner prompts can share an unanswered span. Keep its gaps when a
-  // later reply closes that same span. A gap before a new span's prompt is
-  // visible only while that owner turn is running; its later reply cannot
-  // retroactively claim activity from the already-closed prior span.
+  const turnReply = precedingBubble.ownerTurnSeq !== undefined
+    ? ownerReplyByTurn.get(precedingBubble.ownerTurnSeq) : undefined;
+  const spanReply = precedingBubble.spanKey ? ownerReplyBySpan.get(precedingBubble.spanKey) : undefined;
+  const closedByLaterReply = [turnReply, spanReply].some(reply => reply && comparePosition(reply, candidate) > 0);
+  // Running activity belongs only to the active owner's turn. A later owner
+  // prompt cannot make an older, completed exchange look live again.
+  const matchesActiveTurn = activeOwnerTurnRunning && (
+    activeOwnerTurnSeq !== undefined && precedingBubble.ownerTurnSeq !== undefined
+      ? activeOwnerTurnSeq === precedingBubble.ownerTurnSeq
+      : !!activeOwnerTurnMessageId && precedingBubble.spanRootMessageId === activeOwnerTurnMessageId
+  );
   const beforeOwnerFollowUp = !!nextBubble && nextBubble.ownerTurnScoped &&
-    nextBubble.bubble.side === 'human' && !!nextBubble.spanKey &&
-    (activeOwnerTurnRunning || (nextBubble.spanKey === precedingBubble.spanKey &&
-      ownerReplySpanKeys.has(precedingBubble.spanKey ?? '')));
-  const activeOwnerTail = !nextBubble && activeOwnerTurnRunning && !!precedingBubble.spanKey;
-  return betweenOwnerPromptAndReply || beforeOwnerFollowUp || activeOwnerTail;
+    nextBubble.bubble.side === 'human' && matchesActiveTurn;
+  const activeOwnerTail = !nextBubble && matchesActiveTurn;
+  return closedByLaterReply || beforeOwnerFollowUp || activeOwnerTail;
 }
 
 function lineWithRun(candidate: Candidate, runKey: string, includeToolDetails = true): ActivityLine {
@@ -302,6 +313,9 @@ export function buildActivityTrail(input: {
   /** Any running turn still gates non-history tool rows and live refusals. */
   readonly activeTurnRunning: boolean;
   readonly activeOwnerTurnRunning: boolean;
+  /** Source-backed identity of the currently running owner turn, when available. */
+  readonly activeOwnerTurnSeq?: number;
+  readonly activeOwnerTurnMessageId?: string;
   readonly railDenials: readonly LiveRailDenial[];
   readonly shownRuns: ReadonlyMap<string, string>;
   readonly expandedRuns: ReadonlySet<string>;
@@ -334,17 +348,21 @@ export function buildActivityTrail(input: {
       kind: 'candidate', candidate, ...candidate.position,
     })),
   ].sort(comparePosition);
-  const ownerReplySpanKeys = new Set(orderedBubbles
-    .filter((bubble) => bubble.ownerTurnScoped && bubble.bubble.side === 'agent' && bubble.spanKey)
-    .map((bubble) => bubble.spanKey!));
-  // Canonical activity persists inside an ordered owner prompt/reply span,
-  // including gaps that cross a follow-up prompt. During a running owner turn,
-  // its tail remains visible after an interim reply. A matching row turnSeq
-  // does not invent a missing turn end.
+  const ownerReplyByTurn = new Map<number, BubbleEvent>();
+  const ownerReplyBySpan = new Map<string, BubbleEvent>();
+  for (const bubble of orderedBubbles) {
+    if (!bubble.ownerTurnScoped || bubble.bubble.side !== 'agent') continue;
+    if (bubble.ownerTurnSeq !== undefined) ownerReplyByTurn.set(bubble.ownerTurnSeq, bubble);
+    if (bubble.spanKey) ownerReplyBySpan.set(bubble.spanKey, bubble);
+  }
+  // Canonical activity persists when a later owner reply closes its turn/span,
+  // including gaps across follow-up prompts. A running turn keeps only its own
+  // gaps visible; the current turn identity prevents unrelated older gaps from
+  // becoming visible simply because another owner turn is active.
   const historyInOwnerConversation = (candidate: Candidate, precedingBubble: BubbleEvent,
     nextBubble?: BubbleEvent) => {
     return belongsToOwnerConversation(candidate, precedingBubble, nextBubble, input.activeOwnerTurnRunning,
-      ownerReplySpanKeys);
+      input.activeOwnerTurnSeq, input.activeOwnerTurnMessageId, ownerReplyByTurn, ownerReplyBySpan);
   };
 
   const eligible = new Map<string, EligibleCandidate[]>();

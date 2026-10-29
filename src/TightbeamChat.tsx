@@ -998,6 +998,10 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     turnStateAvailable: state.activityTurnStateAvailable === true,
     activeTurnRunning: state.activeTurn?.turn.status === 'running',
     activeOwnerTurnRunning: state.activeTurn?.sourceKind === 'human' && state.activeTurn.turn.status === 'running',
+    activeOwnerTurnSeq: state.activeTurn?.sourceKind === 'human' && state.activeTurn.turn.status === 'running'
+      ? state.activeTurn.turn.seq : undefined,
+    activeOwnerTurnMessageId: state.activeTurn?.sourceKind === 'human' && state.activeTurn.turn.status === 'running'
+      ? state.activeTurn.turn.messageId : undefined,
     railDenials: state.liveRailDenials ?? [],
     shownRuns,
     expandedRuns,

@@ -283,6 +283,10 @@ export interface RuntimeState {
   /** A local caption-only failure; it never makes conversation or sending unavailable. */
   /** True only after this live subscription has delivered at least one turn record. */
   readonly activityTurnStateAvailable?: boolean;
+  /** Message ids observed on the live subscription; retained for public runtime consumers. */
+  readonly liveActivityIds?: readonly string[];
+  /** Live message ids whose arrival occurred while activity was unknown or a turn was running. */
+  readonly liveActivityEligibleIds?: readonly string[];
   /** Ephemeral rail.denied observations; they are not transcript history. */
   readonly liveRailDenials?: readonly LiveRailDenial[];
   readonly targetGateway?: string;
