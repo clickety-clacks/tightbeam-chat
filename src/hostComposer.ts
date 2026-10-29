@@ -95,7 +95,12 @@ function runtimeUnavailableReason(state: RuntimeState): string | undefined {
 }
 
 function liveFeedState(state: RuntimeState): HostConnectionState {
-  if (state.status === 'ready') return state.liveError ? 'reconnecting' : 'connected';
+  if (state.status === 'ready') {
+    if (state.liveConnectionState === 'disconnected') return 'disconnected';
+    if (state.liveConnectionState === 'connecting' || state.liveConnectionState === 'reconnecting') return 'reconnecting';
+    if (state.liveConnectionState === 'connected') return 'connected';
+    return state.liveError ? 'reconnecting' : 'connected';
+  }
   if (state.status === 'loading' || state.status === 'stale') return 'reconnecting';
   return 'disconnected';
 }
@@ -317,7 +322,7 @@ export class HostComposerBridge {
       const state = lifetime.runtime.getSnapshot();
       if (command.lifetimeId !== lifetime.lifetimeId || command.sessionKey !== lifetime.sessionKey ||
           state.sessionKey !== lifetime.sessionKey || state.identityChanged || runtimeUnavailableReason(state)) return;
-      if (liveFeedState(state) === 'connected') return;
+      if (liveFeedState(state) === 'connected' && !state.liveError) return;
       // Explicit recovery supersedes a scheduled retry while keeping this runtime
       // and its retained transcript in place. Send attempts are owned separately.
       void lifetime.runtime.rebuild({ restart: true });

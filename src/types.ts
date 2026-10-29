@@ -228,6 +228,7 @@ export interface ChatTransport {
 }
 
 export type RuntimeStatus = 'loading' | 'ready' | 'stale' | 'unsupported' | 'unauthorized' | 'error';
+export type LiveConnectionState = 'connecting' | 'connected' | 'reconnecting' | 'disconnected';
 export type SendStatus = 'pending' | 'accepted' | 'failed' | 'uncertain';
 
 export interface LocalSend extends HumanSubmission {
@@ -261,6 +262,8 @@ export interface RuntimeState {
   readonly conversationError?: string;
   /** Live updates can reconnect independently from reading and sending. */
   readonly liveError?: string;
+  /** The live-feed connection is independent from conversation availability. */
+  readonly liveConnectionState?: LiveConnectionState;
   /** Set only when the host principal/device no longer matches this runtime's identity. */
   readonly identityChanged?: boolean;
   readonly records: readonly ConversationRecord[];

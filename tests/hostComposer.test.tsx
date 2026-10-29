@@ -36,6 +36,7 @@ class HostComposerTransport implements ChatTransport {
   readonly observation: TargetObservation = profile;
   readyGate?: ReturnType<typeof deferred<void>>;
   readGate?: ReturnType<typeof deferred<void>>;
+  changeOpenFailures = 0;
   failReadSessionOnce = false;
   missingSession = false;
   authorizationLost = false;
@@ -49,6 +50,11 @@ class HostComposerTransport implements ChatTransport {
     this.callbacks.set(sessionKey, callbacks);
     if (this.readyGate) await this.readyGate.promise;
     if (signal.aborted) throw new Error('Changes subscription was canceled.');
+    if (this.changeOpenFailures > 0) {
+      this.changeOpenFailures--;
+      if (this.callbacks.get(sessionKey) === callbacks) this.callbacks.delete(sessionKey);
+      throw new Error('Live updates are unavailable.');
+    }
     queueMicrotask(() => {
       if (signal.aborted || this.callbacks.get(sessionKey) !== callbacks) return;
       for (const turn of this.currentTurns.filter(turn => turn.sessionKey === sessionKey)) {
@@ -228,7 +234,7 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     await act(async () => { transport.readyGate?.resolve(); });
     expect(events.filter((event) => event.event === 'ready')).toHaveLength(1);
     await waitFor(() => expect(connectionEvents(events).map((event) => event.state))
-      .toEqual(['reconnecting', 'connected']));
+      .toEqual(['reconnecting', 'connected']), { timeout: 2500 });
   });
 
   it('leaves keyboard navigation to the host after native-composer opt-in', async () => {
@@ -642,7 +648,7 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     expect(transport.submissions[0].sessionKey).toBe('session-a');
   });
 
-  it('keeps the host composer ready and sending during a live-update reconnect', async () => {
+  it('keeps the host composer ready through feed debounce, sustained failure, and recovery', async () => {
     const events: HostComposerEvent[] = [];
     const transport = new HostComposerTransport();
     transport.nextSend = async (submission) => {
@@ -652,11 +658,20 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     installDeclaration(events);
     const { runtimes } = openChat(transport, 'conversation-a');
     const first = await waitForReady(events, 'conversation-a');
+    await waitFor(() => expect(connectionEvents(events).some((event) => event.state === 'connected' &&
+      event.lifetimeId === first.lifetimeId)).toBe(true), { timeout: 2000 });
+    const connectionEventCountBeforeDrop = connectionEvents(events).length;
 
+    transport.changeOpenFailures = 8;
     act(() => transport.callbacks.get('conversation-a')?.onDoubt('connection closed'));
-    act(() => commandEntry()({ type: 'reconnect', lifetimeId: first.lifetimeId, sessionKey: first.sessionKey }));
-    expect(events.some((event) => event.event === 'connection' && event.state === 'reconnecting' &&
-      event.lifetimeId === first.lifetimeId)).toBe(true);
+    expect(connectionEvents(events).slice(connectionEventCountBeforeDrop).some((event) => event.state === 'disconnected'))
+      .toBe(false);
+    await waitFor(() => expect(connectionEvents(events).slice(connectionEventCountBeforeDrop).some((event) =>
+      event.state === 'reconnecting' && event.lifetimeId === first.lifetimeId)).toBe(true), { timeout: 2000 });
+
+    await waitFor(() => expect(events.some((event) => event.event === 'connection' && event.state === 'disconnected' &&
+      event.lifetimeId === first.lifetimeId)).toBe(true), { timeout: 12_000 });
+    expect(runtimes[0].getSnapshot().liveConnectionState).toBe('disconnected');
     expect(screen.queryByRole('button', { name: 'Reconnect' })).toBeNull();
     expect(events.filter((event) => event.event === 'ready' && event.lifetimeId === first.lifetimeId)).toHaveLength(1);
     expect(events.some((event) => event.event === 'unavailable' && event.lifetimeId === first.lifetimeId)).toBe(false);
@@ -668,8 +683,12 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     await screen.findByText('send while live updates reconnect');
     expect(events.some((event) => event.event === 'unavailable' && event.lifetimeId === first.lifetimeId)).toBe(false);
     expect(runtimes[0].getSnapshot().status).toBe('ready');
+    transport.changeOpenFailures = 0;
+    act(() => commandEntry()({ type: 'reconnect', lifetimeId: first.lifetimeId, sessionKey: first.sessionKey }));
     await waitFor(() => expect(transport.changeOpenCount).toBeGreaterThan(1));
     await waitFor(() => expect(runtimes[0].getSnapshot().liveError).toBeUndefined());
+    await waitFor(() => expect(events.some((event) => event.event === 'connection' && event.state === 'connected' &&
+      event.lifetimeId === first.lifetimeId)).toBe(true), { timeout: 3000 });
 
     const reply: CanonicalMessage = { kind: 'message', id: 'live-agent-reply', sessionKey: 'conversation-a',
       seq: 2, rowVersion: 1, role: 'assistant', sender: 'assistant-service', messageType: 'assistant',
@@ -679,7 +698,7 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     await screen.findByText(reply.content);
     expect(events.filter((event) => event.event === 'ready')).toHaveLength(1);
     expect(readyEvent(events, 'conversation-a')?.lifetimeId).toBe(first.lifetimeId);
-  });
+  }, 20_000);
 
   it('reconnects the live feed in place and preserves the newest view and an older reading anchor', async () => {
     const events: HostComposerEvent[] = [];
@@ -697,22 +716,22 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     const layout = installSubmitViewportLayout(viewport);
     const reconnect = async () => {
       const openedBefore = transport.changeOpenCount;
-      const connectedBefore = events.filter((event) => event.event === 'connection' &&
-        event.state === 'connected' && event.lifetimeId === ready.lifetimeId).length;
       act(() => {
         transport.callbacks.get(sessionKey)?.onDoubt('live feed dropped');
         commandEntry()({ type: 'reconnect', lifetimeId: ready.lifetimeId, sessionKey: ready.sessionKey });
       });
       expect(transport.changeOpenCount).toBe(openedBefore + 1);
       await waitFor(() => expect(runtimes[0].getSnapshot().liveError).toBeUndefined());
-      await waitFor(() => expect(events.filter((event) => event.event === 'connection' &&
-        event.state === 'connected' && event.lifetimeId === ready.lifetimeId).length).toBe(connectedBefore + 1));
+      await waitFor(() => expect(runtimes[0].getSnapshot().liveConnectionState).toBe('connected'),
+        { timeout: 2500 });
       await act(async () => { await new Promise((resolve) => setTimeout(resolve, 300)); });
       expect(transport.changeOpenCount).toBe(openedBefore + 1);
     };
 
     try {
-      expect(connectionEvents(events).map((event) => event.state)).toEqual(['connected']);
+      await waitFor(() => expect(connectionEvents(events).map((event) => event.state))
+        .toEqual(['reconnecting', 'connected']),
+        { timeout: 2500 });
       const openCount = transport.changeOpenCount;
       const eventCount = events.length;
       act(() => {
@@ -747,11 +766,31 @@ describe('versioned host composer seam on the real adapter and surface', () => {
       expect(events.filter((event) => event.event === 'ready' && event.lifetimeId === ready.lifetimeId)).toHaveLength(1);
       expect(events.some((event) => event.event === 'unavailable' && event.lifetimeId === ready.lifetimeId)).toBe(false);
       expect(events.some((event) => event.event === 'lifetime-ended' && event.lifetimeId === ready.lifetimeId)).toBe(false);
-      expect(connectionEvents(events).filter((event) => event.lifetimeId === ready.lifetimeId)
-        .map((event) => event.state)).toEqual(['connected', 'reconnecting', 'connected', 'reconnecting', 'connected']);
+      expect(runtimes[0].getSnapshot().liveConnectionState).toBe('connected');
     } finally {
       layout.restore();
     }
+  });
+
+  it('keeps host connection status aligned with the connected dot during a short feed blip', async () => {
+    const events: HostComposerEvent[] = [];
+    const transport = new HostComposerTransport();
+    installDeclaration(events);
+    const { runtimes, unmount } = openChat(transport, 'conversation-a');
+    const ready = await waitForReady(events, 'conversation-a');
+    await waitFor(() => expect(connectionEvents(events).some((event) =>
+      event.state === 'connected' && event.lifetimeId === ready.lifetimeId)).toBe(true), { timeout: 2500 });
+
+    const initialConnectionEvents = connectionEvents(events).map((event) => event.state);
+    act(() => transport.callbacks.get('conversation-a')?.onDoubt('brief feed gap'));
+    expect(runtimes[0].getSnapshot().liveConnectionState).toBe('connected');
+    expect(connectionEvents(events).map((event) => event.state)).toEqual(initialConnectionEvents);
+
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 500)); });
+    await waitFor(() => expect(runtimes[0].getSnapshot().liveError).toBeUndefined(), { timeout: 1500 });
+    expect(runtimes[0].getSnapshot().liveConnectionState).toBe('connected');
+    expect(connectionEvents(events).map((event) => event.state)).toEqual(initialConnectionEvents);
+    unmount();
   });
 
   it('keeps the built-in composer live through reconnect and renders the human and agent rows without reload', async () => {

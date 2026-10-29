@@ -45,7 +45,7 @@ class ControlledTransport implements ChatTransport {
   closed = 0;
   coverage = true;
   tailPage?: ConversationPage;
-  afterHook?: (cursor: string) => ConversationPage;
+  afterHook?: (cursor: string) => ConversationPage | Promise<ConversationPage>;
   messageDetails = new Map<string, ConversationRecord>();
   clearBarrier = 0;
   openingFailures: Error[] = [];
@@ -322,16 +322,176 @@ describe('framework-independent runtime', () => {
       for (const delay of [250, 500, 1000]) await vi.advanceTimersByTimeAsync(delay);
       expect(runtime.getSnapshot().status).toBe('ready');
       expect(runtime.getSnapshot().liveError).toBe('Connection unavailable');
+      expect(runtime.getSnapshot().liveConnectionState).toBe('reconnecting');
+      expect(runtime.send('The conversation remains available while the feed is disconnected.')).toBeTruthy();
       expect(open).toHaveBeenCalledTimes(4);
+      await vi.advanceTimersByTimeAsync(8250);
+      expect(runtime.getSnapshot().liveConnectionState).toBe('disconnected');
       transport.rows.push(message(9));
       open.mockImplementation((...args) => connect(...args));
       await runtime.rebuild({ restart: true });
-      expect(open).toHaveBeenCalledTimes(5);
+      expect(open).toHaveBeenCalledTimes(7);
       expect(runtime.getSnapshot().status).toBe('ready');
       expect(runtime.getSnapshot().records.some(row => row.id === oldest)).toBe(true);
       expect(runtime.getSnapshot().records.at(-1)?.id).toBe('m9');
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(runtime.getSnapshot().liveConnectionState).toBe('connected');
       await vi.advanceTimersByTimeAsync(30_000);
-      expect(open).toHaveBeenCalledTimes(5);
+      expect(open).toHaveBeenCalledTimes(7);
+    } finally { runtime.dispose(); vi.useRealTimers(); }
+  });
+
+  it('keeps the connected indicator through a feed blip that recovers within a second', async () => {
+    vi.useFakeTimers();
+    const transport = new ControlledTransport();
+    const connect = transport.openChanges;
+    const open = vi.fn(async (...args: Parameters<typeof connect>) => connect(...args));
+    transport.openChanges = open;
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    try {
+      await runtime.rebuild();
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(runtime.getSnapshot().liveConnectionState).toBe('connected');
+
+      const transitions: RuntimeState['liveConnectionState'][] = [];
+      let priorState = runtime.getSnapshot().liveConnectionState;
+      const unsubscribe = runtime.subscribe(() => {
+        const nextState = runtime.getSnapshot().liveConnectionState;
+        if (nextState !== priorState) transitions.push(nextState);
+        priorState = nextState;
+      });
+      transport.doubt();
+      expect(runtime.getSnapshot().liveConnectionState).toBe('connected');
+      await vi.advanceTimersByTimeAsync(250);
+      await vi.advanceTimersByTimeAsync(750);
+
+      expect(runtime.getSnapshot().liveConnectionState).toBe('connected');
+      expect(runtime.getSnapshot().liveError).toBeUndefined();
+      expect(transitions).toEqual([]);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(runtime.getSnapshot().liveConnectionState).toBe('connected');
+      expect(transitions).toEqual([]);
+      unsubscribe();
+    } finally { runtime.dispose(); vi.useRealTimers(); }
+  });
+
+  it('keeps flapping yellow, shows red after ten seconds, and waits for a stable recovery', async () => {
+    vi.useFakeTimers();
+    const transport = new ControlledTransport();
+    const connect = transport.openChanges;
+    const open = vi.fn(async (...args: Parameters<typeof connect>) => connect(...args));
+    transport.openChanges = open;
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    try {
+      await runtime.rebuild();
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(runtime.getSnapshot().liveConnectionState).toBe('connected');
+      const transitions: Array<{ state: RuntimeState['liveConnectionState']; at: number }> = [];
+      let priorState = runtime.getSnapshot().liveConnectionState;
+      const unsubscribe = runtime.subscribe(() => {
+        const nextState = runtime.getSnapshot().liveConnectionState;
+        if (nextState !== priorState) transitions.push({ state: nextState, at: Date.now() });
+        priorState = nextState;
+      });
+
+      const outageStartedAt = Date.now();
+      open.mockRejectedValue(new Error('Connection unavailable'));
+      transport.doubt();
+      expect(runtime.getSnapshot().liveConnectionState).toBe('connected');
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(runtime.getSnapshot().liveConnectionState).toBe('reconnecting');
+
+      // A brief successful connection is not stable while the same outage is flapping.
+      open.mockImplementation((...args) => connect(...args));
+      await runtime.rebuild({ restart: true });
+      expect(runtime.getSnapshot().liveConnectionState).toBe('reconnecting');
+      await vi.advanceTimersByTimeAsync(500);
+      open.mockRejectedValue(new Error('Connection unavailable'));
+      transport.doubt();
+      expect(runtime.getSnapshot().liveConnectionState).toBe('reconnecting');
+      await vi.advanceTimersByTimeAsync(8500);
+
+      expect(Date.now() - outageStartedAt).toBe(10_000);
+      expect(runtime.getSnapshot().liveConnectionState).toBe('disconnected');
+      expect(transitions.map(({ state }) => state)).toEqual(['reconnecting', 'disconnected']);
+
+      open.mockImplementation((...args) => connect(...args));
+      await runtime.rebuild({ restart: true });
+      expect(runtime.getSnapshot().liveConnectionState).toBe('disconnected');
+      await vi.advanceTimersByTimeAsync(999);
+      expect(runtime.getSnapshot().liveConnectionState).toBe('disconnected');
+      await vi.advanceTimersByTimeAsync(1);
+      expect(runtime.getSnapshot().liveConnectionState).toBe('connected');
+      expect(transitions.slice(1).every((change, index) =>
+        change.at - transitions[index].at >= 1000)).toBe(true);
+      unsubscribe();
+    } finally { runtime.dispose(); vi.useRealTimers(); }
+  });
+
+  it('settles repeated feed failures as disconnected and catches up immediately when the feed returns', async () => {
+    vi.useFakeTimers();
+    const transport = new ControlledTransport();
+    const connect = transport.openChanges;
+    const open = vi.fn(async (...args: Parameters<typeof connect>) => connect(...args));
+    transport.openChanges = open;
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    try {
+      await runtime.rebuild();
+      const oldest = runtime.getSnapshot().records[0].id;
+      open.mockRejectedValue(new Error('Connection unavailable'));
+      transport.doubt();
+      for (const delay of [250, 500, 1000, 2000, 4000, 8000, 16000]) {
+        await vi.advanceTimersByTimeAsync(delay);
+      }
+      expect(runtime.getSnapshot().status).toBe('ready');
+      expect(runtime.getSnapshot().liveConnectionState).toBe('disconnected');
+      expect(runtime.getSnapshot().records.some(row => row.id === oldest)).toBe(true);
+
+      const ready = deferred<{ close(): void }>();
+      open.mockImplementation(async () => ready.promise);
+      const latest = message(9);
+      const recoveryReadStarted = deferred<void>();
+      let recoveryReadSignaled = false;
+      transport.afterHook = (cursor) => {
+        const afterSeq = Number(cursor.slice('after:'.length));
+        const records = transport.rows.filter(row => row.seq > afterSeq).slice(0, 3);
+        if (open.mock.calls.length >= 9 && !recoveryReadSignaled) {
+          recoveryReadSignaled = true;
+          recoveryReadStarted.resolve();
+        }
+        return { records, oldestCursor: records[0]?.id ?? null,
+          newestCursor: records.length ? `after:${records.at(-1)!.seq}` : cursor,
+          hasNewer: false, hasOlder: false, coverage: 'controlled-fixture' };
+      };
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(open).toHaveBeenCalledTimes(9);
+      await recoveryReadStarted.promise;
+      const readsBeforeOpen = transport.readAfterCalls.length;
+      const caughtUp = deferred<void>();
+      transport.afterHook = (cursor) => {
+        if (transport.readAfterCalls.length > readsBeforeOpen) caughtUp.resolve();
+        const afterSeq = Number(cursor.slice('after:'.length));
+        const records = transport.rows.filter(row => row.seq > afterSeq).slice(0, 3);
+        return { records, oldestCursor: records[0]?.id ?? null,
+          newestCursor: records.length ? `after:${records.at(-1)!.seq}` : cursor,
+          hasNewer: false, hasOlder: false, coverage: 'controlled-fixture' };
+      };
+      transport.rows.push(latest);
+      ready.resolve({ close: vi.fn() });
+      // Feed recovery schedules the held-cursor request on the reconnect
+      // interval. Drive that timer explicitly before waiting for its response.
+      await vi.advanceTimersByTimeAsync(250);
+      await caughtUp.promise;
+      for (let index = 0; index < 12; index++) await Promise.resolve();
+
+      expect(transport.readAfterCalls.length).toBeGreaterThan(readsBeforeOpen);
+      expect(runtime.getSnapshot().records.some(row => row.id === latest.id)).toBe(true);
+      expect(runtime.getSnapshot().records.some(row => row.id === oldest)).toBe(true);
+      expect(runtime.getSnapshot().liveConnectionState).toBe('disconnected');
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(runtime.getSnapshot().liveConnectionState).toBe('connected');
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(open).toHaveBeenCalledTimes(9);
     } finally { runtime.dispose(); vi.useRealTimers(); }
   });
 
@@ -479,33 +639,52 @@ describe('framework-independent runtime', () => {
     await vi.waitFor(() => expect(runtime.getSnapshot().sends[0].status).toBe('accepted'));
 
     liveReady.resolve();
-    await vi.waitFor(() => expect(transport.readTailCalls).toBeGreaterThan(1), { timeout: 1500 });
     await vi.waitFor(() => expect(runtime.getSnapshot().liveError).toBeUndefined(), { timeout: 1500 });
     expect(runtime.getSnapshot().status).toBe('ready');
+    expect(transport.readSessionCalls).toBe(1);
+    expect(transport.readTailCalls).toBe(1);
+    expect(transport.readAfterCalls).toEqual(['after:8']);
     runtime.dispose();
   });
 
-  it('shows the snapshot before live readiness, then closes snapshot overlap and restores older history', async () => {
+  it('catches up rows committed before initial feed readiness and restores older history', async () => {
     const transport = new ControlledTransport();
-    transport.readyGate = deferred<void>();
-    transport.tailHook = () => {
-      // A newer version delivered after the candidate snapshot is captured.
-      transport.emit(message(8, { rowVersion: 2, content: 'updated eight' }));
-      transport.reset();
+    const catchUpStarted = deferred<void>();
+    const catchUpResponse = deferred<ConversationPage>();
+    transport.afterHook = (cursor) => {
+      expect(cursor).toBe('after:8');
+      catchUpStarted.resolve();
+      return catchUpResponse.promise;
     };
+    transport.readyGate = deferred<void>();
     const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
     expect(transport.readTailCalls).toBe(1);
     expect(runtime.getSnapshot().records.map((row) => row.id)).toEqual(['t6', 'm7', 'm8']);
     expect(runtime.getSnapshot().liveError).toBe('Live updates are connecting.');
+
+    // The row lands after the history response but before subscription_ready;
+    // the server cannot replay it as a change frame, so cursor catch-up must.
+    transport.rows.push(message(9, { content: 'committed during initial feed open' }));
     transport.readyGate.resolve();
-    await vi.waitFor(() => expect(transport.readTailCalls).toBeGreaterThan(1));
-    await vi.waitFor(() => expect((runtime.getSnapshot().records[2] as CanonicalMessage)?.content).toBe('updated eight'));
-    expect((runtime.getSnapshot().records[2] as CanonicalMessage).content).toBe('updated eight');
+    await catchUpStarted.promise;
+    expect(runtime.getSnapshot().records.map((row) => row.id)).toEqual(['t6', 'm7', 'm8']);
+    expect(runtime.getSnapshot().liveError).toBe('Live updates are connecting.');
+    expect(transport.readSessionCalls).toBe(1);
+    expect(transport.readTailCalls).toBe(1);
+
+    const appended = message(9, { content: 'committed during initial feed open' });
+    catchUpResponse.resolve({ records: [appended], oldestCursor: 'm9', newestCursor: 'after:9',
+      hasOlder: false, hasNewer: false, coverage: 'controlled-fixture' });
+    await vi.waitFor(() => expect(runtime.getSnapshot().records.some((row) => row.id === 'm9')).toBe(true));
+    await vi.waitFor(() => expect(runtime.getSnapshot().liveError).toBeUndefined(), { timeout: 1500 });
+    expect(transport.readSessionCalls).toBe(1);
+    expect(transport.readTailCalls).toBe(1);
+    expect(transport.readAfterCalls).toEqual(['after:8']);
     expect(runtime.getSnapshot().session?.raw.clearedThroughSeq).toBe(0);
     while (runtime.getSnapshot().hasOlder) await runtime.loadOlder();
     expect(runtime.getSnapshot().records.map((row) => row.id)).toEqual(
-      ['m1', 'm2', 't3', 'm4', 'm5', 't6', 'm7', 'm8']);
+      ['m1', 'm2', 't3', 'm4', 'm5', 't6', 'm7', 'm8', 'm9']);
     expect(transport.readOlderCalls).toBe(2);
     runtime.dispose();
   });
