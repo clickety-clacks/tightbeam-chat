@@ -142,7 +142,7 @@ function visibilityMix(sessionKey: string, prefix: string): readonly CanonicalMe
     sender: 'assistant-service', messageType: 'assistant', replyToMessageId: batch.id, turnSeq: 2, turnIncludesHuman: true,
   });
   const marker = row(sessionKey, `${prefix}-marker`, `Hidden assistant substrate marker ${prefix}`, {
-    sender: 'process:notifications', messageType: 'substrate',
+    sender: 'process:notifications', messageType: 'substrate', turnSeq: 5,
   });
   const agentWake = row(sessionKey, `${prefix}-agent-wake`, `Hidden agent wake ${prefix}`, {
     role: 'user', sender: 'agent:external', messageType: 'agent', turnSeq: 3,
@@ -175,6 +175,7 @@ function expectVisibilityMix(log: HTMLElement, prefix: string): void {
     const renderedAsBubble = [...log.querySelectorAll<HTMLElement>('.tb-chat-bubble')]
       .some(element => element.textContent?.includes(label));
     expect(renderedAsBubble).toBe(false);
+    expect(within(log).queryByText(label)).toBeNull();
   }
   for (const label of [
     `Hidden reply to agent wake ${prefix}`, `Hidden reply to process notice ${prefix}`,
@@ -245,7 +246,7 @@ describe('conversation surface', () => {
     }
   });
 
-  it('keeps non-human history as activity pills while filtering bubbles and rendering safe Markdown', async () => {
+  it('keeps owner-scoped activity pills while filtering other history and rendering safe Markdown', async () => {
     const sessionKey = 'conversation-a';
     const human = row(sessionKey, 'human-trigger', 'Could you explain this?', { seq: 1, role: 'user', sender: 'user:person', turnSeq: 1 });
     const unprovenHuman = row(sessionKey, 'unproven-human', 'A user row with no sender stays visible', { seq: 8, role: 'user' });
@@ -315,9 +316,9 @@ describe('conversation surface', () => {
     expect(substrateLine.closest('article')?.classList.contains('tb-chat-bubble')).not.toBe(true);
     expect(batch.content).toBe(batchText);
     expect(within(log).getByText('Answer to the batch question')).toBeTruthy();
-    expectActivityText(log, 'A system event marker');
-    expectActivityText(log, 'An agent sent a wake');
-    expectActivityText(log, 'A process notice in the batch');
+    expect(within(log).queryByText('A system event marker')).toBeNull();
+    expect(within(log).queryByText('An agent sent a wake')).toBeNull();
+    expect(within(log).queryByText('A process notice in the batch')).toBeNull();
     expect(within(log).queryByText('Must remain hidden')).toBeNull();
     const unmarkedBubble = within(log).getByText('A user row with no sender stays visible').closest('article');
     expect(unmarkedBubble?.getAttribute('aria-label')).toBe('Message from User');
@@ -331,7 +332,7 @@ describe('conversation surface', () => {
       .toBe('Research assistant');
   });
 
-  it('keeps non-human records as activity while preserving human exchanges across pages, live updates, and reconnects', async () => {
+  it('keeps owner-scoped activity while preserving human exchanges across pages, live updates, and reconnects', async () => {
     const sessionKey = 'conversation-without-provenance';
     const firstPage = visibilityMix(sessionKey, 'first-page');
     const unprovenAgent = row(sessionKey, 'unproven-agent', 'An unproven assistant reply', {
@@ -356,10 +357,10 @@ describe('conversation surface', () => {
     render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
     const log = screen.getByRole('log');
     expectVisibilityMix(log, 'first-page');
-    expectActivityText(log, 'Hidden assistant substrate marker first-page');
-    expectActivityText(log, 'Hidden agent wake first-page');
-    expectActivityText(log, 'Hidden process notice first-page');
-    expectActivityText(log, 'An unproven assistant reply');
+    expect(within(log).queryByText('Hidden assistant substrate marker first-page')).toBeNull();
+    expect(within(log).queryByText('Hidden agent wake first-page')).toBeNull();
+    expect(within(log).queryByText('Hidden process notice first-page')).toBeNull();
+    expect(within(log).queryByText('An unproven assistant reply')).toBeNull();
     expect(within(log).getByText('A selected reply without a provable trigger')).toBeTruthy();
     expect(within(log).getByText('A selected reply without a parent link')).toBeTruthy();
     expect(within(log).getByText('An unproven user row')).toBeTruthy();
@@ -436,7 +437,7 @@ describe('conversation surface', () => {
 
     await waitFor(() => expect(runtime.getSnapshot().hasOlder).toBe(false));
     expect(runtime.loadOlderCalls).toBe(1);
-    expectActivityText(log, 'An older agent wake');
+    expect(within(log).queryByText('An older agent wake')).toBeNull();
     expect(within(log).queryByText('A reply whose parent is not loaded')).toBeNull();
     expect(within(log).getByText('A human message with a null sender')).toBeTruthy();
     expect(within(log).getByText('An absent sender stays visible without identity proof')).toBeTruthy();

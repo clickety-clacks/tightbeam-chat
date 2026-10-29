@@ -370,6 +370,8 @@ describe('activity trail projection', () => {
       storeRow('history-reply-two', 8, 'assistant', 'assistant-service', 'Second answer', 'assistant', { turnSeq: 2 }),
       carrier('history-tail-first', 9, 5568, 'asg_23456789', 'test'),
       carrier('history-tail-second', 10, 5569, 'asg_bcdef123', 'review'),
+      storeRow('history-unrelated-marker', 11, 'assistant', 'process:notifications', 'Unrelated process marker',
+        'substrate', { turnSeq: 77 }),
     ];
     const readHistory = () => storedRows.map(row => {
       const decoded = decodePublic019Message(row, 'session');
@@ -378,7 +380,7 @@ describe('activity trail projection', () => {
     });
     const project = (records: readonly CanonicalMessage[], live = false) => {
       const byId = new Map(records.map(record => [record.id, record]));
-      const activity = records.filter(record => record.isBatchCarrier === true);
+      const activity = records.filter(record => record.isBatchCarrier === true || record.id === 'history-unrelated-marker');
       const liveIds = live ? new Set(activity.map(record => record.id)) : new Set<string>();
       return build({ records: activity, bubbles: [
         bubble(byId.get('history-prompt-one')!, 'human'), bubble(byId.get('history-reply-one')!, 'agent'),
@@ -395,6 +397,7 @@ describe('activity trail projection', () => {
 
     expect(afterReturn.messageItems).toEqual(beforeLeave.messageItems);
     expect(afterReload.messageItems).toEqual(beforeLeave.messageItems);
+    expect(afterReload.messageItems.some(item => item.id === 'message:history-unrelated-marker')).toBe(false);
     expect(afterReturn.messageItems).toMatchObject([
       { kind: 'fold', id: 'member:history-gap-first:member:3', runKey: 'run:history-reply-one',
         lines: [{ id: 'member:history-gap-first:member:3' }, { id: 'member:history-gap-second:member:5567' }],

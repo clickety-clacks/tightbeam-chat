@@ -166,6 +166,7 @@ function messageCandidate(message: CanonicalMessage, live: boolean, liveTailElig
 function memberCandidate(carrier: CanonicalMessage, member: ParsedBatchMember, live: boolean,
   liveTailEligibleAtArrival: boolean): Candidate | undefined {
   if (member.sender.startsWith('user:')) return undefined;
+  // The carrier's turnSeq belongs to the batching turn, not this notice member.
   const id = `member:${member.sourceId}`;
   const position = { sequence: carrier.seq, phase: 1, order: member.index };
   const parsedTime = carrier.createdAt ? Date.parse(carrier.createdAt) : Number.NaN;
@@ -179,7 +180,7 @@ function memberCandidate(carrier: CanonicalMessage, member: ParsedBatchMember, l
       originalContent: member.content,
       presentation: activityPillPresentation({ kind: 'rail', gist, content: member.content, sender: member.sender,
         source: member.source }),
-      sortTime, live, liveTailEligibleAtArrival, sourceTurnSeq: carrier.turnSeq, historyBacked: true };
+      sortTime, live, liveTailEligibleAtArrival, historyBacked: true };
   }
   if (member.sender.startsWith('process:')) {
     const gist = detail || 'Substrate activity';
@@ -188,7 +189,7 @@ function memberCandidate(carrier: CanonicalMessage, member: ParsedBatchMember, l
       originalContent: member.content,
       presentation: activityPillPresentation({ kind: 'substrate', gist, content: member.content, sender: member.sender,
         source: member.source, messageType: carrier.messageType }),
-      sortTime, live, liveTailEligibleAtArrival, sourceTurnSeq: carrier.turnSeq, historyBacked: true,
+      sortTime, live, liveTailEligibleAtArrival, historyBacked: true,
       semanticFoldKind: gatewayNoticeFoldKind(member.content) };
   }
   if (member.sender.startsWith('agent:') || member.sender.startsWith('session:')) {
@@ -197,7 +198,7 @@ function memberCandidate(carrier: CanonicalMessage, member: ParsedBatchMember, l
       accessibleText: `Other agent: ${gist}`,
       originalContent: member.content,
       presentation: activityPillPresentation({ kind: 'agent', gist, content: member.content, sender: member.sender }),
-      sortTime, live, liveTailEligibleAtArrival, sourceTurnSeq: carrier.turnSeq, historyBacked: true };
+      sortTime, live, liveTailEligibleAtArrival, historyBacked: true };
   }
   return undefined;
 }
@@ -314,6 +315,8 @@ export function buildActivityTrail(input: {
     .filter((turnSeq): turnSeq is number => Number.isSafeInteger(turnSeq)));
   const belongsToOwnerTurn = (candidate: Candidate) => candidate.sourceTurnSeq !== undefined &&
     retainedTurnSequences.has(candidate.sourceTurnSeq);
+  const historyInOwnerConversation = (candidate: Candidate, precedingBubble: BubbleEvent) => candidate.historyBacked &&
+    (candidate.sourceTurnSeq === undefined ? precedingBubble.bubble.ownerScoped : belongsToOwnerTurn(candidate));
 
   const eligible = new Map<string, EligibleCandidate[]>();
   const membership = new Map<string, string>();
@@ -348,7 +351,7 @@ export function buildActivityTrail(input: {
         const allowed = candidate.live
           ? (!input.turnStateAvailable || candidate.liveTailEligibleAtArrival)
           : (beforeOrAtTool.has(candidate.id) || (input.turnStateAvailable && input.activeTurnRunning));
-        const historyAllowed = (!candidate.live && candidate.historyBacked) ||
+        const historyAllowed = (!candidate.live && historyInOwnerConversation(candidate, previousBubble)) ||
           (candidate.live && (allowed || belongsToOwnerTurn(candidate))) || input.shownRuns.has(candidate.id);
         if (candidate.historyBacked ? historyAllowed : allowed || input.shownRuns.has(candidate.id)) add(candidate, runKey);
       }
@@ -358,7 +361,7 @@ export function buildActivityTrail(input: {
         const allowed = candidate.live
           ? (!input.turnStateAvailable || candidate.liveTailEligibleAtArrival)
           : beforeOrAtTool.has(candidate.id);
-        const historyAllowed = (!candidate.live && candidate.historyBacked) ||
+        const historyAllowed = (!candidate.live && historyInOwnerConversation(candidate, previousBubble)) ||
           (candidate.live && (allowed || belongsToOwnerTurn(candidate))) || oldRun;
         if (candidate.historyBacked ? historyAllowed : allowed || oldRun) {
           add(candidate, oldRun ?? runKey);
