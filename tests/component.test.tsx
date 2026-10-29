@@ -926,6 +926,12 @@ describe('conversation surface', () => {
     expect(childRow.textContent).toContain('s_3456');
 
     expect(pillFor('Wake: Review the result, fallback').querySelector('.tb-chat-activity-pill-purple')).toBeTruthy();
+    const reminderFold = within(log).getByRole('button', {
+      name: /Expand substrate activity run, 2 entries\. Latest: Assignment asg_456789ab/,
+    });
+    expect(reminderFold.textContent).toContain('No recent activity · Background task');
+    expect(reminderFold.querySelector('.tb-chat-activity-pill-amber')).toBeTruthy();
+    fireEvent.click(reminderFold);
     expect(pillFor('Assignment: Quiet for 3 h · Background assignment').querySelector('.tb-chat-activity-pill-amber')).toBeTruthy();
     expect(pillFor('Assignment: No recent activity · Background task, asg_4567')).toBeTruthy();
     expect(pillFor('Decision: Needs a response · Can the change ship?, dr_1234')).toBeTruthy();
