@@ -362,7 +362,7 @@ describe('activity trail projection', () => {
     });
     const duringTurn = build({ records: [activity], bubbles: [
       bubble(prompt, 'human'), bubble(followUp, 'human'),
-    ], activeTurnRunning: true, activeOwnerTurnRunning: true });
+    ], activeTurnRunning: true, activeOwnerTurnRunning: true, activeOwnerTurnMessageId: prompt.id });
     const completedTurn = build({ records: [activity], bubbles: [
       bubble(prompt, 'human'), bubble(followUp, 'human'), bubble(reply, 'agent'),
     ], activeTurnRunning: false, activeOwnerTurnRunning: false });
@@ -386,7 +386,7 @@ describe('activity trail projection', () => {
     const followUp = message('interim-gap-next-prompt', 4, 'user:person', 'Continue the answer', { role: 'user' });
     const runningTurn = build({ records: [activity], bubbles: [
       bubble(prompt, 'human'), bubble(interimReply, 'agent'), bubble(followUp, 'human'),
-    ], activeTurnRunning: true, activeOwnerTurnRunning: true });
+    ], activeTurnRunning: true, activeOwnerTurnRunning: true, activeOwnerTurnMessageId: prompt.id });
     const endedWithoutReply = build({ records: [activity], bubbles: [
       bubble(prompt, 'human'), bubble(interimReply, 'agent'), bubble(followUp, 'human'),
     ], activeTurnRunning: false, activeOwnerTurnRunning: false });

@@ -270,7 +270,8 @@ function belongsToOwnerConversation(candidate: Candidate, precedingBubble: Bubbl
   const matchesActiveTurn = activeOwnerTurnRunning && (
     activeOwnerTurnSeq !== undefined && precedingBubble.ownerTurnSeq !== undefined
       ? activeOwnerTurnSeq === precedingBubble.ownerTurnSeq
-      : !!activeOwnerTurnMessageId && precedingBubble.spanRootMessageId === activeOwnerTurnMessageId
+      : !!activeOwnerTurnMessageId && (precedingBubble.bubble.record.id === activeOwnerTurnMessageId ||
+        precedingBubble.spanRootMessageId === activeOwnerTurnMessageId)
   );
   const beforeOwnerFollowUp = !!nextBubble && nextBubble.ownerTurnScoped &&
     nextBubble.bubble.side === 'human' && matchesActiveTurn;
