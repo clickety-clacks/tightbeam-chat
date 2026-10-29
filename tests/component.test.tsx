@@ -1200,6 +1200,63 @@ describe('conversation surface', () => {
     await waitFor(() => expect(runtime.loadOlderCalls).toBe(1));
   });
 
+  it('keeps linked-target recovery and Tool calls reachable without shifting history', () => {
+    const sessionKey = 'linked-target-error-controls';
+    const records = Array.from({ length: 6 }, (_, index) => row(sessionKey, `message-${index + 1}`,
+      `History message ${index + 1}`, { seq: index + 1 }));
+    const runtime = new FakeRuntime(sessionKey, {
+      records,
+      toolCallsEnabled: true,
+    });
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)}
+      configuredConversationHref="/" />);
+
+    const viewport = screen.getByRole('log');
+    act(() => runtime.update({ loadingOlder: true }));
+    expect(viewport.querySelector('.tb-chat-history-loading')?.textContent).toBe('Loading earlier messages…');
+    expect(viewport.querySelector('.tb-chat-tool-controls-placeholder')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Tool calls' }).hasAttribute('disabled')).toBe(false);
+    act(() => runtime.update({ loadingOlder: false }));
+
+    const layout = installViewportLayout(viewport);
+    try {
+      const anchor = screen.getByText('History message 4').closest<HTMLElement>('[data-scroll-key]')!;
+      fireEvent.wheel(viewport, { deltaY: -1 });
+      layout.setScrollTop(250);
+      fireEvent.scroll(viewport);
+      const before = layout.offset(anchor);
+
+      act(() => runtime.update({ conversationError: 'The linked target is unavailable.' }));
+
+      expect(layout.offset(anchor)).toBeCloseTo(before, 0);
+      const alert = screen.getByRole('alert');
+      const reconnect = within(alert).getByRole('button', { name: 'Reconnect' });
+      const recovery = within(alert).getByRole('link', { name: 'Open the configured conversation' });
+      const tools = within(alert).getByRole('group', { name: 'Tool history controls' });
+      const toggle = within(tools).getByRole('button', { name: 'Tool calls' });
+      expect(alert.classList.contains('tb-chat-runtime-notice-with-tools')).toBe(true);
+      expect(recovery.getAttribute('href')).toBe('/');
+      expect(toggle.getAttribute('aria-pressed')).toBe('true');
+      expect(screen.getAllByRole('button', { name: 'Tool calls' })).toHaveLength(1);
+      expect(viewport.querySelector('.tb-chat-tool-controls-placeholder')?.getAttribute('aria-hidden')).toBe('true');
+      expect(screen.getByText('History message 4')).toBeTruthy();
+
+      fireEvent.click(toggle);
+      expect(within(alert).getByRole('button', { name: 'Tool calls' }).getAttribute('aria-pressed')).toBe('false');
+      fireEvent.click(reconnect);
+      expect(runtime.rebuildCalls).toBe(1);
+
+      act(() => runtime.update({ conversationError: undefined }));
+
+      expect(layout.offset(anchor)).toBeCloseTo(before, 0);
+      expect(screen.queryByRole('alert')).toBeNull();
+      expect(screen.queryByRole('link', { name: 'Open the configured conversation' })).toBeNull();
+      expect(screen.getByRole('button', { name: 'Tool calls' }).getAttribute('aria-pressed')).toBe('false');
+    } finally {
+      layout.restore();
+    }
+  });
+
   it('renders tool history updates as captions without restyling the toggle', () => {
     const runtime = new FakeRuntime('tool-history-caption', { toolCallsEnabled: true, toolCallsLoading: true });
     const view = render(<TightbeamChat sessionKey="tool-history-caption" adapter={adapterFor(runtime)} />);

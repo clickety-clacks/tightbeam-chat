@@ -28,6 +28,8 @@ export interface RenderContext {
 export interface TightbeamChatProps {
   readonly sessionKey: string;
   readonly adapter: TightbeamAdapter;
+  /** Same-page route to the configured conversation for an unavailable linked target. */
+  readonly configuredConversationHref?: string;
   /** Change when the host changes principal or transport lifetime. */
   readonly identityKey?: string;
   readonly renderMessage?: (record: ConversationRecord, context: RenderContext) => ReactNode | undefined;
@@ -770,11 +772,12 @@ function ActivityRunRow({ entry, expanded, toggle, registerRow, preservePosition
   </div>;
 }
 
-function ChatBody({ runtime, renderMessage, className, hostBridge }: {
+function ChatBody({ runtime, renderMessage, className, hostBridge, configuredConversationHref }: {
   runtime: ChatRuntime;
   renderMessage?: TightbeamChatProps['renderMessage'];
   className?: string;
   hostBridge: HostComposerBridge | null;
+  configuredConversationHref?: string;
 }) {
   const state = useSyncExternalStore(runtime.subscribe, runtime.getSnapshot, runtime.getSnapshot);
   const subscribeHost = useCallback((listener: () => void) => subscribeHostComposer(hostBridge, listener), [hostBridge]);
@@ -1157,6 +1160,28 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
     : state.conversationError ? `Conversation history could not be loaded: ${state.conversationError}`
       : state.sessionError ? `Some conversation details are unavailable: ${state.sessionError}`
         : undefined;
+  const showRuntimeNotice = state.loadingOlder || !!state.historyError || !!localNotice;
+  const showConfiguredConversationLink = !!configuredConversationHref &&
+    (state.sessionNotFound || state.sessionError || state.conversationError ||
+      state.status === 'unauthorized' || state.status === 'unsupported');
+  const showReconnect = state.sessionNotFound || state.sessionError || state.conversationError;
+  const showToolControlsInNotice = !state.loadingOlder && !!(state.historyError || localNotice) &&
+    state.toolCallsEnabled !== undefined;
+  const renderToolControls = (placeholder = false) => <div
+    className={`tb-chat-tool-controls${placeholder ? ' tb-chat-tool-controls-placeholder' : ''}`}
+    aria-hidden={placeholder || undefined}>
+    <button type="button" aria-pressed={state.toolCallsEnabled}
+      disabled={placeholder || undefined} tabIndex={placeholder ? -1 : undefined}
+      onClick={() => runtime.setToolCallsEnabled?.(!state.toolCallsEnabled)}>Tool calls</button>
+    {state.toolCallsEnabled && state.toolCallsLoading && <span className="tb-chat-caption tb-chat-caption-neutral" role="status">Loading tool history…</span>}
+    {state.toolCallsEnabled && state.toolCallsError && <span className="tb-chat-caption tb-chat-caption-danger" role="status">
+      <span className="tb-chat-caption-body">
+        <span>Tool history is not current: {state.toolCallsError}{' '}</span>
+          <button type="button" disabled={placeholder || undefined} tabIndex={placeholder ? -1 : undefined}
+            onClick={() => runtime.retryToolCalls?.()}>Retry tool history</button>
+      </span>
+    </span>}
+  </div>;
 
   const renderItem = useCallback((item: TimelineItem) => {
         if (item.kind === 'tool') {
@@ -1245,28 +1270,22 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
       onPointerDown={reading.interrupt} onPointerMove={(event) => { if (event.buttons !== 0) reading.noteUserScroll(); }}
       onKeyDown={(event) => { if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) { reading.interrupt(); reading.noteUserScroll(); } }}
       aria-label={`${agentName || 'Conversation'} messages`} aria-live="polite" aria-relevant="additions text">
-      {(state.loadingOlder || state.historyError || localNotice) && <div className={`tb-chat-runtime-notice ${state.loadingOlder ? 'tb-chat-history-loading ' : ''} tb-chat-caption ${state.historyError || state.sessionNotFound || state.sessionError || state.conversationError || state.status === 'unauthorized' || state.status === 'unsupported'
+      {showRuntimeNotice && <div className={`tb-chat-runtime-notice ${showToolControlsInNotice ? 'tb-chat-runtime-notice-with-tools ' : ''}${state.loadingOlder ? 'tb-chat-history-loading ' : ''} tb-chat-caption ${state.historyError || state.sessionNotFound || state.sessionError || state.conversationError || state.status === 'unauthorized' || state.status === 'unsupported'
         ? 'tb-chat-caption-danger' : 'tb-chat-caption-neutral'}`} role={state.historyError || state.sessionNotFound || state.conversationError || state.sessionError || state.status === 'unauthorized' || state.status === 'unsupported' ? 'alert' : 'status'}>
         <span className="tb-chat-caption-body">
           {(state.loadingOlder || state.historyError || localNotice) && <span>{state.loadingOlder ? 'Loading earlier messages…'
             : state.historyError ? `Earlier messages could not be loaded: ${state.historyError}` : localNotice}</span>}
           {state.historyError && <button type="button" onClick={loadOlder}>Retry loading messages</button>}
-          {(state.sessionNotFound || state.sessionError || state.conversationError) &&
+          {showReconnect &&
             <button type="button" onClick={() => void runtime.rebuild({ restart: true })}>Reconnect</button>}
+          {showConfiguredConversationLink && <a href={configuredConversationHref}>Open the configured conversation</a>}
         </span>
+        {showToolControlsInNotice && <div className="tb-chat-runtime-tools" role="group" aria-label="Tool history controls">
+          {renderToolControls()}
+        </div>}
       </div>}
       <div className="tb-chat-message-content" ref={reading.content}>
-      {state.toolCallsEnabled !== undefined && <div className="tb-chat-tool-controls">
-        <button type="button" aria-pressed={state.toolCallsEnabled}
-          onClick={() => runtime.setToolCallsEnabled?.(!state.toolCallsEnabled)}>Tool calls</button>
-        {state.toolCallsEnabled && state.toolCallsLoading && <span className="tb-chat-caption tb-chat-caption-neutral" role="status">Loading tool history…</span>}
-        {state.toolCallsEnabled && state.toolCallsError && <span className="tb-chat-caption tb-chat-caption-danger" role="status">
-          <span className="tb-chat-caption-body">
-            <span>Tool history is not current: {state.toolCallsError}{' '}</span>
-            <button type="button" onClick={() => runtime.retryToolCalls?.()}>Retry tool history</button>
-          </span>
-        </span>}
-      </div>}
+      {state.toolCallsEnabled !== undefined && renderToolControls(showToolControlsInNotice)}
       {projection.issues.length > 0 && <div className="tb-chat-history-error tb-chat-caption tb-chat-caption-danger" role="alert">
         Some message sources could not be interpreted. Conversation filtering is incomplete.
       </div>}
@@ -1290,7 +1309,8 @@ function ChatBody({ runtime, renderMessage, className, hostBridge }: {
 }
 
 /** One host-selected session. Changing selection/identity disposes the old runtime. */
-export function TightbeamChat({ sessionKey, adapter, identityKey, renderMessage, className }: TightbeamChatProps) {
+export function TightbeamChat({ sessionKey, adapter, identityKey, renderMessage, className,
+  configuredConversationHref }: TightbeamChatProps) {
   const key = `${sessionKey}\u0000${identityKey || ''}`;
   const latest = useRef({ key, sessionKey, adapter });
   latest.current = { key, sessionKey, adapter };
@@ -1327,5 +1347,5 @@ export function TightbeamChat({ sessionKey, adapter, identityKey, renderMessage,
     </section>;
   }
   return <ChatBody key={key} runtime={opened.runtime} renderMessage={renderMessage}
-    className={className} hostBridge={hostBridge} />;
+    className={className} hostBridge={hostBridge} configuredConversationHref={configuredConversationHref} />;
 }

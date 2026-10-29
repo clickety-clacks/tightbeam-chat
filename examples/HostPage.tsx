@@ -13,6 +13,7 @@ export function HostPage({ defaultTarget, configurationError }: {
   const selected = resolution.kind === 'selected' ? resolution.target : undefined;
   const selectionSource = resolution.kind === 'selected' ? resolution.source : undefined;
   const unavailable = resolution.kind === 'unavailable-selection' ? resolution : undefined;
+  const configuredConversationHref = selectionSource === 'link' ? (window.location.pathname || '/') : undefined;
 
   useEffect(() => {
     if (!selected) return;
@@ -32,7 +33,8 @@ export function HostPage({ defaultTarget, configurationError }: {
     }
   }, [selected?.gateway, selected?.sessionKey, selected?.principalKey, selected?.deviceId]);
 
-  if (selected && adapter) return <TightbeamChat sessionKey={selected.sessionKey} adapter={adapter} />;
+  if (selected && adapter) return <TightbeamChat sessionKey={selected.sessionKey} adapter={adapter}
+    configuredConversationHref={configuredConversationHref} />;
 
   return <main className="chat-entry-state">
     {resolution.kind === 'configuration-error' && <p role="alert">
@@ -53,8 +55,8 @@ export function HostPage({ defaultTarget, configurationError }: {
     {selected && !adapter && !error && <p role="status">Connecting…</p>}
     {error && <div role="alert">
       <p>{error}</p>
-      {selectionSource === 'link' &&
-        <a href={window.location.pathname || '/'}>Open the configured conversation</a>}
+      {configuredConversationHref &&
+        <a href={configuredConversationHref}>Open the configured conversation</a>}
     </div>}
   </main>;
 }
