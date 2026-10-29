@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.51",
+    "items": [
+      {
+        "title": "Smooth arrivals while following the conversation",
+        "description": "When you are following the latest conversation, new messages and activity fade in while the view glides to the bottom. In-place activity updates and scrolled-up reading stay still, and reduced-motion preference keeps instant placement."
+      }
+    ]
+  },
+  {
     "version": "v0.1.50",
     "items": [
       {
