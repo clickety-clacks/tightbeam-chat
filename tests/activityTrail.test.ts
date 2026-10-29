@@ -224,14 +224,19 @@ describe('activity trail projection', () => {
 
   it('projects running-index batch members with spaced senders and extends their fold across batches', () => {
     const prompt = message('prompt', 1, 'user:person', 'A question', { role: 'user' });
-    const carrier = (id: string, seq: number, index: number, detail: string) => message(id, seq,
+    const carrier = (id: string, seq: number, members: Array<{ index: number; detail: string }>) => message(id, seq,
       'process:notifications', [
-        '[from process:tightbeam]', '', '[batched notices: 1]', `batchId=${id}`, 'release=example',
-        `[${index}] source=agent:helper sender=agent:helper:main session cause=notice class=fyi`, detail, '',
+        '[from process:tightbeam]', '', `[batched notices: ${members.length}]`, `batchId=${id}`, 'release=example',
+        ...members.flatMap(({ index, detail }) => [
+          `[${index}] source=agent:helper sender=agent:helper:main session cause=notice class=fyi`, detail, '',
+        ]),
         'coalesced by notices',
       ].join('\n'), { isBatchCarrier: true, messageType: 'substrate' });
-    const first = carrier('carrier-first', 2, 7, 'First helper update');
-    const second = carrier('carrier-second', 3, 8, 'Latest helper update');
+    const first = carrier('carrier-first', 2, [
+      { index: 7, detail: 'First helper update' },
+      { index: 9, detail: 'Second helper update' },
+    ]);
+    const second = carrier('carrier-second', 3, [{ index: 12, detail: 'Latest helper update' }]);
     const reply = message('reply', 4, 'assistant-service', 'Answer', { role: 'assistant' });
 
     const plan = build({ records: [first, second], bubbles: [bubble(prompt, 'human'), bubble(reply, 'agent')] });
@@ -242,10 +247,11 @@ describe('activity trail projection', () => {
       kind: 'agent', gist: 'Another agent — Latest helper update',
     } });
     expect(fold.lines.map(line => line.gist)).toEqual([
-      'Another agent — First helper update', 'Another agent — Latest helper update',
+      'Another agent — First helper update', 'Another agent — Second helper update',
+      'Another agent — Latest helper update',
     ]);
     expect(fold.lines.map(line => line.id)).toEqual([
-      'member:carrier-first:member:7', 'member:carrier-second:member:8',
+      'member:carrier-first:member:7', 'member:carrier-first:member:9', 'member:carrier-second:member:12',
     ]);
     expect(fold.lines.every(line => line.presentation !== undefined)).toBe(true);
   });
