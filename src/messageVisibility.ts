@@ -15,18 +15,23 @@ const batchHeading = /^\[(\d+)\] source=([^\s]+) sender=([^\s]+) cause=([^\s]+) 
 
 /** Parse only the delivered, indexed notice-batch form; unknown wrappers stay hidden. */
 export function parseBatchMembers(record: CanonicalMessage): readonly ParsedBatchMember[] | undefined {
-  if (record.isBatchCarrier !== true && !record.sender?.startsWith('process:')) return undefined;
+  const isCanonicalCarrier = record.isBatchCarrier === true;
+  if (!isCanonicalCarrier && !record.sender?.startsWith('process:')) return undefined;
   const lines = record.content.split(/\r?\n/);
   const countMatch = /^\[batched notices: ([1-9]\d*)\]$/.exec(lines[0] ?? '');
-  if (!countMatch) return undefined;
-  const count = Number(countMatch[1]);
-  if (!Number.isSafeInteger(count)) return undefined;
+  // Canonical carriers are explicitly identified by the conversation feed. Some
+  // delivered carriers use a different first-line label, so their member headers
+  // and coalescing footer provide the framing instead of the optional count line.
+  if (!countMatch && !isCanonicalCarrier) return undefined;
+  const declaredCount = countMatch ? Number(countMatch[1]) : undefined;
+  if (declaredCount !== undefined && !Number.isSafeInteger(declaredCount)) return undefined;
 
   const headers = lines.flatMap((line, lineIndex) => {
     const match = batchHeading.exec(line);
     return match ? [{ lineIndex, index: Number(match[1]), sender: match[3] }] : [];
   });
-  if (headers.length !== count || headers.some((header, index) => header.index !== index + 1)) return undefined;
+  if (!headers.length || (declaredCount !== undefined && headers.length !== declaredCount) ||
+    headers.some((header, index) => header.index !== index + 1)) return undefined;
   const footerIndex = lines.reduce((found, line, index) => /^coalesced by\s+\S/.test(line) ? index : found, -1);
   if (footerIndex <= headers.at(-1)!.lineIndex) return undefined;
 

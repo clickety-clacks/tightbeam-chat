@@ -66,6 +66,22 @@ describe('principal-scoped message projection', () => {
     expect(forPerson[0].member?.content).toBe('Question one');
   });
 
+  it('does not expose canonical carrier contents as human rows with a different heading', () => {
+    const carrier = message('headed-carrier', { sender: 'process:notifications', isBatchCarrier: true,
+      content: [
+        'Canonical notification envelope',
+        '[1] source=user:person sender=user:person cause=notice class=fyi', 'Question one', '',
+        '[2] source=agent:helper sender=agent:helper cause=notice class=fyi', 'A helper started', '',
+        'coalesced by notices',
+      ].join('\n') });
+
+    expect(projectMessages([carrier], 'person', 'person').messages).toEqual([]);
+    expect(projectMessages([carrier], 'visitor', 'person').messages).toEqual([]);
+
+    const unmarked = { ...carrier, id: 'unmarked-carrier', isBatchCarrier: undefined };
+    expect(projectMessages([unmarked], 'person', 'person').messages).toEqual([]);
+  });
+
   it('requires the complete direct turn relation and reclassifies when older parents arrive', () => {
     const human = message('human', { turnSeq: 1 });
     const agent = message('agent', { sender: 'agent:helper', turnSeq: 2 });
