@@ -48,6 +48,7 @@ interface Bubble {
 }
 
 const olderHistoryPrefetchDistance = (viewport: HTMLElement) => Math.max(80, viewport.clientHeight * 1.5);
+const toolHistoryErrorGraceMs = 1000;
 
 type TimelineItem =
   | { readonly kind: 'tool'; readonly call: ToolCallRecord }
@@ -842,6 +843,19 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   configuredConversationHref?: string;
 }) {
   const state = useSyncExternalStore(runtime.subscribe, runtime.getSnapshot, runtime.getSnapshot);
+  const [toolCallsErrorAfterGrace, setToolCallsErrorAfterGrace] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    const error = state.toolCallsError;
+    if (!error) {
+      setToolCallsErrorAfterGrace(undefined);
+      return;
+    }
+    // Avoid a short-lived optional-feed warning changing transcript height.
+    const timer = window.setTimeout(() => setToolCallsErrorAfterGrace(error), toolHistoryErrorGraceMs);
+    return () => window.clearTimeout(timer);
+  }, [state.toolCallsError]);
+  const visibleToolCallsError = state.toolCallsError === toolCallsErrorAfterGrace
+    ? toolCallsErrorAfterGrace : undefined;
   const subscribeHost = useCallback((listener: () => void) => subscribeHostComposer(hostBridge, listener), [hostBridge]);
   const getHostSnapshot = useCallback(() => getHostComposerSnapshot(hostBridge), [hostBridge]);
   const host = useSyncExternalStore(subscribeHost, getHostSnapshot, getHostSnapshot);
@@ -1235,9 +1249,9 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
       disabled={placeholder || undefined} tabIndex={placeholder ? -1 : undefined}
       onClick={() => runtime.setToolCallsEnabled?.(!state.toolCallsEnabled)}>Tool calls</button>
     {state.toolCallsEnabled && state.toolCallsLoading && <span className="tb-chat-caption tb-chat-caption-neutral" role="status">Loading tool history…</span>}
-    {state.toolCallsEnabled && state.toolCallsError && <span className="tb-chat-caption tb-chat-caption-danger" role="status">
+    {state.toolCallsEnabled && visibleToolCallsError && <span className="tb-chat-caption tb-chat-caption-danger" role="status">
       <span className="tb-chat-caption-body">
-        <span>Tool history is not current: {state.toolCallsError}{' '}</span>
+        <span>Tool history is not current: {visibleToolCallsError}{' '}</span>
           <button type="button" disabled={placeholder || undefined} tabIndex={placeholder ? -1 : undefined}
             onClick={() => runtime.retryToolCalls?.()}>Retry tool history</button>
       </span>
