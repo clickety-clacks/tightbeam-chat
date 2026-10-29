@@ -718,7 +718,17 @@ class SessionRuntime implements ChatRuntime {
         !pending.feedReadyWhenHistoryReadFinished ? pending.page.newestCursor : undefined;
       const cursor = this.catchUpAfterCursor ?? pendingCursor;
       if (typeof cursor === 'string' && this.transport.readAfter) {
-        void this.catchUpFromCursor(connection, cursor, this.generation, this.controller?.signal);
+        const generation = this.generation;
+        const signal = this.controller?.signal;
+        this.reconnectTimer = setTimeout(() => {
+          this.reconnectTimer = undefined;
+          if (this.disposed) return;
+          if (!this.isCurrent(generation) || this.connection !== connection) {
+            this.scheduleRebuild();
+            return;
+          }
+          void this.catchUpFromCursor(connection, cursor, generation, signal);
+        }, this.retryDelayMs);
         return;
       }
 
