@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.54",
+    "items": [
+      {
+        "title": "Keep your place through brief reconnects",
+        "description": "Scrolling up in a short conversation keeps your place during reconnects. Brief tool-history interruptions no longer shift the conversation, while persistent errors still offer Retry."
+      }
+    ]
+  },
+  {
     "version": "v0.1.53",
     "items": [
       {

@@ -68,6 +68,12 @@ export function useReadingPosition(
   arrivalEligibleRef.current = arrivalEligible;
 
   const distance = (box: HTMLElement) => Math.max(0, box.scrollHeight - box.clientHeight - box.scrollTop);
+  const isAtLatest = (box: HTMLElement, scrollTop = box.scrollTop) => {
+    const bottom = Math.max(0, box.scrollHeight - box.clientHeight);
+    // A short transcript can fit entirely inside the usual following tolerance.
+    const threshold = bottom <= bottomThreshold ? .5 : bottomThreshold;
+    return Math.max(0, bottom - scrollTop) <= threshold;
+  };
   const viewportResized = (box: HTMLElement) => viewportHeight.current !== undefined && viewportHeight.current !== box.clientHeight;
   const lastArrivalAnchorRow = () => {
     let row = content.current?.lastElementChild ?? null;
@@ -341,7 +347,7 @@ export function useReadingPosition(
         if (wanted < 0) box.style.setProperty('--tb-chat-anchor-space', `${-wanted}px`);
         if (Math.abs(box.scrollTop - Math.max(0, wanted)) > .5) box.scrollTop = Math.max(0, wanted);
       }
-      setShowLatest(distance(box) > bottomThreshold);
+      setShowLatest(!following.current);
     }
     capture();
   };
@@ -396,14 +402,14 @@ export function useReadingPosition(
     if (resized) {
       if (readerInitiated) {
         initialSettlePending.current = false;
-        following.current = currentDistance <= bottomThreshold;
+        following.current = isAtLatest(box);
       } else if (following.current) {
         if (!moveToLatest(false) && initialSettlePending.current && !shouldKeepInitialSettleRef.current(box)) initialSettlePending.current = false;
       }
     } else if (!animating.current) {
       if (readerInitiated) {
         initialSettlePending.current = false;
-        following.current = currentDistance <= bottomThreshold;
+        following.current = isAtLatest(box);
       } else if (following.current && currentDistance > bottomThreshold && initialSettlePending.current && latestReady.current) {
         // Correct only the initial browser restoration before the first settle.
         moveToLatest(false);
@@ -415,7 +421,7 @@ export function useReadingPosition(
           // After startup, correct only offsets that match a measured layout restore.
           moveToLatest(false);
         } else {
-          following.current = currentDistance <= bottomThreshold;
+          following.current = isAtLatest(box);
         }
       }
     }
@@ -438,7 +444,7 @@ export function useReadingPosition(
       if (following.current) moveToLatest(false);
     } else if (userScrollIntent.current) {
       initialSettlePending.current = false;
-      following.current = distance(box) <= bottomThreshold;
+      following.current = isAtLatest(box);
     }
     capture();
   };
@@ -459,7 +465,7 @@ export function useReadingPosition(
       target.current = undefined;
     }
     // Expanding an activity run is not reader intent to leave the latest edge.
-    setShowLatest(distance(box) > bottomThreshold);
+    setShowLatest(!following.current);
     capture();
   };
   const scrollBy = (amount: number) => {
@@ -474,7 +480,7 @@ export function useReadingPosition(
     const destination = Math.max(0, Math.min(bottom, origin + amount));
     if (Math.abs(destination - origin) < 1) {
       if (!animating.current) {
-        following.current = distance(box) <= bottomThreshold;
+        following.current = isAtLatest(box);
         setShowLatest(!following.current);
         capture();
       }
@@ -483,11 +489,11 @@ export function useReadingPosition(
     const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
     animating.current = !reduceMotion;
     target.current = animating.current ? destination : undefined;
-    following.current = bottom - destination <= bottomThreshold;
+    following.current = isAtLatest(box, destination);
     setShowLatest(!following.current);
     box.scrollTo({ top: destination, behavior: animating.current ? 'smooth' : 'instant' });
     if (!animating.current) {
-      following.current = distance(box) <= bottomThreshold;
+      following.current = isAtLatest(box);
       setShowLatest(!following.current);
     }
     capture();

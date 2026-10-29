@@ -11,6 +11,7 @@ import type {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
 });
 
 function row(sessionKey: string, id: string, content: string, extra: Partial<CanonicalMessage> = {}): CanonicalMessage {
@@ -1477,6 +1478,7 @@ describe('conversation surface', () => {
   });
 
   it('renders tool history updates as captions without restyling the toggle', () => {
+    vi.useFakeTimers();
     const runtime = new FakeRuntime('tool-history-caption', { toolCallsEnabled: true, toolCallsLoading: true });
     const view = render(<TightbeamChat sessionKey="tool-history-caption" adapter={adapterFor(runtime)} />);
 
@@ -1487,12 +1489,29 @@ describe('conversation surface', () => {
     expect(loading.classList.contains('tb-chat-caption-neutral')).toBe(true);
 
     act(() => runtime.update({ toolCallsLoading: false, toolCallsError: 'Connection unavailable' }));
+    expect(view.container.querySelector('.tb-chat-tool-controls > .tb-chat-caption-danger')).toBeNull();
+    act(() => { vi.advanceTimersByTime(1000); });
     const status = view.container.querySelector<HTMLElement>('.tb-chat-tool-controls > .tb-chat-caption-danger');
     expect(status?.getAttribute('role')).toBe('status');
     expect(status?.textContent).toBe('Tool history is not current: Connection unavailable Retry tool history');
     const retry = within(status!).getByRole('button', { name: 'Retry tool history' });
     expect(retry).toBeTruthy();
     expect(retry.closest('.tb-chat-caption-body')).toBeTruthy();
+  });
+
+  it('does not render a tool-history warning for a subsecond feed blip that recovers', () => {
+    vi.useFakeTimers();
+    const runtime = new FakeRuntime('tool-history-blip', { toolCallsEnabled: true, toolCallsLoading: false });
+    const view = render(<TightbeamChat sessionKey="tool-history-blip" adapter={adapterFor(runtime)} />);
+
+    act(() => runtime.update({ toolCallsError: 'Firehose disconnected (close code 1000).' }));
+    expect(view.container.querySelector('.tb-chat-tool-controls > .tb-chat-caption-danger')).toBeNull();
+    act(() => { vi.advanceTimersByTime(350); });
+    act(() => runtime.update({ toolCallsError: undefined }));
+    act(() => { vi.advanceTimersByTime(1000); });
+
+    expect(view.container.querySelector('.tb-chat-tool-controls > .tb-chat-caption-danger')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Retry tool history' })).toBeNull();
   });
 
   it('keeps the transcript usable when optional tool history is absent', () => {
