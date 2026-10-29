@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.52",
+    "items": [
+      {
+        "title": "Open conversation history reliably",
+        "description": "Configured conversations and direct links keep history available when there are no newer messages to fetch. Chat shows a plain empty state when no conversation is configured."
+      }
+    ]
+  },
+  {
     "version": "v0.1.51",
     "items": [
       {
