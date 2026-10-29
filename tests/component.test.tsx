@@ -87,9 +87,13 @@ function adapterFor(runtime: FakeRuntime): TightbeamAdapter { return { open: () 
 function installViewportLayout(viewport: HTMLElement, trailingSpace = 200) {
   const content = viewport.querySelector<HTMLElement>('.tb-chat-message-content')!;
   const rowHeight = 92;
+  const activityDetailHeight = 32;
+  const heightOf = (row: Element) => rowHeight +
+    (row.querySelector('.tb-chat-activity-run-rows')?.children.length ?? 0) * activityDetailHeight;
+  const rowsHeight = () => [...content.children].reduce((height, row) => height + heightOf(row), 0);
   let scrollTop = 0;
   const anchorSpace = () => Number.parseFloat(viewport.style.getPropertyValue('--tb-chat-anchor-space')) || 0;
-  const scrollHeight = () => 32 + content.children.length * rowHeight + anchorSpace() + trailingSpace;
+  const scrollHeight = () => 32 + rowsHeight() + anchorSpace() + trailingSpace;
   Object.defineProperties(viewport, {
     clientHeight: { configurable: true, get: () => 180 },
     scrollHeight: { configurable: true, get: scrollHeight },
@@ -105,7 +109,10 @@ function installViewportLayout(viewport: HTMLElement, trailingSpace = 200) {
   const bounds = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
     if (this === viewport) return new DOMRect(0, 100, 320, 180);
     const index = [...content.children].indexOf(this);
-    if (index >= 0) return new DOMRect(0, 116 + anchorSpace() + index * rowHeight - scrollTop, 320, 80);
+    if (index >= 0) {
+      const offset = [...content.children].slice(0, index).reduce((height, row) => height + heightOf(row), 0);
+      return new DOMRect(0, 116 + anchorSpace() + offset - scrollTop, 320, heightOf(this) - 12);
+    }
     return originalBounds.call(this);
   });
   return {
@@ -826,11 +833,96 @@ describe('conversation surface', () => {
     }
   });
 
+  it('folds activity to its newest line and preserves an away reader through growth, expansion, and collapse', () => {
+    const sessionKey = 'activity-run-reading-position';
+    const question = row(sessionKey, 'question-1', 'Question 1', {
+      seq: 1, role: 'user', sender: 'user:person', messageType: 'chat', turnSeq: 1,
+    });
+    const activity = [1, 2, 3, 4, 5, 6].map((index) => row(sessionKey, `reminder-${index}`,
+      `Quiet for ${index} min · Background activity ${index}`, {
+      seq: index + 1, role: 'user', sender: 'process:events', messageType: 'substrate',
+    }));
+    const firstReply = row(sessionKey, 'reply-1', 'Idle answer 1', {
+      seq: 10, sender: 'assistant-service', messageType: 'assistant', replyToMessageId: question.id, turnSeq: 1,
+    });
+    const laterMessages: CanonicalMessage[] = [];
+    for (let index = 2; index <= 8; index++) {
+      const human = row(sessionKey, `question-${index}`, `Question ${index}`, {
+        seq: index * 10, role: 'user', sender: 'user:person', messageType: 'chat', turnSeq: index,
+      });
+      const reply = row(sessionKey, `reply-${index}`, `Idle answer ${index}`, {
+        seq: index * 10 + 1, sender: 'assistant-service', messageType: 'assistant',
+        replyToMessageId: human.id, turnSeq: index,
+      });
+      laterMessages.push(human, reply);
+    }
+    let records = [question, ...activity, firstReply, ...laterMessages];
+    const runtime = new FakeRuntime(sessionKey, {
+      records, activityTurnStateAvailable: true, activeTurn: undefined,
+    });
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+    const viewport = screen.getByRole('log');
+    const layout = installViewportLayout(viewport);
+    try {
+      act(() => runtime.update({}));
+
+      const anchor = screen.getByText('Idle answer 5').closest<HTMLElement>('[data-scroll-key]')!;
+      fireEvent.wheel(viewport, { deltaY: -1 });
+      layout.setScrollTop(Math.max(0, layout.scrollTop + layout.offset(anchor) - 120));
+      fireEvent.scroll(viewport);
+      const anchorBefore = layout.offset(anchor);
+      expect(anchorBefore).toBeCloseTo(120, 0);
+
+      let toggle = screen.getByRole('button', { name: /6 entries\. Latest: Quiet for .*Background activity 6/ });
+      expect(toggle.textContent).toContain('×6');
+      expect(screen.queryByRole('button', { name: 'Show earlier activity' })).toBeNull();
+      expect(toggle.getAttribute('aria-expanded')).toBe('false');
+      fireEvent.click(toggle);
+      toggle = screen.getByRole('button', { name: /6 entries\. Latest: Quiet for .*Background activity 6/ });
+      expect(toggle.getAttribute('aria-expanded')).toBe('true');
+      expect(screen.getAllByRole('note').map(note => note.textContent)).toEqual([
+        'Quiet for 1 min · Background activity 1', 'Quiet for 2 min · Background activity 2',
+        'Quiet for 3 min · Background activity 3', 'Quiet for 4 min · Background activity 4',
+        'Quiet for 5 min · Background activity 5', 'Quiet for 6 min · Background activity 6',
+      ]);
+      const expandedRun = toggle.closest<HTMLElement>('.tb-chat-activity-run')!;
+      expect(expandedRun.firstElementChild).toBe(toggle);
+      expect(expandedRun.lastElementChild?.classList.contains('tb-chat-activity-run-rows')).toBe(true);
+      expect(layout.offset(anchor)).toBeCloseTo(anchorBefore, 0);
+
+      const incoming = row(sessionKey, 'reminder-7', 'Quiet for 7 min · Background activity 7', {
+        seq: 8, role: 'user', sender: 'process:events', messageType: 'substrate',
+      });
+      records = [question, ...activity, incoming, firstReply, ...laterMessages];
+      act(() => runtime.update({ records }));
+      toggle = screen.getByRole('button', { name: /7 entries\. Latest: Quiet for 7 min .*Background activity 7/ });
+      expect(toggle.getAttribute('aria-expanded')).toBe('true');
+      expect(layout.offset(anchor)).toBeCloseTo(anchorBefore, 0);
+
+      fireEvent.click(toggle);
+      toggle = screen.getByRole('button', { name: /7 entries\. Latest: Quiet for 7 min .*Background activity 7/ });
+      expect(toggle.getAttribute('aria-expanded')).toBe('false');
+      expect(layout.offset(anchor)).toBeCloseTo(anchorBefore, 0);
+
+      const finalReminder = row(sessionKey, 'reminder-8', 'Quiet for 8 min · Background activity 8', {
+        seq: 9, role: 'user', sender: 'process:events', messageType: 'substrate',
+      });
+      records = [question, ...activity, incoming, finalReminder, firstReply, ...laterMessages];
+      act(() => runtime.update({ records }));
+      toggle = screen.getByRole('button', { name: /8 entries\. Latest: Quiet for 8 min .*Background activity 8/ });
+      expect(toggle.getAttribute('aria-expanded')).toBe('false');
+      expect(layout.offset(anchor)).toBeCloseTo(anchorBefore, 0);
+    } finally {
+      layout.restore();
+    }
+  });
+
   it('expands one activity gap in place and keeps it expanded for later entries', () => {
     const sessionKey = 'activity-expansion';
     const prompt = row(sessionKey, 'prompt', 'Question', { role: 'user', sender: 'user:person', seq: 1, turnSeq: 1 });
     const activity = Array.from({ length: 8 }, (_, index) => row(sessionKey, `notice-${index + 1}`,
-      `Background event ${index + 1}`, { role: 'user', sender: 'process:events', messageType: 'substrate', seq: index + 2 }));
+      `Quiet for ${index + 1} min · Background event ${index + 1}`,
+      { role: 'user', sender: 'process:events', messageType: 'substrate', seq: index + 2 }));
     const boundary: ConversationRecord = { kind: 'transition', id: 'boundary', seq: 6, rowVersion: 1,
       sessionKey, transition: 'compaction', content: 'Context compacted', raw: {} };
     const reply = row(sessionKey, 'reply', 'Answer', { role: 'assistant', sender: 'assistant-service',
@@ -846,11 +938,7 @@ describe('conversation surface', () => {
     fireEvent.change(composer, { target: { value: 'Unsent draft' } });
     composer.focus();
     composer.setSelectionRange(2, 6);
-    const overflow = screen.getByRole('button', { name: 'Show earlier activity' });
     expect(screen.getByRole('separator', { name: 'Transition: Context compacted' })).toBeTruthy();
-    fireEvent.click(overflow);
-
-    expect(screen.getAllByRole('note')).toHaveLength(8);
     expect(screen.queryByRole('button', { name: 'Show earlier activity' })).toBeNull();
     expect(screen.getByText('Context compacted')).toBeTruthy();
     expect(Math.abs(layout.offset(replyRow) - before)).toBeLessThanOrEqual(1);
@@ -858,12 +946,20 @@ describe('conversation surface', () => {
     expect(composer.value).toBe('Unsent draft');
     expect([composer.selectionStart, composer.selectionEnd]).toEqual([2, 6]);
 
+    const laterRun = screen.getByRole('button', { name: /4 entries\. Latest: Quiet for 8 min .*Background event 8/ });
+    fireEvent.click(laterRun);
+    expect(laterRun.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getAllByRole('note')).toHaveLength(4);
+    expect(Math.abs(layout.offset(replyRow) - before)).toBeLessThanOrEqual(1);
+
     const later = row(sessionKey, 'notice-later', 'A later background event', {
       role: 'user', sender: 'process:events', messageType: 'substrate', seq: 15,
     });
-    act(() => runtime.update({ records: [prompt, ...activity, boundary, later, reply] }));
-    expect(screen.getAllByRole('note')).toHaveLength(9);
-    expect(screen.getByText('A later background event')).toBeTruthy();
+    const laterReminder = { ...later, content: 'Quiet for 9 min · A later background event' };
+    act(() => runtime.update({ records: [prompt, ...activity, boundary, laterReminder, reply] }));
+    const updatedRun = screen.getByRole('button', { name: /5 entries\. Latest: Quiet for 9 min .*A later background event/ });
+    expect(updatedRun.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getAllByRole('note')).toHaveLength(5);
     expect(screen.queryByRole('button', { name: 'Show earlier activity' })).toBeNull();
     expect(Math.abs(layout.offset(replyRow) - before)).toBeLessThanOrEqual(1);
     expect(composer.value).toBe('Unsent draft');
@@ -1524,6 +1620,29 @@ describe('conversation surface', () => {
 });
 
 describe('tool-call and transition display', () => {
+  it('renders one earlier-activity control when the display cap hides distinct tool groups', () => {
+    let index: ToolCallIndex | undefined;
+    const names = ['Bash', 'Read', 'Grep', 'Edit', 'Search', 'Write'];
+    for (let seq = 1; seq <= names.length; seq++) {
+      const toolName = names[seq - 1];
+      const call: ToolCallRecord = { id: `group-${seq}`, seq, sessionKey: 'tool-groups', turnSeq: 1,
+        afterMessageSeq: 1, harnessToolCallId: `call-${seq}`, title: `${toolName} ${seq}`, kind: 'read', toolName,
+        status: 'completed', rawInput: null, rawOutput: null, content: null, truncated: [], startedAt: seq,
+        endedAt: seq + 1, rowVersion: 1 };
+      const group = putIndex(getIndex(index, call.afterMessageSeq), call.seq, call, call.startedAt);
+      index = putIndex(index, call.afterMessageSeq, group, group.maxTime);
+    }
+    const human = row('tool-groups', 'human', 'A question', { seq: 1, role: 'user', sender: 'user:person' });
+    const runtime = new FakeRuntime('tool-groups', { records: [human], toolCallsEnabled: true, toolCallIndex: index });
+    const view = render(<TightbeamChat sessionKey="tool-groups" adapter={adapterFor(runtime)} />);
+
+    expect(view.container.querySelectorAll('.tb-chat-activity-overflow')).toHaveLength(1);
+    expect(view.container.querySelectorAll('details.tb-chat-activity-line.tb-chat-activity-tool')).toHaveLength(5);
+    fireEvent.click(screen.getByRole('button', { name: 'Show earlier activity' }));
+    expect(view.container.querySelectorAll('.tb-chat-activity-overflow')).toHaveLength(0);
+    expect(view.container.querySelectorAll('details.tb-chat-activity-line.tb-chat-activity-tool')).toHaveLength(6);
+  });
+
   it('caps a large tool run and expands its retained details in place', () => {
     let inspected = 0;
     let index: ToolCallIndex | undefined;
@@ -1543,19 +1662,28 @@ describe('tool-call and transition display', () => {
     const runtime = new FakeRuntime('indexed', { records: [human], toolCallsEnabled: true, toolCallIndex: index });
     const view = render(<TightbeamChat sessionKey="indexed" adapter={adapterFor(runtime)} />);
     expect(inspected).toBeLessThan(100);
-    expect(view.container.querySelectorAll('.tb-chat-activity-tool')).toHaveLength(5);
-    const overflow = screen.getByRole('button', { name: 'Show earlier activity' });
-    overflow.focus();
-    fireEvent.click(overflow);
-    expect(view.container.querySelectorAll('.tb-chat-activity-tool')).toHaveLength(2000);
+    expect(view.container.querySelectorAll('.tb-chat-activity-run.tb-chat-activity-tool')).toHaveLength(1);
+    expect(view.container.querySelectorAll('details.tb-chat-activity-line.tb-chat-activity-tool')).toHaveLength(0);
+    const foldedRun = screen.getByRole('button', { name: /2000 entries\. Latest: Read source 2000/ });
+    foldedRun.focus();
+    expect(screen.queryByRole('button', { name: 'Show earlier activity' })).toBeNull();
+    expect(foldedRun.getAttribute('aria-expanded')).toBe('false');
+    fireEvent.click(foldedRun);
+    expect(view.container.querySelectorAll('details.tb-chat-activity-line.tb-chat-activity-tool')).toHaveLength(2000);
+    const expandedToolTitles = [...view.container.querySelectorAll('.tb-chat-activity-run-rows .tb-chat-activity-gist')]
+      .map(element => element.textContent);
+    expect(expandedToolTitles).toEqual(Array.from({ length: 2000 }, (_, index) =>
+      `Read source ${index + 1} · running`));
+    expect(view.container.querySelector('[data-record-key="tool-tc_1"]')?.getAttribute('aria-label'))
+      .toBe('Tool call: Read source 1 · running');
     const retained = view.container.querySelector<HTMLDetailsElement>('[data-record-key="tool-tc_1000"]')!;
     retained.open = true;
     fireEvent(retained, new Event('toggle'));
     insert(tool(2001));
     act(() => runtime.update({ toolCallIndex: index }));
-    expect(view.container.querySelector('[data-record-key="tool-tc_1000"]')).toBe(retained);
-    expect(retained.open).toBe(true);
-    expect(view.container.querySelectorAll('.tb-chat-activity-tool')).toHaveLength(2001);
+    const retainedAfterAppend = view.container.querySelector<HTMLDetailsElement>('[data-record-key="tool-tc_1000"]')!;
+    expect(retainedAfterAppend.open).toBe(true);
+    expect(view.container.querySelectorAll('details.tb-chat-activity-line.tb-chat-activity-tool')).toHaveLength(2001);
   });
 
   it('keeps an unmatched send at submission time among tools, then uses its canonical anchor with the same scroll key', () => {
@@ -1579,7 +1707,8 @@ describe('tool-call and transition display', () => {
     const canonical = row('ordered-tools', 'canonical-send', send.content, { seq: 11, role: 'user', sender: 'user:person',
       createdAt: send.submittedAt, clientMessageId: send.clientMessageId, deviceId: send.deviceId });
     act(() => runtime.update({ records: [human, canonical, reply], sends: [{ ...send, reconciled: true, status: 'accepted' }] }));
-    expect(keys()).toEqual(['human', 'tool-tc_201', 'tool-tc_202', 'local-c_pending', 'reply']);
+    expect(keys()).toEqual(['human', 'tool:tc_201', 'local-c_pending', 'reply']);
+    expect(screen.getByRole('button', { name: /2 entries\. Latest: Tool 202/ })).toBeTruthy();
     expect(screen.getAllByText('Follow-up')).toHaveLength(1);
   });
 
