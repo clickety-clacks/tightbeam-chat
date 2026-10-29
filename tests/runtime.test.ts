@@ -478,6 +478,9 @@ describe('framework-independent runtime', () => {
       };
       transport.rows.push(latest);
       ready.resolve({ close: vi.fn() });
+      // Feed recovery schedules the held-cursor request on the reconnect
+      // interval. Drive that timer explicitly before waiting for its response.
+      await vi.advanceTimersByTimeAsync(250);
       await caughtUp.promise;
       for (let index = 0; index < 12; index++) await Promise.resolve();
 
