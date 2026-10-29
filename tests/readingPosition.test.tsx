@@ -38,6 +38,44 @@ function deferred<T>() {
 const message = (id: number): CanonicalMessage => ({ kind: 'message', id: `message-${id}`, sessionKey: 'reading',
   seq: id, rowVersion: 1, role: 'user', sender: 'user:person', content: `Message ${id}`, raw: {} });
 const initialRows = Array.from({ length: 20 }, (_, i) => message(i));
+function createReconnectFixture() {
+  const profile: TargetProfile = { identity: 'fixture:arrival-recovery', label: 'Recovery', capabilities: {
+    newestTail: true, stableOlderCursor: true, retainedHistoryAcrossResets: true,
+    orderedTransitions: true, snapshotCoverage: true, versionedNotices: true,
+    humanSendDedupe: true, authoritativeTurnProvenance: true,
+  } };
+  const catchUpStarted = deferred<void>();
+  const catchUpResponse = deferred<ConversationPage>();
+  const recoveryRows = Array.from({ length: 20 }, (_, index) => message(index + 1));
+  let callbacks: ChangeCallbacks | undefined;
+  let connectionCount = 0;
+  const transport: ChatTransport = {
+    currentIdentity: () => ({ principalKey: 'person', deviceId: 'browser' }),
+    inspectTarget: async () => profile,
+    openChanges: async (_key, nextCallbacks) => {
+      connectionCount++;
+      callbacks = nextCallbacks;
+      return { close: () => { if (callbacks === nextCallbacks) callbacks = undefined; } };
+    },
+    readSession: async (sessionKey) => ({ sessionKey, rowVersion: 1, displayName: 'Assistant', raw: {} }),
+    readTail: async () => ({ records: recoveryRows, oldestCursor: recoveryRows[0].id,
+      newestCursor: 'after:20', hasOlder: false, hasNewer: false, coverage: 'reading' }),
+    readAfter: async (_key, after) => {
+      expect(after).toBe('after:20');
+      catchUpStarted.resolve();
+      return catchUpResponse.promise;
+    },
+    readOlder: async (sessionKey) => ({ records: [], oldestCursor: null, hasOlder: false, coverage: sessionKey }),
+    proveCoverage: () => true,
+    sendHuman: async () => ({ outcome: 'accepted' }),
+  };
+  const runtime = createTightbeamAdapter(transport, profile).open('reading');
+  return {
+    runtime, catchUpStarted, catchUpResponse, recoveryRows,
+    get callbacks() { return callbacks; },
+    get connectionCount() { return connectionCount; },
+  };
+}
 let scrollTop = 0;
 let clampScrollTopOnRead = false;
 let viewportHeight = 300;
@@ -333,53 +371,24 @@ describe('conversation reading position', () => {
   });
 
   it('keeps a following reader still for real reconnect catch-up, then animates the next live row', async () => {
-    const profile: TargetProfile = { identity: 'fixture:arrival-recovery', label: 'Recovery', capabilities: {
-      newestTail: true, stableOlderCursor: true, retainedHistoryAcrossResets: true,
-      orderedTransitions: true, snapshotCoverage: true, versionedNotices: true,
-      humanSendDedupe: true, authoritativeTurnProvenance: true,
-    } };
-    const catchUpStarted = deferred<void>();
-    const catchUpResponse = deferred<ConversationPage>();
-    const recoveryRows = Array.from({ length: 20 }, (_, index) => message(index + 1));
-    let callbacks: ChangeCallbacks | undefined;
-    let connectionCount = 0;
-    const transport: ChatTransport = {
-      currentIdentity: () => ({ principalKey: 'person', deviceId: 'browser' }),
-      inspectTarget: async () => profile,
-      openChanges: async (_key, nextCallbacks) => {
-        connectionCount++;
-        callbacks = nextCallbacks;
-        return { close: () => { if (callbacks === nextCallbacks) callbacks = undefined; } };
-      },
-      readSession: async (sessionKey) => ({ sessionKey, rowVersion: 1, displayName: 'Assistant', raw: {} }),
-      readTail: async () => ({ records: recoveryRows, oldestCursor: recoveryRows[0].id,
-        newestCursor: 'after:20', hasOlder: false, hasNewer: false, coverage: 'reading' }),
-      readAfter: async (_key, after) => {
-        expect(after).toBe('after:20');
-        catchUpStarted.resolve();
-        return catchUpResponse.promise;
-      },
-      readOlder: async (sessionKey) => ({ records: [], oldestCursor: null, hasOlder: false, coverage: sessionKey }),
-      proveCoverage: () => true,
-      sendHuman: async () => ({ outcome: 'accepted' }),
-    };
-    const runtime = createTightbeamAdapter(transport, profile).open('reading');
+    const fixture = createReconnectFixture();
+    const { runtime, catchUpStarted, catchUpResponse, recoveryRows } = fixture;
     render(<TightbeamChat sessionKey="reading" adapter={{ open: () => runtime }} />);
 
     try {
       await screen.findByText('Message 19');
-      await waitFor(() => expect(callbacks).toBeDefined());
+      await waitFor(() => expect(fixture.callbacks).toBeDefined());
       const box = screen.getByRole('log');
       expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight);
       expect(animate).not.toHaveBeenCalled();
       scrollTo.mockClear();
 
-      const lostConnection = callbacks!;
+      const lostConnection = fixture.callbacks!;
       act(() => lostConnection.onDoubt('The live feed lost coverage.'));
       let rebuilding!: Promise<void>;
       act(() => { rebuilding = runtime.rebuild(); });
       await catchUpStarted.promise;
-      expect(connectionCount).toBe(2);
+      expect(fixture.connectionCount).toBe(2);
       expect(runtime.getSnapshot().status).toBe('ready');
       expect(runtime.getSnapshot().records).toHaveLength(recoveryRows.length);
 
@@ -394,13 +403,54 @@ describe('conversation reading position', () => {
       expect(scrollTo).toHaveBeenLastCalledWith({ top: box.scrollHeight - box.clientHeight, behavior: 'instant' });
       expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight);
 
-      const liveCallbacks = callbacks!;
+      const liveCallbacks = fixture.callbacks!;
       vi.spyOn(performance, 'now').mockReturnValue(1000);
       act(() => liveCallbacks.onNotice({ operation: 'upsert', record: message(22) }));
       expect(animate).toHaveBeenCalledTimes(1);
       expect(animate.mock.contexts[0]).toBe(screen.getByText('Message 22').closest('article'));
       advanceNextFrame(1300);
       expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight);
+    } finally {
+      runtime.dispose();
+    }
+  });
+
+  it('keeps a scrolled-up reader anchored through real reconnect catch-up', async () => {
+    const fixture = createReconnectFixture();
+    const { runtime, catchUpStarted, catchUpResponse, recoveryRows } = fixture;
+    render(<TightbeamChat sessionKey="reading" adapter={{ open: () => runtime }} />);
+
+    try {
+      await screen.findByText('Message 19');
+      await waitFor(() => expect(fixture.callbacks).toBeDefined());
+      const box = screen.getByRole('log');
+      expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight);
+      readAt(box, 460);
+      const chosenPosition = box.scrollTop;
+      expect(chosenPosition).toBe(460);
+      expect(animate).not.toHaveBeenCalled();
+      scrollTo.mockClear();
+
+      const lostConnection = fixture.callbacks!;
+      act(() => lostConnection.onDoubt('The live feed lost coverage.'));
+      let rebuilding!: Promise<void>;
+      act(() => { rebuilding = runtime.rebuild(); });
+      await catchUpStarted.promise;
+      expect(fixture.connectionCount).toBe(2);
+      expect(runtime.getSnapshot().status).toBe('ready');
+      expect(runtime.getSnapshot().records).toHaveLength(recoveryRows.length);
+
+      await act(async () => {
+        catchUpResponse.resolve({ records: [message(21)], oldestCursor: 'message-21',
+          newestCursor: 'after:21', hasOlder: false, hasNewer: false, coverage: 'reading' });
+        await rebuilding;
+      });
+
+      expect(screen.getByText('Message 21')).toBeTruthy();
+      expect(animate).not.toHaveBeenCalled();
+      expect(animationFrames.size).toBe(0);
+      expect(scrollTo).not.toHaveBeenCalled();
+      expect(box.scrollTop).toBe(chosenPosition);
     } finally {
       runtime.dispose();
     }
