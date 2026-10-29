@@ -239,7 +239,8 @@ describe('Nordic theme', () => {
     expect(captionAction).toContain('background: transparent');
     expect(captionAction).toContain('border: 0');
     expect(captionAction).toContain('text-decoration: underline');
-    expect(rule(componentCss, '.tb-chat-tool-controls > button')).toContain('border: 1px solid currentColor');
+    expect(componentCss).not.toContain('.tb-chat-tool-controls');
+    expect(rule(componentCss, '.tb-chat-tool-history-status')).toContain('display: flex');
     expect(rule(componentCss, '.tb-chat-transition')).not.toContain('border:');
     expect(rule(componentCss, '.tb-chat-status-ready')).toContain('background: var(--tb-chat-ok)');
     expect(rule(componentCss, '.tb-chat-status-loading, .tb-chat-status-stale')).toContain('background: var(--tb-chat-caution)');
