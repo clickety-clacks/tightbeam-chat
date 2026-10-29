@@ -45,7 +45,7 @@ class ControlledTransport implements ChatTransport {
   closed = 0;
   coverage = true;
   tailPage?: ConversationPage;
-  afterHook?: (cursor: string) => ConversationPage;
+  afterHook?: (cursor: string) => ConversationPage | Promise<ConversationPage>;
   messageDetails = new Map<string, ConversationRecord>();
   clearBarrier = 0;
   openingFailures: Error[] = [];
