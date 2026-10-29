@@ -20,12 +20,12 @@ export function parseBatchMembers(record: CanonicalMessage): readonly ParsedBatc
   const isCanonicalCarrier = record.isBatchCarrier === true;
   if (!isCanonicalCarrier && !record.sender?.startsWith('process:')) return undefined;
   const lines = record.content.split(/\r?\n/);
-  // Canonical carriers wrap the count line in a process preamble; unmarked
-  // records retain the older count-first format.
-  const countLineIndex = isCanonicalCarrier ? 2 : 0;
-  if (isCanonicalCarrier && (!/^\[from process:[^\]]+\]$/.test(lines[0] ?? '') || lines[1] !== '')) {
-    return undefined;
-  }
+  // Keep the count-first form already in use while recognizing the process
+  // preamble used by current canonical carriers.
+  const countFirst = batchCountHeading.test(lines[0] ?? '');
+  const hasProcessPreamble = /^\[from process:[^\]]+\]$/.test(lines[0] ?? '') && lines[1] === '';
+  const countLineIndex = countFirst ? 0 : isCanonicalCarrier && hasProcessPreamble ? 2 : -1;
+  if (countLineIndex < 0) return undefined;
   const countMatch = batchCountHeading.exec(lines[countLineIndex] ?? '');
   if (!countMatch) return undefined;
   const declaredCount = Number(countMatch[1]);
