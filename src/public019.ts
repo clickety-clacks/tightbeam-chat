@@ -339,7 +339,8 @@ export function createPublic019Transport(config: Public019Config): { transport: 
   }
 
   const activeSessions = new Set<string>();
-  async function readPage(sessionKey: string, query: string, signal: AbortSignal): Promise<ConversationPage> {
+  async function readPage(sessionKey: string, query: string, signal: AbortSignal,
+    isAfterPage = false): Promise<ConversationPage> {
     const body = await get(`/api/sessions/${encodeURIComponent(sessionKey)}/messages?limit=50&${query}`, signal);
     if (body.schemaVersion !== 1 || body.resource !== 'transcript messages' || !Array.isArray(body.items)) {
       throw new UnsupportedTargetError('Unexpected transcript collection envelope.');
@@ -347,13 +348,17 @@ export function createPublic019Transport(config: Public019Config): { transport: 
     const page = record(body.page);
     const oldestCursor = optionalString(page, 'oldestCursor') ?? null;
     const newestCursor = optionalString(page, 'newestCursor') ?? null;
-    if (typeof page.hasMoreBefore !== 'boolean' || typeof page.hasMoreAfter !== 'boolean' ||
-        (page.hasMoreBefore && !oldestCursor) || (page.hasMoreAfter && !newestCursor)) {
+    const hasMoreAfter = page.hasMoreAfter;
+    const emptyAfterWithoutBackwardCursor = isAfterPage && body.items.length === 0 && !oldestCursor;
+    if (typeof page.hasMoreBefore !== 'boolean' || typeof hasMoreAfter !== 'boolean' ||
+        (page.hasMoreBefore && !oldestCursor && !emptyAfterWithoutBackwardCursor) ||
+        (page.hasMoreAfter && !newestCursor)) {
       throw new UnsupportedTargetError('Invalid transcript page metadata.');
     }
     return { records: body.items.map((item) => decodePublic019Message(item, sessionKey))
-      .sort((a, b) => a.seq - b.seq), oldestCursor, hasOlder: page.hasMoreBefore,
-      newestCursor, hasNewer: page.hasMoreAfter, coverage: sessionKey };
+      .sort((a, b) => a.seq - b.seq), oldestCursor: emptyAfterWithoutBackwardCursor ? null : oldestCursor,
+      hasOlder: emptyAfterWithoutBackwardCursor ? false : page.hasMoreBefore,
+      newestCursor, hasNewer: hasMoreAfter, coverage: sessionKey };
   }
 
   async function openChanges(sessionKey: string, callbacks: ChangeCallbacks, signal: AbortSignal, tools = false): Promise<ChangeConnection> {
@@ -541,7 +546,7 @@ export function createPublic019Transport(config: Public019Config): { transport: 
     },
     readTail: (sessionKey, signal) => readPage(sessionKey, 'tail=true', signal),
     readOlder: (sessionKey, before, signal) => readPage(sessionKey, `before=${encodeURIComponent(before)}`, signal),
-    readAfter: (sessionKey, after, signal) => readPage(sessionKey, `after=${encodeURIComponent(after)}`, signal),
+    readAfter: (sessionKey, after, signal) => readPage(sessionKey, `after=${encodeURIComponent(after)}`, signal, true),
     // Hub.subscribe completes before subscription_ready. Runtime subscribes first,
     // then reads retained append-only rows and unions buffered versioned notices.
     // This is overlap coverage, not a server snapshot watermark or replay promise.
