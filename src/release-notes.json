@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.49",
+    "items": [
+      {
+        "title": "Recover live updates in place",
+        "description": "Chat retries interrupted live updates without reloading or losing your place. Short blips leave the status unchanged; sustained failures show Disconnected after ten seconds, and recovery catches up missed messages before returning to Connected."
+      }
+    ]
+  },
+  {
     "version": "v0.1.48",
     "items": [
       {
