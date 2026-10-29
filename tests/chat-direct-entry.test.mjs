@@ -697,6 +697,7 @@ describe('private direct-entry Chat service bridge', () => {
     gateway.on('upgrade', (request, socket) => {
       const kind = request.url.startsWith('/ws/changes') ? 'changes' : 'human';
       observed.push({ kind, path: request.url, origin: request.headers.origin });
+      socket.on('end', () => socket.end());
       socket.write(`HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: ${websocketHandshakeAccept(request.headers['sec-websocket-key'])}\r\n\r\n`);
       void nextFrame(socket).then(({ value, masked }) => {
         observed.push({ kind, path: request.url, origin: request.headers.origin, auth: value, masked });
@@ -774,6 +775,15 @@ describe('private direct-entry Chat service bridge', () => {
     const changesClosed = new Promise((resolve) => changesUpstream.socket.once('close', resolve));
     changes.socket.destroy();
     await changesClosed;
+    await new Promise((resolve, reject) => {
+      const deadline = Date.now() + 1_000;
+      const checkCleanup = () => {
+        if (vi.getTimerCount() === 0) resolve();
+        else if (Date.now() >= deadline) reject(new Error('The changes-feed keepalive timer was not cleared.'));
+        else setTimeout(checkCleanup, 10);
+      };
+      checkCleanup();
+    });
     expect(vi.getTimerCount()).toBe(0);
 
     const human = await connect(`/__chat/ws?sessionKey=${encodeURIComponent(LINKED_SESSION)}&gateway=${encodeURIComponent(linkedAlias)}`);
