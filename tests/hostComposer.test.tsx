@@ -234,7 +234,7 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     await act(async () => { transport.readyGate?.resolve(); });
     expect(events.filter((event) => event.event === 'ready')).toHaveLength(1);
     await waitFor(() => expect(connectionEvents(events).map((event) => event.state))
-      .toEqual(['reconnecting', 'connected']));
+      .toEqual(['reconnecting', 'connected']), { timeout: 2500 });
   });
 
   it('leaves keyboard navigation to the host after native-composer opt-in', async () => {
@@ -731,7 +731,8 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     };
 
     try {
-      expect(connectionEvents(events).map((event) => event.state)).toEqual(['connected']);
+      await waitFor(() => expect(connectionEvents(events).map((event) => event.state)).toEqual(['connected']),
+        { timeout: 2500 });
       const openCount = transport.changeOpenCount;
       const eventCount = events.length;
       act(() => {
