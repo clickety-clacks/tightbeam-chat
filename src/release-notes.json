@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.48",
+    "items": [
+      {
+        "title": "Recover from linked conversation errors",
+        "description": "A conversation opened from a link now offers a way back to your configured conversation if it fails. Error notices give Tool calls its own space beside Reconnect, with a separate row on narrow screens."
+      }
+    ]
+  },
+  {
     "version": "v0.1.47",
     "items": [
       {
