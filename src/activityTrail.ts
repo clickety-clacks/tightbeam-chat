@@ -80,6 +80,8 @@ interface BubbleEvent extends Position {
   readonly kind: 'bubble';
   readonly bubble: ActivityBubble;
   readonly spanKey?: string;
+  /** True only when this bubble belongs to a span opened by the selected user's prompt. */
+  readonly ownerTurnScoped: boolean;
 }
 
 interface CandidateEvent extends Position {
@@ -228,16 +230,20 @@ function bubbleEvents(bubbles: readonly ActivityBubble[]): BubbleEvent[] {
     left.key.localeCompare(right.key));
   const events: BubbleEvent[] = [];
   let spanKey: string | undefined;
+  let ownerTurnScoped = false;
   let hasReply = false;
   for (let order = 0; order < ordered.length; order++) {
     const bubble = ordered[order];
     if (bubble.side === 'human') {
-      if (!spanKey || hasReply) spanKey = `prompt:${bubble.key}`;
+      if (!spanKey || hasReply || ownerTurnScoped !== bubble.ownerScoped) {
+        spanKey = `prompt:${bubble.key}`;
+        ownerTurnScoped = bubble.ownerScoped;
+      }
       hasReply = false;
     } else if (spanKey) {
       hasReply = true;
     }
-    events.push({ kind: 'bubble', bubble, spanKey,
+    events.push({ kind: 'bubble', bubble, spanKey, ownerTurnScoped,
       sequence: bubble.record.seq, phase: 0, order });
   }
   return events;
@@ -275,7 +281,9 @@ export function buildActivityTrail(input: {
   readonly tools: readonly ToolCallRecord[];
   readonly toolsEnabled: boolean;
   readonly turnStateAvailable: boolean;
+  /** Any running turn still gates non-history tool rows and live refusals. */
   readonly activeTurnRunning: boolean;
+  readonly activeOwnerTurnRunning: boolean;
   readonly liveActivityIds: ReadonlySet<string>;
   readonly liveActivityEligibleIds: ReadonlySet<string>;
   readonly railDenials: readonly LiveRailDenial[];
@@ -305,18 +313,31 @@ export function buildActivityTrail(input: {
   }
   if (input.toolsEnabled) candidates.push(...input.tools.map(toolCandidate));
 
+  const orderedBubbles = bubbleEvents(input.bubbles);
   const events: TrailEvent[] = [
-    ...bubbleEvents(input.bubbles),
+    ...orderedBubbles,
     ...candidates.map((candidate): CandidateEvent => ({
       kind: 'candidate', candidate, ...candidate.position,
     })),
   ].sort(comparePosition);
-  const retainedTurnSequences = new Set(input.bubbles.filter(bubble => bubble.ownerScoped).map(bubble => bubble.record.turnSeq)
+  const retainedTurnSequences = new Set(orderedBubbles.filter(bubble => bubble.ownerTurnScoped).map(bubble => bubble.bubble.record.turnSeq)
     .filter((turnSeq): turnSeq is number => Number.isSafeInteger(turnSeq)));
   const belongsToOwnerTurn = (candidate: Candidate) => candidate.sourceTurnSeq !== undefined &&
     retainedTurnSequences.has(candidate.sourceTurnSeq);
-  const historyInOwnerConversation = (candidate: Candidate, precedingBubble: BubbleEvent) => candidate.historyBacked &&
-    (candidate.sourceTurnSeq === undefined ? precedingBubble.bubble.ownerScoped : belongsToOwnerTurn(candidate));
+  // Canonical activity must have the same inclusion rule live and after history
+  // reload. Ordered owner prompt/reply boundaries place batch members whose
+  // carrier turnSeq belongs to the batching turn. A row's own turnSeq can also
+  // associate later-gap activity with an already retained owner turn.
+  const historyInOwnerConversation = (candidate: Candidate, precedingBubble: BubbleEvent,
+    nextBubble?: BubbleEvent) => {
+    if (!candidate.historyBacked || !precedingBubble.ownerTurnScoped) return false;
+    const betweenOwnerPromptAndReply = !!nextBubble && precedingBubble.ownerTurnScoped &&
+      nextBubble.ownerTurnScoped && nextBubble.bubble.side === 'agent' &&
+      nextBubble.spanKey === precedingBubble.spanKey;
+    const activeOwnerTail = !nextBubble && input.activeOwnerTurnRunning && precedingBubble.ownerTurnScoped &&
+      precedingBubble.bubble.side === 'human';
+    return belongsToOwnerTurn(candidate) || betweenOwnerPromptAndReply || activeOwnerTail;
+  };
 
   const eligible = new Map<string, EligibleCandidate[]>();
   const membership = new Map<string, string>();
@@ -334,8 +355,8 @@ export function buildActivityTrail(input: {
   const closeGap = (nextBubble?: BubbleEvent) => {
     if (!previousBubble?.spanKey) { pending = []; return; }
     const runKey = `run:${previousBubble.bubble.key}`;
-    const closedByReply = !!nextBubble && nextBubble.bubble.side === 'agent' &&
-      nextBubble.spanKey === previousBubble.spanKey;
+    const closedByReply = !!nextBubble && previousBubble.ownerTurnScoped && nextBubble.ownerTurnScoped &&
+      nextBubble.bubble.side === 'agent' && nextBubble.spanKey === previousBubble.spanKey;
     const tail = pending.map((event) => event.candidate);
     const beforeOrAtTool = new Set<string>();
     let foundTool = false;
@@ -345,14 +366,17 @@ export function buildActivityTrail(input: {
       if (foundTool) beforeOrAtTool.add(candidate.id);
     }
     if (closedByReply) {
-      for (const event of pending) add(event.candidate, runKey);
+      for (const event of pending) {
+        if (!event.candidate.historyBacked || historyInOwnerConversation(event.candidate, previousBubble, nextBubble)) {
+          add(event.candidate, runKey);
+        }
+      }
     } else if (!nextBubble) {
       for (const candidate of tail) {
         const allowed = candidate.live
           ? (!input.turnStateAvailable || candidate.liveTailEligibleAtArrival)
           : (beforeOrAtTool.has(candidate.id) || (input.turnStateAvailable && input.activeTurnRunning));
-        const historyAllowed = (!candidate.live && historyInOwnerConversation(candidate, previousBubble)) ||
-          (candidate.live && (allowed || belongsToOwnerTurn(candidate))) || input.shownRuns.has(candidate.id);
+        const historyAllowed = historyInOwnerConversation(candidate, previousBubble);
         if (candidate.historyBacked ? historyAllowed : allowed || input.shownRuns.has(candidate.id)) add(candidate, runKey);
       }
     } else {
@@ -361,8 +385,7 @@ export function buildActivityTrail(input: {
         const allowed = candidate.live
           ? (!input.turnStateAvailable || candidate.liveTailEligibleAtArrival)
           : beforeOrAtTool.has(candidate.id);
-        const historyAllowed = (!candidate.live && historyInOwnerConversation(candidate, previousBubble)) ||
-          (candidate.live && (allowed || belongsToOwnerTurn(candidate))) || oldRun;
+        const historyAllowed = historyInOwnerConversation(candidate, previousBubble, nextBubble);
         if (candidate.historyBacked ? historyAllowed : allowed || oldRun) {
           add(candidate, oldRun ?? runKey);
         }

@@ -29,6 +29,7 @@ function build(input: {
   toolsEnabled?: boolean;
   turnStateAvailable?: boolean;
   activeTurnRunning?: boolean;
+  activeOwnerTurnRunning?: boolean;
   liveActivityIds?: ReadonlySet<string>;
   liveActivityEligibleIds?: ReadonlySet<string>;
   railDenials?: readonly LiveRailDenial[];
@@ -40,6 +41,7 @@ function build(input: {
     localSendTimes: input.localSendTimes,
     tools: input.tools ?? [], toolsEnabled: input.toolsEnabled ?? true,
     turnStateAvailable: input.turnStateAvailable ?? true, activeTurnRunning: input.activeTurnRunning ?? true,
+    activeOwnerTurnRunning: input.activeOwnerTurnRunning ?? input.activeTurnRunning ?? true,
     liveActivityIds: input.liveActivityIds ?? new Set(), railDenials: input.railDenials ?? [],
     liveActivityEligibleIds: input.liveActivityEligibleIds ?? new Set(),
     shownRuns: input.shownRuns ?? new Map(), expandedRuns: input.expandedRuns ?? new Set(),
@@ -348,7 +350,7 @@ describe('activity trail projection', () => {
     }]);
   });
 
-  it('keeps history-backed later-gap and tail folds in canonical order after reload across non-owner turns', () => {
+  it('matches live and reloaded pills while excluding non-owner activity on every page', () => {
     const storeRow = (id: string, seq: number, role: string, sender: string, content: string,
       messageType: string, extra: Record<string, unknown> = {}) => ({
       id, sessionKey: 'session', seq, rowVersion: 1, role, sender, content, messageType,
@@ -361,16 +363,27 @@ describe('activity trail projection', () => {
         `Assignment ${assignment} (Background ${task}) has had no recorded activity since 12`, '',
         'coalesced by notices',
       ].join('\n'), 'substrate', { isBatchCarrier: true, turnSeq: 77 });
+    const laterOwnerActivity = storeRow('history-owner-gap', 5, 'user', 'process:events',
+      'Owner-turn activity in a later gap', 'substrate', { turnSeq: 1 });
     const storedRows = [
-      storeRow('history-prompt-one', 1, 'user', 'user:person', 'First question', 'chat', { turnSeq: 1 }),
-      storeRow('history-reply-one', 2, 'assistant', 'assistant-service', 'First answer', 'assistant', { turnSeq: 1 }),
+      storeRow('history-older-page-process', 1, 'user', 'process:events', 'Older process notice', 'process', { turnSeq: 77 }),
+      storeRow('history-prompt-one', 2, 'user', 'user:person', 'First question', 'chat', { turnSeq: 1 }),
       carrier('history-gap-first', 3, 3, 'asg_12345678', 'review'),
       carrier('history-gap-second', 4, 5567, 'asg_abcdef12', 'build'),
-      storeRow('history-prompt-two', 7, 'user', 'user:person', 'Second question', 'chat', { turnSeq: 2 }),
-      storeRow('history-reply-two', 8, 'assistant', 'assistant-service', 'Second answer', 'assistant', { turnSeq: 2 }),
-      carrier('history-tail-first', 9, 5568, 'asg_23456789', 'test'),
-      carrier('history-tail-second', 10, 5569, 'asg_bcdef123', 'review'),
-      storeRow('history-unrelated-marker', 11, 'assistant', 'process:notifications', 'Unrelated process marker',
+      storeRow('history-reply-one', 5, 'assistant', 'assistant-service', 'First answer', 'assistant', { turnSeq: 1 }),
+      laterOwnerActivity,
+      carrier('history-older-non-owner', 7, 5568, 'asg_23456789', 'test'),
+      storeRow('history-other-agent-wake', 8, 'user', 'agent:helper', '[woke: fallback deadline]\nWake outside owner turn',
+        'agent', { turnSeq: 77 }),
+      storeRow('history-process-notice', 9, 'user', 'process:events', 'Direct process notice outside owner turn',
+        'process', { turnSeq: 77 }),
+      storeRow('history-external-reply', 10, 'assistant', 'agent:external', 'Unproven external reply',
+        'assistant', { turnSeq: 77 }),
+      storeRow('history-prompt-two', 11, 'user', 'user:person', 'Second question', 'chat', { turnSeq: 2 }),
+      carrier('history-tail-first', 12, 5569, 'asg_bcdef123', 'review'),
+      carrier('history-tail-second', 13, 5570, 'asg_aaaa1234', 'build'),
+      storeRow('history-reply-two', 14, 'assistant', 'assistant-service', 'Second answer', 'assistant', { turnSeq: 2 }),
+      storeRow('history-unrelated-marker', 15, 'assistant', 'process:notifications', 'Unrelated process marker',
         'substrate', { turnSeq: 77 }),
     ];
     const readHistory = () => storedRows.map(row => {
@@ -380,15 +393,21 @@ describe('activity trail projection', () => {
     });
     const project = (records: readonly CanonicalMessage[], live = false) => {
       const byId = new Map(records.map(record => [record.id, record]));
-      const activity = records.filter(record => record.isBatchCarrier === true || record.id === 'history-unrelated-marker');
-      const liveIds = live ? new Set(activity.filter(record => record.isBatchCarrier === true).map(record => record.id)) : new Set<string>();
+      const activity = records.filter(record => record.isBatchCarrier === true ||
+        record.id.startsWith('history-older-page') || record.id === 'history-owner-gap' ||
+        record.id.startsWith('history-other-agent') || record.id === 'history-process-notice' ||
+        record.id === 'history-external-reply' || record.id === 'history-unrelated-marker');
+      const liveIds = live ? new Set(activity.map(record => record.id)) : new Set<string>();
+      // Model a permissive live arrival set; the owner-boundary projection must
+      // apply the same filter to it and to retained history.
+      const liveEligibleIds = live ? liveIds : new Set<string>();
       return build({ records: activity, bubbles: [
         bubble(byId.get('history-prompt-one')!, 'human'), bubble(byId.get('history-reply-one')!, 'agent'),
         bubble(byId.get('history-prompt-two')!, 'human'), bubble(byId.get('history-reply-two')!, 'agent'),
-      ], liveActivityIds: liveIds, liveActivityEligibleIds: liveIds, activeTurnRunning: false });
+      ], liveActivityIds: liveIds, liveActivityEligibleIds: liveEligibleIds, activeTurnRunning: false });
     };
     const history = readHistory();
-    expect(history.filter(record => record.isBatchCarrier).map(record => record.turnSeq)).toEqual([77, 77, 77, 77]);
+    expect(history.filter(record => record.isBatchCarrier).map(record => record.turnSeq)).toEqual([77, 77, 77, 77, 77]);
     expect(history.filter(record => record.id.startsWith('history-prompt') || record.id.startsWith('history-reply'))
       .map(record => record.turnSeq)).toEqual([1, 1, 2, 2]);
     const beforeLeave = project(history, true);
@@ -397,15 +416,21 @@ describe('activity trail projection', () => {
 
     expect(afterReturn.messageItems).toEqual(beforeLeave.messageItems);
     expect(afterReload.messageItems).toEqual(beforeLeave.messageItems);
-    expect(afterReload.messageItems.some(item => item.id === 'message:history-unrelated-marker')).toBe(false);
+    const renderedIds = beforeLeave.messageItems.flatMap(item => item.kind === 'fold' ? item.lines.map(line => line.id) : [item.id]);
+    for (const hiddenId of ['history-older-page-process', 'history-older-non-owner', 'history-other-agent-wake',
+      'history-process-notice', 'history-external-reply', 'history-unrelated-marker']) {
+      expect(renderedIds.some(id => id.includes(hiddenId))).toBe(false);
+    }
     expect(afterReturn.messageItems).toMatchObject([
-      { kind: 'fold', id: 'member:history-gap-first:member:3', runKey: 'run:history-reply-one',
+      { kind: 'fold', id: 'member:history-gap-first:member:3', runKey: 'run:history-prompt-one',
         lines: [{ id: 'member:history-gap-first:member:3' }, { id: 'member:history-gap-second:member:5567' }],
         summary: { presentation: { text: 'No recent activity · Background build', metadata: 'asg_abcd' } } },
-      { kind: 'fold', id: 'member:history-tail-first:member:5568', runKey: 'run:history-reply-two',
-        lines: [{ id: 'member:history-tail-first:member:5568' }, { id: 'member:history-tail-second:member:5569' }],
-        summary: { presentation: { text: 'No recent activity · Background review', metadata: 'asg_bcde' } } },
+      { kind: 'line', id: 'message:history-owner-gap', runKey: 'run:history-reply-one' },
+      { kind: 'fold', id: 'member:history-tail-first:member:5569', runKey: 'run:history-prompt-two',
+        lines: [{ id: 'member:history-tail-first:member:5569' }, { id: 'member:history-tail-second:member:5570' }],
+        summary: { presentation: { text: 'No recent activity · Background build', metadata: 'asg_aaaa' } } },
     ]);
+    expect(afterReturn.messageItems.some(item => item.id.startsWith('member:history-older-non-owner'))).toBe(false);
   });
 
   it('uses a retained batch member source kind when its carrier type is substrate', () => {
@@ -476,50 +501,84 @@ describe('activity trail projection', () => {
     ]);
   });
 
-  it('rebuilds history activity in a later closed gap across reload', () => {
+  it('rebuilds a batch member from its ordered owner prompt/reply boundary despite carrier turnSeq', () => {
     const firstPrompt = message('first-prompt', 1, 'user:person');
-    const firstReply = message('first-reply', 3, 'assistant-service', 'First answer', { role: 'assistant' });
+    const firstReply = message('first-reply', 3, 'assistant-service', 'First answer', { role: 'assistant', turnSeq: 1 });
     const nextPrompt = message('next-prompt', 8, 'user:person', 'Another question');
-    const beforeTool = message('before-tool', 4, 'process:work', 'Prepared tool work', { messageType: 'substrate' });
-    const plan = build({ records: [beforeTool], bubbles: [bubble(firstPrompt, 'human'),
-      bubble(firstReply, 'agent'), bubble(nextPrompt, 'human')], activeTurnRunning: false,
-      liveActivityIds: new Set(), liveActivityEligibleIds: new Set() });
+    const carrier = message('owner-turn-carrier', 2, 'process:notifications', [
+      '[from process:notifications]', '', '[batched notices: 1]', 'batchId=owner-turn-carrier', 'release=example',
+      '[5567] source=process:events sender=process:events cause=notice class=fyi',
+      'A notice inside the owner turn', '', 'coalesced by notices',
+    ].join('\n'), { isBatchCarrier: true, messageType: 'substrate', turnSeq: 77 });
+    const live = build({ records: [carrier], bubbles: [bubble(firstPrompt, 'human'), bubble(firstReply, 'agent')],
+      activeTurnRunning: false, liveActivityIds: new Set([carrier.id]),
+      liveActivityEligibleIds: new Set([carrier.id]) });
+    const afterReload = build({ records: [carrier], bubbles: [bubble(firstPrompt, 'human'), bubble(firstReply, 'agent')],
+      activeTurnRunning: false });
 
-    expect(plan.messageItems).toMatchObject([{ id: 'message:before-tool', runKey: 'run:first-reply' }]);
+    expect(afterReload.messageItems).toEqual(live.messageItems);
+    expect(afterReload.messageItems).toMatchObject([{ id: 'member:owner-turn-carrier:member:5567',
+      runKey: 'run:first-prompt', kind: 'line' }]);
+    expect(afterReload.messageItems[0].position).toEqual({ sequence: 2, phase: 1, order: 5567 });
   });
 
-  it('keeps reconstructed activity in the newest tail without turn state', () => {
+  it('keeps a later-gap activity only when its retained turn is owner-scoped', () => {
     const prompt = message('prompt', 1, 'user:person');
-    const beforeTool = message('before-tool', 2, 'process:work', 'Before tool', { messageType: 'substrate' });
-    const plan = build({ records: [beforeTool], bubbles: [bubble(prompt, 'human')],
-      turnStateAvailable: false, activeTurnRunning: false, liveActivityIds: new Set(), liveActivityEligibleIds: new Set() });
+    const reply = message('reply', 2, 'assistant-service', 'Answer', { role: 'assistant', turnSeq: 1 });
+    const beforeTool = message('before-tool', 3, 'process:work', 'Before tool', { messageType: 'substrate', turnSeq: 1 });
+    const plan = build({ records: [beforeTool], bubbles: [bubble(prompt, 'human'), bubble(reply, 'agent')],
+      turnStateAvailable: false, activeTurnRunning: false, liveActivityIds: new Set([beforeTool.id]),
+      liveActivityEligibleIds: new Set([beforeTool.id]) });
 
     expect(plan.messageItems.map(item => item.id)).toEqual(['message:before-tool']);
   });
 
-  it('uses the live entry eligibility captured at arrival, not the later turn state', () => {
-    const prompt = message('prompt', 1, 'user:person');
-    const idleMessage = message('idle-message', 2, 'agent:helper', 'Arrived after the reply', { messageType: 'agent' });
-    const liveActivityIds = new Set([idleMessage.id]);
-    const idleArrival = build({ records: [idleMessage], bubbles: [bubble(prompt, 'human')],
-      turnStateAvailable: true, activeTurnRunning: false, liveActivityIds, liveActivityEligibleIds: new Set() });
-    expect(idleArrival.messageItems).toHaveLength(0);
+  it('uses the same owner-turn evidence for live, returned and reloaded history', () => {
+    const prompt = message('prompt', 1, 'user:person', 'Question', { role: 'user', turnSeq: 1 });
+    const reply = message('reply', 3, 'assistant-service', 'Answer', { role: 'assistant', turnSeq: 1 });
+    const activity = message('activity', 2, 'agent:helper', 'Activity during the owner turn', {
+      messageType: 'agent', turnSeq: 77,
+    });
+    const bubbles = [bubble(prompt, 'human'), bubble(reply, 'agent')];
+    const live = build({ records: [activity], bubbles, turnStateAvailable: true, activeTurnRunning: false,
+      liveActivityIds: new Set([activity.id]), liveActivityEligibleIds: new Set([activity.id]) });
+    const afterReturn = build({ records: [activity], bubbles, turnStateAvailable: true, activeTurnRunning: false });
+    expect(afterReturn.messageItems).toEqual(live.messageItems);
+    expect(afterReturn.messageItems).toMatchObject([{ id: 'message:activity', kind: 'line' }]);
 
-    const turnStartedLater = build({ records: [idleMessage], bubbles: [bubble(prompt, 'human')],
-      turnStateAvailable: true, activeTurnRunning: true, liveActivityIds, liveActivityEligibleIds: new Set() });
-    expect(turnStartedLater.messageItems).toHaveLength(0);
+    const unmatched = message('unmatched', 4, 'process:events', 'Outside the owner turn', {
+      messageType: 'substrate', turnSeq: 77,
+    });
+    const nextPrompt = message('next-prompt', 5, 'user:person', 'Next question', { role: 'user', turnSeq: 2 });
+    const outsideBubbles = [...bubbles, bubble(nextPrompt, 'human')];
+    const liveOlderPage = build({ records: [unmatched], bubbles: outsideBubbles, turnStateAvailable: true,
+      activeTurnRunning: false, liveActivityIds: new Set([unmatched.id]),
+      liveActivityEligibleIds: new Set([unmatched.id]) });
+    const reloadedOlderPage = build({ records: [unmatched], bubbles: outsideBubbles, turnStateAvailable: true,
+      activeTurnRunning: false });
+    expect(liveOlderPage.messageItems).toEqual([]);
+    expect(reloadedOlderPage.messageItems).toEqual(liveOlderPage.messageItems);
+  });
 
-    const laterTool = { ...tool('later-tool', 3, 'completed'), afterMessageSeq: 3 };
-    const turnStartedWithTool = build({ records: [idleMessage], bubbles: [bubble(prompt, 'human')],
-      tools: [laterTool], turnStateAvailable: true, activeTurnRunning: true, liveActivityIds,
-      liveActivityEligibleIds: new Set() });
-    expect(turnStartedWithTool.messageItems).toHaveLength(0);
-    expect(turnStartedWithTool.toolItems.has(laterTool.id)).toBe(true);
+  it('does not preserve an unmatched live tail pill that canonical history cannot reconstruct', () => {
+    const prompt = message('prompt', 1, 'user:person', 'Question', { role: 'user', turnSeq: 1 });
+    const activity = message('unscoped-tail', 2, 'agent:helper', 'Outside the owner turn', {
+      messageType: 'agent', turnSeq: 77,
+    });
+    const live = build({ records: [activity], bubbles: [bubble(prompt, 'human')], turnStateAvailable: true,
+      activeTurnRunning: false, liveActivityIds: new Set([activity.id]),
+      liveActivityEligibleIds: new Set([activity.id]) });
+    const afterReload = build({ records: [activity], bubbles: [bubble(prompt, 'human')], turnStateAvailable: true,
+      activeTurnRunning: false });
+    expect(live.messageItems).toEqual([]);
+    expect(afterReload.messageItems).toEqual(live.messageItems);
 
-    const arrivedDuringTurn = build({ records: [idleMessage], bubbles: [bubble(prompt, 'human')],
-      turnStateAvailable: true, activeTurnRunning: false, liveActivityIds,
-      liveActivityEligibleIds: new Set([idleMessage.id]) });
-    expect(arrivedDuringTurn.messageItems).toMatchObject([{ id: 'message:idle-message', kind: 'agent' }]);
+    const activeOwnerTail = build({ records: [activity], bubbles: [bubble(prompt, 'human')],
+      turnStateAvailable: true, activeTurnRunning: true, liveActivityIds: new Set([activity.id]) });
+    const reloadedActiveTail = build({ records: [activity], bubbles: [bubble(prompt, 'human')],
+      turnStateAvailable: true, activeTurnRunning: true });
+    expect(activeOwnerTail.messageItems).toEqual(reloadedActiveTail.messageItems);
+    expect(reloadedActiveTail.messageItems).toMatchObject([{ id: 'message:unscoped-tail' }]);
   });
 
   it('keeps rail denials scoped to the selected session and live tail eligibility', () => {

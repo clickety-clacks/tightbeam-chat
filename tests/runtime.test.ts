@@ -125,18 +125,18 @@ class ControlledTransport implements ChatTransport {
 async function settle() { await vi.waitFor(() => {}, { timeout: 50 }); }
 
 describe('framework-independent runtime', () => {
-  it('marks session-addressed live messages as activity without turn history', async () => {
+  it('keeps activity without owner-turn evidence out of the live eligible set', async () => {
     const transport = new ControlledTransport();
     const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
     await runtime.rebuild();
     const activity = message(9, { role: 'user', sender: 'session:helper', messageType: undefined });
     transport.emit(activity);
     expect(runtime.getSnapshot().liveActivityIds).toContain(activity.id);
-    expect(runtime.getSnapshot().liveActivityEligibleIds).toContain(activity.id);
+    expect(runtime.getSnapshot().liveActivityEligibleIds).not.toContain(activity.id);
     runtime.dispose();
   });
 
-  it('keeps live-tail eligibility fixed to turn state when each message arrives', async () => {
+  it('marks activity live-eligible only when the selected user turn is running at arrival', async () => {
     const transport = new ControlledTransport();
     const settledTurn: CanonicalTurn = { seq: 80, sessionKey, status: 'completed', messageId: 'm8',
       origin: 'user:person', triggerSource: 'mike', raw: { rowVersion: 1 } };
@@ -151,6 +151,7 @@ describe('framework-independent runtime', () => {
     expect(runtime.getSnapshot().liveActivityEligibleIds).not.toContain(idleActivity.id);
 
     const runningTurn: CanonicalTurn = { ...settledTurn, seq: 81, status: 'running', messageId: 'm9',
+      triggerSource: 'agent',
       raw: { rowVersion: 1 } };
     transport.callbacks?.onNotice({ operation: 'turn', turn: runningTurn });
     expect(runtime.getSnapshot().activeTurn?.turn.seq).toBe(81);
@@ -160,11 +161,20 @@ describe('framework-independent runtime', () => {
 
     const activeActivity = message(10, { role: 'user', sender: 'process:work', messageType: 'substrate' });
     transport.emit(activeActivity);
-    expect(runtime.getSnapshot().liveActivityEligibleIds).toContain(activeActivity.id);
+    expect(runtime.getSnapshot().liveActivityEligibleIds).not.toContain(activeActivity.id);
 
     transport.callbacks?.onNotice({ operation: 'turn', turn: { ...runningTurn, status: 'completed',
       raw: { rowVersion: 2 } } });
-    expect(runtime.getSnapshot().liveActivityEligibleIds).toContain(activeActivity.id);
+
+    const ownerTurn: CanonicalTurn = { ...settledTurn, seq: 82, status: 'running', messageId: 'm10',
+      raw: { rowVersion: 1 } };
+    transport.callbacks?.onNotice({ operation: 'turn', turn: ownerTurn });
+    const ownerActivity = message(11, { role: 'user', sender: 'process:work', messageType: 'substrate' });
+    transport.emit(ownerActivity);
+    expect(runtime.getSnapshot().liveActivityEligibleIds).toContain(ownerActivity.id);
+
+    transport.emit({ ...ownerActivity, rowVersion: 2, content: 'Updated while the owner turn remains active' });
+    expect(runtime.getSnapshot().liveActivityEligibleIds).toContain(ownerActivity.id);
     runtime.dispose();
   });
 

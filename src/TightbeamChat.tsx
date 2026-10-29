@@ -997,6 +997,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     toolsEnabled: Boolean(state.toolCallsEnabled),
     turnStateAvailable: state.activityTurnStateAvailable === true,
     activeTurnRunning: state.activeTurn?.turn.status === 'running',
+    activeOwnerTurnRunning: state.activeTurn?.sourceKind === 'human' && state.activeTurn.turn.status === 'running',
     liveActivityIds: new Set(state.liveActivityIds ?? []),
     liveActivityEligibleIds: new Set(state.liveActivityEligibleIds ?? []),
     railDenials: state.liveRailDenials ?? [],

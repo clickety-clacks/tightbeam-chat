@@ -238,6 +238,18 @@ class SessionRuntime implements ChatRuntime {
     return false;
   }
 
+  private liveOwnerTurnEligibleAtArrival(): boolean {
+    if (!this.activityTurnStateAvailable) return false;
+    let running: CanonicalTurn | undefined;
+    for (const turn of this.turns.values()) {
+      if (turn.status === 'running' && (!running || turn.seq > running.seq)) running = turn;
+    }
+    if (!running) return false;
+    const records = [...this.rows.values()];
+    return createTurnProvenance(running, records, this.identity.principalKey,
+      this.state.session?.raw.ownerUserId).sourceKind === 'human';
+  }
+
   private stopTools(): void {
     this.toolEpoch++;
     this.toolController?.abort();
@@ -496,7 +508,7 @@ class SessionRuntime implements ChatRuntime {
             /^(?:agent|process|remedy|session):/.test(record.sender ?? ''))) {
           const firstLiveArrival = !this.liveActivityIds.has(record.id);
           this.liveActivityIds.add(record.id);
-          if (firstLiveArrival && this.liveTailEligibleAtArrival()) this.liveActivityEligibleIds.add(record.id);
+          if (firstLiveArrival && this.liveOwnerTurnEligibleAtArrival()) this.liveActivityEligibleIds.add(record.id);
         }
         return true;
       }
