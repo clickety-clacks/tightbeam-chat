@@ -18,6 +18,8 @@ const MIME_TYPES = new Map([
   ['.woff2', 'font/woff2'],
 ]);
 
+const CHANGE_FEED_KEEPALIVE_INTERVAL_MS = 30_000;
+
 function canonicalOrigin(value) {
   if (typeof value !== 'string' || value.length === 0) return undefined;
   try {
@@ -434,6 +436,11 @@ function websocketClientTextFrame(value) {
   return Buffer.concat([header, mask, masked]);
 }
 
+function websocketClientPingFrame() {
+  const mask = crypto.randomBytes(4);
+  return Buffer.from([0x89, 0x80, ...mask]);
+}
+
 function proxyServiceWebSocket(request, socket, head, target, runtime, gateway) {
   const protocol = gateway.base.startsWith('https:') ? https : http;
   const headers = {
@@ -450,6 +457,11 @@ function proxyServiceWebSocket(request, socket, head, target, runtime, gateway) 
 
   const upstream = protocol.request(gateway.base, { method: 'GET', path: target.path, headers });
   upstream.on('upgrade', (reply, remote, remoteHead) => {
+    let keepalive;
+    const stopKeepalive = () => {
+      if (keepalive !== undefined) clearInterval(keepalive);
+      keepalive = undefined;
+    };
     const statusText = reply.statusMessage || 'Switching Protocols';
     const headerLines = [];
     for (const [name, value] of Object.entries(reply.headers)) {
@@ -472,10 +484,16 @@ function proxyServiceWebSocket(request, socket, head, target, runtime, gateway) 
     remote.write(websocketClientTextFrame(auth));
     if (head.length) remote.write(head);
     socket.pipe(remote).pipe(socket);
-    socket.on('error', () => remote.destroy());
-    remote.on('error', () => socket.destroy());
-    socket.on('close', () => remote.destroy());
-    remote.on('close', () => socket.destroy());
+    socket.on('error', () => { stopKeepalive(); remote.destroy(); });
+    remote.on('error', () => { stopKeepalive(); socket.destroy(); });
+    socket.on('close', () => { stopKeepalive(); remote.destroy(); });
+    remote.on('close', () => { stopKeepalive(); socket.destroy(); });
+    if (target.kind === 'changes') {
+      keepalive = setInterval(() => {
+        if (!remote.destroyed && remote.writable) remote.write(websocketClientPingFrame());
+      }, CHANGE_FEED_KEEPALIVE_INTERVAL_MS);
+      keepalive.unref?.();
+    }
   });
   upstream.on('response', (reply) => {
     socket.end(`HTTP/1.1 ${reply.statusCode ?? 502} Gateway Refused\r\nConnection: close\r\n\r\n`);

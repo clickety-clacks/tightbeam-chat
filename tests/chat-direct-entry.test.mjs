@@ -98,6 +98,7 @@ function serverTextFrame(value) {
 function takeFrame(buffer) {
   if (buffer.length < 2) return undefined;
   const first = buffer[0];
+  const opcode = first & 0x0f;
   const second = buffer[1];
   const masked = (second & 0x80) !== 0;
   let length = second & 0x7f;
@@ -121,13 +122,13 @@ function takeFrame(buffer) {
     const mask = buffer.subarray(maskOffset, maskOffset + 4);
     for (let index = 0; index < payload.length; index += 1) payload[index] ^= mask[index % 4];
   }
-  if ((first & 0x0f) !== 1) throw new Error('Expected a text frame.');
-  return { value: JSON.parse(payload.toString('utf8')), masked, rest: buffer.subarray(offset + length) };
+  return { opcode, value: opcode === 1 ? JSON.parse(payload.toString('utf8')) : undefined,
+    payload, masked, rest: buffer.subarray(offset + length) };
 }
 
 const pendingSocketBytes = new WeakMap();
 
-function nextFrame(socket, initial = Buffer.alloc(0)) {
+function nextFrame(socket, initial = Buffer.alloc(0), expectedOpcode = 1) {
   return new Promise((resolve, reject) => {
     let bytes = Buffer.concat([pendingSocketBytes.get(socket) ?? Buffer.alloc(0), Buffer.from(initial)]);
     const timer = setTimeout(() => finish(new Error('Timed out waiting for a WebSocket frame.')), 5000);
@@ -141,6 +142,10 @@ function nextFrame(socket, initial = Buffer.alloc(0)) {
       try {
         const frame = takeFrame(bytes);
         if (!frame) return false;
+        if (frame.opcode !== expectedOpcode) {
+          finish(new Error(`Expected WebSocket opcode ${expectedOpcode}, received ${frame.opcode}.`));
+          return true;
+        }
         bytes = frame.rest;
         pendingSocketBytes.set(socket, bytes);
         finish(undefined, frame);
@@ -164,6 +169,7 @@ function websocketHandshakeAccept(key) {
 }
 
 afterEach(async () => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   for (const server of [...createdServers].reverse()) await closeServer(server);
   for (const root of temporaryRoots.splice(0)) await fs.rm(root, { recursive: true, force: true });
@@ -683,8 +689,10 @@ describe('private direct-entry Chat service bridge', () => {
     expect(observed).toEqual([]);
   });
 
-  it('injects masked service auth for the linked session before forwarding Firehose and human sockets', async () => {
+  it('sends a masked control ping on the idle changes feed without pinging the human socket', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
     const observed = [];
+    const upstreamConnections = new Map();
     const gateway = http.createServer();
     gateway.on('upgrade', (request, socket) => {
       const kind = request.url.startsWith('/ws/changes') ? 'changes' : 'human';
@@ -692,6 +700,9 @@ describe('private direct-entry Chat service bridge', () => {
       socket.write(`HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: ${websocketHandshakeAccept(request.headers['sec-websocket-key'])}\r\n\r\n`);
       void nextFrame(socket).then(({ value, masked }) => {
         observed.push({ kind, path: request.url, origin: request.headers.origin, auth: value, masked });
+        const upstream = { socket, bytes: Buffer.alloc(0) };
+        socket.on('data', (chunk) => { upstream.bytes = Buffer.concat([upstream.bytes, chunk]); });
+        upstreamConnections.set(kind, upstream);
         if (kind === 'changes') {
           socket.write(serverTextFrame({ type: 'auth_result', success: true, userId: PRINCIPAL, sessionKey: value.sessionKey }));
         } else {
@@ -748,7 +759,22 @@ describe('private direct-entry Chat service bridge', () => {
     expect((await nextFrame(changes.socket, changes.head)).value).toMatchObject({
       type: 'auth_result', success: true, userId: PRINCIPAL, sessionKey: LINKED_SESSION,
     });
+    const changesUpstream = upstreamConnections.get('changes');
+    expect(changesUpstream).toBeDefined();
+    expect(changesUpstream.bytes).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(changesUpstream.bytes).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.waitFor(() => expect(changesUpstream.bytes.length).toBeGreaterThan(0));
+    const ping = takeFrame(changesUpstream.bytes);
+    expect(ping.opcode).toBe(9);
+    expect(ping.masked).toBe(true);
+    expect(ping.payload).toEqual(Buffer.alloc(0));
+    expect(ping.rest).toEqual(Buffer.alloc(0));
+    const changesClosed = new Promise((resolve) => changesUpstream.socket.once('close', resolve));
     changes.socket.destroy();
+    await changesClosed;
+    expect(vi.getTimerCount()).toBe(0);
 
     const human = await connect(`/__chat/ws?sessionKey=${encodeURIComponent(LINKED_SESSION)}&gateway=${encodeURIComponent(linkedAlias)}`);
     expect(human.response.statusCode).toBe(101);
@@ -757,7 +783,13 @@ describe('private direct-entry Chat service bridge', () => {
     expect(humanAuth).toMatchObject({ type: 'auth_result', success: true, userId: PRINCIPAL,
       sessionId: `conn_${humanAuthRecord.auth.deviceId}` });
     expect((await nextFrame(human.socket)).value).toEqual({ type: 'sync_complete' });
+    const humanUpstream = upstreamConnections.get('human');
+    expect(humanUpstream).toBeDefined();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(humanUpstream.bytes).toHaveLength(0);
+    const humanClosed = new Promise((resolve) => humanUpstream.socket.once('close', resolve));
     human.socket.destroy();
+    await humanClosed;
 
     const changeAuth = observed.find((row) => row.kind === 'changes' && row.auth);
     expect(observed.filter((row) => row.auth).every((row) => row.masked)).toBe(true);
