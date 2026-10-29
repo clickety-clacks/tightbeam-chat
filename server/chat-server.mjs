@@ -5,7 +5,6 @@ import https from 'node:https';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { startChangesFeedKeepalive } from './websocket-keepalive.mjs';
 
 const MIME_TYPES = new Map([
   ['.css', 'text/css; charset=utf-8'],
@@ -18,6 +17,8 @@ const MIME_TYPES = new Map([
   ['.woff', 'font/woff'],
   ['.woff2', 'font/woff2'],
 ]);
+
+const CHANGE_FEED_KEEPALIVE_INTERVAL_MS = 30_000;
 
 function canonicalOrigin(value) {
   if (typeof value !== 'string' || value.length === 0) return undefined;
@@ -433,6 +434,21 @@ function websocketClientTextFrame(value) {
   const masked = Buffer.alloc(payload.length);
   for (let index = 0; index < payload.length; index += 1) masked[index] = payload[index] ^ mask[index % 4];
   return Buffer.concat([header, mask, masked]);
+}
+
+function websocketClientPingFrame() {
+  const mask = crypto.randomBytes(4);
+  return Buffer.from([0x89, 0x80, ...mask]);
+}
+
+export function startChangesFeedKeepalive(target, remote) {
+  if (target.kind !== 'changes') return () => {};
+
+  const keepalive = setInterval(() => {
+    if (!remote.destroyed && remote.writable) remote.write(websocketClientPingFrame());
+  }, CHANGE_FEED_KEEPALIVE_INTERVAL_MS);
+  keepalive.unref?.();
+  return () => clearInterval(keepalive);
 }
 
 function proxyServiceWebSocket(request, socket, head, target, runtime, gateway) {

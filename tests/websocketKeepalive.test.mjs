@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { startChangesFeedKeepalive } from '../server/websocket-keepalive.mjs';
+import { startChangesFeedKeepalive } from '../server/chat-server.mjs';
 
 afterEach(() => vi.useRealTimers());
 
