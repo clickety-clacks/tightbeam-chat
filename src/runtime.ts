@@ -698,6 +698,7 @@ class SessionRuntime implements ChatRuntime {
       if (afterCursor !== undefined) this.catchUpAfterCursor = afterCursor;
       return;
     }
+    const wasRecoveringFromFeedGap = this.preserveRowsOnReconnect;
     this.catchUpConnection = connection;
     this.catchUpAfterCursor = afterCursor;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
@@ -736,7 +737,15 @@ class SessionRuntime implements ChatRuntime {
       this.connectionForRebuild = connection;
       void this.rebuild();
     };
-    recover();
+    if (wasRecoveringFromFeedGap) recover();
+    else {
+      // Let the just-opened initial feed settle through the same retry window
+      // used by normal recovery before issuing its cursor catch-up request.
+      this.reconnectTimer = setTimeout(() => {
+        this.reconnectTimer = undefined;
+        recover();
+      }, this.retryDelayMs);
+    }
   }
 
   private async catchUpFromCursor(
