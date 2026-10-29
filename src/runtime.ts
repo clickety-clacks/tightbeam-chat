@@ -32,7 +32,10 @@ import { ToolHistoryUnavailableError } from './toolHistory';
 import { createTurnProvenance } from './provenance';
 import { getIndex, putIndex, trimIndexBelow } from './recordIndex';
 
-const MAX_UNRECOVERED_LIVE_FAILURES = 3;
+const LIVE_RECONNECTING_AFTER_MS = 1_000;
+const LIVE_DISCONNECTED_AFTER_MS = 10_000;
+const LIVE_STATUS_MIN_INTERVAL_MS = 1_000;
+const LIVE_STABLE_OPEN_MS = 1_000;
 
 function identityEquals(a: HostIdentity, b: HostIdentity): boolean {
   return a.principalKey === b.principalKey && a.deviceId === b.deviceId;
@@ -151,7 +154,12 @@ class SessionRuntime implements ChatRuntime {
   private pendingHistoryReanchor = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   private retryDelayMs = 250;
-  private liveFeedFailures = 0;
+  private liveOutageStartedAt: number | undefined;
+  private liveReconnectStatusTimer: ReturnType<typeof setTimeout> | undefined;
+  private liveDisconnectedStatusTimer: ReturnType<typeof setTimeout> | undefined;
+  private liveRecoveryStatusTimer: ReturnType<typeof setTimeout> | undefined;
+  private liveRecoveryPending = false;
+  private liveStatusChangedAt = Date.now();
   private rebuildPromise: Promise<void> | undefined;
 
   constructor(
@@ -185,6 +193,9 @@ class SessionRuntime implements ChatRuntime {
   private publish(patch: Partial<RuntimeState>): void {
     if (this.disposed) return;
     const next = { ...this.state, ...patch };
+    if (next.liveConnectionState !== this.state.liveConnectionState) {
+      this.liveStatusChangedAt = Date.now();
+    }
     if (next.status !== 'ready') next.activeTurn = undefined;
     else if ('records' in patch || 'session' in patch || 'activeTurn' in patch || 'status' in patch) {
       let running: CanonicalTurn | undefined;
@@ -553,7 +564,7 @@ class SessionRuntime implements ChatRuntime {
 
   private doubt(reason: string, generation: number): void {
     if (!this.isCurrent(generation) || !this.checkIdentity()) return;
-    const liveConnectionState = this.recordLiveFeedFailure();
+    this.noteLiveFeedUnavailable();
     // A feed gap does not make the already shown transcript less trustworthy.
     // Keep it while REST and the replacement subscription catch up.
     this.preserveRowsOnReconnect = true;
@@ -570,7 +581,7 @@ class SessionRuntime implements ChatRuntime {
       this.connectionForRebuild = undefined;
       this.buffered = [];
       this.bufferedSession = undefined;
-      this.publish({ liveError: reason, liveConnectionState, activeTurn: undefined, ...this.activityStatePatch() });
+      this.publish({ liveError: reason, activeTurn: undefined, ...this.activityStatePatch() });
       return;
     }
     this.generation++;
@@ -582,14 +593,75 @@ class SessionRuntime implements ChatRuntime {
     this.connectionForRebuild = undefined;
     this.rebuildPromise = undefined;
     this.initializing = false;
-    this.publish({ generation: this.generation, status: 'ready', liveError: reason, liveConnectionState, activeTurn: undefined,
+    this.publish({ generation: this.generation, status: 'ready', liveError: reason, activeTurn: undefined,
       ...this.activityStatePatch() });
     this.scheduleRebuild();
   }
 
-  private recordLiveFeedFailure(): RuntimeState['liveConnectionState'] {
-    this.liveFeedFailures++;
-    return this.liveFeedFailures >= MAX_UNRECOVERED_LIVE_FAILURES ? 'disconnected' : 'reconnecting';
+  private noteLiveFeedUnavailable(): void {
+    this.liveRecoveryPending = false;
+    if (this.liveRecoveryStatusTimer) clearTimeout(this.liveRecoveryStatusTimer);
+    this.liveRecoveryStatusTimer = undefined;
+    if (this.liveOutageStartedAt === undefined) this.liveOutageStartedAt = Date.now();
+    const outageStartedAt = this.liveOutageStartedAt;
+
+    if (this.state.liveConnectionState !== 'reconnecting' && this.state.liveConnectionState !== 'disconnected') {
+      if (this.liveReconnectStatusTimer) clearTimeout(this.liveReconnectStatusTimer);
+      const reconnectAt = Math.max(outageStartedAt + LIVE_RECONNECTING_AFTER_MS,
+        this.liveStatusChangedAt + LIVE_STATUS_MIN_INTERVAL_MS);
+      this.liveReconnectStatusTimer = setTimeout(() => {
+        this.liveReconnectStatusTimer = undefined;
+        if (this.disposed || this.liveOutageStartedAt !== outageStartedAt || this.liveRecoveryPending) return;
+        if (this.state.liveConnectionState !== 'reconnecting' && this.state.liveConnectionState !== 'disconnected') {
+          this.publish({ liveConnectionState: 'reconnecting' });
+        }
+      }, Math.max(0, reconnectAt - Date.now()));
+    }
+
+    if (this.state.liveConnectionState !== 'disconnected') {
+      if (this.liveDisconnectedStatusTimer) clearTimeout(this.liveDisconnectedStatusTimer);
+      const disconnectedAt = Math.max(outageStartedAt + LIVE_DISCONNECTED_AFTER_MS,
+        this.liveStatusChangedAt + LIVE_STATUS_MIN_INTERVAL_MS);
+      this.liveDisconnectedStatusTimer = setTimeout(() => {
+        this.liveDisconnectedStatusTimer = undefined;
+        if (this.disposed || this.liveOutageStartedAt !== outageStartedAt || this.liveRecoveryPending) return;
+        if (this.state.liveConnectionState !== 'disconnected') {
+          this.publish({ liveConnectionState: 'disconnected' });
+        }
+      }, Math.max(0, disconnectedAt - Date.now()));
+    }
+  }
+
+  private noteLiveFeedRecovered(): void {
+    const connection = this.connection;
+    if (this.disposed || !connection) return;
+    this.liveRecoveryPending = true;
+    if (this.liveRecoveryStatusTimer) clearTimeout(this.liveRecoveryStatusTimer);
+    const connectedAt = Math.max(Date.now() + LIVE_STABLE_OPEN_MS,
+      this.liveStatusChangedAt + LIVE_STATUS_MIN_INTERVAL_MS);
+    this.liveRecoveryStatusTimer = setTimeout(() => {
+      this.liveRecoveryStatusTimer = undefined;
+      if (this.disposed || !this.liveRecoveryPending || this.connection !== connection) return;
+      this.liveRecoveryPending = false;
+      this.liveOutageStartedAt = undefined;
+      if (this.liveReconnectStatusTimer) clearTimeout(this.liveReconnectStatusTimer);
+      this.liveReconnectStatusTimer = undefined;
+      if (this.liveDisconnectedStatusTimer) clearTimeout(this.liveDisconnectedStatusTimer);
+      this.liveDisconnectedStatusTimer = undefined;
+      this.retryDelayMs = 250;
+      if (this.state.liveConnectionState !== 'connected') this.publish({ liveConnectionState: 'connected' });
+    }, Math.max(0, connectedAt - Date.now()));
+  }
+
+  private clearLiveFeedStatusTimers(): void {
+    if (this.liveReconnectStatusTimer) clearTimeout(this.liveReconnectStatusTimer);
+    this.liveReconnectStatusTimer = undefined;
+    if (this.liveDisconnectedStatusTimer) clearTimeout(this.liveDisconnectedStatusTimer);
+    this.liveDisconnectedStatusTimer = undefined;
+    if (this.liveRecoveryStatusTimer) clearTimeout(this.liveRecoveryStatusTimer);
+    this.liveRecoveryStatusTimer = undefined;
+    this.liveRecoveryPending = false;
+    this.liveOutageStartedAt = undefined;
   }
 
   private scheduleRebuild(): void {
@@ -625,6 +697,7 @@ class SessionRuntime implements ChatRuntime {
     this.initializing = false;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = undefined;
+    this.clearLiveFeedStatusTimers();
     this.stopTools();
     this.controller?.abort();
     this.connectionController?.abort();
@@ -667,8 +740,6 @@ class SessionRuntime implements ChatRuntime {
       // a new generation instead of waiting for that attempt to settle.
       this.rebuildPromise = undefined;
       this.retryDelayMs = 250;
-      this.liveFeedFailures = 0;
-      if (this.state.status === 'ready') this.publish({ liveConnectionState: 'reconnecting' });
     }
     if (this.rebuildPromise) return this.rebuildPromise;
     // An explicit recovery supersedes a retry that may have been throttled.
@@ -768,14 +839,14 @@ class SessionRuntime implements ChatRuntime {
             // first REST snapshot and subscription readiness. Do this promptly,
             // even if repeated failed attempts had reached the maximum backoff.
             this.connectionForRebuild = connection;
-            this.publish({ liveConnectionState: 'reconnecting' });
             this.catchUpAfterFeedOpens(connection);
           }
         }).catch((error) => {
           liveAttemptSettled = true;
           if (!this.isCurrent(binding.generation) || connectionController.signal.aborted) return;
           liveError = errorText(error);
-          this.publish({ liveError, liveConnectionState: this.recordLiveFeedFailure() });
+          this.noteLiveFeedUnavailable();
+          this.publish({ liveError });
           if (!this.initializing) this.scheduleRebuild();
         });
       }
@@ -925,7 +996,7 @@ class SessionRuntime implements ChatRuntime {
 
       if (!this.connection || !session || !tail || sessionError || conversationError) {
         if (this.connection && this.preserveRowsOnReconnect) {
-          this.publish({ liveConnectionState: this.recordLiveFeedFailure() });
+          this.noteLiveFeedUnavailable();
         }
         this.connection?.close();
         this.connection = undefined;
@@ -961,7 +1032,7 @@ class SessionRuntime implements ChatRuntime {
           for (const notice of prefix) this.apply(notice);
           if (this.preserveRowsOnReconnect && !historyError) this.preserveRowsOnReconnect = false;
         } else {
-          this.publish({ liveConnectionState: this.recordLiveFeedFailure() });
+          this.noteLiveFeedUnavailable();
           this.connection?.close();
           this.connection = undefined;
           this.connectionController?.abort();
@@ -977,13 +1048,8 @@ class SessionRuntime implements ChatRuntime {
       if (!this.connection && !liveError) {
         liveError = liveAttemptSettled ? 'Live updates are unavailable.' : 'Live updates are connecting.';
       }
-      let liveConnectionState = this.state.liveConnectionState;
       if (this.connection && !liveError) {
-        liveConnectionState = 'connected';
-        this.liveFeedFailures = 0;
         this.retryDelayMs = 250;
-      } else if (!this.connection && liveError && liveConnectionState !== 'disconnected') {
-        liveConnectionState = 'reconnecting';
       }
       const sends = this.state.sends.map((send) => this.pendingReconciledIds.has(send.clientMessageId)
         ? { ...send, status: 'accepted' as const, reconciled: true, reason: undefined }
@@ -1002,8 +1068,10 @@ class SessionRuntime implements ChatRuntime {
         provenance: noProvenance, provenanceAvailable: false, activeTurn: undefined,
         ...this.activityStatePatch(),
         hasOlder, historyError: tail ? historyError : this.state.historyError,
-        sessionError, sessionNotFound, conversationError, liveError, liveConnectionState,
+        sessionError, sessionNotFound, conversationError, liveError,
       });
+      if (this.connection && !liveError) this.noteLiveFeedRecovered();
+      else if (!this.connection && liveError) this.noteLiveFeedUnavailable();
       void this.startTools();
       for (const send of sends) {
         if (send.reconciled) this.notifyHostSend(send.clientMessageId, { kind: 'reconciled' });
@@ -1017,7 +1085,6 @@ class SessionRuntime implements ChatRuntime {
       // decision but just before this rebuild publishes. It still needs the
       // immediate cursor catch-up used by the fully late-open path above.
       if (this.connection && liveError === 'Live updates are connecting.') {
-        this.publish({ liveConnectionState: 'reconnecting' });
         this.catchUpAfterFeedOpens(this.connection);
       }
     } catch (error) {
@@ -1344,6 +1411,7 @@ class SessionRuntime implements ChatRuntime {
     this.disposed = true;
     this.generation++;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.clearLiveFeedStatusTimers();
     this.stopTools();
     this.controller?.abort();
     this.connectionController?.abort();
