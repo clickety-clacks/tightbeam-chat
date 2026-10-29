@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.56",
+    "items": [
+      {
+        "title": "Remove the Tool calls button",
+        "description": "Chat no longer shows a Tool calls button. Available tool calls appear automatically, and tool-history loading and retry notices remain."
+      }
+    ]
+  },
+  {
     "version": "v0.1.55",
     "items": [
       {
