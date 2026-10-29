@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.47",
+    "items": [
+      {
+        "title": "Fold repeated activity into expandable summaries",
+        "description": "Consecutive activity of the same kind now appears as one expandable line with the full count. Open it to see every entry beneath the summary; tool activity stays grouped by tool name."
+      }
+    ]
+  },
+  {
     "version": "v0.1.46",
     "items": [
       {
