@@ -398,9 +398,14 @@ describe('activity trail projection', () => {
         record.id.startsWith('history-other-agent') || record.id === 'history-process-notice' ||
         record.id === 'history-external-reply' || record.id === 'history-unrelated-marker');
       const liveIds = live ? new Set(activity.map(record => record.id)) : new Set<string>();
-      // Model a permissive live arrival set; the owner-boundary projection must
-      // apply the same filter to it and to retained history.
-      const liveEligibleIds = live ? liveIds : new Set<string>();
+      // Model the runtime's selected-human-turn admission: the batch carriers
+      // inside owner exchanges and the row tied to the retained owner turn are
+      // eligible. Non-owner rows are present on the feed but never admitted.
+      const ownerTurnIds = new Set(['history-gap-first', 'history-gap-second', 'history-owner-gap',
+        'history-tail-first', 'history-tail-second']);
+      const liveEligibleIds = live
+        ? new Set(activity.filter(record => ownerTurnIds.has(record.id)).map(record => record.id))
+        : new Set<string>();
       return build({ records: activity, bubbles: [
         bubble(byId.get('history-prompt-one')!, 'human'), bubble(byId.get('history-reply-one')!, 'agent'),
         bubble(byId.get('history-prompt-two')!, 'human'), bubble(byId.get('history-reply-two')!, 'agent'),
@@ -414,8 +419,9 @@ describe('activity trail projection', () => {
     const afterReturn = project(readHistory());
     const afterReload = project(readHistory());
 
-    expect(afterReturn.messageItems).toEqual(beforeLeave.messageItems);
+    expect(beforeLeave.messageItems).toEqual(afterReturn.messageItems);
     expect(afterReload.messageItems).toEqual(beforeLeave.messageItems);
+    expect(beforeLeave.messageItems.some(item => item.id.includes('member:history-older-non-owner'))).toBe(false);
     const renderedIds = beforeLeave.messageItems.flatMap(item => item.kind === 'fold' ? item.lines.map(line => line.id) : [item.id]);
     for (const hiddenId of ['history-older-page-process', 'history-older-non-owner', 'history-other-agent-wake',
       'history-process-notice', 'history-external-reply', 'history-unrelated-marker']) {
