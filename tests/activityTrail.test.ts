@@ -510,7 +510,6 @@ describe('activity trail projection', () => {
   it('rebuilds a batch member from its ordered owner prompt/reply boundary despite carrier turnSeq', () => {
     const firstPrompt = message('first-prompt', 1, 'user:person');
     const firstReply = message('first-reply', 3, 'assistant-service', 'First answer', { role: 'assistant', turnSeq: 1 });
-    const nextPrompt = message('next-prompt', 8, 'user:person', 'Another question');
     const carrier = message('owner-turn-carrier', 2, 'process:notifications', [
       '[from process:notifications]', '', '[batched notices: 1]', 'batchId=owner-turn-carrier', 'release=example',
       '[5567] source=process:events sender=process:events cause=notice class=fyi',
