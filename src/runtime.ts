@@ -150,7 +150,7 @@ class SessionRuntime implements ChatRuntime {
     generation: number;
     session: SessionRecord;
     page: ConversationPage;
-    feedReadyBeforeHistoryRead: boolean;
+    feedReadyWhenHistoryReadFinished: boolean;
     historyError?: string;
     appliedNotices: Set<ChangeNotice>;
   } | undefined;
@@ -715,7 +715,7 @@ class SessionRuntime implements ChatRuntime {
 
       const pending = this.pendingFeedCoverage;
       const pendingCursor = pending?.generation === this.generation &&
-        !pending.feedReadyBeforeHistoryRead ? pending.page.newestCursor : undefined;
+        !pending.feedReadyWhenHistoryReadFinished ? pending.page.newestCursor : undefined;
       const cursor = this.catchUpAfterCursor ?? pendingCursor;
       if (typeof cursor === 'string' && this.transport.readAfter) {
         void this.catchUpFromCursor(connection, cursor, this.generation, this.controller?.signal);
@@ -779,7 +779,7 @@ class SessionRuntime implements ChatRuntime {
     const notices = [...this.buffered];
     // A feed recovering after a real gap still needs cursor catch-up. A session
     // update can also invalidate the held snapshot even when the feed is ready.
-    if (this.preserveRowsOnReconnect || pending.historyError || !pending.feedReadyBeforeHistoryRead) return false;
+    if (this.preserveRowsOnReconnect || pending.historyError || !pending.feedReadyWhenHistoryReadFinished) return false;
 
     const sessionCandidates = [pending.session, this.state.session]
       .filter((session): session is SessionRecord => session?.sessionKey === this.sessionKey);
@@ -1002,9 +1002,6 @@ class SessionRuntime implements ChatRuntime {
         typeof snapshotBarrier === 'number' && Number.isSafeInteger(snapshotBarrier) &&
         snapshotBarrier > this.clearBarrier && !!priorOldest && priorOldest.seq <= snapshotBarrier);
       if (session) this.advanceClearBarrier(session);
-      // Coverage is only provable if the subscription was ready before this
-      // history request started. A later subscription has no replay cursor.
-      const feedReadyBeforeHistoryRead = Boolean(this.connection);
       const catchingUp = this.preserveRowsOnReconnect && !!priorNewestCursor &&
         !!this.transport.readAfter && !clearInvalidatesOlderAnchor;
       const [tailResult] = await Promise.allSettled([
@@ -1013,6 +1010,9 @@ class SessionRuntime implements ChatRuntime {
           : this.transport.readTail(this.sessionKey, controller.signal),
       ] as const);
       if (!this.isCurrent(generation) || !this.checkIdentity()) return;
+      // A snapshot can share coverage with the feed when readiness completes
+      // before that history response. A later-ready feed has no replay cursor.
+      const feedReadyWhenHistoryReadFinished = Boolean(this.connection);
       const tailFailure = tailResult.status === 'rejected' ? tailResult.reason : undefined;
       if (tailFailure instanceof AuthorizationError) throw tailFailure;
 
@@ -1140,7 +1140,7 @@ class SessionRuntime implements ChatRuntime {
         }
         const canVerifyWhenFeedOpens = !liveAttemptSettled && !liveError && !!session && !!tail;
         this.pendingFeedCoverage = canVerifyWhenFeedOpens && session && tail
-          ? { generation, session, page: tail, feedReadyBeforeHistoryRead, historyError, appliedNotices: new Set() }
+          ? { generation, session, page: tail, feedReadyWhenHistoryReadFinished, historyError, appliedNotices: new Set() }
           : undefined;
         if (!canVerifyWhenFeedOpens) {
           this.buffered = [];
@@ -1150,7 +1150,7 @@ class SessionRuntime implements ChatRuntime {
           liveError = 'Live updates are paused while conversation data is unavailable.';
         }
       } else {
-        if (!feedReadyBeforeHistoryRead) {
+        if (!feedReadyWhenHistoryReadFinished) {
           // The subscription may have missed rows committed after the history
           // snapshot. Apply any delivered notices, then catch up from the
           // snapshot cursor before reporting a recovered feed.
