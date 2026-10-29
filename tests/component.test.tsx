@@ -182,6 +182,13 @@ function expectVisibilityMix(log: HTMLElement, prefix: string): void {
   ]) expect(within(log).queryByText(label)).toBeNull();
 }
 
+function expectActivityText(log: HTMLElement, label: string): void {
+  const rows = [...log.querySelectorAll<HTMLElement>('.tb-chat-activity-line')]
+    .filter(element => element.textContent?.includes(label));
+  expect(rows).toHaveLength(1);
+  expect(rows[0].closest('.tb-chat-bubble')).toBeNull();
+}
+
 describe('conversation surface', () => {
   it('renders late canonical rows in sequence order without dropping a human message', () => {
     const sessionKey = 'out-of-order-conversation';
@@ -239,7 +246,7 @@ describe('conversation surface', () => {
     }
   });
 
-  it('filters with message provenance and renders safe Markdown without exposing batch wrappers', async () => {
+  it('keeps non-human history as activity pills while filtering bubbles and rendering safe Markdown', async () => {
     const sessionKey = 'conversation-a';
     const human = row(sessionKey, 'human-trigger', 'Could you explain this?', { seq: 1, role: 'user', sender: 'user:person', turnSeq: 1 });
     const unprovenHuman = row(sessionKey, 'unproven-human', 'A user row with no sender stays visible', { seq: 8, role: 'user' });
@@ -269,7 +276,7 @@ describe('conversation surface', () => {
       'Batch question from the person',
       '',
       '[2] source=event-b sender=process:maintenance cause=refresh class=fyi',
-      'Substrate payload must stay hidden',
+      'A process notice in the batch',
       '',
       'coalesced by notice-batching-v1',
     ].join('\n');
@@ -309,8 +316,9 @@ describe('conversation surface', () => {
     expect(substrateLine.closest('article')?.classList.contains('tb-chat-bubble')).not.toBe(true);
     expect(batch.content).toBe(batchText);
     expect(within(log).getByText('Answer to the batch question')).toBeTruthy();
-    expect(within(log).queryByText('A system event marker')).toBeNull();
-    expect(within(log).queryByText('An agent sent a wake')).toBeNull();
+    expectActivityText(log, 'A system event marker');
+    expectActivityText(log, 'An agent sent a wake');
+    expectActivityText(log, 'A process notice in the batch');
     expect(within(log).queryByText('Must remain hidden')).toBeNull();
     const unmarkedBubble = within(log).getByText('A user row with no sender stays visible').closest('article');
     expect(unmarkedBubble?.getAttribute('aria-label')).toBe('Message from User');
@@ -324,7 +332,7 @@ describe('conversation surface', () => {
       .toBe('Research assistant');
   });
 
-  it('hides typed non-envelope activity and keeps human exchanges across pages, live updates, and reconnects', async () => {
+  it('keeps non-human records as activity while preserving human exchanges across pages, live updates, and reconnects', async () => {
     const sessionKey = 'conversation-without-provenance';
     const firstPage = visibilityMix(sessionKey, 'first-page');
     const unprovenAgent = row(sessionKey, 'unproven-agent', 'An unproven assistant reply', {
@@ -349,7 +357,7 @@ describe('conversation surface', () => {
     render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
     const log = screen.getByRole('log');
     expectVisibilityMix(log, 'first-page');
-    expect(within(log).queryByText('An unproven assistant reply')).toBeNull();
+    expectActivityText(log, 'An unproven assistant reply');
     expect(within(log).getByText('A selected reply without a provable trigger')).toBeTruthy();
     expect(within(log).getByText('A selected reply without a parent link')).toBeTruthy();
     expect(within(log).getByText('An unproven user row')).toBeTruthy();
@@ -426,7 +434,7 @@ describe('conversation surface', () => {
 
     await waitFor(() => expect(runtime.getSnapshot().hasOlder).toBe(false));
     expect(runtime.loadOlderCalls).toBe(1);
-    expect(within(log).queryByText('An older agent wake')).toBeNull();
+    expectActivityText(log, 'An older agent wake');
     expect(within(log).queryByText('A reply whose parent is not loaded')).toBeNull();
     expect(within(log).getByText('A human message with a null sender')).toBeTruthy();
     expect(within(log).getByText('An absent sender stays visible without identity proof')).toBeTruthy();
