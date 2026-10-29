@@ -145,6 +145,8 @@ describe('direct browser entry', () => {
     expect(await screen.findByRole('textbox', { name: /message to/i })).toBeTruthy();
     expect(await screen.findByRole('alert')).toBeTruthy();
     expect(screen.getByText(/Conversation history could not be loaded/)).toBeTruthy();
+    expect((await screen.findByRole('link', { name: 'Open the configured conversation' })).getAttribute('href')).toBe('/');
+    expect(screen.getByRole('button', { name: 'Reconnect' })).toBeTruthy();
     expect(screen.queryByText('https://other.example')).toBeNull();
     expect(screen.queryByText('agent:other/chat')).toBeNull();
     const request = new URL(String(fetchSpy.mock.calls[0][0]));
