@@ -172,10 +172,9 @@ function expectVisibilityMix(log: HTMLElement, prefix: string): void {
     `Hidden assistant substrate marker ${prefix}`, `Hidden agent wake ${prefix}`,
     `Hidden process notice ${prefix}`,
   ]) {
-    const rows = [...log.querySelectorAll<HTMLElement>('.tb-chat-activity-line')]
-      .filter(element => element.textContent?.includes(label));
-    expect(rows).toHaveLength(1);
-    expect(rows[0].closest('.tb-chat-bubble')).toBeNull();
+    const renderedAsBubble = [...log.querySelectorAll<HTMLElement>('.tb-chat-bubble')]
+      .some(element => element.textContent?.includes(label));
+    expect(renderedAsBubble).toBe(false);
   }
   for (const label of [
     `Hidden reply to agent wake ${prefix}`, `Hidden reply to process notice ${prefix}`,
@@ -307,7 +306,7 @@ describe('conversation surface', () => {
     expect(batchBubble?.classList.contains('tb-chat-bubble-human')).toBe(true);
     expect(batchBubble?.getAttribute('aria-label')).toBe('Message from You');
     expect(batchBubble?.textContent).not.toContain('coalesced by');
-    const substrateLine = within(log).getByRole('note', { name: 'Notice: Substrate payload must stay hidden' });
+    const substrateLine = within(log).getByRole('note', { name: 'Notice: A process notice in the batch' });
     expect(substrateLine.classList.contains('tb-chat-activity-substrate')).toBe(true);
     expect(substrateLine.querySelector('.tb-chat-activity-pill-blue svg')).toBeTruthy();
     expect(substrateLine.querySelector('.tb-chat-activity-bullet')).toBeNull();
@@ -357,6 +356,9 @@ describe('conversation surface', () => {
     render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
     const log = screen.getByRole('log');
     expectVisibilityMix(log, 'first-page');
+    expectActivityText(log, 'Hidden assistant substrate marker first-page');
+    expectActivityText(log, 'Hidden agent wake first-page');
+    expectActivityText(log, 'Hidden process notice first-page');
     expectActivityText(log, 'An unproven assistant reply');
     expect(within(log).getByText('A selected reply without a provable trigger')).toBeTruthy();
     expect(within(log).getByText('A selected reply without a parent link')).toBeTruthy();
