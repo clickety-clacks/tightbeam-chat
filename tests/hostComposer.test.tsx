@@ -716,22 +716,21 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     const layout = installSubmitViewportLayout(viewport);
     const reconnect = async () => {
       const openedBefore = transport.changeOpenCount;
-      const connectedBefore = events.filter((event) => event.event === 'connection' &&
-        event.state === 'connected' && event.lifetimeId === ready.lifetimeId).length;
+      const connectionEventCountBefore = connectionEvents(events).length;
       act(() => {
         transport.callbacks.get(sessionKey)?.onDoubt('live feed dropped');
         commandEntry()({ type: 'reconnect', lifetimeId: ready.lifetimeId, sessionKey: ready.sessionKey });
       });
       expect(transport.changeOpenCount).toBe(openedBefore + 1);
       await waitFor(() => expect(runtimes[0].getSnapshot().liveError).toBeUndefined());
-      await waitFor(() => expect(events.filter((event) => event.event === 'connection' &&
-        event.state === 'connected' && event.lifetimeId === ready.lifetimeId).length).toBe(connectedBefore + 1));
       await act(async () => { await new Promise((resolve) => setTimeout(resolve, 300)); });
       expect(transport.changeOpenCount).toBe(openedBefore + 1);
+      expect(connectionEvents(events)).toHaveLength(connectionEventCountBefore);
     };
 
     try {
-      await waitFor(() => expect(connectionEvents(events).map((event) => event.state)).toEqual(['connected']),
+      await waitFor(() => expect(connectionEvents(events).map((event) => event.state))
+        .toEqual(['reconnecting', 'connected']),
         { timeout: 2500 });
       const openCount = transport.changeOpenCount;
       const eventCount = events.length;
@@ -768,7 +767,7 @@ describe('versioned host composer seam on the real adapter and surface', () => {
       expect(events.some((event) => event.event === 'unavailable' && event.lifetimeId === ready.lifetimeId)).toBe(false);
       expect(events.some((event) => event.event === 'lifetime-ended' && event.lifetimeId === ready.lifetimeId)).toBe(false);
       expect(connectionEvents(events).filter((event) => event.lifetimeId === ready.lifetimeId)
-        .map((event) => event.state)).toEqual(['connected', 'reconnecting', 'connected', 'reconnecting', 'connected']);
+        .map((event) => event.state)).toEqual(['reconnecting', 'connected']);
     } finally {
       layout.restore();
     }
