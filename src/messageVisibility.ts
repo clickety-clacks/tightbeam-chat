@@ -8,6 +8,7 @@ export interface HumanMember {
 }
 
 export interface ParsedBatchMember extends HumanMember {
+  readonly source: string;
   readonly sender: string;
 }
 
@@ -33,7 +34,7 @@ export function parseBatchMembers(record: CanonicalMessage): readonly ParsedBatc
 
   const headers = lines.flatMap((line, lineIndex) => {
     const match = (isCanonicalCarrier ? canonicalBatchHeading : batchHeading).exec(line);
-    return match ? [{ lineIndex, index: Number(match[1]), sender: match[3] }] : [];
+    return match ? [{ lineIndex, index: Number(match[1]), source: match[2], sender: match[3] }] : [];
   });
   const validIndexes = headers.every((header, index) => Number.isSafeInteger(header.index) && header.index > 0 &&
     (isCanonicalCarrier ? index === 0 || header.index > headers[index - 1].index : header.index === index + 1));
@@ -49,7 +50,7 @@ export function parseBatchMembers(record: CanonicalMessage): readonly ParsedBatc
     // A single empty line separates a member body from the next framing line.
     if (bodyEnd > bodyStart && lines[bodyEnd - 1] === '') bodyEnd--;
     return Object.freeze({ index: header.index, sourceId: `${record.id}:member:${header.index}`,
-      sender: header.sender, content: lines.slice(bodyStart, bodyEnd).join('\n') });
+      source: header.source, sender: header.sender, content: lines.slice(bodyStart, bodyEnd).join('\n') });
   });
 }
 
@@ -107,7 +108,8 @@ export function projectMessages(records: readonly ConversationRecord[], principa
         if (member.sender.startsWith('user:')) {
           messages.push({ key: `${record.id}:member:${member.index}`, source: record, side: 'human',
             senderLabel: member.sender === `user:${principalKey}` ? 'You' : 'User',
-            provenancePending: false, member });
+            provenancePending: false, member: Object.freeze({ index: member.index, sourceId: member.sourceId,
+              sender: member.sender, content: member.content }) });
         }
       }
     } else if (classification === 'human') {

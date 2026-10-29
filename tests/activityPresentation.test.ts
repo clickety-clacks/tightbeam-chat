@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { activityPillPresentation, type ActivityPillSource } from '../src/activityPresentation';
 
-const source = (kind: ActivityPillSource['kind'], content: string, gist = content.split('\n')[0] ?? '') =>
-  ({ kind, content, gist } satisfies ActivityPillSource);
+const source = (kind: ActivityPillSource['kind'], content: string, gist = content.split('\n')[0] ?? '',
+  extra: Partial<ActivityPillSource> = {}) => ({ kind, content, gist, ...extra } satisfies ActivityPillSource);
 
 describe('activity pill presentation', () => {
   it('uses stable delivered notice shapes and shortens their primary identifiers', () => {
@@ -97,5 +97,49 @@ describe('activity pill presentation', () => {
     for (const [input, expected] of cases) {
       expect(activityPillPresentation(input), input.content).toMatchObject(expected);
     }
+  });
+
+  it('uses delivered source and substrate message types for distinct fallback pills', () => {
+    expect(activityPillPresentation(source('substrate', 'A source update', 'A source update', {
+      sender: 'process:events', messageType: 'process',
+    }))).toMatchObject({ label: 'System', tone: 'purple', icon: 'process', text: 'A source update' });
+    expect(activityPillPresentation(source('substrate', 'A retained notice', 'A retained notice', {
+      sender: 'process:events', messageType: 'substrate',
+    }))).toMatchObject({ label: 'Notice', tone: 'blue', icon: 'notice', text: 'A retained notice' });
+    expect(activityPillPresentation(source('substrate', 'A sourced agent update', 'A sourced agent update', {
+      sender: 'process:events', source: 'agent:helper', messageType: 'substrate',
+    }))).toMatchObject({ label: 'Message', tone: 'indigo', icon: 'message', text: 'A sourced agent update' });
+  });
+
+  it('removes transport framing from pill copy and shortens identifiers everywhere', () => {
+    const fullAssignmentId = 'asg_12345678-1111-4111-8111-123456789abc';
+    const fullWorkItemId = 'wi_abcdef12-1111-4111-8111-123456789abc';
+    const presentation = activityPillPresentation(source('substrate', [
+      '[from process:notifications]',
+      '',
+      `[assignment: ${fullAssignmentId}]`,
+      `Review work item ${fullWorkItemId}`,
+    ].join('\n'), `[from process:notifications]`, {
+      sender: 'process:notifications', messageType: 'substrate',
+    }));
+
+    expect(presentation).toMatchObject({
+      label: 'Assignment', text: 'New · Review work item wi_abcd', metadata: 'asg_1234',
+    });
+    const lineCopy = `${presentation?.label} ${presentation?.text} ${presentation?.metadata}`;
+    expect(lineCopy).not.toMatch(/[\[\]]/);
+    expect(lineCopy).not.toContain(fullAssignmentId);
+    expect(lineCopy).not.toContain(fullWorkItemId);
+
+    const framedUnknown = activityPillPresentation(source('substrate', [
+      '[from process:notifications]', '', '[batched notices: 1]', 'batchId=example',
+      '[8] source=agent:helper sender=agent:helper cause=notice class=fyi',
+      `[turn failed]`, `Unavailable for ${fullWorkItemId}`,
+    ].join('\n'), '[from process:notifications]', {
+      sender: 'process:notifications', messageType: 'process',
+    }));
+    expect(framedUnknown).toMatchObject({ label: 'System', text: 'Unavailable for wi_abcd' });
+    expect(`${framedUnknown?.label} ${framedUnknown?.text}`).not.toMatch(/[\[\]]/);
+    expect(`${framedUnknown?.label} ${framedUnknown?.text}`).not.toContain(fullWorkItemId);
   });
 });

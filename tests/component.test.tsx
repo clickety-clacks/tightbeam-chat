@@ -293,9 +293,12 @@ describe('conversation surface', () => {
     expect(batchBubble?.classList.contains('tb-chat-bubble-human')).toBe(true);
     expect(batchBubble?.getAttribute('aria-label')).toBe('Message from You');
     expect(batchBubble?.textContent).not.toContain('coalesced by');
-    const substrateLine = within(log).getByRole('note', { name: 'Activity: Substrate payload must stay hidden' });
+    const substrateLine = within(log).getByRole('note', { name: 'Notice: Substrate payload must stay hidden' });
     expect(substrateLine.classList.contains('tb-chat-activity-substrate')).toBe(true);
-    expect(substrateLine.querySelector('.tb-chat-activity-pill-slate')).toBeTruthy();
+    expect(substrateLine.querySelector('.tb-chat-activity-pill-blue svg')).toBeTruthy();
+    expect(substrateLine.querySelector('.tb-chat-activity-bullet')).toBeNull();
+    expect(substrateLine.textContent).not.toContain('•');
+    expect(substrateLine.textContent).not.toMatch(/[\[\]]/);
     expect(substrateLine.closest('article')?.classList.contains('tb-chat-bubble')).not.toBe(true);
     expect(batch.content).toBe(batchText);
     expect(within(log).getByText('Answer to the batch question')).toBeTruthy();
@@ -901,20 +904,27 @@ describe('conversation surface', () => {
     const unknownActivity = row(sessionKey, 'unknown-activity', 'A notice whose kind is not known', {
       seq: 15, role: 'user', sender: 'process:events', messageType: 'substrate', turnSeq: 1,
     });
+    const processActivity = row(sessionKey, 'process-activity', 'A process event', {
+      seq: 16, role: 'user', sender: 'process:events', messageType: 'process', turnSeq: 1,
+    });
+    const sourceActivity = row(sessionKey, 'source-activity', 'An update from another agent', {
+      seq: 17, role: 'user', sender: 'process:events', messageType: 'substrate', turnSeq: 1,
+      raw: { source: 'agent:helper', id: 'source-activity' },
+    });
     const agent = row(sessionKey, 'agent-note', 'A short update', {
-      seq: 16, role: 'user', sender: 'agent:helper', messageType: 'agent', turnSeq: 1,
+      seq: 18, role: 'user', sender: 'agent:helper', messageType: 'agent', turnSeq: 1,
       raw: { source: 'fixture', id: 'agent-note', senderDisplayName: 'Review helper' },
     });
     const agentFollowup = row(sessionKey, 'agent-followup', 'The review is ready', {
-      seq: 17, role: 'user', sender: 'agent:helper', messageType: 'agent', turnSeq: 1,
+      seq: 19, role: 'user', sender: 'agent:helper', messageType: 'agent', turnSeq: 1,
       raw: { source: 'fixture', id: 'agent-followup', senderDisplayName: 'Review helper' },
     });
     const answer = row(sessionKey, 'answer', 'Answer', {
-      seq: 18, sender: 'assistant-service', messageType: 'assistant', replyToMessageId: human.id, turnSeq: 1,
+      seq: 20, sender: 'assistant-service', messageType: 'assistant', replyToMessageId: human.id, turnSeq: 1,
     });
     const runtime = new FakeRuntime(sessionKey, { records: [human, attest, assignment, child, wake, reminder,
       inactiveAssignment, decision, answeredDecision, expiredDecision, workItem, sessionNotice, turnFailure,
-      remedy, unknownActivity, agent, agentFollowup, answer], provenanceAvailable: false,
+      remedy, unknownActivity, processActivity, sourceActivity, agent, agentFollowup, answer], provenanceAvailable: false,
       liveRailDenials: [{ id: 'denial-1', principal: `session:${sessionKey}`, verb: 'attest',
         rule: 'completion-requires-verification', tailEligibleAtArrival: true, occurredAt: 1,
         afterMessageSeq: 1, arrivalOrder: 1 }] });
@@ -938,10 +948,16 @@ describe('conversation surface', () => {
 
     expect(pillFor('Wake: Review the result, fallback').querySelector('.tb-chat-activity-pill-purple')).toBeTruthy();
     const reminderFold = within(log).getByRole('button', {
-      name: /Expand substrate activity run, 2 entries\. Latest: Assignment asg_456789ab/,
+      name: /Expand substrate activity run, 2 entries\. Latest: Assignment: No recent activity · Background task, asg_4567/,
     });
     expect(reminderFold.textContent).toContain('No recent activity · Background task');
     expect(reminderFold.querySelector('.tb-chat-activity-pill-amber')).toBeTruthy();
+    expect(reminderFold.querySelector('.tb-chat-activity-bullet')).toBeNull();
+    expect(reminderFold.textContent).not.toContain('•');
+    expect(reminderFold.textContent).not.toMatch(/[\[\]]/);
+    expect(reminderFold.getAttribute('aria-label')).not.toMatch(/asg_456789ab/);
+    expect(reminderFold.getAttribute('title')).toBe(
+      'Assignment asg_456789ab-1111-4111-8111-123456789abc (Background task) has had no recorded activity since 12');
     fireEvent.click(reminderFold);
     expect(pillFor('Assignment: Quiet for 3 h · Background assignment').querySelector('.tb-chat-activity-pill-amber')).toBeTruthy();
     expect(pillFor('Assignment: No recent activity · Background task, asg_4567')).toBeTruthy();
@@ -952,11 +968,13 @@ describe('conversation surface', () => {
     expect(pillFor('Session: Retired, s_5678')).toBeTruthy();
     expect(pillFor('Turn: The agent could not complete the reply, turn 13')).toBeTruthy();
     const remedyRow = within(log).getByRole('note', {
-      name: /^Remedy: Review requested changes for asg_6789abcd-1111-4111-8111-123456789abc, asg_6789$/,
+      name: 'Remedy: Review requested changes for asg_6789, asg_6789',
     });
     expect(remedyRow.querySelector('.tb-chat-activity-pill-orange')).toBeTruthy();
-    const unknownRow = pillFor('Activity: A notice whose kind is not known');
-    expect(unknownRow.querySelector('.tb-chat-activity-pill-slate')).toBeTruthy();
+    const unknownRow = pillFor('Notice: A notice whose kind is not known');
+    expect(unknownRow.querySelector('.tb-chat-activity-pill-blue svg')).toBeTruthy();
+    expect(pillFor('System: A process event').querySelector('.tb-chat-activity-pill-purple svg')).toBeTruthy();
+    expect(pillFor('Message: An update from another agent').querySelector('.tb-chat-activity-pill-indigo svg')).toBeTruthy();
 
     const agentFold = within(log).getByRole('button', { name: /Expand agent activity run, 2 entries/ });
     expect(agentFold.classList.contains('tb-chat-activity-pill-toggle')).toBe(true);
@@ -965,10 +983,19 @@ describe('conversation surface', () => {
     fireEvent.click(agentFold);
     const agentRow = pillFor('Message: A short update, Review helper');
     expect(agentRow.querySelector('.tb-chat-activity-pill')?.textContent).toContain('Message');
+    expect(agentRow.querySelector('.tb-chat-activity-pill-indigo svg')).toBeTruthy();
     expect(agentRow.textContent).toContain('Review helper');
 
     const refusedRow = pillFor('Refused: Completion needs a recorded verification first');
     expect(refusedRow.querySelector('.tb-chat-activity-pill-red')).toBeTruthy();
+
+    for (const pill of within(log).getAllByRole('note').filter(note =>
+      note.classList.contains('tb-chat-activity-pill-row'))) {
+      expect(pill.querySelector('.tb-chat-activity-bullet')).toBeNull();
+      expect(pill.textContent).not.toContain('•');
+      expect(pill.textContent).not.toMatch(/[\[\]]/);
+      expect(pill.textContent).not.toMatch(/\b(?:wi|asg|dr|att|s|w|c|tc)_[a-f0-9]{8}-/i);
+    }
   });
 
   it('updates only a growing activity fold and preserves an away reader', () => {

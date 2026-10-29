@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { buildActivityTrail, type ActivityBubble, type ActivityFold, type ActivityLine, type MessageActivityItem } from '../src/activityTrail';
+import { decodePublic019Message } from '../src/public019';
 import type { CanonicalMessage, CanonicalTransition, LiveRailDenial, ToolCallRecord } from '../src/types';
 
 const message = (id: string, seq: number, sender: string, content = id,
@@ -254,6 +255,118 @@ describe('activity trail projection', () => {
       'member:carrier-first:member:7', 'member:carrier-first:member:9', 'member:carrier-second:member:12',
     ]);
     expect(fold.lines.every(line => line.presentation !== undefined)).toBe(true);
+  });
+
+  it('rebuilds the same activity pills and fold from retained history after reload', () => {
+    const prompt = message('history-prompt', 1, 'user:person', 'A question', {
+      role: 'user', messageType: 'chat', turnSeq: 1,
+    });
+    const carrier = (id: string, seq: number, index: number, task: string, assignment: string) => message(id, seq,
+      'process:notifications', [
+        '[from process:notifications]', '', '[batched notices: 1]', `batchId=${id}`, 'release=example',
+        `[${index}] source=process:events sender=process:events cause=notice class=fyi`,
+        `Assignment ${assignment} (Background ${task}) has had no recorded activity since 12`, '',
+        'coalesced by notices',
+      ].join('\n'), { isBatchCarrier: true, messageType: 'substrate' });
+    const first = carrier('history-carrier-first', 2, 7, 'review', 'asg_12345678-1111-4111-8111-123456789abc');
+    const second = carrier('history-carrier-second', 3, 5567, 'build', 'asg_abcdef12-1111-4111-8111-123456789abc');
+    const reply = message('history-reply', 4, 'assistant-service', 'The answer', {
+      role: 'assistant', messageType: 'assistant', turnSeq: 1, replyToMessageId: prompt.id,
+    });
+    const storedRows = [prompt, first, second, reply].map(record => ({
+      id: record.id, sessionKey: record.sessionKey, seq: record.seq, rowVersion: record.rowVersion,
+      role: record.role, sender: record.sender, content: record.content, messageType: record.messageType,
+      isBatchCarrier: record.isBatchCarrier, turnSeq: record.turnSeq, replyToMessageId: record.replyToMessageId,
+      at: record.seq * 1_000, attachments: [],
+    }));
+    const readHistory = () => storedRows.map(row => {
+      const decoded = decodePublic019Message(row, 'session');
+      if (decoded.kind !== 'message') throw new Error('Expected retained message row');
+      return decoded;
+    });
+    const delivered = readHistory();
+    const liveBubbles = [bubble(delivered[0], 'human'), bubble(delivered[3], 'agent')];
+    const whenDelivered = build({ records: [delivered[1], delivered[2]], bubbles: liveBubbles,
+      liveActivityIds: new Set([first.id, second.id]),
+      liveActivityEligibleIds: new Set([first.id, second.id]),
+      activeTurnRunning: false,
+    });
+    // A new Chat lifetime decodes retained history again, with no live-feed ids.
+    const reloaded = readHistory();
+    const afterReload = build({ records: [reloaded[1], reloaded[2]],
+      bubbles: [bubble(reloaded[0], 'human'), bubble(reloaded[3], 'agent')], activeTurnRunning: false });
+
+    expect(afterReload.messageItems).toEqual(whenDelivered.messageItems);
+    const fold = afterReload.messageItems.find((item): item is ActivityFold => item.kind === 'fold');
+    expect(fold).toMatchObject({ id: 'member:history-carrier-first:member:7', activityKind: 'substrate',
+      summary: { presentation: { label: 'Assignment', text: 'No recent activity · Background build', metadata: 'asg_abcd' } },
+    });
+    expect(fold?.lines).toHaveLength(2);
+    expect(fold?.lines.map(line => line.id)).toEqual([
+      'member:history-carrier-first:member:7', 'member:history-carrier-second:member:5567',
+    ]);
+  });
+
+  it('rebuilds a retained tail fold after a tool from the stored turn sequence', () => {
+    const prompt = message('tail-history-prompt', 1, 'user:person', 'A question', {
+      role: 'user', messageType: 'chat', turnSeq: 9,
+    });
+    const reply = message('tail-history-reply', 2, 'assistant-service', 'The answer', {
+      role: 'assistant', messageType: 'assistant', turnSeq: 9, replyToMessageId: prompt.id,
+    });
+    const reminder = (id: string, seq: number, assignment: string, task: string) => message(id, seq,
+      'process:events', `Assignment ${assignment} (Background ${task}) has had no recorded activity since 12`, {
+        messageType: 'substrate', turnSeq: 9,
+      });
+    const first = reminder('tail-reminder-first', 4, 'asg_12345678-1111-4111-8111-123456789abc', 'review');
+    const second = reminder('tail-reminder-second', 5, 'asg_abcdef12-1111-4111-8111-123456789abc', 'build');
+    const storedRows = [prompt, reply, first, second].map(record => ({
+      id: record.id, sessionKey: record.sessionKey, seq: record.seq, rowVersion: record.rowVersion,
+      role: record.role, sender: record.sender, content: record.content, messageType: record.messageType,
+      turnSeq: record.turnSeq, replyToMessageId: record.replyToMessageId, at: record.seq * 1_000, attachments: [],
+    }));
+    const readHistory = () => storedRows.map(row => {
+      const decoded = decodePublic019Message(row, 'session');
+      if (decoded.kind !== 'message') throw new Error('Expected retained message row');
+      return decoded;
+    });
+    const delivered = readHistory();
+    const tailTool = { ...tool('tail-history-tool', 3, 'completed'), afterMessageSeq: reply.seq };
+    const whenDelivered = build({ records: [delivered[2], delivered[3]],
+      bubbles: [bubble(delivered[0], 'human'), bubble(delivered[1], 'agent')], tools: [tailTool],
+      liveActivityIds: new Set([first.id, second.id]), liveActivityEligibleIds: new Set([first.id, second.id]),
+      activeTurnRunning: false,
+    });
+    const reloaded = readHistory();
+    const afterReload = build({ records: [reloaded[2], reloaded[3]],
+      bubbles: [bubble(reloaded[0], 'human'), bubble(reloaded[1], 'agent')], tools: [tailTool],
+      activeTurnRunning: false,
+    });
+
+    expect(afterReload.messageItems).toEqual(whenDelivered.messageItems);
+    expect(afterReload.toolItems).toEqual(whenDelivered.toolItems);
+    expect(afterReload.messageItems).toMatchObject([{
+      kind: 'fold', lines: [{ id: 'message:tail-reminder-first' }, { id: 'message:tail-reminder-second' }],
+      summary: { presentation: { text: 'No recent activity · Background build', metadata: 'asg_abcd' } },
+    }]);
+  });
+
+  it('uses a retained batch member source kind when its carrier type is substrate', () => {
+    const prompt = message('source-prompt', 1, 'user:person', 'Question', { role: 'user' });
+    const carrier = message('source-carrier', 2, 'process:notifications', [
+      '[from process:notifications]', '', '[batched notices: 1]', 'batchId=source-carrier', 'release=example',
+      '[5567] source=agent:helper sender=process:events cause=notice class=fyi',
+      'A sourced helper update', '', 'coalesced by notices',
+    ].join('\n'), { isBatchCarrier: true, messageType: 'substrate' });
+    const reply = message('source-reply', 3, 'assistant-service', 'Answer', { role: 'assistant' });
+    const plan = build({ records: [carrier], bubbles: [bubble(prompt, 'human'), bubble(reply, 'agent')],
+      activeTurnRunning: false });
+
+    expect(plan.messageItems).toHaveLength(1);
+    expect(plan.messageItems[0]).toMatchObject({
+      kind: 'substrate', presentation: { label: 'Message', tone: 'indigo', icon: 'message',
+        text: 'A sourced helper update' },
+    });
   });
 
   it('caps displayed groups per gap and keeps an expanded run expanded when a later entry arrives', () => {

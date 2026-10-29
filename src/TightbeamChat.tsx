@@ -687,6 +687,8 @@ const activityPillIconPaths: Record<ActivityPillIcon, ReactNode> = {
   clock: <><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>,
   flag: <><path d="M5 21V4" /><path d="M5 4h13l-2 4 2 4H5" /></>,
   activity: <><path d="M3 12h4l2-6 4 12 2-6h6" /></>,
+  notice: <><circle cx="12" cy="12" r="9" /><path d="M12 11v5m0-8h.01" /></>,
+  process: <><circle cx="6" cy="6" r="2" /><circle cx="18" cy="6" r="2" /><circle cx="12" cy="18" r="2" /><path d="M8 7.5 10.8 16m5.2-8.5L13.2 16M8 6h8" /></>,
 };
 
 function ActivityPillIconView({ icon }: { readonly icon: ActivityPillIcon }) {
@@ -713,6 +715,7 @@ function sameActivityPresentation(left: ActivityPillPresentation | undefined,
 function sameActivityLine(left: ActivityLine, right: ActivityLine): boolean {
   return left.id === right.id && left.kind === right.kind && left.runKey === right.runKey &&
     left.gist === right.gist && left.accessibleText === right.accessibleText &&
+    left.originalContent === right.originalContent &&
     sameActivityPresentation(left.presentation, right.presentation);
 }
 
@@ -728,8 +731,10 @@ const ActivityMessageRow = memo(function ActivityMessageRow({ entry, registerRow
   return <div role="note" tabIndex={-1} aria-label={accessibleText}
     className={`tb-chat-activity-line tb-chat-activity-${entry.kind}${presentation ? ' tb-chat-activity-pill-row' : ''}`}
     ref={element => registerRow(scrollKey, element)} data-record-key={entry.id} data-scroll-key={scrollKey}
-    data-activity-run={entry.runKey} title={presentation ? entry.accessibleText : undefined}>
-    {presentation ? <ActivityPillContents presentation={presentation} /> : entry.gist}
+    data-activity-run={entry.runKey} title={presentation ? entry.originalContent ?? entry.accessibleText : undefined}>
+    {!presentation && <span className="tb-chat-activity-bullet" aria-hidden="true">•</span>}
+    {presentation ? <ActivityPillContents presentation={presentation} />
+      : <span className="tb-chat-activity-gist">{entry.gist}</span>}
   </div>;
 }, (previous, next) => previous.registerRow === next.registerRow && previous.scrollKey === next.scrollKey &&
   sameActivityLine(previous.entry, next.entry));
@@ -797,14 +802,18 @@ const ActivityRunRow = memo(function ActivityRunRow({ entry, expanded, toggle, r
 }) {
   const detailLines = entry.lines;
   const presentation = entry.summary.presentation;
+  const latestDescription = presentation
+    ? `${presentation.label}: ${presentation.text}${presentation.metadata ? `, ${presentation.metadata}` : ''}`
+    : entry.summary.gist;
   return <div className={`tb-chat-activity-run tb-chat-activity-${entry.activityKind}`} tabIndex={-1}
     ref={element => registerRow(entry.id, element)} data-record-key={entry.id} data-scroll-key={entry.id}
     data-activity-run={entry.runKey} data-activity-fold="true" data-run-expanded={expanded ? 'true' : 'false'}>
     <button type="button" className={`tb-chat-activity-run-toggle tb-chat-activity-${entry.activityKind}${presentation ? ' tb-chat-activity-pill-toggle' : ''}`}
       aria-expanded={expanded}
-      aria-label={`${expanded ? 'Collapse' : 'Expand'} ${entry.activityKind} activity run, ${entry.lines.length} entries. Latest: ${entry.summary.gist}`}
+      aria-label={`${expanded ? 'Collapse' : 'Expand'} ${entry.activityKind} activity run, ${entry.lines.length} entries. Latest: ${latestDescription}`}
+      title={presentation ? entry.summary.originalContent ?? entry.summary.accessibleText : undefined}
       onClick={() => { preservePosition(); toggle(entry.id); }}>
-      <span className="tb-chat-activity-bullet" aria-hidden="true">•</span>
+      {!presentation && <span className="tb-chat-activity-bullet" aria-hidden="true">•</span>}
       <span className={`tb-chat-activity-run-chevron${expanded ? ' is-expanded' : ''}`} aria-hidden="true" />
       {presentation ? <ActivityPillContents presentation={presentation} />
         : <span className="tb-chat-activity-gist">{entry.summary.gist}</span>}

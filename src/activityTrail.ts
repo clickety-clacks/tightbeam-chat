@@ -1,5 +1,5 @@
 import type { CanonicalMessage, CanonicalTransition, LiveRailDenial, ToolCallRecord } from './types';
-import { parseBatchMembers, type HumanMember } from './messageVisibility';
+import { parseBatchMembers, type HumanMember, type ParsedBatchMember } from './messageVisibility';
 import { activityPillPresentation, type ActivityPillPresentation } from './activityPresentation';
 
 export type ActivityKind = 'tool' | 'agent' | 'substrate' | 'rail';
@@ -25,6 +25,8 @@ export interface ActivityLine {
   readonly position: Position;
   readonly gist: string;
   readonly accessibleText: string;
+  /** Original retained content is only exposed through the pill's hover title. */
+  readonly originalContent?: string;
   readonly presentation?: ActivityPillPresentation;
   readonly sortTime?: number;
   readonly call?: ToolCallRecord;
@@ -65,6 +67,7 @@ export interface ActivityTrailPlan {
 interface Candidate extends ActivityLine {
   readonly live: boolean;
   readonly liveTailEligibleAtArrival: boolean;
+  readonly sourceTurnSeq?: number;
   /** Present only when the source text identifies a stable foldable notice kind. */
   readonly semanticFoldKind?: string;
 }
@@ -108,6 +111,9 @@ const rawDisplayName = (message: CanonicalMessage): string | undefined => {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 };
 
+const rawSource = (message: CanonicalMessage): string | undefined =>
+  typeof message.raw.source === 'string' ? message.raw.source : undefined;
+
 function messageCandidate(message: CanonicalMessage, live: boolean, liveTailEligibleAtArrival: boolean): Candidate | undefined {
   const sender = message.sender ?? '';
   if (message.isBatchCarrier || /^\[batched notices:/i.test(message.content)) return undefined;
@@ -123,16 +129,19 @@ function messageCandidate(message: CanonicalMessage, live: boolean, liveTailElig
     return { id, kind: 'rail', runKey: '', anchorSeq: message.seq,
       position: { sequence: message.seq, phase: 1, order: 0 }, gist,
       accessibleText: `Rail: ${gist}`,
+      originalContent: message.content,
       presentation: activityPillPresentation({ kind: 'rail', gist, content: message.content, sender }),
-      sortTime, live, liveTailEligibleAtArrival };
+      sortTime, live, liveTailEligibleAtArrival, sourceTurnSeq: message.turnSeq };
   }
   if (message.messageType === 'substrate' || message.messageType === 'process' || sender.startsWith('process:')) {
     const gist = bodyGist(message.content) || 'Substrate activity';
     return { id, kind: 'substrate', runKey: '', anchorSeq: message.seq,
       position: { sequence: message.seq, phase: 1, order: 0 }, gist,
       accessibleText: `Substrate: ${gist}`,
+      originalContent: message.content,
       presentation: activityPillPresentation({ kind: 'substrate', gist, content: message.content, sender,
-        turnSeq: message.turnSeq }), sortTime, live, liveTailEligibleAtArrival,
+        source: rawSource(message), messageType: message.messageType, turnSeq: message.turnSeq }), sortTime, live, liveTailEligibleAtArrival,
+      sourceTurnSeq: message.turnSeq,
       semanticFoldKind: gatewayNoticeFoldKind(message.content) };
   }
   if (message.messageType === 'agent' || sender.startsWith('agent:') || sender.startsWith('session:')) {
@@ -142,13 +151,15 @@ function messageCandidate(message: CanonicalMessage, live: boolean, liveTailElig
     return { id, kind: 'agent', runKey: '', anchorSeq: message.seq,
       position: { sequence: message.seq, phase: 1, order: 0 }, gist,
       accessibleText: `Other agent: ${gist}`,
+      originalContent: message.content,
       presentation: activityPillPresentation({ kind: 'agent', gist, content: message.content, sender,
-        senderDisplayName: rawDisplayName(message) }), sortTime, live, liveTailEligibleAtArrival };
+        senderDisplayName: rawDisplayName(message) }), sortTime, live, liveTailEligibleAtArrival,
+      sourceTurnSeq: message.turnSeq };
   }
   return undefined;
 }
 
-function memberCandidate(carrier: CanonicalMessage, member: HumanMember, live: boolean,
+function memberCandidate(carrier: CanonicalMessage, member: ParsedBatchMember, live: boolean,
   liveTailEligibleAtArrival: boolean): Candidate | undefined {
   if (member.sender.startsWith('user:')) return undefined;
   const id = `member:${member.sourceId}`;
@@ -161,23 +172,28 @@ function memberCandidate(carrier: CanonicalMessage, member: HumanMember, live: b
     const gist = `Remedy ${statute || 'sent'} sent${detail ? ` — ${detail}` : ''}`;
     return { id, kind: 'rail', runKey: '', anchorSeq: carrier.seq, position, gist,
       accessibleText: `Rail: ${gist}`,
-      presentation: activityPillPresentation({ kind: 'rail', gist, content: member.content, sender: member.sender }),
-      sortTime, live, liveTailEligibleAtArrival };
+      originalContent: member.content,
+      presentation: activityPillPresentation({ kind: 'rail', gist, content: member.content, sender: member.sender,
+        source: member.source }),
+      sortTime, live, liveTailEligibleAtArrival, sourceTurnSeq: carrier.turnSeq };
   }
   if (member.sender.startsWith('process:')) {
     const gist = detail || 'Substrate activity';
     return { id, kind: 'substrate', runKey: '', anchorSeq: carrier.seq, position, gist,
       accessibleText: `Substrate: ${gist}`,
-      presentation: activityPillPresentation({ kind: 'substrate', gist, content: member.content, sender: member.sender }),
-      sortTime, live, liveTailEligibleAtArrival,
+      originalContent: member.content,
+      presentation: activityPillPresentation({ kind: 'substrate', gist, content: member.content, sender: member.sender,
+        source: member.source, messageType: carrier.messageType }),
+      sortTime, live, liveTailEligibleAtArrival, sourceTurnSeq: carrier.turnSeq,
       semanticFoldKind: gatewayNoticeFoldKind(member.content) };
   }
   if (member.sender.startsWith('agent:') || member.sender.startsWith('session:')) {
     const gist = detail ? `Another agent — ${detail}` : 'Another agent';
     return { id, kind: 'agent', runKey: '', anchorSeq: carrier.seq, position, gist,
       accessibleText: `Other agent: ${gist}`,
+      originalContent: member.content,
       presentation: activityPillPresentation({ kind: 'agent', gist, content: member.content, sender: member.sender }),
-      sortTime, live, liveTailEligibleAtArrival };
+      sortTime, live, liveTailEligibleAtArrival, sourceTurnSeq: carrier.turnSeq };
   }
   return undefined;
 }
@@ -193,7 +209,7 @@ function railCandidate(denial: LiveRailDenial): Candidate {
   return { id: `rail:${denial.id}`, kind: 'rail', runKey: '',
     anchorSeq: denial.afterMessageSeq,
     position: { sequence: denial.afterMessageSeq, phase: 3, order: denial.arrivalOrder },
-    gist, accessibleText: `Rail: ${gist}`, sortTime: denial.occurredAt, live: true,
+    gist, accessibleText: `Rail: ${gist}`, originalContent: gist, sortTime: denial.occurredAt, live: true,
     presentation: activityPillPresentation({ kind: 'rail', gist, content: gist }),
     liveTailEligibleAtArrival: denial.tailEligibleAtArrival };
 }
@@ -224,7 +240,7 @@ function bubbleEvents(bubbles: readonly ActivityBubble[]): BubbleEvent[] {
 
 function lineWithRun(candidate: Candidate, runKey: string, includeToolDetails = true): ActivityLine {
   const { live: _live, liveTailEligibleAtArrival: _eligibleAtArrival,
-    semanticFoldKind: _semanticFoldKind, ...line } = candidate;
+    sourceTurnSeq: _sourceTurnSeq, semanticFoldKind: _semanticFoldKind, ...line } = candidate;
   if (candidate.kind === 'tool' && candidate.call) {
     if (!includeToolDetails) return { ...line, runKey, gist: '', accessibleText: '' };
     const call = candidate.call;
@@ -245,7 +261,7 @@ export function buildActivityTrail(input: {
   readonly sessionKey: string;
   readonly records: readonly { readonly kind: 'message'; readonly id: string; readonly seq: number;
     readonly sender?: string; readonly messageType?: string; readonly role: string; readonly content: string;
-    readonly isBatchCarrier?: boolean; readonly raw: Readonly<Record<string, unknown>> }[];
+    readonly isBatchCarrier?: boolean; readonly turnSeq?: number; readonly raw: Readonly<Record<string, unknown>> }[];
   readonly bubbles: readonly ActivityBubble[];
   readonly transitions: readonly CanonicalTransition[];
   /** Unmatched local sends use timestamps to find their place between tool rows. */
@@ -289,6 +305,10 @@ export function buildActivityTrail(input: {
       kind: 'candidate', candidate, ...candidate.position,
     })),
   ].sort(comparePosition);
+  const retainedTurnSequences = new Set(input.bubbles.map(bubble => bubble.record.turnSeq)
+    .filter((turnSeq): turnSeq is number => Number.isSafeInteger(turnSeq)));
+  const belongsToRetainedTurn = (candidate: Candidate) => candidate.sourceTurnSeq !== undefined &&
+    retainedTurnSequences.has(candidate.sourceTurnSeq);
 
   const eligible = new Map<string, EligibleCandidate[]>();
   const membership = new Map<string, string>();
@@ -323,14 +343,14 @@ export function buildActivityTrail(input: {
         const allowed = candidate.live
           ? (!input.turnStateAvailable || candidate.liveTailEligibleAtArrival)
           : (beforeOrAtTool.has(candidate.id) || (input.turnStateAvailable && input.activeTurnRunning));
-        if (allowed || input.shownRuns.has(candidate.id)) add(candidate, runKey);
+        if (allowed || belongsToRetainedTurn(candidate) || input.shownRuns.has(candidate.id)) add(candidate, runKey);
       }
     } else {
       for (const candidate of tail) {
         const oldRun = input.shownRuns.get(candidate.id);
         const allowed = candidate.live
           ? (!input.turnStateAvailable || candidate.liveTailEligibleAtArrival)
-          : beforeOrAtTool.has(candidate.id);
+          : (beforeOrAtTool.has(candidate.id) || belongsToRetainedTurn(candidate));
         if (allowed || oldRun) {
           add(candidate, oldRun ?? runKey);
         }
