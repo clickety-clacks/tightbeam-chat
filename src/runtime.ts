@@ -743,6 +743,11 @@ class SessionRuntime implements ChatRuntime {
       // used by normal recovery before issuing its cursor catch-up request.
       this.reconnectTimer = setTimeout(() => {
         this.reconnectTimer = undefined;
+        if (this.disposed) return;
+        if (this.connection !== connection) {
+          this.scheduleRebuild();
+          return;
+        }
         recover();
       }, this.retryDelayMs);
     }
@@ -1021,6 +1026,7 @@ class SessionRuntime implements ChatRuntime {
         typeof snapshotBarrier === 'number' && Number.isSafeInteger(snapshotBarrier) &&
         snapshotBarrier > this.clearBarrier && !!priorOldest && priorOldest.seq <= snapshotBarrier);
       if (session) this.advanceClearBarrier(session);
+      const feedReadyWhenHistoryRequestStarted = Boolean(this.connection);
       const catchingUp = this.preserveRowsOnReconnect && !!priorNewestCursor &&
         !!this.transport.readAfter && !clearInvalidatesOlderAnchor;
       const [tailResult] = await Promise.allSettled([
@@ -1169,7 +1175,7 @@ class SessionRuntime implements ChatRuntime {
           liveError = 'Live updates are paused while conversation data is unavailable.';
         }
       } else {
-        if (!feedReadyWhenHistoryReadFinished) {
+        if (!feedReadyWhenHistoryReadFinished || (catchingUp && !feedReadyWhenHistoryRequestStarted)) {
           // The subscription may have missed rows committed after the history
           // snapshot. Apply any delivered notices, then catch up from the
           // snapshot cursor before reporting a recovered feed.
