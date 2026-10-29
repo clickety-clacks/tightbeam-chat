@@ -115,7 +115,7 @@ describe('direct browser entry', () => {
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
-  it('renders configured-root history from the documented transcript page shape', async () => {
+  it('renders configured-root history when an empty forward catch-up page has no older cursor', async () => {
     const message = {
       id: 'm_root_1', seq: 1, sessionKey: defaultTarget.sessionKey, role: 'user',
       sender: `user:${defaultTarget.principalKey}`, deviceId: defaultTarget.deviceId,
@@ -144,16 +144,21 @@ describe('direct browser entry', () => {
       }
     }
     const fetchSpy = vi.fn<typeof fetch>(async (input) => {
-      const path = new URL(String(input), window.location.origin).pathname;
+      const url = new URL(String(input), window.location.origin);
+      const path = url.pathname;
       const body = path === '/chat-config.json'
         ? defaultTarget
         : path.endsWith('/tool-calls')
         ? { schemaVersion: 1, resource: 'tool calls', items: [], page: { hasMoreBefore: false } }
         : path.endsWith('/turns')
         ? { schemaVersion: 1, resource: 'turns', items: [], page: { hasMoreBefore: false } }
+        : path.endsWith('/messages') && url.searchParams.has('after')
+        ? { schemaVersion: 1, resource: 'transcript messages', items: [],
+          page: { oldestCursor: null, newestCursor: null, hasMoreBefore: true, hasMoreAfter: false } }
         : path.endsWith('/messages')
         ? { schemaVersion: 1, resource: 'transcript messages', items: [message],
-          page: { oldestCursor: null, hasMoreBefore: false } }
+          page: { oldestCursor: null, newestCursor: 'root-newest-cursor',
+            hasMoreBefore: false, hasMoreAfter: false } }
         : { schemaVersion: 1, resource: 'sessions', item: {
           sessionKey: defaultTarget.sessionKey, rowVersion: 1, displayName: 'Example agent',
         } };
@@ -172,6 +177,9 @@ describe('direct browser entry', () => {
       .find((url) => url.pathname.endsWith('/messages'));
     expect(historyRequest?.pathname).toBe(`/__chat/api/sessions/${encodeURIComponent(defaultTarget.sessionKey)}/messages`);
     expect(historyRequest?.searchParams.get('tail')).toBe('true');
+    await waitFor(() => expect(fetchSpy.mock.calls.some(([input]) =>
+      new URL(String(input), window.location.origin).searchParams.has('after'))).toBe(true));
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 
   it('keeps a linked target selected and reports its local history failure', async () => {

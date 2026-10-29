@@ -340,7 +340,7 @@ export function createPublic019Transport(config: Public019Config): { transport: 
 
   const activeSessions = new Set<string>();
   async function readPage(sessionKey: string, query: string, signal: AbortSignal,
-    requireForwardMetadata = false): Promise<ConversationPage> {
+    isAfterPage = false): Promise<ConversationPage> {
     const body = await get(`/api/sessions/${encodeURIComponent(sessionKey)}/messages?limit=50&${query}`, signal);
     if (body.schemaVersion !== 1 || body.resource !== 'transcript messages' || !Array.isArray(body.items)) {
       throw new UnsupportedTargetError('Unexpected transcript collection envelope.');
@@ -349,15 +349,16 @@ export function createPublic019Transport(config: Public019Config): { transport: 
     const oldestCursor = optionalString(page, 'oldestCursor') ?? null;
     const newestCursor = optionalString(page, 'newestCursor') ?? null;
     const hasMoreAfter = page.hasMoreAfter;
-    if (typeof page.hasMoreBefore !== 'boolean' ||
-        (hasMoreAfter !== undefined && typeof hasMoreAfter !== 'boolean') ||
-        (requireForwardMetadata && typeof hasMoreAfter !== 'boolean') ||
-        (page.hasMoreBefore && !oldestCursor) || (page.hasMoreAfter && !newestCursor)) {
+    const emptyAfterWithoutBackwardCursor = isAfterPage && body.items.length === 0 && !oldestCursor;
+    if (typeof page.hasMoreBefore !== 'boolean' || typeof hasMoreAfter !== 'boolean' ||
+        (page.hasMoreBefore && !oldestCursor && !emptyAfterWithoutBackwardCursor) ||
+        (page.hasMoreAfter && !newestCursor)) {
       throw new UnsupportedTargetError('Invalid transcript page metadata.');
     }
     return { records: body.items.map((item) => decodePublic019Message(item, sessionKey))
-      .sort((a, b) => a.seq - b.seq), oldestCursor, hasOlder: page.hasMoreBefore,
-      newestCursor, hasNewer: hasMoreAfter === true, coverage: sessionKey };
+      .sort((a, b) => a.seq - b.seq), oldestCursor: emptyAfterWithoutBackwardCursor ? null : oldestCursor,
+      hasOlder: emptyAfterWithoutBackwardCursor ? false : page.hasMoreBefore,
+      newestCursor, hasNewer: hasMoreAfter, coverage: sessionKey };
   }
 
   async function openChanges(sessionKey: string, callbacks: ChangeCallbacks, signal: AbortSignal, tools = false): Promise<ChangeConnection> {

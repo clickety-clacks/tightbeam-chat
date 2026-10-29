@@ -668,28 +668,24 @@ describe('Gateway wire mapping and behavior checks', () => {
     expect(transport.proveCoverage({ sessionKey, rowVersion: 4, displayName: 'Fixture agent', raw: {} }, page, [])).toBe(false);
   });
 
-  it('loads tail and older history from the documented page shape without forward-page fields', async () => {
-    const candidate = setup();
-    const requests: string[] = [];
-    candidate.host.fetch = async (path) => {
-      requests.push(path);
-      return new Response(JSON.stringify({ schemaVersion: 1, resource: 'transcript messages', items: [item],
-        page: { oldestCursor: 'older-cursor', hasMoreBefore: true } }), { status: 200 });
-    };
-    const signal = new AbortController().signal;
-
-    const tail = await candidate.transport.readTail(sessionKey, signal);
-    const older = await candidate.transport.readOlder(sessionKey, 'older-cursor', signal);
-
-    expect(tail.records.map((row) => row.id)).toEqual(['m_1']);
-    expect(tail).toMatchObject({ oldestCursor: 'older-cursor', hasOlder: true, newestCursor: null, hasNewer: false });
-    expect(older).toMatchObject({ oldestCursor: 'older-cursor', hasOlder: true, newestCursor: null, hasNewer: false });
-    expect(requests).toEqual([
-      'https://host.example/api/sessions/s-public/messages?limit=50&tail=true',
-      'https://host.example/api/sessions/s-public/messages?limit=50&before=older-cursor',
-    ]);
-    await expect(candidate.transport.readAfter!(sessionKey, 'newer-cursor', signal))
+  it('keeps transcript metadata complete and accepts an empty after page without a backward cursor', async () => {
+    const invalidTail = setup();
+    invalidTail.host.fetch = async () => new Response(JSON.stringify({
+      schemaVersion: 1, resource: 'transcript messages', items: [item],
+      page: { oldestCursor: 'older-cursor', hasMoreBefore: true },
+    }), { status: 200 });
+    await expect(invalidTail.transport.readTail(sessionKey, new AbortController().signal))
       .rejects.toThrow('Invalid transcript page metadata.');
+
+    const candidate = setup();
+    candidate.host.fetch = async () => new Response(JSON.stringify({
+      schemaVersion: 1, resource: 'transcript messages', items: [],
+      page: { oldestCursor: null, newestCursor: null, hasMoreBefore: true, hasMoreAfter: false },
+    }), { status: 200 });
+    const page = await candidate.transport.readAfter!(sessionKey, 'newer-cursor', new AbortController().signal);
+
+    expect(page).toMatchObject({ records: [], oldestCursor: null, hasOlder: false,
+      newestCursor: null, hasNewer: false });
   });
 
   it('reads forward pages and individual transcript details through the 0.1.11 routes', async () => {
