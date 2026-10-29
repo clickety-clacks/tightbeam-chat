@@ -41,6 +41,7 @@ interface Bubble {
   readonly key: string;
   readonly record: CanonicalMessage;
   readonly side: 'human' | 'agent';
+  readonly ownerScoped: boolean;
   readonly sender: string;
   readonly displayContent?: string;
   readonly member?: HumanMember;
@@ -940,6 +941,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   const bubbles: Bubble[] = useMemo(() => projection.messages
     .map((message) => ({
       key: message.key, record: message.source, side: message.side,
+      ownerScoped: message.side === 'agent' || message.senderLabel === 'You',
       sender: message.senderLabel ?? sourceLabel(message.side, agentName), derived: Boolean(message.member),
       displayContent: message.member?.content, member: message.member,
     })), [projection, agentName]);

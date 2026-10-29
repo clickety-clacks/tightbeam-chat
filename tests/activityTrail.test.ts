@@ -10,7 +10,7 @@ const message = (id: string, seq: number, sender: string, content = id,
 });
 
 const bubble = (record: CanonicalMessage, side: ActivityBubble['side']): ActivityBubble => ({
-  key: record.id, record, side,
+  key: record.id, record, side, ownerScoped: side === 'agent' || record.sender === 'user:person',
 });
 
 const tool = (id: string, seq: number, status: ToolCallRecord['status'], toolName = 'read_file'): ToolCallRecord => ({
@@ -307,7 +307,7 @@ describe('activity trail projection', () => {
     ]);
   });
 
-  it('rebuilds a retained tail fold after a tool from the stored turn sequence', () => {
+  it('rebuilds a retained tail fold from stored canonical history', () => {
     const prompt = message('tail-history-prompt', 1, 'user:person', 'A question', {
       role: 'user', messageType: 'chat', turnSeq: 9,
     });
@@ -331,24 +331,76 @@ describe('activity trail projection', () => {
       return decoded;
     });
     const delivered = readHistory();
-    const tailTool = { ...tool('tail-history-tool', 3, 'completed'), afterMessageSeq: reply.seq };
     const whenDelivered = build({ records: [delivered[2], delivered[3]],
-      bubbles: [bubble(delivered[0], 'human'), bubble(delivered[1], 'agent')], tools: [tailTool],
+      bubbles: [bubble(delivered[0], 'human'), bubble(delivered[1], 'agent')],
       liveActivityIds: new Set([first.id, second.id]), liveActivityEligibleIds: new Set([first.id, second.id]),
       activeTurnRunning: false,
     });
     const reloaded = readHistory();
     const afterReload = build({ records: [reloaded[2], reloaded[3]],
-      bubbles: [bubble(reloaded[0], 'human'), bubble(reloaded[1], 'agent')], tools: [tailTool],
-      activeTurnRunning: false,
+      bubbles: [bubble(reloaded[0], 'human'), bubble(reloaded[1], 'agent')], activeTurnRunning: false,
     });
 
     expect(afterReload.messageItems).toEqual(whenDelivered.messageItems);
-    expect(afterReload.toolItems).toEqual(whenDelivered.toolItems);
     expect(afterReload.messageItems).toMatchObject([{
       kind: 'fold', lines: [{ id: 'message:tail-reminder-first' }, { id: 'message:tail-reminder-second' }],
       summary: { presentation: { text: 'No recent activity · Background build', metadata: 'asg_abcd' } },
     }]);
+  });
+
+  it('keeps history-backed later-gap and tail folds in canonical order after reload without turn metadata', () => {
+    const storeRow = (id: string, seq: number, role: string, sender: string, content: string,
+      messageType: string, extra: Record<string, unknown> = {}) => ({
+      id, sessionKey: 'session', seq, rowVersion: 1, role, sender, content, messageType,
+      at: seq * 1_000, attachments: [], ...extra,
+    });
+    const carrier = (id: string, seq: number, memberIndex: number, assignment: string, task: string) =>
+      storeRow(id, seq, 'user', 'process:notifications', [
+        '[from process:notifications]', '', '[batched notices: 1]', `batchId=${id}`, 'release=example',
+        `[${memberIndex}] source=process:events sender=process:events cause=notice class=fyi`,
+        `Assignment ${assignment} (Background ${task}) has had no recorded activity since 12`, '',
+        'coalesced by notices',
+      ].join('\n'), 'substrate', { isBatchCarrier: true });
+    const storedRows = [
+      storeRow('history-prompt-one', 1, 'user', 'user:person', 'First question', 'chat'),
+      storeRow('history-reply-one', 2, 'assistant', 'assistant-service', 'First answer', 'assistant'),
+      carrier('history-gap-first', 3, 3, 'asg_12345678', 'review'),
+      carrier('history-gap-second', 4, 5567, 'asg_abcdef12', 'build'),
+      storeRow('history-prompt-two', 7, 'user', 'user:person', 'Second question', 'chat'),
+      storeRow('history-reply-two', 8, 'assistant', 'assistant-service', 'Second answer', 'assistant'),
+      carrier('history-tail-first', 9, 5568, 'asg_23456789', 'test'),
+      carrier('history-tail-second', 10, 5569, 'asg_bcdef123', 'review'),
+    ];
+    const readHistory = () => storedRows.map(row => {
+      const decoded = decodePublic019Message(row, 'session');
+      if (decoded.kind !== 'message') throw new Error('Expected retained message row');
+      return decoded;
+    });
+    const project = (records: readonly CanonicalMessage[], live = false) => {
+      const byId = new Map(records.map(record => [record.id, record]));
+      const activity = records.filter(record => record.isBatchCarrier === true);
+      const liveIds = live ? new Set(activity.map(record => record.id)) : new Set<string>();
+      return build({ records: activity, bubbles: [
+        bubble(byId.get('history-prompt-one')!, 'human'), bubble(byId.get('history-reply-one')!, 'agent'),
+        bubble(byId.get('history-prompt-two')!, 'human'), bubble(byId.get('history-reply-two')!, 'agent'),
+      ], liveActivityIds: liveIds, liveActivityEligibleIds: liveIds, activeTurnRunning: false });
+    };
+    const history = readHistory();
+    expect(history.every(record => record.turnSeq === undefined)).toBe(true);
+    const beforeLeave = project(history, true);
+    const afterReturn = project(readHistory());
+    const afterReload = project(readHistory());
+
+    expect(afterReturn.messageItems).toEqual(beforeLeave.messageItems);
+    expect(afterReload.messageItems).toEqual(beforeLeave.messageItems);
+    expect(afterReturn.messageItems).toMatchObject([
+      { kind: 'fold', id: 'member:history-gap-first:member:3', runKey: 'run:history-reply-one',
+        lines: [{ id: 'member:history-gap-first:member:3' }, { id: 'member:history-gap-second:member:5567' }],
+        summary: { presentation: { text: 'No recent activity · Background build', metadata: 'asg_abcd' } } },
+      { kind: 'fold', id: 'member:history-tail-first:member:5568', runKey: 'run:history-reply-two',
+        lines: [{ id: 'member:history-tail-first:member:5568' }, { id: 'member:history-tail-second:member:5569' }],
+        summary: { presentation: { text: 'No recent activity · Background review', metadata: 'asg_bcde' } } },
+    ]);
   });
 
   it('uses a retained batch member source kind when its carrier type is substrate', () => {
@@ -419,32 +471,25 @@ describe('activity trail projection', () => {
     ]);
   });
 
-  it('rebuilds every tail gap with tools and earlier-in-gap activity across reload', () => {
+  it('rebuilds history activity in a later closed gap across reload', () => {
     const firstPrompt = message('first-prompt', 1, 'user:person');
     const firstReply = message('first-reply', 3, 'assistant-service', 'First answer', { role: 'assistant' });
     const nextPrompt = message('next-prompt', 8, 'user:person', 'Another question');
     const beforeTool = message('before-tool', 4, 'process:work', 'Prepared tool work', { messageType: 'substrate' });
-    const afterTool = message('after-tool', 6, 'agent:helper', 'Later notice', { messageType: 'agent' });
-    const call = { ...tool('middle-tool', 5, 'completed'), afterMessageSeq: 5 };
-    const plan = build({ records: [beforeTool, afterTool], bubbles: [bubble(firstPrompt, 'human'),
-      bubble(firstReply, 'agent'), bubble(nextPrompt, 'human')], tools: [call], activeTurnRunning: false,
+    const plan = build({ records: [beforeTool], bubbles: [bubble(firstPrompt, 'human'),
+      bubble(firstReply, 'agent'), bubble(nextPrompt, 'human')], activeTurnRunning: false,
       liveActivityIds: new Set(), liveActivityEligibleIds: new Set() });
 
     expect(plan.messageItems).toMatchObject([{ id: 'message:before-tool', runKey: 'run:first-reply' }]);
-    expect(plan.messageItems.some(item => item.id === 'message:after-tool')).toBe(false);
-    expect(plan.toolItems.get(call.id)).toMatchObject({ id: `tool:${call.id}`, runKey: 'run:first-reply' });
   });
 
-  it('keeps reconstructed activity before a tool in the newest tail without turn state', () => {
+  it('keeps reconstructed activity in the newest tail without turn state', () => {
     const prompt = message('prompt', 1, 'user:person');
     const beforeTool = message('before-tool', 2, 'process:work', 'Before tool', { messageType: 'substrate' });
-    const afterTool = message('after-tool', 4, 'agent:helper', 'After tool', { messageType: 'agent' });
-    const call = { ...tool('tool', 3, 'completed'), afterMessageSeq: 3 };
-    const plan = build({ records: [beforeTool, afterTool], bubbles: [bubble(prompt, 'human')], tools: [call],
+    const plan = build({ records: [beforeTool], bubbles: [bubble(prompt, 'human')],
       turnStateAvailable: false, activeTurnRunning: false, liveActivityIds: new Set(), liveActivityEligibleIds: new Set() });
 
     expect(plan.messageItems.map(item => item.id)).toEqual(['message:before-tool']);
-    expect(plan.toolItems.has(call.id)).toBe(true);
   });
 
   it('uses the live entry eligibility captured at arrival, not the later turn state', () => {

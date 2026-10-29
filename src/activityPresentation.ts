@@ -31,7 +31,7 @@ const transportLine = (line: string): boolean =>
   /^coalesced by /i.test(line) || /^(?:messageType|source|cause|class|role|sender)=/i.test(line);
 const semanticLines = (value: string): string[] => lines(value).filter(line => !transportLine(line));
 const wireOnlyLine = (line: string): boolean => transportLine(line) ||
-  /^(?:terminal-child-owner-notification|source_kind|source_token|assignment_id|work_item_id|child_session_key|outcome|terminal_at)=?/i.test(line) ||
+  /^(?:terminal-child-owner-notification|(?:source_kind|source_token|assignment_id|work_item_id|child_session_key|outcome|terminal_at)=)/i.test(line) ||
   /^\[(?:assignment:|woke:|turn failed\])/i.test(line);
 const shortenVisibleIds = (value: string): string => value.replace(
   /\b((?:wi|asg|dr|att|s|w|c|tc)_)([a-z0-9]{4})[a-z0-9-]{4,}\b/gi,

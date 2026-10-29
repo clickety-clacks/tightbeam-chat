@@ -142,4 +142,10 @@ describe('activity pill presentation', () => {
     expect(`${framedUnknown?.label} ${framedUnknown?.text}`).not.toMatch(/[\[\]]/);
     expect(`${framedUnknown?.label} ${framedUnknown?.text}`).not.toContain(fullWorkItemId);
   });
+
+  it('keeps ordinary lines beginning with Outcome in pill copy', () => {
+    const presentation = activityPillPresentation(source('substrate', 'Outcome was recorded after review'));
+
+    expect(presentation?.text).toBe('Outcome was recorded after review');
+  });
 });

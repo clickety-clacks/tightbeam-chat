@@ -8,6 +8,8 @@ export interface ActivityBubble {
   readonly key: string;
   readonly record: CanonicalMessage;
   readonly side: 'human' | 'agent';
+  /** Whether message visibility already placed this bubble in the owner's conversation. */
+  readonly ownerScoped: boolean;
   readonly member?: HumanMember;
 }
 
@@ -68,6 +70,8 @@ interface Candidate extends ActivityLine {
   readonly live: boolean;
   readonly liveTailEligibleAtArrival: boolean;
   readonly sourceTurnSeq?: number;
+  /** Message activity is backed by the canonical conversation history. */
+  readonly historyBacked: boolean;
   /** Present only when the source text identifies a stable foldable notice kind. */
   readonly semanticFoldKind?: string;
 }
@@ -131,7 +135,7 @@ function messageCandidate(message: CanonicalMessage, live: boolean, liveTailElig
       accessibleText: `Rail: ${gist}`,
       originalContent: message.content,
       presentation: activityPillPresentation({ kind: 'rail', gist, content: message.content, sender }),
-      sortTime, live, liveTailEligibleAtArrival, sourceTurnSeq: message.turnSeq };
+      sortTime, live, liveTailEligibleAtArrival, sourceTurnSeq: message.turnSeq, historyBacked: true };
   }
   if (message.messageType === 'substrate' || message.messageType === 'process' || sender.startsWith('process:')) {
     const gist = bodyGist(message.content) || 'Substrate activity';
@@ -141,7 +145,7 @@ function messageCandidate(message: CanonicalMessage, live: boolean, liveTailElig
       originalContent: message.content,
       presentation: activityPillPresentation({ kind: 'substrate', gist, content: message.content, sender,
         source: rawSource(message), messageType: message.messageType, turnSeq: message.turnSeq }), sortTime, live, liveTailEligibleAtArrival,
-      sourceTurnSeq: message.turnSeq,
+      sourceTurnSeq: message.turnSeq, historyBacked: true,
       semanticFoldKind: gatewayNoticeFoldKind(message.content) };
   }
   if (message.messageType === 'agent' || sender.startsWith('agent:') || sender.startsWith('session:')) {
@@ -154,7 +158,7 @@ function messageCandidate(message: CanonicalMessage, live: boolean, liveTailElig
       originalContent: message.content,
       presentation: activityPillPresentation({ kind: 'agent', gist, content: message.content, sender,
         senderDisplayName: rawDisplayName(message) }), sortTime, live, liveTailEligibleAtArrival,
-      sourceTurnSeq: message.turnSeq };
+      sourceTurnSeq: message.turnSeq, historyBacked: true };
   }
   return undefined;
 }
@@ -175,7 +179,7 @@ function memberCandidate(carrier: CanonicalMessage, member: ParsedBatchMember, l
       originalContent: member.content,
       presentation: activityPillPresentation({ kind: 'rail', gist, content: member.content, sender: member.sender,
         source: member.source }),
-      sortTime, live, liveTailEligibleAtArrival, sourceTurnSeq: carrier.turnSeq };
+      sortTime, live, liveTailEligibleAtArrival, sourceTurnSeq: carrier.turnSeq, historyBacked: true };
   }
   if (member.sender.startsWith('process:')) {
     const gist = detail || 'Substrate activity';
@@ -184,7 +188,7 @@ function memberCandidate(carrier: CanonicalMessage, member: ParsedBatchMember, l
       originalContent: member.content,
       presentation: activityPillPresentation({ kind: 'substrate', gist, content: member.content, sender: member.sender,
         source: member.source, messageType: carrier.messageType }),
-      sortTime, live, liveTailEligibleAtArrival, sourceTurnSeq: carrier.turnSeq,
+      sortTime, live, liveTailEligibleAtArrival, sourceTurnSeq: carrier.turnSeq, historyBacked: true,
       semanticFoldKind: gatewayNoticeFoldKind(member.content) };
   }
   if (member.sender.startsWith('agent:') || member.sender.startsWith('session:')) {
@@ -193,7 +197,7 @@ function memberCandidate(carrier: CanonicalMessage, member: ParsedBatchMember, l
       accessibleText: `Other agent: ${gist}`,
       originalContent: member.content,
       presentation: activityPillPresentation({ kind: 'agent', gist, content: member.content, sender: member.sender }),
-      sortTime, live, liveTailEligibleAtArrival, sourceTurnSeq: carrier.turnSeq };
+      sortTime, live, liveTailEligibleAtArrival, sourceTurnSeq: carrier.turnSeq, historyBacked: true };
   }
   return undefined;
 }
@@ -201,7 +205,7 @@ function memberCandidate(carrier: CanonicalMessage, member: ParsedBatchMember, l
 function toolCandidate(call: ToolCallRecord): Candidate {
   return { id: `tool:${call.id}`, kind: 'tool', runKey: '', anchorSeq: call.afterMessageSeq,
     position: { sequence: call.afterMessageSeq, phase: 2, order: call.seq }, gist: '', accessibleText: '',
-    sortTime: call.startedAt, call, live: false, liveTailEligibleAtArrival: false };
+    sortTime: call.startedAt, call, live: false, liveTailEligibleAtArrival: false, historyBacked: false };
 }
 
 function railCandidate(denial: LiveRailDenial): Candidate {
@@ -211,7 +215,7 @@ function railCandidate(denial: LiveRailDenial): Candidate {
     position: { sequence: denial.afterMessageSeq, phase: 3, order: denial.arrivalOrder },
     gist, accessibleText: `Rail: ${gist}`, originalContent: gist, sortTime: denial.occurredAt, live: true,
     presentation: activityPillPresentation({ kind: 'rail', gist, content: gist }),
-    liveTailEligibleAtArrival: denial.tailEligibleAtArrival };
+    liveTailEligibleAtArrival: denial.tailEligibleAtArrival, historyBacked: false };
 }
 
 const comparePosition = (left: Position, right: Position): number =>
@@ -240,7 +244,8 @@ function bubbleEvents(bubbles: readonly ActivityBubble[]): BubbleEvent[] {
 
 function lineWithRun(candidate: Candidate, runKey: string, includeToolDetails = true): ActivityLine {
   const { live: _live, liveTailEligibleAtArrival: _eligibleAtArrival,
-    sourceTurnSeq: _sourceTurnSeq, semanticFoldKind: _semanticFoldKind, ...line } = candidate;
+    sourceTurnSeq: _sourceTurnSeq, historyBacked: _historyBacked,
+    semanticFoldKind: _semanticFoldKind, ...line } = candidate;
   if (candidate.kind === 'tool' && candidate.call) {
     if (!includeToolDetails) return { ...line, runKey, gist: '', accessibleText: '' };
     const call = candidate.call;
@@ -305,10 +310,12 @@ export function buildActivityTrail(input: {
       kind: 'candidate', candidate, ...candidate.position,
     })),
   ].sort(comparePosition);
-  const retainedTurnSequences = new Set(input.bubbles.map(bubble => bubble.record.turnSeq)
+  const retainedTurnSequences = new Set(input.bubbles.filter(bubble => bubble.ownerScoped).map(bubble => bubble.record.turnSeq)
     .filter((turnSeq): turnSeq is number => Number.isSafeInteger(turnSeq)));
-  const belongsToRetainedTurn = (candidate: Candidate) => candidate.sourceTurnSeq !== undefined &&
+  const belongsToOwnerTurn = (candidate: Candidate) => candidate.sourceTurnSeq !== undefined &&
     retainedTurnSequences.has(candidate.sourceTurnSeq);
+  const historyInOwnerConversation = (candidate: Candidate, precedingBubble: BubbleEvent) => candidate.historyBacked &&
+    (candidate.sourceTurnSeq === undefined ? precedingBubble.bubble.ownerScoped : belongsToOwnerTurn(candidate));
 
   const eligible = new Map<string, EligibleCandidate[]>();
   const membership = new Map<string, string>();
@@ -343,15 +350,18 @@ export function buildActivityTrail(input: {
         const allowed = candidate.live
           ? (!input.turnStateAvailable || candidate.liveTailEligibleAtArrival)
           : (beforeOrAtTool.has(candidate.id) || (input.turnStateAvailable && input.activeTurnRunning));
-        if (allowed || belongsToRetainedTurn(candidate) || input.shownRuns.has(candidate.id)) add(candidate, runKey);
+        const historyAllowed = historyInOwnerConversation(candidate, previousBubble) ||
+          (candidate.live && allowed) || input.shownRuns.has(candidate.id);
+        if (candidate.historyBacked ? historyAllowed : allowed || input.shownRuns.has(candidate.id)) add(candidate, runKey);
       }
     } else {
       for (const candidate of tail) {
         const oldRun = input.shownRuns.get(candidate.id);
         const allowed = candidate.live
           ? (!input.turnStateAvailable || candidate.liveTailEligibleAtArrival)
-          : (beforeOrAtTool.has(candidate.id) || belongsToRetainedTurn(candidate));
-        if (allowed || oldRun) {
+          : beforeOrAtTool.has(candidate.id);
+        const historyAllowed = historyInOwnerConversation(candidate, previousBubble) || (candidate.live && allowed) || oldRun;
+        if (candidate.historyBacked ? historyAllowed : allowed || oldRun) {
           add(candidate, oldRun ?? runKey);
         }
       }
