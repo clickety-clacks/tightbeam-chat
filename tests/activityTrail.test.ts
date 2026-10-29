@@ -381,7 +381,7 @@ describe('activity trail projection', () => {
     const project = (records: readonly CanonicalMessage[], live = false) => {
       const byId = new Map(records.map(record => [record.id, record]));
       const activity = records.filter(record => record.isBatchCarrier === true || record.id === 'history-unrelated-marker');
-      const liveIds = live ? new Set(activity.map(record => record.id)) : new Set<string>();
+      const liveIds = live ? new Set(activity.filter(record => record.isBatchCarrier === true).map(record => record.id)) : new Set<string>();
       return build({ records: activity, bubbles: [
         bubble(byId.get('history-prompt-one')!, 'human'), bubble(byId.get('history-reply-one')!, 'agent'),
         bubble(byId.get('history-prompt-two')!, 'human'), bubble(byId.get('history-reply-two')!, 'agent'),

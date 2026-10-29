@@ -318,7 +318,7 @@ describe('conversation surface', () => {
     expect(within(log).getByText('Answer to the batch question')).toBeTruthy();
     expect(within(log).queryByText('A system event marker')).toBeNull();
     expect(within(log).queryByText('An agent sent a wake')).toBeNull();
-    expect(within(log).queryByText('A process notice in the batch')).toBeNull();
+    expectActivityText(log, 'A process notice in the batch');
     expect(within(log).queryByText('Must remain hidden')).toBeNull();
     const unmarkedBubble = within(log).getByText('A user row with no sender stays visible').closest('article');
     expect(unmarkedBubble?.getAttribute('aria-label')).toBe('Message from User');
