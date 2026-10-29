@@ -322,7 +322,7 @@ export class HostComposerBridge {
       const state = lifetime.runtime.getSnapshot();
       if (command.lifetimeId !== lifetime.lifetimeId || command.sessionKey !== lifetime.sessionKey ||
           state.sessionKey !== lifetime.sessionKey || state.identityChanged || runtimeUnavailableReason(state)) return;
-      if (liveFeedState(state) === 'connected') return;
+      if (liveFeedState(state) === 'connected' && !state.liveError) return;
       // Explicit recovery supersedes a scheduled retry while keeping this runtime
       // and its retained transcript in place. Send attempts are owned separately.
       void lifetime.runtime.rebuild({ restart: true });

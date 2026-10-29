@@ -718,8 +718,7 @@ class SessionRuntime implements ChatRuntime {
     const notices = [...this.buffered];
     // A feed recovering after a real gap still needs cursor catch-up. A session
     // update can also invalidate the held snapshot even when the feed is ready.
-    if (this.preserveRowsOnReconnect || pending.historyError || this.bufferedSession ||
-        notices.some((notice) => notice.operation === 'session')) return false;
+    if (this.preserveRowsOnReconnect || pending.historyError) return false;
 
     const sessionCandidates = [pending.session, this.state.session]
       .filter((session): session is SessionRecord => session?.sessionKey === this.sessionKey);
@@ -742,7 +741,8 @@ class SessionRuntime implements ChatRuntime {
     // Keep this healthy connection available to an explicit snapshot refresh.
     this.connectionForRebuild = connection;
     this.retryDelayMs = 250;
-    const currentSession = this.state.session ?? session;
+    const currentSession = this.state.session && this.state.session.rowVersion > session.rowVersion
+      ? this.state.session : session;
     this.publish({
       status: 'ready', liveError: undefined, records: recordsFrom(this.rows),
       session: currentSession, agentDisplayName: currentSession.displayName,

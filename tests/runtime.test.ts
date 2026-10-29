@@ -644,9 +644,10 @@ describe('framework-independent runtime', () => {
     expect(runtime.getSnapshot().records.map((row) => row.id)).toEqual(['t6', 'm7', 'm8']);
     expect(runtime.getSnapshot().liveError).toBe('Live updates are connecting.');
     transport.readyGate.resolve();
-    await vi.waitFor(() => expect(transport.readTailCalls).toBeGreaterThan(1));
     await vi.waitFor(() => expect((runtime.getSnapshot().records[2] as CanonicalMessage)?.content).toBe('updated eight'));
     expect((runtime.getSnapshot().records[2] as CanonicalMessage).content).toBe('updated eight');
+    expect(transport.readSessionCalls).toBe(1);
+    expect(transport.readTailCalls).toBe(1);
     expect(runtime.getSnapshot().session?.raw.clearedThroughSeq).toBe(0);
     while (runtime.getSnapshot().hasOlder) await runtime.loadOlder();
     expect(runtime.getSnapshot().records.map((row) => row.id)).toEqual(
@@ -789,8 +790,10 @@ describe('framework-independent runtime', () => {
     expect(runtime.getSnapshot().activeTurn?.turn.seq).toBe(running.seq);
 
     transport.readyGate.resolve();
-    await vi.waitFor(() => expect(runtime.getSnapshot().records.some((row) => row.id === arriving.id)).toBe(true));
-    expect(runtime.getSnapshot().liveError).toBeUndefined();
+    await vi.waitFor(() => {
+      expect(runtime.getSnapshot().records.some((row) => row.id === arriving.id)).toBe(true);
+      expect(runtime.getSnapshot().liveError).toBeUndefined();
+    });
     expect(runtime.getSnapshot().activeTurn?.turn.seq).toBe(running.seq);
     expect(transport.readSessionCalls).toBe(1);
     expect(transport.readTailCalls).toBe(1);
