@@ -622,9 +622,11 @@ describe('framework-independent runtime', () => {
     await vi.waitFor(() => expect(runtime.getSnapshot().sends[0].status).toBe('accepted'));
 
     liveReady.resolve();
-    await vi.waitFor(() => expect(transport.readTailCalls).toBeGreaterThan(1), { timeout: 1500 });
     await vi.waitFor(() => expect(runtime.getSnapshot().liveError).toBeUndefined(), { timeout: 1500 });
     expect(runtime.getSnapshot().status).toBe('ready');
+    expect(transport.readSessionCalls).toBe(1);
+    expect(transport.readTailCalls).toBe(1);
+    expect(transport.readAfterCalls).toEqual([]);
     runtime.dispose();
   });
 
@@ -779,12 +781,17 @@ describe('framework-independent runtime', () => {
     expect(transport.readTailCalls).toBe(1);
 
     const arriving = message(9);
+    const running: CanonicalTurn = { seq: 90, sessionKey, status: 'running', messageId: arriving.id,
+      origin: 'user:person', triggerSource: 'mike', raw: { rowVersion: 1 } };
     transport.emit(arriving);
-    expect(runtime.getSnapshot().records.some((row) => row.id === arriving.id)).toBe(false);
+    transport.callbacks?.onNotice({ operation: 'turn', turn: running });
+    expect(runtime.getSnapshot().records.some((row) => row.id === arriving.id)).toBe(true);
+    expect(runtime.getSnapshot().activeTurn?.turn.seq).toBe(running.seq);
 
     transport.readyGate.resolve();
     await vi.waitFor(() => expect(runtime.getSnapshot().records.some((row) => row.id === arriving.id)).toBe(true));
     expect(runtime.getSnapshot().liveError).toBeUndefined();
+    expect(runtime.getSnapshot().activeTurn?.turn.seq).toBe(running.seq);
     expect(transport.readSessionCalls).toBe(1);
     expect(transport.readTailCalls).toBe(1);
     expect(transport.readAfterCalls).toEqual([]);

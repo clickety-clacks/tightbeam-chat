@@ -151,6 +151,7 @@ class SessionRuntime implements ChatRuntime {
     session: SessionRecord;
     page: ConversationPage;
     historyError?: string;
+    appliedNotices: Set<ChangeNotice>;
   } | undefined;
   private catchUpConnection: ChangeConnection | undefined;
   private generation = 0;
@@ -568,6 +569,8 @@ class SessionRuntime implements ChatRuntime {
     for (const captured of this.coverageReaders) captured.push(notice);
     if (this.pendingFeedCoverage?.generation === generation && !this.connection) {
       this.buffered.push(notice);
+      this.pendingFeedCoverage.appliedNotices.add(notice);
+      if (this.apply(notice)) this.publish({ records: recordsFrom(this.rows), ...this.activityStatePatch() });
       return;
     }
     if (this.apply(notice)) this.publish({ records: recordsFrom(this.rows), ...this.activityStatePatch() });
@@ -713,7 +716,12 @@ class SessionRuntime implements ChatRuntime {
     if (!pending || pending.generation !== this.generation || this.connection !== connection) return false;
 
     const notices = [...this.buffered];
-    const sessionCandidates = [pending.session, this.bufferedSession, this.state.session]
+    // A feed recovering after a real gap still needs cursor catch-up. A session
+    // update can also invalidate the held snapshot even when the feed is ready.
+    if (this.preserveRowsOnReconnect || pending.historyError || this.bufferedSession ||
+        notices.some((notice) => notice.operation === 'session')) return false;
+
+    const sessionCandidates = [pending.session, this.state.session]
       .filter((session): session is SessionRecord => session?.sessionKey === this.sessionKey);
     const session = sessionCandidates.reduce((latest, candidate) =>
       candidate.rowVersion > latest.rowVersion ? candidate : latest);
@@ -728,8 +736,11 @@ class SessionRuntime implements ChatRuntime {
     this.pendingFeedCoverage = undefined;
     this.buffered = [];
     this.bufferedSession = undefined;
-    for (const notice of notices) this.apply(notice);
-    if (this.preserveRowsOnReconnect && !pending.historyError) this.preserveRowsOnReconnect = false;
+    for (const notice of notices) {
+      if (!pending.appliedNotices.has(notice)) this.apply(notice);
+    }
+    // Keep this healthy connection available to an explicit snapshot refresh.
+    this.connectionForRebuild = connection;
     this.retryDelayMs = 250;
     const currentSession = this.state.session ?? session;
     this.publish({
@@ -1062,7 +1073,7 @@ class SessionRuntime implements ChatRuntime {
         }
         const canVerifyWhenFeedOpens = !liveAttemptSettled && !liveError && !!session && !!tail;
         this.pendingFeedCoverage = canVerifyWhenFeedOpens
-          ? { generation, session, page: tail, historyError }
+          ? { generation, session, page: tail, historyError, appliedNotices: new Set() }
           : undefined;
         if (!canVerifyWhenFeedOpens) {
           this.buffered = [];
