@@ -721,9 +721,12 @@ describe('conversation surface', () => {
     expect(runtime.rebuildOptions).toEqual([{ restart: true }]);
   });
 
-  it('shows a live-feed reconnect only through the yellow then green status dot', () => {
-    const runtime = new FakeRuntime('feed-status', { status: 'ready', liveError: 'Changes socket closed' });
+  it('shows live-feed reconnecting, sustained failure, and recovery through the status dot', () => {
+    const runtime = new FakeRuntime('feed-status', { status: 'ready', liveError: 'Changes socket closed',
+      liveConnectionState: 'reconnecting' });
     render(<TightbeamChat sessionKey="feed-status" adapter={adapterFor(runtime)} />);
+    const composer = screen.getByRole('textbox') as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: 'keep this draft while the feed reconnects' } });
 
     const reconnectingButton = screen.getByRole('button', { name: 'Connection status: Reconnecting. Show details' });
     expect(reconnectingButton.querySelector('.tb-chat-status-dot')?.classList.contains('tb-chat-status-stale')).toBe(true);
@@ -733,10 +736,18 @@ describe('conversation surface', () => {
     expect(within(details).queryByText(/Changes socket closed|Live updates:/)).toBeNull();
     expect(within(details).getByRole('button', { name: 'Reconnect' })).toBeTruthy();
 
-    act(() => runtime.update({ liveError: undefined }));
+    act(() => runtime.update({ liveError: undefined, liveConnectionState: 'disconnected' }));
+    const disconnectedButton = screen.getByRole('button', { name: 'Connection status: Disconnected. Show details' });
+    expect(disconnectedButton.querySelector('.tb-chat-status-dot')?.classList.contains('tb-chat-status-error')).toBe(true);
+    expect(within(details).getByRole('button', { name: 'Reconnect' })).toBeTruthy();
+    expect(composer.value).toBe('keep this draft while the feed reconnects');
+    expect(screen.getByRole('button', { name: 'Send message' })).toHaveProperty('disabled', false);
+
+    act(() => runtime.update({ liveError: undefined, liveConnectionState: 'connected' }));
     const connectedButton = screen.getByRole('button', { name: 'Connection status: Connected. Show details' });
     expect(connectedButton.querySelector('.tb-chat-status-dot')?.classList.contains('tb-chat-status-ready')).toBe(true);
     expect(screen.queryByText(/Reconnecting|Live updates are reconnecting|conversation may be out of date/)).toBeNull();
+    expect(composer.value).toBe('keep this draft while the feed reconnects');
   });
 
   it('keeps the authorization-loss explanation with the red connection dot', () => {

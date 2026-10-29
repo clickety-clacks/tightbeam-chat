@@ -95,7 +95,11 @@ function runtimeUnavailableReason(state: RuntimeState): string | undefined {
 }
 
 function liveFeedState(state: RuntimeState): HostConnectionState {
-  if (state.status === 'ready') return state.liveError ? 'reconnecting' : 'connected';
+  if (state.status === 'ready') {
+    if (state.liveConnectionState === 'disconnected') return 'disconnected';
+    if (state.liveConnectionState === 'connecting' || state.liveConnectionState === 'reconnecting') return 'reconnecting';
+    return state.liveError ? 'reconnecting' : 'connected';
+  }
   if (state.status === 'loading' || state.status === 'stale') return 'reconnecting';
   return 'disconnected';
 }

@@ -334,8 +334,11 @@ function sourceLabel(side: Bubble['side'], agentName: string): string {
 function statusText(state: RuntimeState): string {
   if (state.status === 'error') return 'Disconnected';
   if (state.status === 'loading') return 'Connecting';
-  if (state.status === 'stale' || (state.status === 'ready' && state.liveError)) return 'Reconnecting';
   if (state.status === 'unauthorized') return 'Access to this conversation is unavailable';
+  if (state.status === 'ready' && state.liveConnectionState === 'disconnected') return 'Disconnected';
+  if (state.status === 'stale' || (state.status === 'ready' &&
+      (state.liveConnectionState === 'connecting' || state.liveConnectionState === 'reconnecting' ||
+        (!state.liveConnectionState && state.liveError)))) return 'Reconnecting';
   if (state.sessionNotFound) return 'Conversation not found';
   if (state.conversationError) return 'Conversation history unavailable';
   if (state.sessionError) return 'Session details unavailable';
@@ -343,7 +346,11 @@ function statusText(state: RuntimeState): string {
 }
 
 function statusIndicatorState(state: RuntimeState): RuntimeState['status'] {
-  return state.status === 'ready' && state.liveError ? 'stale' : state.status;
+  if (state.status !== 'ready') return state.status;
+  if (state.liveConnectionState === 'disconnected') return 'error';
+  if (state.liveConnectionState === 'connecting' || state.liveConnectionState === 'reconnecting' ||
+      (!state.liveConnectionState && state.liveError)) return 'stale';
+  return 'ready';
 }
 
 type ActiveIcon = 'person' | 'batch' | 'chat' | 'gear';
@@ -653,7 +660,8 @@ const Composer = forwardRef<ComposerHandle, {
           <dt>Model</dt><dd>{state.session?.model || 'Unavailable'}</dd>
           <dt>Harness</dt><dd>{state.session?.harness || 'Unavailable'}</dd>
         </dl>
-        {(state.status === 'error' || state.sessionError || state.sessionNotFound || state.conversationError || state.liveError) &&
+        {(state.status === 'error' || state.sessionError || state.sessionNotFound || state.conversationError || state.liveError ||
+          state.liveConnectionState === 'disconnected') &&
           <button type="button" onClick={() => void runtime.rebuild({ restart: true })}>Reconnect</button>}
       </div>}
       <button ref={sendControl} type="submit" className="tb-chat-send-button" aria-label="Send message"

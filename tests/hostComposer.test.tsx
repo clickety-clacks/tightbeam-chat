@@ -36,6 +36,7 @@ class HostComposerTransport implements ChatTransport {
   readonly observation: TargetObservation = profile;
   readyGate?: ReturnType<typeof deferred<void>>;
   readGate?: ReturnType<typeof deferred<void>>;
+  changeOpenFailures = 0;
   failReadSessionOnce = false;
   missingSession = false;
   authorizationLost = false;
@@ -49,6 +50,11 @@ class HostComposerTransport implements ChatTransport {
     this.callbacks.set(sessionKey, callbacks);
     if (this.readyGate) await this.readyGate.promise;
     if (signal.aborted) throw new Error('Changes subscription was canceled.');
+    if (this.changeOpenFailures > 0) {
+      this.changeOpenFailures--;
+      if (this.callbacks.get(sessionKey) === callbacks) this.callbacks.delete(sessionKey);
+      throw new Error('Live updates are unavailable.');
+    }
     queueMicrotask(() => {
       if (signal.aborted || this.callbacks.get(sessionKey) !== callbacks) return;
       for (const turn of this.currentTurns.filter(turn => turn.sessionKey === sessionKey)) {
@@ -653,10 +659,13 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     const { runtimes } = openChat(transport, 'conversation-a');
     const first = await waitForReady(events, 'conversation-a');
 
+    transport.changeOpenFailures = 3;
     act(() => transport.callbacks.get('conversation-a')?.onDoubt('connection closed'));
-    act(() => commandEntry()({ type: 'reconnect', lifetimeId: first.lifetimeId, sessionKey: first.sessionKey }));
     expect(events.some((event) => event.event === 'connection' && event.state === 'reconnecting' &&
       event.lifetimeId === first.lifetimeId)).toBe(true);
+    await waitFor(() => expect(events.some((event) => event.event === 'connection' && event.state === 'disconnected' &&
+      event.lifetimeId === first.lifetimeId)).toBe(true), { timeout: 4000 });
+    expect(runtimes[0].getSnapshot().liveConnectionState).toBe('disconnected');
     expect(screen.queryByRole('button', { name: 'Reconnect' })).toBeNull();
     expect(events.filter((event) => event.event === 'ready' && event.lifetimeId === first.lifetimeId)).toHaveLength(1);
     expect(events.some((event) => event.event === 'unavailable' && event.lifetimeId === first.lifetimeId)).toBe(false);
@@ -668,8 +677,12 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     await screen.findByText('send while live updates reconnect');
     expect(events.some((event) => event.event === 'unavailable' && event.lifetimeId === first.lifetimeId)).toBe(false);
     expect(runtimes[0].getSnapshot().status).toBe('ready');
+    transport.changeOpenFailures = 0;
+    act(() => commandEntry()({ type: 'reconnect', lifetimeId: first.lifetimeId, sessionKey: first.sessionKey }));
     await waitFor(() => expect(transport.changeOpenCount).toBeGreaterThan(1));
     await waitFor(() => expect(runtimes[0].getSnapshot().liveError).toBeUndefined());
+    await waitFor(() => expect(events.some((event) => event.event === 'connection' && event.state === 'connected' &&
+      event.lifetimeId === first.lifetimeId)).toBe(true));
 
     const reply: CanonicalMessage = { kind: 'message', id: 'live-agent-reply', sessionKey: 'conversation-a',
       seq: 2, rowVersion: 1, role: 'assistant', sender: 'assistant-service', messageType: 'assistant',
