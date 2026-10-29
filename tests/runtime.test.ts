@@ -162,7 +162,7 @@ describe('framework-independent runtime', () => {
     const excludedWhileAnotherAgentRuns = [
       message(10, { role: 'assistant', sender: 'process:notifications', messageType: 'substrate', turnSeq: 77 }),
       message(11, { role: 'user', sender: 'agent:helper', messageType: 'agent', turnSeq: 77,
-        content: '[woke: fallback deadline]\nWake outside the selected user's turn' }),
+        content: "[woke: fallback deadline]\nWake outside the selected user's turn" }),
       message(12, { role: 'user', sender: 'process:events', messageType: 'process', turnSeq: 77 }),
     ];
     for (const activity of excludedWhileAnotherAgentRuns) {
