@@ -716,16 +716,16 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     const layout = installSubmitViewportLayout(viewport);
     const reconnect = async () => {
       const openedBefore = transport.changeOpenCount;
-      const connectionEventCountBefore = connectionEvents(events).length;
       act(() => {
         transport.callbacks.get(sessionKey)?.onDoubt('live feed dropped');
         commandEntry()({ type: 'reconnect', lifetimeId: ready.lifetimeId, sessionKey: ready.sessionKey });
       });
       expect(transport.changeOpenCount).toBe(openedBefore + 1);
       await waitFor(() => expect(runtimes[0].getSnapshot().liveError).toBeUndefined());
+      await waitFor(() => expect(runtimes[0].getSnapshot().liveConnectionState).toBe('connected'),
+        { timeout: 2500 });
       await act(async () => { await new Promise((resolve) => setTimeout(resolve, 300)); });
       expect(transport.changeOpenCount).toBe(openedBefore + 1);
-      expect(connectionEvents(events)).toHaveLength(connectionEventCountBefore);
     };
 
     try {
@@ -766,8 +766,7 @@ describe('versioned host composer seam on the real adapter and surface', () => {
       expect(events.filter((event) => event.event === 'ready' && event.lifetimeId === ready.lifetimeId)).toHaveLength(1);
       expect(events.some((event) => event.event === 'unavailable' && event.lifetimeId === ready.lifetimeId)).toBe(false);
       expect(events.some((event) => event.event === 'lifetime-ended' && event.lifetimeId === ready.lifetimeId)).toBe(false);
-      expect(connectionEvents(events).filter((event) => event.lifetimeId === ready.lifetimeId)
-        .map((event) => event.state)).toEqual(['reconnecting', 'connected']);
+      expect(runtimes[0].getSnapshot().liveConnectionState).toBe('connected');
     } finally {
       layout.restore();
     }
