@@ -6,6 +6,7 @@ import remarkGfm from 'remark-gfm';
 import type { ChatRuntime, CanonicalMessage, CanonicalTransition, ToolCallRecord, ToolCallIndex, ConversationRecord, LocalSend, RuntimeState, TightbeamAdapter, TurnProvenance } from './types';
 import { projectMessages, type HumanMember } from './messageVisibility';
 import { buildActivityTrail, type ActivityFold, type ActivityLine, type ActivityOverflow, type MessageActivityItem } from './activityTrail';
+import type { ActivityPillIcon, ActivityPillPresentation } from './activityPresentation';
 import { useReadingPosition } from './useReadingPosition';
 import { firstAfterTime, getIndex, indexValues, putIndex, type RecordIndex } from './recordIndex';
 import { getHostComposerSnapshot, HostComposerBridge, subscribeHostComposer } from './hostComposer';
@@ -684,16 +685,68 @@ function ActivityOverflowButton({ entry, registerRow, expand }: {
     onClick={event => expand(entry.runKey, event.currentTarget)}>…</button>;
 }
 
-function ActivityMessageRow({ entry, registerRow, scrollKey = entry.id }: {
+const activityPillIconPaths: Record<ActivityPillIcon, ReactNode> = {
+  message: <path d="M20 15a2 2 0 0 1-2 2H8l-4 4V5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2z" />,
+  attest: <><rect x="7" y="3" width="10" height="4" rx="1" /><path d="M17 5h2a2 2 0 0 1 2 2v13a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2" /><path d="m8 14 2.5 2.5L16 11" /></>,
+  assignment: <><path d="M9 4h10a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" /><rect x="8" y="2" width="8" height="4" rx="1" /><path d="M7 11h10M7 15h7" /></>,
+  decision: <><circle cx="12" cy="12" r="9" /><path d="M9.4 9a2.7 2.7 0 1 1 4.8 1.7c-1 1.1-2.2 1.4-2.2 3" /><path d="M12 17h.01" /></>,
+  'decision-answered': <><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /><path d="m9 10 2 2 4-4" /></>,
+  hourglass: <><path d="M5 22h14M5 2h14M7 2v4l5 6 5-6V2M7 22v-4l5-6 5 6v4" /></>,
+  'work-item': <><path d="M3 12h5l2 3h4l2-3h5" /><path d="m5 5-2 7v7a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7l-3-7z" /></>,
+  session: <><path d="M3 7h18v13a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /><path d="M2 3h20v4H2zM10 12h4" /></>,
+  turn: <><path d="m10.3 3.9-8.5 14a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3l-8.5-14a2 2 0 0 0-3.4 0z" /><path d="M12 9v4m0 4h.01" /></>,
+  remedy: <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.8-3.8a6 6 0 0 1-7.9 7.9l-6.9 6.9a2.1 2.1 0 0 1-3-3l6.9-6.9a6 6 0 0 1 7.9-7.9z" />,
+  refused: <><circle cx="12" cy="12" r="9" /><path d="m6 6 12 12" /></>,
+  alarm: <><circle cx="12" cy="13" r="8" /><path d="M12 9v4l2 2M5 3 2 6m17-3 3 3" /></>,
+  clock: <><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>,
+  flag: <><path d="M5 21V4" /><path d="M5 4h13l-2 4 2 4H5" /></>,
+  activity: <><path d="M3 12h4l2-6 4 12 2-6h6" /></>,
+};
+
+function ActivityPillIconView({ icon }: { readonly icon: ActivityPillIcon }) {
+  return <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">{activityPillIconPaths[icon]}</svg>;
+}
+
+function ActivityPillContents({ presentation }: { readonly presentation: ActivityPillPresentation }) {
+  return <>
+    <span className={`tb-chat-activity-pill tb-chat-activity-pill-${presentation.tone}`}>
+      <ActivityPillIconView icon={presentation.icon} />
+      <span>{presentation.label}</span>
+    </span>
+    <span className="tb-chat-activity-pill-text">{presentation.text}</span>
+    {presentation.metadata && <span className="tb-chat-activity-pill-meta">{presentation.metadata}</span>}
+  </>;
+}
+
+function sameActivityPresentation(left: ActivityPillPresentation | undefined,
+  right: ActivityPillPresentation | undefined): boolean {
+  return left === right || Boolean(left && right && left.label === right.label && left.tone === right.tone &&
+    left.icon === right.icon && left.text === right.text && left.metadata === right.metadata);
+}
+
+function sameActivityLine(left: ActivityLine, right: ActivityLine): boolean {
+  return left.id === right.id && left.kind === right.kind && left.runKey === right.runKey &&
+    left.gist === right.gist && left.accessibleText === right.accessibleText &&
+    sameActivityPresentation(left.presentation, right.presentation);
+}
+
+const ActivityMessageRow = memo(function ActivityMessageRow({ entry, registerRow, scrollKey = entry.id }: {
   readonly entry: ActivityLine;
   readonly registerRow: (key: string, element: HTMLElement | null) => void;
   readonly scrollKey?: string;
 }) {
-  return <div role="note" tabIndex={-1} aria-label={entry.accessibleText}
-    className={`tb-chat-activity-line tb-chat-activity-${entry.kind}`}
+  const presentation = entry.presentation;
+  const accessibleText = presentation
+    ? `${presentation.label}: ${presentation.text}${presentation.metadata ? `, ${presentation.metadata}` : ''}`
+    : entry.accessibleText;
+  return <div role="note" tabIndex={-1} aria-label={accessibleText}
+    className={`tb-chat-activity-line tb-chat-activity-${entry.kind}${presentation ? ' tb-chat-activity-pill-row' : ''}`}
     ref={element => registerRow(scrollKey, element)} data-record-key={entry.id} data-scroll-key={scrollKey}
-    data-activity-run={entry.runKey}>{entry.gist}</div>;
-}
+    data-activity-run={entry.runKey} title={presentation ? entry.accessibleText : undefined}>
+    {presentation ? <ActivityPillContents presentation={presentation} /> : entry.gist}
+  </div>;
+}, (previous, next) => previous.registerRow === next.registerRow && previous.scrollKey === next.scrollKey &&
+  sameActivityLine(previous.entry, next.entry));
 
 const ToolCallRow = memo(function ToolCallRow({ call, entry, registerRow, preservePosition, expandRun,
   expandedToolCalls, setToolCallExpanded }: {
@@ -745,7 +798,7 @@ const ToolCallRow = memo(function ToolCallRow({ call, entry, registerRow, preser
   </details>;
 });
 
-function ActivityRunRow({ entry, expanded, toggle, registerRow, preservePosition, expandHistoryRun,
+const ActivityRunRow = memo(function ActivityRunRow({ entry, expanded, toggle, registerRow, preservePosition, expandHistoryRun,
   expandedToolCalls, setToolCallExpanded }: {
   readonly entry: ActivityFold;
   readonly expanded: boolean;
@@ -757,16 +810,18 @@ function ActivityRunRow({ entry, expanded, toggle, registerRow, preservePosition
   readonly setToolCallExpanded: (id: string, expanded: boolean) => void;
 }) {
   const detailLines = entry.lines;
+  const presentation = entry.summary.presentation;
   return <div className={`tb-chat-activity-run tb-chat-activity-${entry.activityKind}`} tabIndex={-1}
     ref={element => registerRow(entry.id, element)} data-record-key={entry.id} data-scroll-key={entry.id}
     data-activity-run={entry.runKey} data-activity-fold="true" data-run-expanded={expanded ? 'true' : 'false'}>
-    <button type="button" className={`tb-chat-activity-run-toggle tb-chat-activity-${entry.activityKind}`}
+    <button type="button" className={`tb-chat-activity-run-toggle tb-chat-activity-${entry.activityKind}${presentation ? ' tb-chat-activity-pill-toggle' : ''}`}
       aria-expanded={expanded}
       aria-label={`${expanded ? 'Collapse' : 'Expand'} ${entry.activityKind} activity run, ${entry.lines.length} entries. Latest: ${entry.summary.gist}`}
       onClick={() => { preservePosition(); toggle(entry.id); }}>
       <span className="tb-chat-activity-bullet" aria-hidden="true">•</span>
       <span className={`tb-chat-activity-run-chevron${expanded ? ' is-expanded' : ''}`} aria-hidden="true" />
-      <span className="tb-chat-activity-gist">{entry.summary.gist}</span>
+      {presentation ? <ActivityPillContents presentation={presentation} />
+        : <span className="tb-chat-activity-gist">{entry.summary.gist}</span>}
       <span className="tb-chat-activity-run-count" aria-hidden="true">×{entry.lines.length}</span>
     </button>
     {expanded && <div className="tb-chat-activity-run-rows">
@@ -778,7 +833,20 @@ function ActivityRunRow({ entry, expanded, toggle, registerRow, preservePosition
           scrollKey={`activity-detail:${line.id}`} />)}
     </div>}
   </div>;
-}
+}, (previous, next) => {
+  // Tool rows keep their existing update path. Non-tool folds are summarized
+  // by their latest member, so the common collapsed update check is constant
+  // time even when a long run grows.
+  if (previous.entry.activityKind === 'tool' || next.entry.activityKind === 'tool') return false;
+  const before = previous.entry;
+  const after = next.entry;
+  if (previous.expanded !== next.expanded || previous.toggle !== next.toggle ||
+      previous.registerRow !== next.registerRow || before.id !== after.id || before.runKey !== after.runKey ||
+      before.activityKind !== after.activityKind || before.lines.length !== after.lines.length ||
+      !sameActivityLine(before.summary, after.summary)) return false;
+  if (!next.expanded) return true;
+  return before.lines.every((line, index) => sameActivityLine(line, after.lines[index]));
+});
 
 function ChatBody({ runtime, renderMessage, className, hostBridge, configuredConversationHref }: {
   runtime: ChatRuntime;
