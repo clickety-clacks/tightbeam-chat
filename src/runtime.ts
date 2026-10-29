@@ -150,6 +150,7 @@ class SessionRuntime implements ChatRuntime {
     generation: number;
     session: SessionRecord;
     page: ConversationPage;
+    feedReadyBeforeHistoryRead: boolean;
     historyError?: string;
     appliedNotices: Set<ChangeNotice>;
   } | undefined;
@@ -718,7 +719,7 @@ class SessionRuntime implements ChatRuntime {
     const notices = [...this.buffered];
     // A feed recovering after a real gap still needs cursor catch-up. A session
     // update can also invalidate the held snapshot even when the feed is ready.
-    if (this.preserveRowsOnReconnect || pending.historyError) return false;
+    if (this.preserveRowsOnReconnect || pending.historyError || !pending.feedReadyBeforeHistoryRead) return false;
 
     const sessionCandidates = [pending.session, this.state.session]
       .filter((session): session is SessionRecord => session?.sessionKey === this.sessionKey);
@@ -860,6 +861,7 @@ class SessionRuntime implements ChatRuntime {
     });
 
     let liveError: string | undefined;
+    let lateFeedNeedsCatchUp = false;
     try {
       let liveAttemptSettled = Boolean(this.connection);
       if (!this.connection) {
@@ -939,6 +941,9 @@ class SessionRuntime implements ChatRuntime {
         typeof snapshotBarrier === 'number' && Number.isSafeInteger(snapshotBarrier) &&
         snapshotBarrier > this.clearBarrier && !!priorOldest && priorOldest.seq <= snapshotBarrier);
       if (session) this.advanceClearBarrier(session);
+      // Coverage is only provable if the subscription was ready before this
+      // history request started. A later subscription has no replay cursor.
+      const feedReadyBeforeHistoryRead = Boolean(this.connection);
       const catchingUp = this.preserveRowsOnReconnect && !!priorNewestCursor &&
         !!this.transport.readAfter && !clearInvalidatesOlderAnchor;
       const [tailResult] = await Promise.allSettled([
@@ -1073,7 +1078,7 @@ class SessionRuntime implements ChatRuntime {
         }
         const canVerifyWhenFeedOpens = !liveAttemptSettled && !liveError && !!session && !!tail;
         this.pendingFeedCoverage = canVerifyWhenFeedOpens && session && tail
-          ? { generation, session, page: tail, historyError, appliedNotices: new Set() }
+          ? { generation, session, page: tail, feedReadyBeforeHistoryRead, historyError, appliedNotices: new Set() }
           : undefined;
         if (!canVerifyWhenFeedOpens) {
           this.buffered = [];
@@ -1083,36 +1088,46 @@ class SessionRuntime implements ChatRuntime {
           liveError = 'Live updates are paused while conversation data is unavailable.';
         }
       } else {
-        const prefix: ChangeNotice[] = [];
-        let coverageVerified = true;
-        while (true) {
-          prefix.push(...this.buffered.splice(0));
-          try {
-            if (!this.transport.proveCoverage(session, tail, prefix)) {
-              liveError = 'The live connection could not verify conversation updates.';
+        if (!feedReadyBeforeHistoryRead) {
+          // The subscription may have missed rows committed after the history
+          // snapshot. Apply any delivered notices, then catch up from the
+          // snapshot cursor before reporting a recovered feed.
+          lateFeedNeedsCatchUp = true;
+          while (this.buffered.length > 0) {
+            for (const notice of this.buffered.splice(0)) this.apply(notice);
+          }
+        } else {
+          const prefix: ChangeNotice[] = [];
+          let coverageVerified = true;
+          while (true) {
+            prefix.push(...this.buffered.splice(0));
+            try {
+              if (!this.transport.proveCoverage(session, tail, prefix)) {
+                liveError = 'The live connection could not verify conversation updates.';
+                coverageVerified = false;
+                break;
+              }
+            } catch (error) {
+              liveError = errorText(error);
               coverageVerified = false;
               break;
             }
-          } catch (error) {
-            liveError = errorText(error);
-            coverageVerified = false;
-            break;
+            if (this.buffered.length === 0) break;
           }
-          if (this.buffered.length === 0) break;
-        }
-        if (coverageVerified) {
-          for (const notice of prefix) this.apply(notice);
-          if (this.preserveRowsOnReconnect && !historyError) this.preserveRowsOnReconnect = false;
-        } else {
-          this.noteLiveFeedUnavailable();
-          this.connection?.close();
-          this.connection = undefined;
-          this.catchUpConnection = undefined;
-          this.connectionController?.abort();
-          this.connectionController = undefined;
-          this.connectionBinding = undefined;
-          this.buffered = [];
-          this.bufferedSession = undefined;
+          if (coverageVerified) {
+            for (const notice of prefix) this.apply(notice);
+            if (this.preserveRowsOnReconnect && !historyError) this.preserveRowsOnReconnect = false;
+          } else {
+            this.noteLiveFeedUnavailable();
+            this.connection?.close();
+            this.connection = undefined;
+            this.catchUpConnection = undefined;
+            this.connectionController?.abort();
+            this.connectionController = undefined;
+            this.connectionBinding = undefined;
+            this.buffered = [];
+            this.bufferedSession = undefined;
+          }
         }
       }
 
@@ -1143,7 +1158,7 @@ class SessionRuntime implements ChatRuntime {
         hasOlder, historyError: tail ? historyError : this.state.historyError,
         sessionError, sessionNotFound, conversationError, liveError,
       });
-      if (this.connection && !liveError) this.noteLiveFeedRecovered();
+      if (this.connection && !liveError && !lateFeedNeedsCatchUp) this.noteLiveFeedRecovered();
       else if (!this.connection && liveError) this.noteLiveFeedUnavailable();
       void this.startTools();
       for (const send of sends) {
@@ -1160,7 +1175,10 @@ class SessionRuntime implements ChatRuntime {
       // The feed can resolve after the snapshot has already made its connection
       // decision but just before this rebuild publishes. Verify the captured
       // feed prefix against this snapshot before scheduling a cursor catch-up.
-      if (this.connection && liveError === 'Live updates are connecting.') {
+      if (this.connection && lateFeedNeedsCatchUp) {
+        this.connectionForRebuild = this.connection;
+        this.catchUpAfterFeedOpens(this.connection);
+      } else if (this.connection && liveError === 'Live updates are connecting.') {
         if (this.completePendingFeedCoverage(this.connection)) liveError = undefined;
         else {
           this.connectionForRebuild = this.connection;

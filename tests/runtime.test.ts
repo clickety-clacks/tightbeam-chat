@@ -624,34 +624,34 @@ describe('framework-independent runtime', () => {
     liveReady.resolve();
     await vi.waitFor(() => expect(runtime.getSnapshot().liveError).toBeUndefined(), { timeout: 1500 });
     expect(runtime.getSnapshot().status).toBe('ready');
-    expect(transport.readSessionCalls).toBe(1);
+    expect(transport.readSessionCalls).toBe(2);
     expect(transport.readTailCalls).toBe(1);
-    expect(transport.readAfterCalls).toEqual([]);
+    expect(transport.readAfterCalls).toEqual(['after:8']);
     runtime.dispose();
   });
 
-  it('shows the snapshot before live readiness, then closes snapshot overlap and restores older history', async () => {
+  it('catches up rows committed before initial feed readiness and restores older history', async () => {
     const transport = new ControlledTransport();
     transport.readyGate = deferred<void>();
-    transport.tailHook = () => {
-      // A newer version delivered after the candidate snapshot is captured.
-      transport.emit(message(8, { rowVersion: 2, content: 'updated eight' }));
-      transport.reset();
-    };
     const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
     expect(transport.readTailCalls).toBe(1);
     expect(runtime.getSnapshot().records.map((row) => row.id)).toEqual(['t6', 'm7', 'm8']);
     expect(runtime.getSnapshot().liveError).toBe('Live updates are connecting.');
+
+    // The row lands after the history response but before subscription_ready;
+    // the server cannot replay it as a change frame, so cursor catch-up must.
+    transport.rows.push(message(9, { content: 'committed during initial feed open' }));
     transport.readyGate.resolve();
-    await vi.waitFor(() => expect((runtime.getSnapshot().records[2] as CanonicalMessage)?.content).toBe('updated eight'));
-    expect((runtime.getSnapshot().records[2] as CanonicalMessage).content).toBe('updated eight');
-    expect(transport.readSessionCalls).toBe(1);
+    await vi.waitFor(() => expect(runtime.getSnapshot().records.some((row) => row.id === 'm9')).toBe(true));
+    await vi.waitFor(() => expect(runtime.getSnapshot().liveError).toBeUndefined(), { timeout: 1500 });
+    expect(transport.readSessionCalls).toBe(2);
     expect(transport.readTailCalls).toBe(1);
+    expect(transport.readAfterCalls).toEqual(['after:8']);
     expect(runtime.getSnapshot().session?.raw.clearedThroughSeq).toBe(0);
     while (runtime.getSnapshot().hasOlder) await runtime.loadOlder();
     expect(runtime.getSnapshot().records.map((row) => row.id)).toEqual(
-      ['m1', 'm2', 't3', 'm4', 'm5', 't6', 'm7', 'm8']);
+      ['m1', 'm2', 't3', 'm4', 'm5', 't6', 'm7', 'm8', 'm9']);
     expect(transport.readOlderCalls).toBe(2);
     runtime.dispose();
   });
@@ -767,37 +767,6 @@ describe('framework-independent runtime', () => {
     expect(transport.readTailCalls).toBe(1);
     expect(transport.readAfterCalls).toEqual(['after:8']);
     expect(runtime.getSnapshot().records.at(-1)).toMatchObject({ id: 't9', kind: 'transition', transition: 'model' });
-    runtime.dispose();
-  });
-
-  it('verifies a late initial feed against the held snapshot without rereading conversation pages', async () => {
-    const transport = new ControlledTransport();
-    transport.readyGate = deferred<void>();
-    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
-    await runtime.rebuild();
-
-    expect(runtime.getSnapshot().status).toBe('ready');
-    expect(runtime.getSnapshot().liveError).toBe('Live updates are connecting.');
-    expect(transport.readSessionCalls).toBe(1);
-    expect(transport.readTailCalls).toBe(1);
-
-    const arriving = message(9);
-    const running: CanonicalTurn = { seq: 90, sessionKey, status: 'running', messageId: arriving.id,
-      origin: 'user:person', triggerSource: 'mike', raw: { rowVersion: 1 } };
-    transport.emit(arriving);
-    transport.callbacks?.onNotice({ operation: 'turn', turn: running });
-    expect(runtime.getSnapshot().records.some((row) => row.id === arriving.id)).toBe(true);
-    expect(runtime.getSnapshot().activeTurn?.turn.seq).toBe(running.seq);
-
-    transport.readyGate.resolve();
-    await vi.waitFor(() => {
-      expect(runtime.getSnapshot().records.some((row) => row.id === arriving.id)).toBe(true);
-      expect(runtime.getSnapshot().liveError).toBeUndefined();
-    });
-    expect(runtime.getSnapshot().activeTurn?.turn.seq).toBe(running.seq);
-    expect(transport.readSessionCalls).toBe(1);
-    expect(transport.readTailCalls).toBe(1);
-    expect(transport.readAfterCalls).toEqual([]);
     runtime.dispose();
   });
 
