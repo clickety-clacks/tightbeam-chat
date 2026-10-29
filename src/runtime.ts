@@ -1072,7 +1072,7 @@ class SessionRuntime implements ChatRuntime {
           this.connectionBinding = undefined;
         }
         const canVerifyWhenFeedOpens = !liveAttemptSettled && !liveError && !!session && !!tail;
-        this.pendingFeedCoverage = canVerifyWhenFeedOpens
+        this.pendingFeedCoverage = canVerifyWhenFeedOpens && session && tail
           ? { generation, session, page: tail, historyError, appliedNotices: new Set() }
           : undefined;
         if (!canVerifyWhenFeedOpens) {
