@@ -146,6 +146,13 @@ class SessionRuntime implements ChatRuntime {
   private clearBarrier = 0;
   private buffered: ChangeNotice[] = [];
   private bufferedSession: RuntimeState['session'];
+  private pendingFeedCoverage: {
+    generation: number;
+    session: SessionRecord;
+    page: ConversationPage;
+    historyError?: string;
+  } | undefined;
+  private catchUpConnection: ChangeConnection | undefined;
   private generation = 0;
   private disposed = false;
   private initializing = false;
@@ -559,6 +566,10 @@ class SessionRuntime implements ChatRuntime {
       return;
     }
     for (const captured of this.coverageReaders) captured.push(notice);
+    if (this.pendingFeedCoverage?.generation === generation && !this.connection) {
+      this.buffered.push(notice);
+      return;
+    }
     if (this.apply(notice)) this.publish({ records: recordsFrom(this.rows), ...this.activityStatePatch() });
   }
 
@@ -568,6 +579,8 @@ class SessionRuntime implements ChatRuntime {
     // A feed gap does not make the already shown transcript less trustworthy.
     // Keep it while REST and the replacement subscription catch up.
     this.preserveRowsOnReconnect = true;
+    this.pendingFeedCoverage = undefined;
+    this.catchUpConnection = undefined;
     this.turns.clear();
     this.liveActivityIds.clear();
     this.liveActivityEligibleIds.clear();
@@ -675,9 +688,12 @@ class SessionRuntime implements ChatRuntime {
   }
 
   private catchUpAfterFeedOpens(connection: ChangeConnection): void {
+    if (this.catchUpConnection === connection) return;
+    this.catchUpConnection = connection;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = undefined;
     this.retryDelayMs = 250;
+    if (this.rows.size > 0) this.preserveRowsOnReconnect = true;
 
     const rebuild = () => {
       if (this.disposed || this.connection !== connection) return;
@@ -692,9 +708,44 @@ class SessionRuntime implements ChatRuntime {
     rebuild();
   }
 
+  private completePendingFeedCoverage(connection: ChangeConnection): boolean {
+    const pending = this.pendingFeedCoverage;
+    if (!pending || pending.generation !== this.generation || this.connection !== connection) return false;
+
+    const notices = [...this.buffered];
+    const sessionCandidates = [pending.session, this.bufferedSession, this.state.session]
+      .filter((session): session is SessionRecord => session?.sessionKey === this.sessionKey);
+    const session = sessionCandidates.reduce((latest, candidate) =>
+      candidate.rowVersion > latest.rowVersion ? candidate : latest);
+    let covered = false;
+    try {
+      covered = this.transport.proveCoverage(session, pending.page, notices);
+    } catch {
+      covered = false;
+    }
+    if (!covered) return false;
+
+    this.pendingFeedCoverage = undefined;
+    this.buffered = [];
+    this.bufferedSession = undefined;
+    for (const notice of notices) this.apply(notice);
+    if (this.preserveRowsOnReconnect && !pending.historyError) this.preserveRowsOnReconnect = false;
+    this.retryDelayMs = 250;
+    const currentSession = this.state.session ?? session;
+    this.publish({
+      status: 'ready', liveError: undefined, records: recordsFrom(this.rows),
+      session: currentSession, agentDisplayName: currentSession.displayName,
+      ...this.activityStatePatch(),
+    });
+    this.noteLiveFeedRecovered();
+    return true;
+  }
+
   private failClosed(reason: string): void {
     this.generation++;
     this.initializing = false;
+    this.pendingFeedCoverage = undefined;
+    this.catchUpConnection = undefined;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = undefined;
     this.clearLiveFeedStatusTimers();
@@ -767,6 +818,7 @@ class SessionRuntime implements ChatRuntime {
       this.preserveRowsOnReconnect = true;
     }
     this.connectionForRebuild = undefined;
+    this.pendingFeedCoverage = undefined;
     this.generation++;
     const generation = this.generation;
     this.stopTools();
@@ -835,15 +887,17 @@ class SessionRuntime implements ChatRuntime {
           }
           this.connection = connection;
           if (!this.initializing) {
-            // Re-read with the now-ready stream to cover the gap between the
-            // first REST snapshot and subscription readiness. Do this promptly,
-            // even if repeated failed attempts had reached the maximum backoff.
-            this.connectionForRebuild = connection;
-            this.catchUpAfterFeedOpens(connection);
+            if (!this.completePendingFeedCoverage(connection)) {
+              this.connectionForRebuild = connection;
+              this.catchUpAfterFeedOpens(connection);
+            }
           }
         }).catch((error) => {
           liveAttemptSettled = true;
           if (!this.isCurrent(binding.generation) || connectionController.signal.aborted) return;
+          this.pendingFeedCoverage = undefined;
+          this.buffered = [];
+          this.bufferedSession = undefined;
           liveError = errorText(error);
           this.noteLiveFeedUnavailable();
           this.publish({ liveError });
@@ -1000,13 +1054,20 @@ class SessionRuntime implements ChatRuntime {
         }
         this.connection?.close();
         this.connection = undefined;
+        this.catchUpConnection = undefined;
         if (sessionNotFound) {
           this.connectionController?.abort();
           this.connectionController = undefined;
           this.connectionBinding = undefined;
         }
-        this.buffered = [];
-        this.bufferedSession = undefined;
+        const canVerifyWhenFeedOpens = !liveAttemptSettled && !liveError && !!session && !!tail;
+        this.pendingFeedCoverage = canVerifyWhenFeedOpens
+          ? { generation, session, page: tail, historyError }
+          : undefined;
+        if (!canVerifyWhenFeedOpens) {
+          this.buffered = [];
+          this.bufferedSession = undefined;
+        }
         if (!liveError && (sessionError || conversationError)) {
           liveError = 'Live updates are paused while conversation data is unavailable.';
         }
@@ -1035,6 +1096,7 @@ class SessionRuntime implements ChatRuntime {
           this.noteLiveFeedUnavailable();
           this.connection?.close();
           this.connection = undefined;
+          this.catchUpConnection = undefined;
           this.connectionController?.abort();
           this.connectionController = undefined;
           this.connectionBinding = undefined;
@@ -1077,15 +1139,22 @@ class SessionRuntime implements ChatRuntime {
         if (send.reconciled) this.notifyHostSend(send.clientMessageId, { kind: 'reconciled' });
       }
       // A synchronous callback may have buffered a notice during publication.
-      for (const notice of this.buffered.splice(0)) this.receive(notice, generation);
+      // Keep the prefix until a late-ready feed can verify it against this snapshot.
+      if (!this.pendingFeedCoverage) {
+        for (const notice of this.buffered.splice(0)) this.receive(notice, generation);
+      }
       if (((liveError && liveAttemptSettled) || sessionError || conversationError) && !sessionNotFound) {
         this.scheduleRebuild();
       }
       // The feed can resolve after the snapshot has already made its connection
-      // decision but just before this rebuild publishes. It still needs the
-      // immediate cursor catch-up used by the fully late-open path above.
+      // decision but just before this rebuild publishes. Verify the captured
+      // feed prefix against this snapshot before scheduling a cursor catch-up.
       if (this.connection && liveError === 'Live updates are connecting.') {
-        this.catchUpAfterFeedOpens(this.connection);
+        if (this.completePendingFeedCoverage(this.connection)) liveError = undefined;
+        else {
+          this.connectionForRebuild = this.connection;
+          this.catchUpAfterFeedOpens(this.connection);
+        }
       }
     } catch (error) {
       if (!this.isCurrent(generation) || controller.signal.aborted) return;
@@ -1410,6 +1479,8 @@ class SessionRuntime implements ChatRuntime {
     if (this.disposed) return;
     this.disposed = true;
     this.generation++;
+    this.pendingFeedCoverage = undefined;
+    this.catchUpConnection = undefined;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.clearLiveFeedStatusTimers();
     this.stopTools();

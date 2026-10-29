@@ -772,6 +772,27 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     }
   });
 
+  it('keeps host connection status aligned with the connected dot during a short feed blip', async () => {
+    const events: HostComposerEvent[] = [];
+    const transport = new HostComposerTransport();
+    installDeclaration(events);
+    const { runtimes, unmount } = openChat(transport, 'conversation-a');
+    const ready = await waitForReady(events, 'conversation-a');
+    await waitFor(() => expect(connectionEvents(events).some((event) =>
+      event.state === 'connected' && event.lifetimeId === ready.lifetimeId)).toBe(true), { timeout: 2500 });
+
+    const initialConnectionEvents = connectionEvents(events).map((event) => event.state);
+    act(() => transport.callbacks.get('conversation-a')?.onDoubt('brief feed gap'));
+    expect(runtimes[0].getSnapshot().liveConnectionState).toBe('connected');
+    expect(connectionEvents(events).map((event) => event.state)).toEqual(initialConnectionEvents);
+
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 500)); });
+    await waitFor(() => expect(runtimes[0].getSnapshot().liveError).toBeUndefined(), { timeout: 1500 });
+    expect(runtimes[0].getSnapshot().liveConnectionState).toBe('connected');
+    expect(connectionEvents(events).map((event) => event.state)).toEqual(initialConnectionEvents);
+    unmount();
+  });
+
   it('keeps the built-in composer live through reconnect and renders the human and agent rows without reload', async () => {
     const transport = new HostComposerTransport();
     transport.nextSend = async (submission) => {

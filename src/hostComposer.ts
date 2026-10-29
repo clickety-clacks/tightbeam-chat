@@ -98,6 +98,7 @@ function liveFeedState(state: RuntimeState): HostConnectionState {
   if (state.status === 'ready') {
     if (state.liveConnectionState === 'disconnected') return 'disconnected';
     if (state.liveConnectionState === 'connecting' || state.liveConnectionState === 'reconnecting') return 'reconnecting';
+    if (state.liveConnectionState === 'connected') return 'connected';
     return state.liveError ? 'reconnecting' : 'connected';
   }
   if (state.status === 'loading' || state.status === 'stale') return 'reconnecting';

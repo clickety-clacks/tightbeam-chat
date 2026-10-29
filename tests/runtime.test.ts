@@ -767,6 +767,30 @@ describe('framework-independent runtime', () => {
     runtime.dispose();
   });
 
+  it('verifies a late initial feed against the held snapshot without rereading conversation pages', async () => {
+    const transport = new ControlledTransport();
+    transport.readyGate = deferred<void>();
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await runtime.rebuild();
+
+    expect(runtime.getSnapshot().status).toBe('ready');
+    expect(runtime.getSnapshot().liveError).toBe('Live updates are connecting.');
+    expect(transport.readSessionCalls).toBe(1);
+    expect(transport.readTailCalls).toBe(1);
+
+    const arriving = message(9);
+    transport.emit(arriving);
+    expect(runtime.getSnapshot().records.some((row) => row.id === arriving.id)).toBe(false);
+
+    transport.readyGate.resolve();
+    await vi.waitFor(() => expect(runtime.getSnapshot().records.some((row) => row.id === arriving.id)).toBe(true));
+    expect(runtime.getSnapshot().liveError).toBeUndefined();
+    expect(transport.readSessionCalls).toBe(1);
+    expect(transport.readTailCalls).toBe(1);
+    expect(transport.readAfterCalls).toEqual([]);
+    runtime.dispose();
+  });
+
   it('rebuilds after a connection gap and restores older history across a reset', async () => {
     vi.useFakeTimers();
     const transport = new ControlledTransport();
