@@ -1353,7 +1353,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
       {pending.tail.map(renderItem)}
       {caption && state.activeTurn && <WorkingStateCaption caption={caption} turnSeq={state.activeTurn.turn.seq} />}
       {state.status === 'ready' && !state.conversationError && !state.sessionNotFound &&
-        state.records.length === 0 && localSends.length === 0 && !state.hasOlder &&
+        bubbles.length === 0 && localSends.length === 0 &&
         <p className="tb-chat-empty">No messages yet.</p>}
       </div>
     </div>

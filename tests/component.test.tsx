@@ -176,6 +176,24 @@ function expectVisibilityMix(log: HTMLElement, prefix: string): void {
 }
 
 describe('conversation surface', () => {
+  it('shows the plain empty state after loading when all loaded messages are hidden and older history remains', () => {
+    const sessionKey = 'hidden-loaded-history';
+    const hiddenReply = row(sessionKey, 'hidden-reply', 'A reply excluded by the loaded visibility evidence', {
+      seq: 1, sender: 'assistant-service', messageType: 'assistant', turnSeq: 1, turnIncludesHuman: false,
+    });
+    const runtime = new FakeRuntime(sessionKey, { status: 'loading', records: [hiddenReply], hasOlder: true });
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+
+    const log = screen.getByRole('log');
+    expect(within(log).queryByText('No messages yet.')).toBeNull();
+    expect(within(log).queryByText('A reply excluded by the loaded visibility evidence')).toBeNull();
+
+    act(() => runtime.update({ status: 'ready' }));
+
+    expect(within(log).getByText('No messages yet.')).toBeTruthy();
+    expect(within(log).queryByText('A reply excluded by the loaded visibility evidence')).toBeNull();
+  });
+
   it('renders late canonical rows in sequence order without dropping a human message', () => {
     const sessionKey = 'out-of-order-conversation';
     const first = row(sessionKey, 'first', 'First canonical message', {

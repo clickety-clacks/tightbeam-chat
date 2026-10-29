@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.53",
+    "items": [
+      {
+        "title": "Know when there are no visible messages",
+        "description": "After loading, Chat shows a plain empty state when the loaded history has no visible messages, even if older history remains available. Message visibility and access to older history stay the same."
+      }
+    ]
+  },
+  {
     "version": "v0.1.52",
     "items": [
       {
