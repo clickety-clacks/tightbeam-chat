@@ -833,6 +833,72 @@ describe('conversation surface', () => {
     }
   });
 
+  it('renders low-volume activity as typed pills while leaving wakes on their existing path', () => {
+    const sessionKey = 'activity-pill-layout';
+    const human = row(sessionKey, 'human', 'Question', {
+      seq: 1, role: 'user', sender: 'user:person', messageType: 'chat', turnSeq: 1,
+    });
+    const attest = row(sessionKey, 'attest-notice',
+      'Attest att_12345678-1111-4111-8111-123456789abc (completion) was filed on assignment asg_abcdef12-1111-4111-8111-123456789abc.', {
+        seq: 2, role: 'user', sender: 'process:events', messageType: 'substrate', turnSeq: 1,
+      });
+    const assignment = row(sessionKey, 'assignment-notice',
+      '[assignment: asg_23456789-1111-4111-8111-123456789abc]\nReview the next change', {
+        seq: 3, role: 'user', sender: 'process:events', messageType: 'substrate', turnSeq: 1,
+      });
+    const child = row(sessionKey, 'child-notice', [
+      'terminal-child-owner-notification',
+      'source_kind="attest"', 'source_token="att_12345678"', 'assignment_id="asg_abcdef12"',
+      'work_item_id=null', 'child_session_key="agent:helper s_34567890-1111-4111-8111-123456789abc"',
+      'outcome="completed"', 'terminal_at=12',
+    ].join('\n'), { seq: 4, role: 'user', sender: 'process:events', messageType: 'substrate', turnSeq: 1 });
+    const unknownWake = row(sessionKey, 'wake-notice', '[woke: fallback deadline]\nReview the result', {
+      seq: 5, role: 'user', sender: 'process:events', messageType: 'substrate', turnSeq: 1,
+    });
+    const agent = row(sessionKey, 'agent-note', 'A short update', {
+      seq: 6, role: 'user', sender: 'agent:helper', messageType: 'agent', turnSeq: 1,
+      raw: { source: 'fixture', id: 'agent-note', senderDisplayName: 'Review helper' },
+    });
+    const agentFollowup = row(sessionKey, 'agent-followup', 'The review is ready', {
+      seq: 7, role: 'user', sender: 'agent:helper', messageType: 'agent', turnSeq: 1,
+      raw: { source: 'fixture', id: 'agent-followup', senderDisplayName: 'Review helper' },
+    });
+    const answer = row(sessionKey, 'answer', 'Answer', {
+      seq: 8, sender: 'assistant-service', messageType: 'assistant', replyToMessageId: human.id, turnSeq: 1,
+    });
+    const runtime = new FakeRuntime(sessionKey, { records: [human, attest, assignment, child, unknownWake, agent, agentFollowup, answer],
+      provenanceAvailable: false });
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+
+    const log = screen.getByRole('log');
+    const pillFor = (text: string) => within(log).getByRole('note', { name: text });
+    const attestRow = pillFor('Attest: Filed completion on assignment asg_abcd, att_1234');
+    expect(attestRow.classList.contains('tb-chat-activity-pill-row')).toBe(true);
+    expect(attestRow.querySelector('.tb-chat-activity-pill')?.textContent).toContain('Attest');
+    expect(attestRow.textContent).toContain('Filed completion on assignment asg_abcd');
+
+    const assignmentRow = pillFor('Assignment: New · Review the next change, asg_2345');
+    expect(assignmentRow.querySelector('.tb-chat-activity-pill')?.textContent).toContain('Assignment');
+    expect(assignmentRow.textContent).toContain('New · Review the next change');
+
+    const childRow = pillFor('Assignment: Child finished, s_3456');
+    expect(childRow.textContent).toContain('Child finished');
+    expect(childRow.textContent).toContain('s_3456');
+
+    const agentFold = within(log).getByRole('button', { name: /Expand agent activity run, 2 entries/ });
+    expect(agentFold.classList.contains('tb-chat-activity-pill-toggle')).toBe(true);
+    expect(agentFold.querySelector('.tb-chat-activity-pill')?.textContent).toContain('Message');
+    expect(agentFold.textContent).toContain('The review is ready');
+    fireEvent.click(agentFold);
+    const agentRow = pillFor('Message: A short update, Review helper');
+    expect(agentRow.querySelector('.tb-chat-activity-pill')?.textContent).toContain('Message');
+    expect(agentRow.textContent).toContain('Review helper');
+
+    const wakeRow = pillFor('Substrate: [woke: fallback deadline]');
+    expect(wakeRow.classList.contains('tb-chat-activity-pill-row')).toBe(false);
+    expect(wakeRow.querySelector('.tb-chat-activity-pill')).toBeNull();
+  });
+
   it('folds activity to its newest line and preserves an away reader through growth, expansion, and collapse', () => {
     const sessionKey = 'activity-run-reading-position';
     const question = row(sessionKey, 'question-1', 'Question 1', {
