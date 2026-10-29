@@ -338,7 +338,7 @@ describe('conversation surface', () => {
       record: element.dataset.recordKey, run: element.dataset.activityRun, text: element.textContent,
     }));
     const liveActivity = visibleActivity();
-    expect(liveActivity.map(row => row.record)).toContain('message:batch-trigger:member:2');
+    expect(liveActivity.map(row => row.record)).toContain('member:batch-trigger:member:2');
     act(() => runtime.update({ liveActivityIds: [], liveActivityEligibleIds: [] }));
     expect(visibleActivity()).toEqual(liveActivity);
   });
