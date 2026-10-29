@@ -116,6 +116,7 @@ describe('direct browser entry', () => {
   });
 
   it('renders configured-root history when an empty forward catch-up page has no older cursor', async () => {
+    let releaseSubscription: (() => void) | undefined;
     const message = {
       id: 'm_root_1', seq: 1, sessionKey: defaultTarget.sessionKey, role: 'user',
       sender: `user:${defaultTarget.principalKey}`, deviceId: defaultTarget.deviceId,
@@ -137,8 +138,8 @@ describe('direct browser entry', () => {
       close() {}
       send(data: string) {
         const frame = JSON.parse(data);
-        if (frame.type === 'subscribe') {
-          this.onmessage?.({ data: JSON.stringify({ type: 'subscription_ready',
+        if (frame.type === 'subscribe' && frame.subscriptionId.startsWith('chat:')) {
+          releaseSubscription = () => this.onmessage?.({ data: JSON.stringify({ type: 'subscription_ready',
             subscriptionId: frame.subscriptionId }) } as MessageEvent);
         }
       }
@@ -170,13 +171,14 @@ describe('direct browser entry', () => {
     render(<RuntimeEntry />);
 
     expect(await screen.findByText('Configured root history')).toBeTruthy();
-    expect(screen.queryByRole('alert')).toBeNull();
     expect(fetchSpy.mock.calls[0][0]).toBe('/chat-config.json');
     const historyRequest = fetchSpy.mock.calls
       .map(([input]) => new URL(String(input), window.location.origin))
       .find((url) => url.pathname.endsWith('/messages'));
     expect(historyRequest?.pathname).toBe(`/__chat/api/sessions/${encodeURIComponent(defaultTarget.sessionKey)}/messages`);
     expect(historyRequest?.searchParams.get('tail')).toBe('true');
+    await waitFor(() => expect(releaseSubscription).toBeTypeOf('function'));
+    releaseSubscription?.();
     await waitFor(() => expect(fetchSpy.mock.calls.some(([input]) =>
       new URL(String(input), window.location.origin).searchParams.has('after'))).toBe(true));
     expect(screen.queryByRole('alert')).toBeNull();
