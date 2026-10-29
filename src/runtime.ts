@@ -120,8 +120,6 @@ class SessionRuntime implements ChatRuntime {
   private readonly identity: HostIdentity;
   private readonly rows = new Map<string, ConversationRecord>();
   private readonly tombstones = new Map<string, number>();
-  private readonly liveActivityIds = new Set<string>();
-  private readonly liveActivityEligibleIds = new Set<string>();
   private readonly liveRailDenials = new Map<string, LiveRailDenial>();
   private activityTurnStateAvailable = false;
   private railArrivalOrder = 0;
@@ -188,8 +186,7 @@ class SessionRuntime implements ChatRuntime {
       toolCalls: Object.freeze([]), toolCallIndex: undefined,
       hasOlder: false, loadingOlder: false, sends: Object.freeze([]), targetLabel: profile.label,
       targetGateway: transport.targetGateway, provenance: noProvenance, provenanceAvailable: false,
-      activityTurnStateAvailable: false, liveActivityIds: Object.freeze([]),
-      liveActivityEligibleIds: Object.freeze([]), liveRailDenials: Object.freeze([]),
+      activityTurnStateAvailable: false, liveRailDenials: Object.freeze([]),
     });
     void this.rebuild();
   }
@@ -222,12 +219,9 @@ class SessionRuntime implements ChatRuntime {
     for (const listener of this.listeners) listener();
   }
 
-  private activityStatePatch(): Pick<RuntimeState, 'activityTurnStateAvailable' | 'liveActivityIds' |
-    'liveActivityEligibleIds' | 'liveRailDenials'> {
+  private activityStatePatch(): Pick<RuntimeState, 'activityTurnStateAvailable' | 'liveRailDenials'> {
     return {
       activityTurnStateAvailable: this.activityTurnStateAvailable,
-      liveActivityIds: Object.freeze([...this.liveActivityIds]),
-      liveActivityEligibleIds: Object.freeze([...this.liveActivityEligibleIds]),
       liveRailDenials: Object.freeze([...this.liveRailDenials.values()]),
     };
   }
@@ -437,8 +431,6 @@ class SessionRuntime implements ChatRuntime {
     this.sendControllers.clear();
     this.rows.clear();
     this.tombstones.clear();
-    this.liveActivityIds.clear();
-    this.liveActivityEligibleIds.clear();
     this.liveRailDenials.clear();
     this.activityTurnStateAvailable = false;
     this.railArrivalOrder = 0;
@@ -491,12 +483,6 @@ class SessionRuntime implements ChatRuntime {
         const record = notice.record;
         if (record.sessionKey !== this.sessionKey) return false;
         this.put(record);
-        if (record.kind === 'message' && (record.messageType === 'substrate' || record.messageType === 'process' ||
-            record.messageType === 'agent' || /^(?:agent|process|remedy|session):/.test(record.sender ?? ''))) {
-          const firstLiveArrival = !this.liveActivityIds.has(record.id);
-          this.liveActivityIds.add(record.id);
-          if (firstLiveArrival && this.liveTailEligibleAtArrival()) this.liveActivityEligibleIds.add(record.id);
-        }
         return true;
       }
       case 'rail-denial': {
@@ -588,8 +574,6 @@ class SessionRuntime implements ChatRuntime {
     this.catchUpConnection = undefined;
     this.catchUpAfterCursor = undefined;
     this.turns.clear();
-    this.liveActivityIds.clear();
-    this.liveActivityEligibleIds.clear();
     this.activityTurnStateAvailable = false;
     this.connectionController?.abort();
     this.connectionController = undefined;
@@ -860,8 +844,6 @@ class SessionRuntime implements ChatRuntime {
     this.sendControllers.clear();
     this.rows.clear();
     this.tombstones.clear();
-    this.liveActivityIds.clear();
-    this.liveActivityEligibleIds.clear();
     this.liveRailDenials.clear();
     this.activityTurnStateAvailable = false;
     this.railArrivalOrder = 0;
@@ -931,8 +913,6 @@ class SessionRuntime implements ChatRuntime {
       this.connection = undefined;
       this.connectionBinding = undefined;
       this.turns.clear();
-      this.liveActivityIds.clear();
-      this.liveActivityEligibleIds.clear();
       this.activityTurnStateAvailable = false;
     }
     const controller = new AbortController();
