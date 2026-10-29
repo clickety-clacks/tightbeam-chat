@@ -1035,7 +1035,7 @@ describe('conversation surface', () => {
       const anchorBefore = layout.offset(anchor);
       expect(anchorBefore).toBeCloseTo(120, 0);
 
-      const toggle = within(viewport).getByRole('button', { name: /2 entries\. Latest: Quiet for 4 h/ });
+      const toggle = within(viewport).getByRole('button', { name: /2 entries\. Latest: Assignment: Quiet for 4 h/ });
       expect(toggle.textContent).toContain('×2');
       const fold = toggle.closest<HTMLElement>('.tb-chat-activity-run')!;
       const content = viewport.querySelector<HTMLElement>('.tb-chat-message-content')!;
@@ -1047,7 +1047,7 @@ describe('conversation surface', () => {
       records = [question, first, second, incoming, reply, laterQuestion, laterReply];
       act(() => runtime.update({ records }));
 
-      const updatedToggle = within(viewport).getByRole('button', { name: /3 entries\. Latest: Quiet for 5 h/ });
+      const updatedToggle = within(viewport).getByRole('button', { name: /3 entries\. Latest: Assignment: Quiet for 5 h/ });
       expect(updatedToggle.textContent).toContain('×3');
       expect(updatedToggle.textContent).toContain('Newest reminder');
       expect(updatedToggle.closest('.tb-chat-activity-run')).toBe(fold);
@@ -1101,12 +1101,12 @@ describe('conversation surface', () => {
       const anchorBefore = layout.offset(anchor);
       expect(anchorBefore).toBeCloseTo(120, 0);
 
-      let toggle = screen.getByRole('button', { name: /6 entries\. Latest: Quiet for .*Background activity 6/ });
+      let toggle = screen.getByRole('button', { name: /6 entries\. Latest: Assignment: Quiet for .*Background activity 6/ });
       expect(toggle.textContent).toContain('×6');
       expect(screen.queryByRole('button', { name: 'Show earlier activity' })).toBeNull();
       expect(toggle.getAttribute('aria-expanded')).toBe('false');
       fireEvent.click(toggle);
-      toggle = screen.getByRole('button', { name: /6 entries\. Latest: Quiet for .*Background activity 6/ });
+      toggle = screen.getByRole('button', { name: /6 entries\. Latest: Assignment: Quiet for .*Background activity 6/ });
       expect(toggle.getAttribute('aria-expanded')).toBe('true');
       expect(screen.getAllByRole('note').map(note => note.querySelector('.tb-chat-activity-pill-text')?.textContent)).toEqual([
         'Quiet for 1 min · Background activity 1', 'Quiet for 2 min · Background activity 2',
@@ -1123,12 +1123,12 @@ describe('conversation surface', () => {
       });
       records = [question, ...activity, incoming, firstReply, ...laterMessages];
       act(() => runtime.update({ records }));
-      toggle = screen.getByRole('button', { name: /7 entries\. Latest: Quiet for 7 min .*Background activity 7/ });
+      toggle = screen.getByRole('button', { name: /7 entries\. Latest: Assignment: Quiet for 7 min .*Background activity 7/ });
       expect(toggle.getAttribute('aria-expanded')).toBe('true');
       expect(layout.offset(anchor)).toBeCloseTo(anchorBefore, 0);
 
       fireEvent.click(toggle);
-      toggle = screen.getByRole('button', { name: /7 entries\. Latest: Quiet for 7 min .*Background activity 7/ });
+      toggle = screen.getByRole('button', { name: /7 entries\. Latest: Assignment: Quiet for 7 min .*Background activity 7/ });
       expect(toggle.getAttribute('aria-expanded')).toBe('false');
       expect(layout.offset(anchor)).toBeCloseTo(anchorBefore, 0);
 
@@ -1137,7 +1137,7 @@ describe('conversation surface', () => {
       });
       records = [question, ...activity, incoming, finalReminder, firstReply, ...laterMessages];
       act(() => runtime.update({ records }));
-      toggle = screen.getByRole('button', { name: /8 entries\. Latest: Quiet for 8 min .*Background activity 8/ });
+      toggle = screen.getByRole('button', { name: /8 entries\. Latest: Assignment: Quiet for 8 min .*Background activity 8/ });
       expect(toggle.getAttribute('aria-expanded')).toBe('false');
       expect(layout.offset(anchor)).toBeCloseTo(anchorBefore, 0);
     } finally {
@@ -1174,7 +1174,7 @@ describe('conversation surface', () => {
     expect(composer.value).toBe('Unsent draft');
     expect([composer.selectionStart, composer.selectionEnd]).toEqual([2, 6]);
 
-    const laterRun = screen.getByRole('button', { name: /4 entries\. Latest: Quiet for 8 min .*Background event 8/ });
+    const laterRun = screen.getByRole('button', { name: /4 entries\. Latest: Assignment: Quiet for 8 min .*Background event 8/ });
     fireEvent.click(laterRun);
     expect(laterRun.getAttribute('aria-expanded')).toBe('true');
     expect(screen.getAllByRole('note')).toHaveLength(4);
@@ -1185,7 +1185,7 @@ describe('conversation surface', () => {
     });
     const laterReminder = { ...later, content: 'Quiet for 9 min · A later background event' };
     act(() => runtime.update({ records: [prompt, ...activity, boundary, laterReminder, reply] }));
-    const updatedRun = screen.getByRole('button', { name: /5 entries\. Latest: Quiet for 9 min .*A later background event/ });
+    const updatedRun = screen.getByRole('button', { name: /5 entries\. Latest: Assignment: Quiet for 9 min .*A later background event/ });
     expect(updatedRun.getAttribute('aria-expanded')).toBe('true');
     expect(screen.getAllByRole('note')).toHaveLength(5);
     expect(screen.queryByRole('button', { name: 'Show earlier activity' })).toBeNull();
