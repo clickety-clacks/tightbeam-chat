@@ -252,6 +252,8 @@ export interface RuntimeState {
   readonly principalKey?: string;
   readonly sessionKey: string;
   readonly generation: number;
+  /** Advances when rebuild/catch-up data is published, so consumers can keep recovered rows still. */
+  readonly recoveryRevision?: number;
   readonly status: RuntimeStatus;
   readonly statusDetail?: string;
   /** Optional session details can fail without hiding the transcript or composer. */

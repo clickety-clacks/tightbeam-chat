@@ -852,17 +852,19 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   const focusExpandedRun = useRef<string | undefined>(undefined);
   const readingRevision = useMemo(() => ({ state, host, expandedRuns, expandedActivityRuns }),
     [state, host, expandedRuns, expandedActivityRuns]);
-  const previousArrivalContext = useRef<{ sessionKey: string; generation: number; ready: boolean } | null>(null);
+  const recoveryRevision = state.recoveryRevision ?? 0;
+  const previousArrivalContext = useRef<{ sessionKey: string; generation: number; recoveryRevision: number; ready: boolean } | null>(null);
   const priorArrivalContext = previousArrivalContext.current;
   const arrivalEligible = state.status === 'ready' && priorArrivalContext?.ready === true &&
-    priorArrivalContext.sessionKey === state.sessionKey && priorArrivalContext.generation === state.generation;
+    priorArrivalContext.sessionKey === state.sessionKey && priorArrivalContext.generation === state.generation &&
+    priorArrivalContext.recoveryRevision === recoveryRevision;
   const reading = useReadingPosition(state.status === 'ready', readingRevision, box =>
     state.loadingOlder || (!state.historyError && state.hasOlder && box.scrollTop < olderHistoryPrefetchDistance(box)),
-    arrivalEligible);
+    arrivalEligible, state.sessionKey);
   useLayoutEffect(() => {
     previousArrivalContext.current = { sessionKey: state.sessionKey, generation: state.generation,
-      ready: state.status === 'ready' };
-  }, [state.sessionKey, state.generation, state.status]);
+      recoveryRevision, ready: state.status === 'ready' };
+  }, [state.sessionKey, state.generation, state.status, recoveryRevision]);
   const { viewport } = reading;
   const observedHostSendIds = useRef<Set<string> | undefined>(undefined);
   if (!observedHostSendIds.current) {

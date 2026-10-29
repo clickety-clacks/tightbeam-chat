@@ -662,6 +662,7 @@ describe('framework-independent runtime', () => {
     expect(transport.readTailCalls).toBe(1);
     expect(runtime.getSnapshot().records.map((row) => row.id)).toEqual(['t6', 'm7', 'm8']);
     expect(runtime.getSnapshot().liveError).toBe('Live updates are connecting.');
+    const recoveryRevisionBeforeCatchUp = runtime.getSnapshot().recoveryRevision ?? 0;
 
     // The row lands after the history response but before subscription_ready;
     // the server cannot replay it as a change frame, so cursor catch-up must.
@@ -678,6 +679,7 @@ describe('framework-independent runtime', () => {
       hasOlder: false, hasNewer: false, coverage: 'controlled-fixture' });
     await vi.waitFor(() => expect(runtime.getSnapshot().records.some((row) => row.id === 'm9')).toBe(true));
     await vi.waitFor(() => expect(runtime.getSnapshot().liveError).toBeUndefined(), { timeout: 1500 });
+    expect(runtime.getSnapshot().recoveryRevision).toBe(recoveryRevisionBeforeCatchUp + 1);
     expect(transport.readSessionCalls).toBe(1);
     expect(transport.readTailCalls).toBe(1);
     expect(transport.readAfterCalls).toEqual(['after:8']);

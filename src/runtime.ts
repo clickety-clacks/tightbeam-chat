@@ -114,6 +114,7 @@ export function createTightbeamAdapter(transport: ChatTransport, profile: Target
 
 class SessionRuntime implements ChatRuntime {
   private state: RuntimeState;
+  private recoveryRevision = 0;
   private readonly turns = new Map<number, CanonicalTurn>();
   private readonly listeners = new Set<() => void>();
   private readonly identity: HostIdentity;
@@ -179,7 +180,7 @@ class SessionRuntime implements ChatRuntime {
   ) {
     this.identity = transport.currentIdentity();
     this.state = Object.freeze({
-      sessionKey, principalKey: this.identity.principalKey, generation: 0, status: 'loading',
+      sessionKey, principalKey: this.identity.principalKey, generation: 0, recoveryRevision: 0, status: 'loading',
       liveConnectionState: 'connecting', records: Object.freeze([]),
       // Tool calls are visible by default when supported. The existing toggle
       // stops both their optional stream and history reads while disabled.
@@ -778,7 +779,8 @@ class SessionRuntime implements ChatRuntime {
       this.catchUpAfterCursor = undefined;
       this.connectionForRebuild = connection;
       this.retryDelayMs = 250;
-      this.publish({ status: 'ready', liveError: undefined, records: recordsFrom(this.rows),
+      this.publish({ status: 'ready', liveError: undefined, recoveryRevision: ++this.recoveryRevision,
+        records: recordsFrom(this.rows),
         ...this.activityStatePatch() });
       this.noteLiveFeedRecovered();
     } catch (error) {
@@ -829,7 +831,8 @@ class SessionRuntime implements ChatRuntime {
     const currentSession = this.state.session && this.state.session.rowVersion > session.rowVersion
       ? this.state.session : session;
     this.publish({
-      status: 'ready', liveError: undefined, records: recordsFrom(this.rows),
+      status: 'ready', liveError: undefined, recoveryRevision: ++this.recoveryRevision,
+      records: recordsFrom(this.rows),
       session: currentSession, agentDisplayName: currentSession.displayName,
       ...this.activityStatePatch(),
     });
@@ -1239,7 +1242,8 @@ class SessionRuntime implements ChatRuntime {
         ? bufferedSession && bufferedSession.rowVersion > session.rowVersion ? bufferedSession : session
         : sessionNotFound ? undefined : this.state.session;
       this.publish({
-        status: 'ready', statusDetail: undefined, records: recordsFrom(this.rows), sends: Object.freeze(sends),
+        status: 'ready', statusDetail: undefined, recoveryRevision: ++this.recoveryRevision,
+        records: recordsFrom(this.rows), sends: Object.freeze(sends),
         session: currentSession, agentDisplayName: currentSession?.displayName ?? (sessionNotFound ? undefined : this.state.agentDisplayName),
         provenance: noProvenance, provenanceAvailable: false, activeTurn: undefined,
         ...this.activityStatePatch(),

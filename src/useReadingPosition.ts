@@ -26,6 +26,7 @@ export function useReadingPosition(
   revision: unknown,
   shouldKeepInitialSettle: (box: HTMLElement) => boolean = () => false,
   arrivalEligible = false,
+  arrivalScope?: string,
 ) {
   const viewport = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
@@ -38,6 +39,12 @@ export function useReadingPosition(
   const arrivalFrame = useRef<number | undefined>(undefined);
   const previousTailRow = useRef<HTMLElement | undefined>(undefined);
   const seenArrivalRows = useRef(new Set<string>());
+  const arrivalScopeRef = useRef(arrivalScope);
+  if (arrivalScopeRef.current !== arrivalScope) {
+    seenArrivalRows.current.clear();
+    previousTailRow.current = undefined;
+    arrivalScopeRef.current = arrivalScope;
+  }
   const arrivalAnimations = useRef(new Map<HTMLElement, Animation>());
   const arrivalEligibleRef = useRef(arrivalEligible);
   const userScrollIntent = useRef(false);
