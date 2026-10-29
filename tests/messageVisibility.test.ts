@@ -66,12 +66,12 @@ describe('principal-scoped message projection', () => {
     expect(forPerson[0].member?.content).toBe('Question one');
   });
 
-  it('does not expose canonical carrier contents as human rows with a different heading', () => {
+  it('keeps explicitly marked batch carriers outside human message projection', () => {
     const carrier = message('headed-carrier', { sender: 'process:notifications', isBatchCarrier: true,
       content: [
-        'Canonical notification envelope',
-        '[1] source=user:person sender=user:person cause=notice class=fyi', 'Question one', '',
-        '[2] source=agent:helper sender=agent:helper cause=notice class=fyi', 'A helper started', '',
+        '[from process:tightbeam]', '', '[batched notices: 2]', 'batchId=example-batch', 'release=example',
+        '[7] source=user:person sender=user:person cause=notice class=fyi', 'Question one', '',
+        '[8] source=agent:helper sender=agent:helper:main session cause=notice class=fyi', 'A helper started', '',
         'coalesced by notices',
       ].join('\n') });
 

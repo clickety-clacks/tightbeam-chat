@@ -222,17 +222,19 @@ describe('activity trail projection', () => {
     expect(build({ records: [hiddenReply], bubbles: [bubble(prompt, 'human')] }).messageItems).toEqual([]);
   });
 
-  it('projects agent members from a canonical carrier with a different first-line heading', () => {
+  it('projects running-index batch members with spaced senders and extends their fold across batches', () => {
     const prompt = message('prompt', 1, 'user:person', 'A question', { role: 'user' });
-    const carrier = message('carrier', 2, 'process:notifications', [
-      'Canonical notification envelope',
-      '[1] source=agent:helper sender=agent:helper cause=notice class=fyi', 'First helper update', '',
-      '[2] source=agent:helper sender=agent:helper cause=notice class=fyi', 'Latest helper update', '',
-      'coalesced by notices',
-    ].join('\n'), { isBatchCarrier: true, messageType: 'substrate' });
-    const reply = message('reply', 3, 'assistant-service', 'Answer', { role: 'assistant' });
+    const carrier = (id: string, seq: number, index: number, detail: string) => message(id, seq,
+      'process:notifications', [
+        '[from process:tightbeam]', '', '[batched notices: 1]', `batchId=${id}`, 'release=example',
+        `[${index}] source=agent:helper sender=agent:helper:main session cause=notice class=fyi`, detail, '',
+        'coalesced by notices',
+      ].join('\n'), { isBatchCarrier: true, messageType: 'substrate' });
+    const first = carrier('carrier-first', 2, 7, 'First helper update');
+    const second = carrier('carrier-second', 3, 8, 'Latest helper update');
+    const reply = message('reply', 4, 'assistant-service', 'Answer', { role: 'assistant' });
 
-    const plan = build({ records: [carrier], bubbles: [bubble(prompt, 'human'), bubble(reply, 'agent')] });
+    const plan = build({ records: [first, second], bubbles: [bubble(prompt, 'human'), bubble(reply, 'agent')] });
 
     expect(plan.messageItems).toHaveLength(1);
     const fold = plan.messageItems[0] as ActivityFold;
@@ -241,6 +243,9 @@ describe('activity trail projection', () => {
     } });
     expect(fold.lines.map(line => line.gist)).toEqual([
       'Another agent — First helper update', 'Another agent — Latest helper update',
+    ]);
+    expect(fold.lines.map(line => line.id)).toEqual([
+      'member:carrier-first:member:7', 'member:carrier-second:member:8',
     ]);
     expect(fold.lines.every(line => line.presentation !== undefined)).toBe(true);
   });

@@ -12,26 +12,33 @@ export interface ParsedBatchMember extends HumanMember {
 }
 
 const batchHeading = /^\[(\d+)\] source=([^\s]+) sender=([^\s]+) cause=([^\s]+) class=([^\s]+)$/;
+const canonicalBatchHeading = /^\[(\d+)\] source=([^\s]+) sender=(.+?) cause=([^\s]+) class=([^\s]+)$/;
+const batchCountHeading = /^\[batched notices: ([1-9]\d*)\]$/;
 
 /** Parse only the delivered, indexed notice-batch form; unknown wrappers stay hidden. */
 export function parseBatchMembers(record: CanonicalMessage): readonly ParsedBatchMember[] | undefined {
   const isCanonicalCarrier = record.isBatchCarrier === true;
   if (!isCanonicalCarrier && !record.sender?.startsWith('process:')) return undefined;
   const lines = record.content.split(/\r?\n/);
-  const countMatch = /^\[batched notices: ([1-9]\d*)\]$/.exec(lines[0] ?? '');
-  // Canonical carriers are explicitly identified by the conversation feed. Some
-  // delivered carriers use a different first-line label, so their member headers
-  // and coalescing footer provide the framing instead of the optional count line.
-  if (!countMatch && !isCanonicalCarrier) return undefined;
-  const declaredCount = countMatch ? Number(countMatch[1]) : undefined;
-  if (declaredCount !== undefined && !Number.isSafeInteger(declaredCount)) return undefined;
+  // Canonical carriers wrap the count line in a process preamble; unmarked
+  // records retain the older count-first format.
+  const countLineIndex = isCanonicalCarrier ? 2 : 0;
+  if (isCanonicalCarrier && (!/^\[from process:[^\]]+\]$/.test(lines[0] ?? '') || lines[1] !== '')) {
+    return undefined;
+  }
+  const countMatch = batchCountHeading.exec(lines[countLineIndex] ?? '');
+  if (!countMatch) return undefined;
+  const declaredCount = Number(countMatch[1]);
+  if (!Number.isSafeInteger(declaredCount)) return undefined;
 
   const headers = lines.flatMap((line, lineIndex) => {
-    const match = batchHeading.exec(line);
+    const match = (isCanonicalCarrier ? canonicalBatchHeading : batchHeading).exec(line);
     return match ? [{ lineIndex, index: Number(match[1]), sender: match[3] }] : [];
   });
-  if (!headers.length || (declaredCount !== undefined && headers.length !== declaredCount) ||
-    headers.some((header, index) => header.index !== index + 1)) return undefined;
+  const validIndexes = headers.every((header, index) => Number.isSafeInteger(header.index) && header.index > 0 &&
+    (isCanonicalCarrier ? index === 0 || header.index > headers[index - 1].index : header.index === index + 1));
+  if (!headers.length || headers.length !== declaredCount || !validIndexes ||
+    headers.some(header => header.lineIndex <= countLineIndex)) return undefined;
   const footerIndex = lines.reduce((found, line, index) => /^coalesced by\s+\S/.test(line) ? index : found, -1);
   if (footerIndex <= headers.at(-1)!.lineIndex) return undefined;
 
