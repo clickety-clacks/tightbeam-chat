@@ -293,8 +293,9 @@ describe('conversation surface', () => {
     expect(batchBubble?.classList.contains('tb-chat-bubble-human')).toBe(true);
     expect(batchBubble?.getAttribute('aria-label')).toBe('Message from You');
     expect(batchBubble?.textContent).not.toContain('coalesced by');
-    const substrateLine = within(log).getByRole('note', { name: 'Substrate: Substrate payload must stay hidden' });
+    const substrateLine = within(log).getByRole('note', { name: 'Activity: Substrate payload must stay hidden' });
     expect(substrateLine.classList.contains('tb-chat-activity-substrate')).toBe(true);
+    expect(substrateLine.querySelector('.tb-chat-activity-pill-slate')).toBeTruthy();
     expect(substrateLine.closest('article')?.classList.contains('tb-chat-bubble')).not.toBe(true);
     expect(batch.content).toBe(batchText);
     expect(within(log).getByText('Answer to the batch question')).toBeTruthy();
@@ -909,6 +910,7 @@ describe('conversation surface', () => {
     render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
 
     const log = screen.getByRole('log');
+    fireEvent.click(within(log).getByRole('button', { name: 'Show earlier activity' }));
     const pillFor = (text: string) => within(log).getByRole('note', { name: text });
     const attestRow = pillFor('Attest: Filed completion on assignment asg_abcd, att_1234');
     expect(attestRow.classList.contains('tb-chat-activity-pill-row')).toBe(true);

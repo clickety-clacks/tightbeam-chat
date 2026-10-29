@@ -51,7 +51,7 @@ describe('activity pill presentation', () => {
     expect(activityPillPresentation(source('substrate', '[woke: fact escalation-ruled/dr_12345678-1111-4111-8111-123456789abc]\nReview complete')))
       .toMatchObject({ label: 'Wake', tone: 'purple', text: 'Review complete', metadata: 'ruled dr_1234' });
     expect(activityPillPresentation(source('substrate', '[woke: fact an-unrecognized-fact/dr_12345678-1111-4111-8111-123456789abc]\nThe condition is ready')))
-      .toMatchObject({ label: 'Wake', metadata: 'condition met' });
+      .toMatchObject({ label: 'Wake', metadata: 'dr_1234' });
     expect(activityPillPresentation(source('substrate', 'Quiet for 3 h · Assignment summary')))
       .toMatchObject({ label: 'Assignment', tone: 'amber', icon: 'clock', text: 'Quiet for 3 h · Assignment summary' });
     expect(activityPillPresentation(source('substrate', 'Assignment asg_12345678-1111-4111-8111-123456789abc has had no recorded activity since 12')))

@@ -434,9 +434,14 @@ export function buildActivityTrail(input: {
     const flush = () => {
       if (currentLines.length > 1) {
         const summary = currentLines[currentLines.length - 1];
+        // A growing non-tool fold stays at its first row's timeline position
+        // while its displayed summary advances to the newest member. This
+        // keeps the row in the same indexed branch and lets React update it
+        // without replacing the row or moving its neighbors.
+        const anchor = currentLines[0].kind === 'tool' ? summary : currentLines[0];
         collapsedItems.push({ kind: 'fold', id: currentSegment!, runKey: currentLines[0].runKey,
           activityKind: currentLines[0].kind, lines: currentLines, summary,
-          anchorSeq: summary.anchorSeq, position: summary.position, sortTime: summary.sortTime });
+          anchorSeq: anchor.anchorSeq, position: anchor.position, sortTime: anchor.sortTime });
       } else if (currentLines.length === 1) collapsedItems.push(currentLines[0]);
       currentLines = [];
       currentSegment = undefined;
