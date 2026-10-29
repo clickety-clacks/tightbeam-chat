@@ -35,11 +35,11 @@ export function HostPage({ defaultTarget, configurationError }: {
 
   if (selected && adapter) return <TightbeamChat sessionKey={selected.sessionKey} adapter={adapter}
     configuredConversationHref={configuredConversationHref} />;
+  if (resolution.kind === 'configuration-error') return <main className="chat-entry-state">
+    <p className="tb-chat-empty">No conversation is available.</p>
+  </main>;
 
   return <main className="chat-entry-state">
-    {resolution.kind === 'configuration-error' && <p role="alert">
-      {configurationError ?? resolution.message}
-    </p>}
     {resolution.kind === 'invalid-selection' && <div role="alert">
       <p>{resolution.message}</p>
       {configurationError && <p>{configurationError}</p>}

@@ -114,13 +114,14 @@ describe('runtime-configured browser entry', () => {
     expect(screen.queryByText(linkedSession)).toBeNull();
   });
 
-  it('fails closed with a readable error when runtime configuration is invalid', async () => {
+  it('shows a plain empty state when runtime configuration has no usable target', async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({ gateway: 'file:///tmp' }));
     vi.stubGlobal('fetch', fetchMock);
 
     render(<RuntimeEntry />);
 
-    expect((await screen.findByRole('alert')).textContent).toBe('The Chat server returned an invalid default target.');
+    expect(await screen.findByText('No conversation is available.')).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
     expect(screen.queryByRole('button', { name: /sign in|pair/i })).toBeNull();
   });
 });

@@ -214,9 +214,10 @@ describe('direct browser entry', () => {
     expect(screen.queryByText(defaultTarget.sessionKey)).toBeNull();
   });
 
-  it('reports missing service configuration without placeholder setup instructions', () => {
+  it('shows a plain empty state when no configured conversation is available', () => {
     render(<HostPage defaultTarget={{}} />);
-    expect(screen.getByRole('alert').textContent).toContain('no valid default target configured');
+    expect(screen.getByText('No conversation is available.')).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
     expect(screen.queryByText(/SESSION_KEY|gateway\.example/)).toBeNull();
     expect(screen.queryByRole('button', { name: /sign in|pair/i })).toBeNull();
   });
