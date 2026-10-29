@@ -450,9 +450,22 @@ describe('framework-independent runtime', () => {
       const ready = deferred<{ close(): void }>();
       open.mockImplementation(async () => ready.promise);
       const latest = message(9);
-      transport.rows.push(latest);
+      const recoveryReadStarted = deferred<void>();
+      let recoveryReadSignaled = false;
+      transport.afterHook = (cursor) => {
+        const afterSeq = Number(cursor.slice('after:'.length));
+        const records = transport.rows.filter(row => row.seq > afterSeq).slice(0, 3);
+        if (open.mock.calls.length >= 9 && !recoveryReadSignaled) {
+          recoveryReadSignaled = true;
+          recoveryReadStarted.resolve();
+        }
+        return { records, oldestCursor: records[0]?.id ?? null,
+          newestCursor: records.length ? `after:${records.at(-1)!.seq}` : cursor,
+          hasNewer: false, hasOlder: false, coverage: 'controlled-fixture' };
+      };
       await vi.advanceTimersByTimeAsync(30_000);
       expect(open).toHaveBeenCalledTimes(9);
+      await recoveryReadStarted.promise;
       const readsBeforeOpen = transport.readAfterCalls.length;
       const caughtUp = deferred<void>();
       transport.afterHook = (cursor) => {
@@ -463,6 +476,7 @@ describe('framework-independent runtime', () => {
           newestCursor: records.length ? `after:${records.at(-1)!.seq}` : cursor,
           hasNewer: false, hasOlder: false, coverage: 'controlled-fixture' };
       };
+      transport.rows.push(latest);
       ready.resolve({ close: vi.fn() });
       await caughtUp.promise;
       for (let index = 0; index < 12; index++) await Promise.resolve();
