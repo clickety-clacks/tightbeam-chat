@@ -255,12 +255,14 @@ function belongsToOwnerConversation(candidate: Candidate, precedingBubble: Bubbl
   if (!candidate.historyBacked || !precedingBubble.ownerTurnScoped) return false;
   const betweenOwnerPromptAndReply = !!nextBubble && nextBubble.ownerTurnScoped &&
     nextBubble.bubble.side === 'agent' && nextBubble.spanKey === precedingBubble.spanKey;
-  // A follow-up owner prompt can arrive before the reply that closes the
-  // current gap. Keep the gap while that owner turn runs, and retain it after
-  // completion when an owner reply in the prompt's span is present in history.
+  // Several owner prompts can share an unanswered span. Keep its gaps when a
+  // later reply closes that same span. A gap before a new span's prompt is
+  // visible only while that owner turn is running; its later reply cannot
+  // retroactively claim activity from the already-closed prior span.
   const beforeOwnerFollowUp = !!nextBubble && nextBubble.ownerTurnScoped &&
     nextBubble.bubble.side === 'human' && !!nextBubble.spanKey &&
-    (activeOwnerTurnRunning || ownerReplySpanKeys.has(nextBubble.spanKey));
+    (activeOwnerTurnRunning || (nextBubble.spanKey === precedingBubble.spanKey &&
+      ownerReplySpanKeys.has(precedingBubble.spanKey ?? '')));
   const activeOwnerTail = !nextBubble && activeOwnerTurnRunning && !!precedingBubble.spanKey;
   return betweenOwnerPromptAndReply || beforeOwnerFollowUp || activeOwnerTail;
 }
