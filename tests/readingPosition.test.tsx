@@ -502,11 +502,16 @@ describe('conversation reading position', () => {
     cleanup();
 
     const activity = setup();
+    const activeOwnerTurn = createTurnProvenance({
+      seq: 20, sessionKey: 'reading', messageId: initialRows.at(-1)!.id, origin: 'user:person',
+      status: 'running', triggerSource: 'mike', raw: { seq: 20, origin: 'user:person' },
+    }, [initialRows.at(-1)!], 'person', 'person');
     const first = { ...message(20), id: 'activity-1', sender: 'process:events', messageType: 'substrate',
       content: 'Quiet for 3 h · Assignment Alpha' };
     const second = { ...message(21), id: 'activity-2', sender: 'process:events', messageType: 'substrate',
       content: 'Quiet for 4 h · Assignment Beta' };
-    act(() => activity.runtime.publish({ records: [...initialRows, first, second] }));
+    act(() => activity.runtime.publish({ activityTurnStateAvailable: true, activeTurn: activeOwnerTurn,
+      records: [...initialRows, first, second] }));
     const fold = document.querySelector('[data-activity-fold="true"]');
     expect(fold).toBeTruthy();
     expect(animate.mock.contexts.at(-1)).toBe(fold);
