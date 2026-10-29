@@ -2,12 +2,31 @@ import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 
 // About two lines of conversation text. Measure intent before content grows.
 const bottomThreshold = 64;
+const arrivalDuration = 240;
+const arrivalEasing = 'cubic-bezier(0.2, 0, 0, 1)';
 type Anchor = { key: string; top: number };
+
+function easeArrival(progress: number): number {
+  // Match cubic-bezier(0.2, 0, 0, 1) for the scroll and row entrance.
+  let low = 0;
+  let high = 1;
+  let parameter = progress;
+  for (let i = 0; i < 12; i++) {
+    const inverse = 1 - parameter;
+    const x = 3 * inverse * inverse * parameter * .2 + parameter * parameter * parameter;
+    if (x < progress) low = parameter;
+    else high = parameter;
+    parameter = (low + high) / 2;
+  }
+  return 3 * (1 - parameter) * parameter * parameter + parameter * parameter * parameter;
+}
 
 export function useReadingPosition(
   ready: boolean,
   revision: unknown,
   shouldKeepInitialSettle: (box: HTMLElement) => boolean = () => false,
+  arrivalEligible = false,
+  arrivalScope?: string,
 ) {
   const viewport = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
@@ -15,6 +34,19 @@ export function useReadingPosition(
   const following = useRef(true);
   const animating = useRef(false);
   const target = useRef<number | undefined>(undefined);
+  const arrivalStartTime = useRef<number | undefined>(undefined);
+  const arrivalStartTop = useRef(0);
+  const arrivalFrame = useRef<number | undefined>(undefined);
+  const previousTailRow = useRef<HTMLElement | undefined>(undefined);
+  const seenArrivalRows = useRef(new Set<string>());
+  const arrivalScopeRef = useRef(arrivalScope);
+  if (arrivalScopeRef.current !== arrivalScope) {
+    seenArrivalRows.current.clear();
+    previousTailRow.current = undefined;
+    arrivalScopeRef.current = arrivalScope;
+  }
+  const arrivalAnimations = useRef(new Map<HTMLElement, Animation>());
+  const arrivalEligibleRef = useRef(arrivalEligible);
   const userScrollIntent = useRef(false);
   const userScrollTimeout = useRef<number | undefined>(undefined);
   const lastKnownScrollTop = useRef<number | undefined>(undefined);
@@ -33,9 +65,89 @@ export function useReadingPosition(
   const latestReady = useRef(ready);
   const [showLatest, setShowLatest] = useState(false);
   latestReady.current = ready;
+  arrivalEligibleRef.current = arrivalEligible;
 
   const distance = (box: HTMLElement) => Math.max(0, box.scrollHeight - box.clientHeight - box.scrollTop);
   const viewportResized = (box: HTMLElement) => viewportHeight.current !== undefined && viewportHeight.current !== box.clientHeight;
+  const lastArrivalAnchorRow = () => {
+    let row = content.current?.lastElementChild ?? null;
+    while (row instanceof HTMLElement && (row.dataset.scrollKey === undefined ||
+      row.dataset.recordKey?.startsWith('local-'))) row = row.previousElementSibling;
+    return row instanceof HTMLElement && row.dataset.scrollKey !== undefined ? row : undefined;
+  };
+  const cancelArrivalAnimations = () => {
+    if (arrivalFrame.current !== undefined) window.cancelAnimationFrame(arrivalFrame.current);
+    arrivalFrame.current = undefined;
+    if (arrivalStartTime.current !== undefined) {
+      arrivalStartTime.current = undefined;
+      animating.current = false;
+      target.current = undefined;
+    }
+    for (const animation of arrivalAnimations.current.values()) animation.cancel();
+    arrivalAnimations.current.clear();
+  };
+  const animateArrivalRows = (rows: readonly HTMLElement[]) => {
+    for (const row of rows) {
+      if (arrivalAnimations.current.has(row)) continue;
+      const animation = row.animate?.([
+        { opacity: 0, transform: 'translateY(18px)' },
+        { opacity: 1, transform: 'translateY(0)' },
+      ], { duration: arrivalDuration, easing: arrivalEasing });
+      if (!animation) continue;
+      arrivalAnimations.current.set(row, animation);
+      animation.onfinish = () => {
+        if (arrivalAnimations.current.get(row) === animation) arrivalAnimations.current.delete(row);
+      };
+    }
+  };
+  const startArrivalMotion = (rows: readonly HTMLElement[]) => {
+    const box = viewport.current;
+    if (!box || !arrivalEligibleRef.current || !following.current || userScrollIntent.current ||
+      window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return false;
+
+    animateArrivalRows(rows);
+    if (arrivalStartTime.current !== undefined) {
+      target.current = Math.max(0, box.scrollHeight - box.clientHeight);
+      return true;
+    }
+
+    // An explicit return-to-latest may already have a native smooth scroll in
+    // flight. Take it over from its current position so the new row joins it.
+    if (animating.current) box.scrollTo({ top: box.scrollTop, behavior: 'instant' });
+    animating.current = false;
+    target.current = undefined;
+    const bottom = Math.max(0, box.scrollHeight - box.clientHeight);
+    const start = box.scrollTop;
+    if (Math.abs(bottom - start) < 1) return true;
+
+    const startedAt = performance.now();
+    arrivalStartTop.current = start;
+    arrivalStartTime.current = startedAt;
+    target.current = bottom;
+    animating.current = true;
+    const step = (now: number) => {
+      const currentBox = viewport.current;
+      if (!currentBox || arrivalStartTime.current === undefined) return;
+      const progress = Math.min(1, Math.max(0, (now - arrivalStartTime.current) / arrivalDuration));
+      const currentBottom = Math.max(0, currentBox.scrollHeight - currentBox.clientHeight);
+      target.current = currentBottom;
+      currentBox.scrollTop = arrivalStartTop.current + (currentBottom - arrivalStartTop.current) * easeArrival(progress);
+      if (progress >= 1) {
+        currentBox.scrollTop = currentBottom;
+        arrivalFrame.current = undefined;
+        arrivalStartTime.current = undefined;
+        target.current = undefined;
+        animating.current = false;
+        following.current = true;
+        setShowLatest(false);
+        capture();
+        return;
+      }
+      arrivalFrame.current = window.requestAnimationFrame(step);
+    };
+    arrivalFrame.current = window.requestAnimationFrame(step);
+    return true;
+  };
   const clearUserScrollIntent = () => {
     userScrollIntent.current = false;
     window.clearTimeout(userScrollTimeout.current);
@@ -46,6 +158,7 @@ export function useReadingPosition(
     userScrollTimeout.current = window.setTimeout(clearUserScrollIntent, 250);
   };
   const noteUserScroll = () => {
+    if (arrivalStartTime.current !== undefined || arrivalAnimations.current.size > 0) cancelArrivalAnimations();
     userScrollIntent.current = true;
     initialSettlePending.current = false;
     pendingLayoutRestoreOffsets.current = [];
@@ -129,6 +242,55 @@ export function useReadingPosition(
   const updateLayout = () => {
     const box = viewport.current;
     if (!box) return;
+    const previousTail = previousTailRow.current;
+    const currentTail = lastArrivalAnchorRow();
+    const canAnimateArrival = arrivalEligibleRef.current && following.current && !userScrollIntent.current &&
+      !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    const appendedRows: HTMLElement[] = [];
+    const contentElement = content.current;
+    if (initialized.current && contentElement) {
+      const retainedTail = previousTail && registeredRows.current.get(previousTail.dataset.scrollKey ?? '');
+      const afterPreviousTail = retainedTail?.parentElement === contentElement
+        ? retainedTail.nextElementSibling
+        : previousTail ? null : contentElement.firstElementChild;
+      for (let row = afterPreviousTail; row; row = row.nextElementSibling) {
+        if (!(row instanceof HTMLElement) || row.dataset.scrollKey === undefined ||
+          seenArrivalRows.current.has(row.dataset.scrollKey)) continue;
+        seenArrivalRows.current.add(row.dataset.scrollKey);
+        if (canAnimateArrival) appendedRows.push(row);
+      }
+    } else if (contentElement) {
+      // Initial content and catch-up are already on screen; remember them so a
+      // later layout change cannot replay their arrival.
+      for (const row of contentElement.children) {
+        if (row instanceof HTMLElement && row.dataset.scrollKey !== undefined) {
+          seenArrivalRows.current.add(row.dataset.scrollKey);
+        }
+      }
+    }
+    previousTailRow.current = currentTail;
+    for (const [row, animation] of arrivalAnimations.current) {
+      if (row.parentElement === content.current) continue;
+      animation.cancel();
+      arrivalAnimations.current.delete(row);
+    }
+
+    if (arrivalStartTime.current !== undefined &&
+      (!following.current || userScrollIntent.current || !arrivalEligibleRef.current)) {
+      cancelArrivalAnimations();
+    }
+    if (appendedRows.length && startArrivalMotion(appendedRows)) {
+      capture();
+      return;
+    }
+    // Retarget the existing frame loop when content changes during an arrival.
+    // A burst never queues another scroll animation or snaps to the new end.
+    if (arrivalStartTime.current !== undefined) {
+      target.current = Math.max(0, box.scrollHeight - box.clientHeight);
+      capture();
+      return;
+    }
+
     const resized = viewportResized(box);
     const bottom = Math.max(0, box.scrollHeight - box.clientHeight);
     const layoutChanged = lastKnownBottom.current !== undefined && Math.abs(bottom - lastKnownBottom.current) > .5;
@@ -138,13 +300,13 @@ export function useReadingPosition(
       initialized.current = true;
       initialSettlePending.current = true;
       if (!moveToLatest(false) && !shouldKeepInitialSettleRef.current(box)) initialSettlePending.current = false;
-    } else if (following.current) {
+    } else if (following.current && !userScrollIntent.current) {
       // Layout corrections run before paint. Smooth-scrolling here exposes a
       // temporary gap whenever a caption, message, or optional tool row changes
       // height while the reader is following the latest content.
       const moved = moveToLatest(false);
       if (initialSettlePending.current && !moved && !shouldKeepInitialSettleRef.current(box)) initialSettlePending.current = false;
-    } else {
+    } else if (!following.current) {
       // Content changes should preserve the reader's current anchor rather
       // than compete with a still-running manual smooth scroll.
       if (animating.current) {
@@ -199,6 +361,7 @@ export function useReadingPosition(
     return () => {
       observer?.disconnect();
       box?.removeEventListener('scrollend', clearUserScrollIntent);
+      cancelArrivalAnimations();
       clearUserScrollIntent();
     };
   }, []);
@@ -207,19 +370,27 @@ export function useReadingPosition(
     const box = viewport.current;
     if (!box) return;
     const readerInitiated = userScrollIntent.current;
+    if (readerInitiated && arrivalStartTime.current !== undefined) cancelArrivalAnimations();
     if (readerInitiated) deferUserScrollIntentExpiry();
     const resized = viewportResized(box);
     const bottom = Math.max(0, box.scrollHeight - box.clientHeight);
     const layoutChanged = lastKnownBottom.current !== undefined && Math.abs(bottom - lastKnownBottom.current) > .5;
     if (following.current && !readerInitiated && (resized || layoutChanged)) recordLayoutRestoreOffsets(box);
     const currentDistance = distance(box);
-    const reachedTarget = target.current !== undefined && Math.abs(box.scrollTop - target.current) < 1;
+    const reachedTarget = arrivalStartTime.current === undefined && target.current !== undefined &&
+      Math.abs(box.scrollTop - target.current) < 1;
     if (reachedTarget) {
       animating.current = false;
       target.current = undefined;
       if (!shouldKeepInitialSettleRef.current(box)) initialSettlePending.current = false;
     } else if (!animating.current) {
       target.current = undefined;
+    }
+    if (arrivalStartTime.current !== undefined && !readerInitiated) {
+      target.current = bottom;
+      setShowLatest(false);
+      capture();
+      return;
     }
     // Intermediate animation frames are not a user's decision to leave the tail.
     if (resized) {
@@ -256,9 +427,13 @@ export function useReadingPosition(
     const box = viewport.current;
     if (!box) return;
     const resized = viewportResized(box);
-    if (animating.current) box.scrollTo({ top: box.scrollTop, behavior: 'instant' });
-    animating.current = false;
-    target.current = undefined;
+    if (arrivalStartTime.current !== undefined || arrivalAnimations.current.size > 0) {
+      cancelArrivalAnimations();
+    } else {
+      if (animating.current) box.scrollTo({ top: box.scrollTop, behavior: 'instant' });
+      animating.current = false;
+      target.current = undefined;
+    }
     if (resized) {
       if (following.current) moveToLatest(false);
     } else if (userScrollIntent.current) {
@@ -276,9 +451,13 @@ export function useReadingPosition(
     const box = viewport.current;
     if (!box) return;
     initialSettlePending.current = false;
-    if (animating.current) box.scrollTo({ top: box.scrollTop, behavior: 'instant' });
-    animating.current = false;
-    target.current = undefined;
+    if (arrivalStartTime.current !== undefined || arrivalAnimations.current.size > 0) {
+      cancelArrivalAnimations();
+    } else {
+      if (animating.current) box.scrollTo({ top: box.scrollTop, behavior: 'instant' });
+      animating.current = false;
+      target.current = undefined;
+    }
     // Expanding an activity run is not reader intent to leave the latest edge.
     setShowLatest(distance(box) > bottomThreshold);
     capture();
@@ -286,6 +465,7 @@ export function useReadingPosition(
   const scrollBy = (amount: number) => {
     const box = viewport.current;
     if (!box || !Number.isFinite(amount) || amount === 0) return;
+    if (arrivalStartTime.current !== undefined || arrivalAnimations.current.size > 0) cancelArrivalAnimations();
     initialSettlePending.current = false;
     const bottom = Math.max(0, box.scrollHeight - box.clientHeight);
     // Repeat events build on the pending destination, so held keys continue
@@ -315,12 +495,39 @@ export function useReadingPosition(
   const scrollToLatest = () => {
     const box = viewport.current;
     if (!box) return;
+    if (arrivalStartTime.current !== undefined || arrivalAnimations.current.size > 0) cancelArrivalAnimations();
     initialSettlePending.current = false;
     // Keep keyboard navigation somewhere useful after its button disappears.
     if (document.activeElement?.getAttribute('data-scroll-latest') === 'true') box.focus({ preventScroll: true });
     moveToLatest(true);
   };
 
+  const arriveOwnMessages = (scrollKeys: readonly string[]) => {
+    const box = viewport.current;
+    if (!box) return;
+    initialSettlePending.current = false;
+    // A deliberate send from older history keeps the existing behavior of
+    // bringing that prompt into view. Arrival motion itself belongs to rows
+    // appended while the reader was already following the bottom.
+    if (!following.current) {
+      moveToLatest(true);
+      capture();
+      return;
+    }
+    following.current = true;
+    setShowLatest(false);
+    const rows = scrollKeys.flatMap(key => {
+      const row = registeredRows.current.get(key);
+      return row ? [row] : [];
+    });
+    if (rows.length && startArrivalMotion(rows)) {
+      capture();
+      return;
+    }
+    moveToLatest(true);
+    capture();
+  };
+
   return { viewport, content, registerRow, showLatest, onScroll, interrupt, holdPosition,
-    preserveVisiblePosition, scrollBy, scrollToLatest, noteUserScroll, reconcileViewportLayout };
+    preserveVisiblePosition, scrollBy, scrollToLatest, arriveOwnMessages, noteUserScroll, reconcileViewportLayout };
 }

@@ -451,32 +451,18 @@ function StatusIcon({ state }: { state: RuntimeState }) {
   return <span className={`tb-chat-status-dot tb-chat-status-${status}`} aria-hidden="true" />;
 }
 
-const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, registerRow, scrollKey: scrollKeyOverride, arriving }: {
+const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, registerRow, scrollKey: scrollKeyOverride }: {
   bubble: Bubble;
   renderMessage?: TightbeamChatProps['renderMessage'];
   agentName: string;
   registerRow: (key: string, element: HTMLElement | null) => void;
   scrollKey?: string;
-  arriving: boolean;
 }) {
   const { record } = bubble;
   const scrollKey = scrollKeyOverride ?? (bubble.derived ? bubble.key : record.id);
-  const row = useRef<HTMLElement | null>(null);
-  const entrance = useRef<Animation | undefined>(undefined);
   const rowRef = useCallback((element: HTMLElement | null) => {
-    row.current = element;
     registerRow(scrollKey, element);
   }, [registerRow, scrollKey]);
-  useLayoutEffect(() => {
-    if (!arriving || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
-    // Opacity leaves row geometry intact for reading anchors and smooth follow.
-    const animation = row.current?.animate?.([{ opacity: 0 }, { opacity: 1 }], {
-      duration: 180, easing: 'ease-out',
-    });
-    entrance.current = animation;
-    if (animation) animation.onfinish = () => { entrance.current = undefined; };
-  }, [arriving]);
-  useLayoutEffect(() => () => entrance.current?.cancel(), []);
   const time = localTimestamp(record.createdAt);
   const context: RenderContext = {
     sessionKey: record.sessionKey,
@@ -516,7 +502,7 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, re
     before.sender === after.sender && before.displayContent === after.displayContent &&
     before.derived === after.derived && sameMember && previous.renderMessage === next.renderMessage &&
     previous.agentName === next.agentName && previous.registerRow === next.registerRow &&
-    previous.scrollKey === next.scrollKey && previous.arriving === next.arriving;
+    previous.scrollKey === next.scrollKey;
 });
 
 interface ComposerHandle {
@@ -866,8 +852,19 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   const focusExpandedRun = useRef<string | undefined>(undefined);
   const readingRevision = useMemo(() => ({ state, host, expandedRuns, expandedActivityRuns }),
     [state, host, expandedRuns, expandedActivityRuns]);
+  const recoveryRevision = state.recoveryRevision ?? 0;
+  const previousArrivalContext = useRef<{ sessionKey: string; generation: number; recoveryRevision: number; ready: boolean } | null>(null);
+  const priorArrivalContext = previousArrivalContext.current;
+  const arrivalEligible = state.status === 'ready' && priorArrivalContext?.ready === true &&
+    priorArrivalContext.sessionKey === state.sessionKey && priorArrivalContext.generation === state.generation &&
+    priorArrivalContext.recoveryRevision === recoveryRevision;
   const reading = useReadingPosition(state.status === 'ready', readingRevision, box =>
-    state.loadingOlder || (!state.historyError && state.hasOlder && box.scrollTop < olderHistoryPrefetchDistance(box)));
+    state.loadingOlder || (!state.historyError && state.hasOlder && box.scrollTop < olderHistoryPrefetchDistance(box)),
+    arrivalEligible, state.sessionKey);
+  useLayoutEffect(() => {
+    previousArrivalContext.current = { sessionKey: state.sessionKey, generation: state.generation,
+      recoveryRevision, ready: state.status === 'ready' };
+  }, [state.sessionKey, state.generation, state.status, recoveryRevision]);
   const { viewport } = reading;
   const observedHostSendIds = useRef<Set<string> | undefined>(undefined);
   if (!observedHostSendIds.current) {
@@ -875,17 +872,17 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
       .filter((send) => send.hostSend)
       .map((send) => send.clientMessageId));
   }
-  const scrollToLatestRef = useRef(reading.scrollToLatest);
-  scrollToLatestRef.current = reading.scrollToLatest;
+  const arriveOwnMessagesRef = useRef(reading.arriveOwnMessages);
+  arriveOwnMessagesRef.current = reading.arriveOwnMessages;
   useLayoutEffect(() => {
     const observed = observedHostSendIds.current!;
-    let submitted = false;
+    const submitted: string[] = [];
     for (const send of state.sends) {
       if (!send.hostSend || observed.has(send.clientMessageId)) continue;
       observed.add(send.clientMessageId);
-      submitted = true;
+      submitted.push(send.clientMessageId);
     }
-    if (submitted) scrollToLatestRef.current();
+    if (submitted.length) arriveOwnMessagesRef.current(submitted.map(id => `local-${id}`));
   }, [state.sends]);
   const root = useRef<HTMLElement>(null);
   const composer = useRef<ComposerHandle>(null);
@@ -1055,18 +1052,6 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     transitions, activityPlan.messageItems), [activityPlan.messageItems, bubbles, canonicalSends, localSends, sendsByIdentity, transitions]);
   const transcript = useMemo(() => transcriptIndex(timeline), [timeline]);
   const pending = useMemo(() => placePending(transcript.placements, tools), [transcript, tools]);
-  const previousTail = useRef<{ generation: number; ready: boolean; seq: number } | null>(null);
-  // Canonical records are ordered by sequence. A high-water mark excludes old
-  // pages and newly revealed filtered rows without scanning retained history.
-  const tailSeq = state.records.at(-1)?.seq ?? -1;
-  const arrivalFloor = useMemo(() => {
-    const prior = previousTail.current;
-    return state.status === 'ready' && prior?.ready && prior.generation === state.generation ? prior.seq : Infinity;
-  }, [state.records, state.status, state.generation]);
-  useLayoutEffect(() => {
-    previousTail.current = { generation: state.generation, ready: state.status === 'ready',
-      seq: Math.max(previousTail.current?.seq ?? -1, tailSeq) };
-  }, [state.generation, state.status, tailSeq]);
   useEffect(() => {
     if (host.settingsRequestRevision <= handledSettingsRevision.current) return;
     handledSettingsRevision.current = host.settingsRequestRevision;
@@ -1296,7 +1281,6 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
         if (item.kind === 'bubble') {
           const { bubble } = item;
           return <RecordRow key={bubble.key} bubble={bubble} scrollKey={item.scrollKey}
-            arriving={bubble.record.seq > arrivalFloor && !item.scrollKey}
             renderMessage={renderMessage} agentName={agentName} registerRow={reading.registerRow} />;
         }
         const { send } = item;
@@ -1336,7 +1320,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
         </article>;
   }, [activityPlan.toolItems, expandedActivityRuns, expandedToolCalls, toggleActivityRun, setToolCallExpanded,
     reading.registerRow, reading.preserveVisiblePosition, expandRun,
-    arrivalFloor, renderMessage, agentName, state.status, runtime]);
+    renderMessage, agentName, state.status, runtime]);
 
   return <section ref={root} className={`tb-chat ${host.composerHidden ? 'tb-chat-host-composer-hidden' : ''} ${className || ''}`}
     aria-label={agentName ? `${agentName} conversation` : 'Conversation'}>

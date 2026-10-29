@@ -6,7 +6,7 @@ import { TightbeamChat, type TightbeamChatProps } from '../src/TightbeamChat';
 import { useReadingPosition } from '../src/useReadingPosition';
 import { createTightbeamAdapter } from '../src/runtime';
 import { createTurnProvenance } from '../src/provenance';
-import { type ChatTransport, type TargetProfile } from '../src/types';
+import { type ChangeCallbacks, type ChatTransport, type ConversationPage, type TargetProfile } from '../src/types';
 import type { CanonicalMessage, ChatRuntime, ConversationRecord, RuntimeState } from '../src/types';
 
 class ReadingRuntime implements ChatRuntime {
@@ -30,9 +30,52 @@ class ReadingRuntime implements ChatRuntime {
   markHostSendUncertain = () => {};
   dispose = () => {};
 }
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(done => { resolve = done; });
+  return { promise, resolve };
+}
 const message = (id: number): CanonicalMessage => ({ kind: 'message', id: `message-${id}`, sessionKey: 'reading',
   seq: id, rowVersion: 1, role: 'user', sender: 'user:person', content: `Message ${id}`, raw: {} });
 const initialRows = Array.from({ length: 20 }, (_, i) => message(i));
+function createReconnectFixture() {
+  const profile: TargetProfile = { identity: 'fixture:arrival-recovery', label: 'Recovery', capabilities: {
+    newestTail: true, stableOlderCursor: true, retainedHistoryAcrossResets: true,
+    orderedTransitions: true, snapshotCoverage: true, versionedNotices: true,
+    humanSendDedupe: true, authoritativeTurnProvenance: true,
+  } };
+  const catchUpStarted = deferred<void>();
+  const catchUpResponse = deferred<ConversationPage>();
+  const recoveryRows = Array.from({ length: 20 }, (_, index) => message(index + 1));
+  let callbacks: ChangeCallbacks | undefined;
+  let connectionCount = 0;
+  const transport: ChatTransport = {
+    currentIdentity: () => ({ principalKey: 'person', deviceId: 'browser' }),
+    inspectTarget: async () => profile,
+    openChanges: async (_key, nextCallbacks) => {
+      connectionCount++;
+      callbacks = nextCallbacks;
+      return { close: () => { if (callbacks === nextCallbacks) callbacks = undefined; } };
+    },
+    readSession: async (sessionKey) => ({ sessionKey, rowVersion: 1, displayName: 'Assistant', raw: {} }),
+    readTail: async () => ({ records: recoveryRows, oldestCursor: recoveryRows[0].id,
+      newestCursor: 'after:20', hasOlder: false, hasNewer: false, coverage: 'reading' }),
+    readAfter: async (_key, after) => {
+      expect(after).toBe('after:20');
+      catchUpStarted.resolve();
+      return catchUpResponse.promise;
+    },
+    readOlder: async (sessionKey) => ({ records: [], oldestCursor: null, hasOlder: false, coverage: sessionKey }),
+    proveCoverage: () => true,
+    sendHuman: async () => ({ outcome: 'accepted' }),
+  };
+  const runtime = createTightbeamAdapter(transport, profile).open('reading');
+  return {
+    runtime, catchUpStarted, catchUpResponse, recoveryRows,
+    get callbacks() { return callbacks; },
+    get connectionCount() { return connectionCount; },
+  };
+}
 let scrollTop = 0;
 let clampScrollTopOnRead = false;
 let viewportHeight = 300;
@@ -43,6 +86,8 @@ let animate: ReturnType<typeof vi.fn>;
 let modelActiveCaptionSlot = false;
 const resizeCallbacks = new Set<ResizeObserverCallback>();
 const resizeTargets = new Map<ResizeObserverCallback, Set<Element>>();
+const animationFrames = new Map<number, { callback: FrameRequestCallback; timer: ReturnType<typeof setTimeout> }>();
+let nextAnimationFrameId = 0;
 const rows = () => [...document.querySelectorAll<HTMLElement>('article[data-record-key]')];
 const styleSource = readFileSync(resolve(process.cwd(), 'src/style.css'), 'utf8');
 const hasStableActiveCaptionSlot =
@@ -86,6 +131,8 @@ beforeEach(() => {
   lateLayoutGrowth = 0;
   reducedMotion = false;
   modelActiveCaptionSlot = false;
+  animationFrames.clear();
+  nextAnimationFrameId = 0;
   animate = vi.fn(() => ({ cancel: vi.fn(), onfinish: null }));
   Object.defineProperty(HTMLElement.prototype, 'animate', { configurable: true, value: animate });
   vi.stubGlobal('matchMedia', () => ({ matches: reducedMotion }));
@@ -125,11 +172,42 @@ beforeEach(() => {
     // Keep smooth motion pending so intermediate scroll frames can be exercised.
     if (options.behavior !== 'smooth') this.scrollTop = options.top ?? 0;
   });
-  vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => setTimeout(() => callback(0), 0));
-  vi.stubGlobal('cancelAnimationFrame', clearTimeout);
+  vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+    const id = ++nextAnimationFrameId;
+    const timer = setTimeout(() => {
+      if (!animationFrames.delete(id)) return;
+      callback(performance.now());
+    }, 0);
+    animationFrames.set(id, { callback, timer });
+    return id;
+  });
+  vi.stubGlobal('cancelAnimationFrame', (id: number) => {
+    const frame = animationFrames.get(id);
+    if (!frame) return;
+    clearTimeout(frame.timer);
+    animationFrames.delete(id);
+  });
   Object.defineProperty(HTMLElement.prototype, 'scrollTo', { configurable: true, value: scrollTo });
 });
-afterEach(() => { vi.useRealTimers(); cleanup(); restoreVisualViewport?.(); vi.restoreAllMocks(); vi.unstubAllGlobals(); resizeCallbacks.clear(); resizeTargets.clear(); });
+afterEach(() => {
+  vi.useRealTimers();
+  cleanup();
+  for (const frame of animationFrames.values()) clearTimeout(frame.timer);
+  animationFrames.clear();
+  restoreVisualViewport?.();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  resizeCallbacks.clear();
+  resizeTargets.clear();
+});
+
+function advanceNextFrame(at: number) {
+  const first = animationFrames.entries().next().value as [number, { callback: FrameRequestCallback; timer: ReturnType<typeof setTimeout> }] | undefined;
+  if (!first) throw new Error('No animation frame is pending.');
+  clearTimeout(first[1].timer);
+  animationFrames.delete(first[0]);
+  act(() => first[1].callback(at));
+}
 
 function setup(records = initialRows, renderMessage?: TightbeamChatProps['renderMessage']) {
   const runtime = new ReadingRuntime();
@@ -264,6 +342,185 @@ describe('conversation reading position', () => {
     expect(input.value).toBe('repeat without editing');
   });
 
+  it('glides to the exact latest bottom once for a burst of appended rows', () => {
+    const { runtime, box } = setup();
+    const startingBottom = box.scrollHeight - box.clientHeight;
+    scrollTo.mockClear();
+
+    act(() => runtime.publish({ records: [...initialRows, message(20)] }));
+    const firstRow = screen.getByText('Message 20').closest('article');
+    expect(animate).toHaveBeenCalledTimes(1);
+    expect(animate.mock.contexts[0]).toBe(firstRow);
+    expect(animate).toHaveBeenCalledWith([
+      { opacity: 0, transform: 'translateY(18px)' },
+      { opacity: 1, transform: 'translateY(0)' },
+    ], { duration: 240, easing: 'cubic-bezier(0.2, 0, 0, 1)' });
+    expect(box.scrollTop).toBe(startingBottom);
+    expect(scrollTo).not.toHaveBeenCalled();
+    expect(animationFrames.size).toBe(1);
+
+    act(() => runtime.publish({ records: [...runtime.state.records, message(21)] }));
+    expect(animate).toHaveBeenCalledTimes(2);
+    expect(animationFrames.size).toBe(1);
+
+    advanceNextFrame(performance.now() + 300);
+
+    expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight);
+    expect(animationFrames.size).toBe(0);
+    expect(scrollTo).not.toHaveBeenCalled();
+  });
+
+  it('keeps a following reader still for real reconnect catch-up, then animates the next live row', async () => {
+    const fixture = createReconnectFixture();
+    const { runtime, catchUpStarted, catchUpResponse, recoveryRows } = fixture;
+    render(<TightbeamChat sessionKey="reading" adapter={{ open: () => runtime }} />);
+
+    try {
+      await screen.findByText('Message 19');
+      await waitFor(() => expect(fixture.callbacks).toBeDefined());
+      const box = screen.getByRole('log');
+      expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight);
+      expect(animate).not.toHaveBeenCalled();
+      scrollTo.mockClear();
+
+      const lostConnection = fixture.callbacks!;
+      act(() => lostConnection.onDoubt('The live feed lost coverage.'));
+      let rebuilding!: Promise<void>;
+      act(() => { rebuilding = runtime.rebuild(); });
+      await catchUpStarted.promise;
+      expect(fixture.connectionCount).toBe(2);
+      expect(runtime.getSnapshot().status).toBe('ready');
+      expect(runtime.getSnapshot().records).toHaveLength(recoveryRows.length);
+
+      await act(async () => {
+        catchUpResponse.resolve({ records: [message(21)], oldestCursor: 'message-21',
+          newestCursor: 'after:21', hasOlder: false, hasNewer: false, coverage: 'reading' });
+        await rebuilding;
+      });
+
+      expect(screen.getByText('Message 21')).toBeTruthy();
+      expect(animate).not.toHaveBeenCalled();
+      expect(scrollTo).toHaveBeenLastCalledWith({ top: box.scrollHeight - box.clientHeight, behavior: 'instant' });
+      expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight);
+
+      const liveCallbacks = fixture.callbacks!;
+      vi.spyOn(performance, 'now').mockReturnValue(1000);
+      act(() => liveCallbacks.onNotice({ operation: 'upsert', record: message(22) }));
+      expect(animate).toHaveBeenCalledTimes(1);
+      expect(animate.mock.contexts[0]).toBe(screen.getByText('Message 22').closest('article'));
+      advanceNextFrame(1300);
+      expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight);
+    } finally {
+      runtime.dispose();
+    }
+  });
+
+  it('keeps a scrolled-up reader anchored through real reconnect catch-up', async () => {
+    const fixture = createReconnectFixture();
+    const { runtime, catchUpStarted, catchUpResponse, recoveryRows } = fixture;
+    render(<TightbeamChat sessionKey="reading" adapter={{ open: () => runtime }} />);
+
+    try {
+      await screen.findByText('Message 19');
+      await waitFor(() => expect(fixture.callbacks).toBeDefined());
+      const box = screen.getByRole('log');
+      expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight);
+      readAt(box, 460);
+      const chosenPosition = box.scrollTop;
+      expect(chosenPosition).toBe(460);
+      expect(animate).not.toHaveBeenCalled();
+      scrollTo.mockClear();
+
+      const lostConnection = fixture.callbacks!;
+      act(() => lostConnection.onDoubt('The live feed lost coverage.'));
+      let rebuilding!: Promise<void>;
+      act(() => { rebuilding = runtime.rebuild(); });
+      await catchUpStarted.promise;
+      expect(fixture.connectionCount).toBe(2);
+      expect(runtime.getSnapshot().status).toBe('ready');
+      expect(runtime.getSnapshot().records).toHaveLength(recoveryRows.length);
+
+      await act(async () => {
+        catchUpResponse.resolve({ records: [message(21)], oldestCursor: 'message-21',
+          newestCursor: 'after:21', hasOlder: false, hasNewer: false, coverage: 'reading' });
+        await rebuilding;
+      });
+
+      expect(screen.getByText('Message 21')).toBeTruthy();
+      expect(animate).not.toHaveBeenCalled();
+      expect(animationFrames.size).toBe(0);
+      expect(scrollTo).not.toHaveBeenCalled();
+      expect(box.scrollTop).toBe(chosenPosition);
+    } finally {
+      runtime.dispose();
+    }
+  });
+
+  it('lets reader scrolling cancel an arrival and preserve the chosen place', () => {
+    const { runtime, box } = setup();
+    const startingBottom = box.scrollHeight - box.clientHeight;
+    const startedAt = 1000;
+    vi.spyOn(performance, 'now').mockReturnValue(startedAt);
+    scrollTo.mockClear();
+
+    act(() => runtime.publish({ records: [...initialRows, message(20)] }));
+    advanceNextFrame(startedAt + 80);
+    const movingPosition = box.scrollTop;
+    expect(movingPosition).toBeGreaterThan(startingBottom);
+    expect(movingPosition).toBeLessThan(box.scrollHeight - box.clientHeight);
+
+    fireEvent.wheel(box, { deltaY: -40 });
+    const chosenPosition = Math.max(0, box.scrollTop - 40);
+    box.scrollTop = chosenPosition;
+    fireEvent.scroll(box);
+    expect(animate.mock.results[0].value.cancel).toHaveBeenCalledTimes(1);
+    expect(animationFrames.size).toBe(0);
+
+    act(() => runtime.publish({ records: [...runtime.state.records, message(21)] }));
+
+    expect(box.scrollTop).toBe(chosenPosition);
+    expect(animate).toHaveBeenCalledTimes(1);
+    expect(scrollTo).not.toHaveBeenCalled();
+  });
+
+  it('animates an own message while following and a new activity fold, but leaves a growing fold in place', () => {
+    const own = setup();
+    const send = { sessionKey: 'reading', clientMessageId: 'c_arrival', deviceId: 'browser', content: 'My new message',
+      status: 'accepted' as const, submittedAt: '2026-10-23T00:00:00Z', reconciled: false,
+      hostSend: { lifetimeId: 'host-bridge', attempt: 1 } };
+    const ownStartingBottom = own.box.scrollHeight - own.box.clientHeight;
+    act(() => own.runtime.publish({ sends: [send] }));
+    const ownRow = document.querySelector('[data-scroll-key="local-c_arrival"]');
+    expect(ownRow).toBeTruthy();
+    expect(animate.mock.contexts[0]).toBe(ownRow);
+    expect(own.box.scrollTop).toBe(ownStartingBottom);
+    advanceNextFrame(performance.now() + 300);
+    expect(own.box.scrollTop).toBe(own.box.scrollHeight - own.box.clientHeight);
+    act(() => own.runtime.publish({ records: [...initialRows, { ...message(20), content: send.content,
+      deviceId: send.deviceId, clientMessageId: send.clientMessageId }] }));
+    expect(animate).toHaveBeenCalledTimes(1);
+    cleanup();
+
+    const activity = setup();
+    const first = { ...message(20), id: 'activity-1', sender: 'process:events', messageType: 'substrate',
+      content: 'Quiet for 3 h · Assignment Alpha' };
+    const second = { ...message(21), id: 'activity-2', sender: 'process:events', messageType: 'substrate',
+      content: 'Quiet for 4 h · Assignment Beta' };
+    act(() => activity.runtime.publish({ records: [...initialRows, first, second], liveActivityIds: [first.id, second.id] }));
+    const fold = document.querySelector('[data-activity-fold="true"]');
+    expect(fold).toBeTruthy();
+    expect(animate.mock.contexts.at(-1)).toBe(fold);
+    expect(animate).toHaveBeenCalledTimes(2);
+
+    const third = { ...message(22), id: 'activity-3', sender: 'process:events', messageType: 'substrate',
+      content: 'Quiet for 5 h · Assignment Gamma' };
+    act(() => activity.runtime.publish({ records: [...initialRows, first, second, third],
+      liveActivityIds: [first.id, second.id, third.id] }));
+    expect(document.querySelector<HTMLElement>('[data-activity-fold="true"]')?.dataset.scrollKey)
+      .toBe((fold as HTMLElement).dataset.scrollKey);
+    expect(animate).toHaveBeenCalledTimes(2);
+  });
+
   it('stops bottom-follow while scrolling up and resumes it after a page reaches the bottom', () => {
     const { runtime, box, input } = setup();
     const bottom = box.scrollHeight - box.clientHeight;
@@ -290,7 +547,8 @@ describe('conversation reading position', () => {
 
     scrollTo.mockClear();
     act(() => runtime.publish({ records: [...runtime.state.records, message(21)] }));
-    expect(scrollTo).toHaveBeenLastCalledWith({ top: box.scrollHeight - box.clientHeight, behavior: 'instant' });
+    expect(scrollTo).not.toHaveBeenCalled();
+    expect(animate).toHaveBeenCalledTimes(1);
   });
 
   it('releases a finished entrance without replaying it on ordinary rerenders', () => {
@@ -314,36 +572,35 @@ describe('conversation reading position', () => {
     expect(animation.cancel).toHaveBeenCalledTimes(1);
   });
 
-  it('fades new rows without moving an away reader or replaying history, refresh, and Sent rows', () => {
+  it('keeps an away reader still without entrance motion for appended rows, history, refresh, and Sent rows', () => {
     const { runtime, box } = setup();
     expect(animate).not.toHaveBeenCalled();
     readAt(box, 600);
     act(() => runtime.publish({ records: [...initialRows, message(20)] }));
-    expect(animate).toHaveBeenCalledTimes(1);
-    expect(animate.mock.contexts[0]).toBe(screen.getByText('Message 20').closest('article'));
-    expect(animate).toHaveBeenCalledWith([{ opacity: 0 }, { opacity: 1 }], { duration: 180, easing: 'ease-out' });
+    expect(animate).not.toHaveBeenCalled();
     expect(box.scrollTop).toBe(600);
     expect(scrollTo).not.toHaveBeenCalled();
     act(() => runtime.publish({ records: [message(-1), ...runtime.state.records] }));
     act(() => runtime.publish({ records: runtime.state.records.map(row => ({ ...row, rowVersion: 2 })) }));
-    expect(animate).toHaveBeenCalledTimes(1);
+    expect(animate).not.toHaveBeenCalled();
     act(() => runtime.publish({ status: 'stale', generation: 2 }));
     act(() => runtime.publish({ status: 'ready', records: [...runtime.state.records, message(21)] }));
-    expect(animate).toHaveBeenCalledTimes(1);
+    expect(animate).not.toHaveBeenCalled();
     const send = { sessionKey: 'reading', clientMessageId: 'c_sent', deviceId: 'browser', content: 'A sent message',
       status: 'accepted' as const, submittedAt: '2026-10-23T00:00:00Z', reconciled: false };
     act(() => runtime.publish({ sends: [send] }));
     act(() => runtime.publish({ records: [...runtime.state.records, { ...message(22),
       content: send.content, deviceId: send.deviceId, clientMessageId: send.clientMessageId }] }));
-    expect(animate).toHaveBeenCalledTimes(1);
+    expect(animate).not.toHaveBeenCalled();
     expect(document.querySelector('[data-scroll-key="local-c_sent"]')).toBeTruthy();
     act(() => runtime.publish({ records: [...runtime.state.records, message(23)] }));
-    expect(animate).toHaveBeenCalledTimes(2);
+    expect(animate).not.toHaveBeenCalled();
   });
 
   it('animates only canonical human members of a new batch while keeping the latest content in the same frame', () => {
     const { runtime, box } = setup();
     readAt(box, box.scrollHeight - box.clientHeight - 40);
+    scrollTo.mockClear();
     const carrier = { ...message(20), isBatchCarrier: true, sender: 'process:notifications', messageType: 'substrate', content: [
       '[batched notices: 2]', '', '[430] source=human sender=user:person cause=notice class=fyi',
       'A new human message', '', '[431] source=other sender=agent:helper session-key cause=notice class=fyi',
@@ -353,7 +610,7 @@ describe('conversation reading position', () => {
     expect(animate).toHaveBeenCalledTimes(1);
     expect(animate.mock.contexts[0]).toBe(screen.getByText('A new human message').closest('article'));
     expect(screen.queryByText('Nonhuman notice')).toBeNull();
-    expect(scrollTo).toHaveBeenLastCalledWith({ top: box.scrollHeight - box.clientHeight, behavior: 'instant' });
+    expect(scrollTo).not.toHaveBeenCalled();
     act(() => runtime.publish({ records: [...initialRows, { ...carrier, rowVersion: 2 }, { ...message(21), content: 'A new human message' }] }));
     expect(animate).toHaveBeenCalledTimes(1);
   });
@@ -517,7 +774,7 @@ describe('conversation reading position', () => {
     for (let i = 0; i < 4; i++) {
       for (const { patch, expectedRenderedRows } of [
         { patch: { status: i % 2 ? 'ready' as const : 'stale' as const },
-          expectedRenderedRows: i >= 2 && i % 2 === 0 ? [`message-${count + i - 1}`] : [] },
+          expectedRenderedRows: [] },
         { patch: { sends: [] }, expectedRenderedRows: [] },
         { patch: { records: [...runtime.state.records, message(count + i)] },
           expectedRenderedRows: [`message-${count + i}`] },
@@ -556,13 +813,19 @@ describe('conversation reading position', () => {
   it.each([0, 40])('keeps the latest content in the same frame when previously %i pixels from bottom', gap => {
     const { runtime, box } = setup();
     readAt(box, box.scrollHeight - box.clientHeight - gap);
+    const startingBottom = box.scrollHeight - box.clientHeight;
+    scrollTo.mockClear();
     act(() => runtime.publish({ records: [...initialRows, message(20), message(21)] }));
-    expect(scrollTo).toHaveBeenLastCalledWith({ top: box.scrollHeight - box.clientHeight, behavior: 'instant' });
-    // Animation frames are not mistaken for the user leaving the bottom.
-    box.scrollTop += 20;
-    fireEvent.scroll(box);
+    expect(animate).toHaveBeenCalledTimes(2);
+    expect(box.scrollTop).toBe(startingBottom - gap);
+    expect(scrollTo).not.toHaveBeenCalled();
+    expect(animationFrames.size).toBe(1);
     act(() => runtime.publish({ records: [...runtime.state.records, message(22)] }));
-    expect(scrollTo).toHaveBeenLastCalledWith({ top: box.scrollHeight - box.clientHeight, behavior: 'instant' });
+    expect(animate).toHaveBeenCalledTimes(3);
+    expect(animationFrames.size).toBe(1);
+    advanceNextFrame(performance.now() + 300);
+    expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight);
+    expect(scrollTo).not.toHaveBeenCalled();
     expect(screen.queryByRole('button', { name: 'Scroll to latest messages' })).toBeNull();
   });
 
@@ -980,7 +1243,7 @@ describe('conversation reading position', () => {
     expect(box.scrollTop).toBe(0);
   });
 
-  it('respects reduced motion when explicitly returning to the bottom', () => {
+  it('uses instant placement without row animation for reduced-motion arrivals', () => {
     reducedMotion = true;
     const { runtime, box } = setup();
     act(() => runtime.publish({ records: [...initialRows, message(20)] }));

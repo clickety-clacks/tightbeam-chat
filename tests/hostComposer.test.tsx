@@ -270,6 +270,7 @@ describe('versioned host composer seam on the real adapter and surface', () => {
       fireEvent.wheel(log, { deltaY: -100 });
       fireEvent.scroll(log);
       await screen.findByRole('button', { name: 'Scroll to latest messages' });
+      fireEvent(log, new Event('scrollend'));
 
       act(() => commandEntry()({ type: 'send', lifetimeId: ready.lifetimeId,
         sessionKey: ready.sessionKey, correlationId: correlation, content: 'Native host prompt' }));
@@ -291,7 +292,7 @@ describe('versioned host composer seam on the real adapter and surface', () => {
       };
       act(() => transport.emit(reply));
       await screen.findByText('Reply after the native prompt');
-      expect(layout.scrollTop).toBe(log.scrollHeight - log.clientHeight);
+      await waitFor(() => expect(layout.scrollTop).toBe(log.scrollHeight - log.clientHeight), { timeout: 1500 });
     } finally {
       layout.restore();
     }
