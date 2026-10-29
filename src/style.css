@@ -518,7 +518,6 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.tb-chat-activity-line:not(details)::before { content: '•'; margin-inline-end: .45rem; }
 .tb-chat-activity-agent { color: var(--tb-chat-fjord); }
 .tb-chat-activity-substrate { color: var(--tb-chat-muted); }
 .tb-chat-activity-tool { color: var(--tb-chat-teak); }
@@ -532,7 +531,6 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
   margin: .1rem 0;
   overflow: hidden;
 }
-.tb-chat-activity-pill-row::before { content: none; }
 .tb-chat-activity-pill {
   box-sizing: border-box;
   display: inline-flex;

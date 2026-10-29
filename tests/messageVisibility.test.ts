@@ -59,6 +59,7 @@ describe('principal-scoped message projection', () => {
     expect(forPerson[0]).toMatchObject({ side: 'human', senderLabel: 'You', member: {
       sender: 'user:person', content: 'Question one',
     } });
+    expect(forPerson[0].member).not.toHaveProperty('source');
 
     const forVisitor = projectMessages([batch, answer], 'visitor', 'person').messages;
     expect(forVisitor.map(row => row.key)).toEqual(['process-batch:member:1']);

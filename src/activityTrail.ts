@@ -1,5 +1,5 @@
 import type { CanonicalMessage, CanonicalTransition, LiveRailDenial, ToolCallRecord } from './types';
-import { parseBatchMembers, type HumanMember } from './messageVisibility';
+import { parseBatchMembers, type HumanMember, type ParsedBatchMember } from './messageVisibility';
 import { activityPillPresentation, type ActivityPillPresentation } from './activityPresentation';
 
 export type ActivityKind = 'tool' | 'agent' | 'substrate' | 'rail';
@@ -8,6 +8,8 @@ export interface ActivityBubble {
   readonly key: string;
   readonly record: CanonicalMessage;
   readonly side: 'human' | 'agent';
+  /** Whether message visibility already placed this bubble in the owner's conversation. */
+  readonly ownerScoped: boolean;
   readonly member?: HumanMember;
 }
 
@@ -25,6 +27,8 @@ export interface ActivityLine {
   readonly position: Position;
   readonly gist: string;
   readonly accessibleText: string;
+  /** Original retained content is only exposed through the pill's hover title. */
+  readonly originalContent?: string;
   readonly presentation?: ActivityPillPresentation;
   readonly sortTime?: number;
   readonly call?: ToolCallRecord;
@@ -63,8 +67,9 @@ export interface ActivityTrailPlan {
 }
 
 interface Candidate extends ActivityLine {
-  readonly live: boolean;
-  readonly liveTailEligibleAtArrival: boolean;
+  readonly liveTailEligibleAtArrival?: boolean;
+  /** Message activity is backed by the canonical conversation history. */
+  readonly historyBacked: boolean;
   /** Present only when the source text identifies a stable foldable notice kind. */
   readonly semanticFoldKind?: string;
 }
@@ -73,6 +78,10 @@ interface BubbleEvent extends Position {
   readonly kind: 'bubble';
   readonly bubble: ActivityBubble;
   readonly spanKey?: string;
+  readonly spanRootMessageId?: string;
+  readonly ownerTurnSeq?: number;
+  /** True only when this bubble belongs to a span opened by the selected user's prompt. */
+  readonly ownerTurnScoped: boolean;
 }
 
 interface CandidateEvent extends Position {
@@ -108,9 +117,15 @@ const rawDisplayName = (message: CanonicalMessage): string | undefined => {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 };
 
-function messageCandidate(message: CanonicalMessage, live: boolean, liveTailEligibleAtArrival: boolean): Candidate | undefined {
+const rawSource = (message: CanonicalMessage): string | undefined =>
+  typeof message.raw.source === 'string' ? message.raw.source : undefined;
+
+function messageCandidate(message: CanonicalMessage): Candidate | undefined {
   const sender = message.sender ?? '';
   if (message.isBatchCarrier || /^\[batched notices:/i.test(message.content)) return undefined;
+  // An assistant-role reply from another session has no owner-visible parent
+  // relation. Keep it out of activity pills just as the bubble projection does.
+  if (message.role === 'assistant' && /^(?:agent|session):/.test(sender)) return undefined;
   const id = `message:${message.id}`;
   const parsedTime = message.createdAt ? Date.parse(message.createdAt) : Number.NaN;
   const sortTime = Number.isFinite(parsedTime) ? parsedTime : undefined;
@@ -123,16 +138,19 @@ function messageCandidate(message: CanonicalMessage, live: boolean, liveTailElig
     return { id, kind: 'rail', runKey: '', anchorSeq: message.seq,
       position: { sequence: message.seq, phase: 1, order: 0 }, gist,
       accessibleText: `Rail: ${gist}`,
+      originalContent: message.content,
       presentation: activityPillPresentation({ kind: 'rail', gist, content: message.content, sender }),
-      sortTime, live, liveTailEligibleAtArrival };
+      sortTime, historyBacked: true };
   }
   if (message.messageType === 'substrate' || message.messageType === 'process' || sender.startsWith('process:')) {
     const gist = bodyGist(message.content) || 'Substrate activity';
     return { id, kind: 'substrate', runKey: '', anchorSeq: message.seq,
       position: { sequence: message.seq, phase: 1, order: 0 }, gist,
       accessibleText: `Substrate: ${gist}`,
+      originalContent: message.content,
       presentation: activityPillPresentation({ kind: 'substrate', gist, content: message.content, sender,
-        turnSeq: message.turnSeq }), sortTime, live, liveTailEligibleAtArrival,
+        source: rawSource(message), messageType: message.messageType, turnSeq: message.turnSeq }), sortTime,
+      historyBacked: true,
       semanticFoldKind: gatewayNoticeFoldKind(message.content) };
   }
   if (message.messageType === 'agent' || sender.startsWith('agent:') || sender.startsWith('session:')) {
@@ -142,15 +160,17 @@ function messageCandidate(message: CanonicalMessage, live: boolean, liveTailElig
     return { id, kind: 'agent', runKey: '', anchorSeq: message.seq,
       position: { sequence: message.seq, phase: 1, order: 0 }, gist,
       accessibleText: `Other agent: ${gist}`,
+      originalContent: message.content,
       presentation: activityPillPresentation({ kind: 'agent', gist, content: message.content, sender,
-        senderDisplayName: rawDisplayName(message) }), sortTime, live, liveTailEligibleAtArrival };
+        senderDisplayName: rawDisplayName(message) }), sortTime,
+      historyBacked: true };
   }
   return undefined;
 }
 
-function memberCandidate(carrier: CanonicalMessage, member: HumanMember, live: boolean,
-  liveTailEligibleAtArrival: boolean): Candidate | undefined {
+function memberCandidate(carrier: CanonicalMessage, member: ParsedBatchMember): Candidate | undefined {
   if (member.sender.startsWith('user:')) return undefined;
+  // The carrier's turnSeq belongs to the batching turn, not this notice member.
   const id = `member:${member.sourceId}`;
   const position = { sequence: carrier.seq, phase: 1, order: member.index };
   const parsedTime = carrier.createdAt ? Date.parse(carrier.createdAt) : Number.NaN;
@@ -161,23 +181,28 @@ function memberCandidate(carrier: CanonicalMessage, member: HumanMember, live: b
     const gist = `Remedy ${statute || 'sent'} sent${detail ? ` — ${detail}` : ''}`;
     return { id, kind: 'rail', runKey: '', anchorSeq: carrier.seq, position, gist,
       accessibleText: `Rail: ${gist}`,
-      presentation: activityPillPresentation({ kind: 'rail', gist, content: member.content, sender: member.sender }),
-      sortTime, live, liveTailEligibleAtArrival };
+      originalContent: member.content,
+      presentation: activityPillPresentation({ kind: 'rail', gist, content: member.content, sender: member.sender,
+        source: member.source }),
+      sortTime, historyBacked: true };
   }
   if (member.sender.startsWith('process:')) {
     const gist = detail || 'Substrate activity';
     return { id, kind: 'substrate', runKey: '', anchorSeq: carrier.seq, position, gist,
       accessibleText: `Substrate: ${gist}`,
-      presentation: activityPillPresentation({ kind: 'substrate', gist, content: member.content, sender: member.sender }),
-      sortTime, live, liveTailEligibleAtArrival,
+      originalContent: member.content,
+      presentation: activityPillPresentation({ kind: 'substrate', gist, content: member.content, sender: member.sender,
+        source: member.source, messageType: carrier.messageType }),
+      sortTime, historyBacked: true,
       semanticFoldKind: gatewayNoticeFoldKind(member.content) };
   }
   if (member.sender.startsWith('agent:') || member.sender.startsWith('session:')) {
     const gist = detail ? `Another agent — ${detail}` : 'Another agent';
     return { id, kind: 'agent', runKey: '', anchorSeq: carrier.seq, position, gist,
       accessibleText: `Other agent: ${gist}`,
+      originalContent: member.content,
       presentation: activityPillPresentation({ kind: 'agent', gist, content: member.content, sender: member.sender }),
-      sortTime, live, liveTailEligibleAtArrival };
+      sortTime, historyBacked: true };
   }
   return undefined;
 }
@@ -185,7 +210,7 @@ function memberCandidate(carrier: CanonicalMessage, member: HumanMember, live: b
 function toolCandidate(call: ToolCallRecord): Candidate {
   return { id: `tool:${call.id}`, kind: 'tool', runKey: '', anchorSeq: call.afterMessageSeq,
     position: { sequence: call.afterMessageSeq, phase: 2, order: call.seq }, gist: '', accessibleText: '',
-    sortTime: call.startedAt, call, live: false, liveTailEligibleAtArrival: false };
+    sortTime: call.startedAt, call, historyBacked: false };
 }
 
 function railCandidate(denial: LiveRailDenial): Candidate {
@@ -193,9 +218,9 @@ function railCandidate(denial: LiveRailDenial): Candidate {
   return { id: `rail:${denial.id}`, kind: 'rail', runKey: '',
     anchorSeq: denial.afterMessageSeq,
     position: { sequence: denial.afterMessageSeq, phase: 3, order: denial.arrivalOrder },
-    gist, accessibleText: `Rail: ${gist}`, sortTime: denial.occurredAt, live: true,
+    gist, accessibleText: `Rail: ${gist}`, originalContent: gist, sortTime: denial.occurredAt,
     presentation: activityPillPresentation({ kind: 'rail', gist, content: gist }),
-    liveTailEligibleAtArrival: denial.tailEligibleAtArrival };
+    liveTailEligibleAtArrival: denial.tailEligibleAtArrival, historyBacked: false };
 }
 
 const comparePosition = (left: Position, right: Position): number =>
@@ -207,23 +232,56 @@ function bubbleEvents(bubbles: readonly ActivityBubble[]): BubbleEvent[] {
     left.key.localeCompare(right.key));
   const events: BubbleEvent[] = [];
   let spanKey: string | undefined;
+  let spanRootMessageId: string | undefined;
+  let spanRootTurnSeq: number | undefined;
+  let ownerTurnScoped = false;
   let hasReply = false;
   for (let order = 0; order < ordered.length; order++) {
     const bubble = ordered[order];
     if (bubble.side === 'human') {
-      if (!spanKey || hasReply) spanKey = `prompt:${bubble.key}`;
+      if (!spanKey || hasReply || ownerTurnScoped !== bubble.ownerScoped) {
+        spanKey = `prompt:${bubble.key}`;
+        spanRootMessageId = bubble.record.id;
+        spanRootTurnSeq = bubble.record.turnSeq;
+        ownerTurnScoped = bubble.ownerScoped;
+      }
       hasReply = false;
     } else if (spanKey) {
       hasReply = true;
     }
-    events.push({ kind: 'bubble', bubble, spanKey,
+    events.push({ kind: 'bubble', bubble, spanKey, spanRootMessageId,
+      ownerTurnSeq: bubble.record.turnSeq ?? spanRootTurnSeq, ownerTurnScoped,
       sequence: bubble.record.seq, phase: 0, order });
   }
   return events;
 }
 
+function belongsToOwnerConversation(candidate: Candidate, precedingBubble: BubbleEvent,
+  nextBubble: BubbleEvent | undefined, activeOwnerTurnRunning: boolean, activeOwnerTurnSeq: number | undefined,
+  activeOwnerTurnMessageId: string | undefined, ownerReplyByTurn: ReadonlyMap<number, BubbleEvent>,
+  ownerReplyBySpan: ReadonlyMap<string, BubbleEvent>): boolean {
+  if (!candidate.historyBacked || !precedingBubble.ownerTurnScoped) return false;
+  const turnReply = precedingBubble.ownerTurnSeq !== undefined
+    ? ownerReplyByTurn.get(precedingBubble.ownerTurnSeq) : undefined;
+  const spanReply = precedingBubble.spanKey ? ownerReplyBySpan.get(precedingBubble.spanKey) : undefined;
+  const closedByLaterReply = [turnReply, spanReply].some(reply => reply && comparePosition(reply, candidate.position) > 0);
+  // Running activity belongs only to the active owner's turn. A later owner
+  // prompt cannot make an older, completed exchange look live again.
+  const matchesActiveTurn = activeOwnerTurnRunning && (
+    activeOwnerTurnSeq !== undefined && precedingBubble.ownerTurnSeq !== undefined
+      ? activeOwnerTurnSeq === precedingBubble.ownerTurnSeq
+      : !!activeOwnerTurnMessageId && (precedingBubble.bubble.record.id === activeOwnerTurnMessageId ||
+        precedingBubble.spanRootMessageId === activeOwnerTurnMessageId)
+  );
+  const beforeOwnerFollowUp = !!nextBubble && nextBubble.ownerTurnScoped &&
+    nextBubble.bubble.side === 'human' && matchesActiveTurn;
+  const activeOwnerTail = !nextBubble && matchesActiveTurn;
+  return closedByLaterReply || beforeOwnerFollowUp || activeOwnerTail;
+}
+
 function lineWithRun(candidate: Candidate, runKey: string, includeToolDetails = true): ActivityLine {
-  const { live: _live, liveTailEligibleAtArrival: _eligibleAtArrival,
+  const { liveTailEligibleAtArrival: _eligibleAtArrival,
+    historyBacked: _historyBacked,
     semanticFoldKind: _semanticFoldKind, ...line } = candidate;
   if (candidate.kind === 'tool' && candidate.call) {
     if (!includeToolDetails) return { ...line, runKey, gist: '', accessibleText: '' };
@@ -245,7 +303,7 @@ export function buildActivityTrail(input: {
   readonly sessionKey: string;
   readonly records: readonly { readonly kind: 'message'; readonly id: string; readonly seq: number;
     readonly sender?: string; readonly messageType?: string; readonly role: string; readonly content: string;
-    readonly isBatchCarrier?: boolean; readonly raw: Readonly<Record<string, unknown>> }[];
+    readonly isBatchCarrier?: boolean; readonly turnSeq?: number; readonly raw: Readonly<Record<string, unknown>> }[];
   readonly bubbles: readonly ActivityBubble[];
   readonly transitions: readonly CanonicalTransition[];
   /** Unmatched local sends use timestamps to find their place between tool rows. */
@@ -253,9 +311,12 @@ export function buildActivityTrail(input: {
   readonly tools: readonly ToolCallRecord[];
   readonly toolsEnabled: boolean;
   readonly turnStateAvailable: boolean;
+  /** Any running turn still gates non-history tool rows and live refusals. */
   readonly activeTurnRunning: boolean;
-  readonly liveActivityIds: ReadonlySet<string>;
-  readonly liveActivityEligibleIds: ReadonlySet<string>;
+  readonly activeOwnerTurnRunning: boolean;
+  /** Source-backed identity of the currently running owner turn, when available. */
+  readonly activeOwnerTurnSeq?: number;
+  readonly activeOwnerTurnMessageId?: string;
   readonly railDenials: readonly LiveRailDenial[];
   readonly shownRuns: ReadonlyMap<string, string>;
   readonly expandedRuns: ReadonlySet<string>;
@@ -267,14 +328,12 @@ export function buildActivityTrail(input: {
     const batchMembers = parseBatchMembers(message as CanonicalMessage);
     if (batchMembers) {
       for (const member of batchMembers) {
-        const candidate = memberCandidate(message as CanonicalMessage, member, input.liveActivityIds.has(message.id),
-          input.liveActivityEligibleIds.has(message.id));
+        const candidate = memberCandidate(message as CanonicalMessage, member);
         if (candidate) candidates.push(candidate);
       }
       continue;
     }
-    const candidate = messageCandidate(message as CanonicalMessage, input.liveActivityIds.has(message.id),
-      input.liveActivityEligibleIds.has(message.id));
+    const candidate = messageCandidate(message as CanonicalMessage);
     if (candidate) candidates.push(candidate);
     else if (message.role === 'assistant') continue;
   }
@@ -283,12 +342,29 @@ export function buildActivityTrail(input: {
   }
   if (input.toolsEnabled) candidates.push(...input.tools.map(toolCandidate));
 
+  const orderedBubbles = bubbleEvents(input.bubbles);
   const events: TrailEvent[] = [
-    ...bubbleEvents(input.bubbles),
+    ...orderedBubbles,
     ...candidates.map((candidate): CandidateEvent => ({
       kind: 'candidate', candidate, ...candidate.position,
     })),
   ].sort(comparePosition);
+  const ownerReplyByTurn = new Map<number, BubbleEvent>();
+  const ownerReplyBySpan = new Map<string, BubbleEvent>();
+  for (const bubble of orderedBubbles) {
+    if (!bubble.ownerTurnScoped || bubble.bubble.side !== 'agent') continue;
+    if (bubble.ownerTurnSeq !== undefined) ownerReplyByTurn.set(bubble.ownerTurnSeq, bubble);
+    if (bubble.spanKey) ownerReplyBySpan.set(bubble.spanKey, bubble);
+  }
+  // Canonical activity persists when a later owner reply closes its turn/span,
+  // including gaps across follow-up prompts. A running turn keeps only its own
+  // gaps visible; the current turn identity prevents unrelated older gaps from
+  // becoming visible simply because another owner turn is active.
+  const historyInOwnerConversation = (candidate: Candidate, precedingBubble: BubbleEvent,
+    nextBubble?: BubbleEvent) => {
+    return belongsToOwnerConversation(candidate, precedingBubble, nextBubble, input.activeOwnerTurnRunning,
+      input.activeOwnerTurnSeq, input.activeOwnerTurnMessageId, ownerReplyByTurn, ownerReplyBySpan);
+  };
 
   const eligible = new Map<string, EligibleCandidate[]>();
   const membership = new Map<string, string>();
@@ -306,8 +382,8 @@ export function buildActivityTrail(input: {
   const closeGap = (nextBubble?: BubbleEvent) => {
     if (!previousBubble?.spanKey) { pending = []; return; }
     const runKey = `run:${previousBubble.bubble.key}`;
-    const closedByReply = !!nextBubble && nextBubble.bubble.side === 'agent' &&
-      nextBubble.spanKey === previousBubble.spanKey;
+    const closedByReply = !!nextBubble && previousBubble.ownerTurnScoped && nextBubble.ownerTurnScoped &&
+      nextBubble.bubble.side === 'agent' && nextBubble.spanKey === previousBubble.spanKey;
     const tail = pending.map((event) => event.candidate);
     const beforeOrAtTool = new Set<string>();
     let foundTool = false;
@@ -317,21 +393,27 @@ export function buildActivityTrail(input: {
       if (foundTool) beforeOrAtTool.add(candidate.id);
     }
     if (closedByReply) {
-      for (const event of pending) add(event.candidate, runKey);
+      for (const event of pending) {
+        if (!event.candidate.historyBacked || historyInOwnerConversation(event.candidate, previousBubble, nextBubble)) {
+          add(event.candidate, runKey);
+        }
+      }
     } else if (!nextBubble) {
       for (const candidate of tail) {
-        const allowed = candidate.live
-          ? (!input.turnStateAvailable || candidate.liveTailEligibleAtArrival)
+        const allowed = candidate.kind === 'rail'
+          ? (!input.turnStateAvailable || candidate.liveTailEligibleAtArrival === true)
           : (beforeOrAtTool.has(candidate.id) || (input.turnStateAvailable && input.activeTurnRunning));
-        if (allowed || input.shownRuns.has(candidate.id)) add(candidate, runKey);
+        const historyAllowed = historyInOwnerConversation(candidate, previousBubble);
+        if (candidate.historyBacked ? historyAllowed : allowed || input.shownRuns.has(candidate.id)) add(candidate, runKey);
       }
     } else {
       for (const candidate of tail) {
         const oldRun = input.shownRuns.get(candidate.id);
-        const allowed = candidate.live
-          ? (!input.turnStateAvailable || candidate.liveTailEligibleAtArrival)
+        const allowed = candidate.kind === 'rail'
+          ? (!input.turnStateAvailable || candidate.liveTailEligibleAtArrival === true)
           : beforeOrAtTool.has(candidate.id);
-        if (allowed || oldRun) {
+        const historyAllowed = historyInOwnerConversation(candidate, previousBubble, nextBubble);
+        if (candidate.historyBacked ? historyAllowed : allowed || oldRun) {
           add(candidate, oldRun ?? runKey);
         }
       }

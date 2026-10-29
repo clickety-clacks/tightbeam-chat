@@ -143,7 +143,7 @@ function visibilityMix(sessionKey: string, prefix: string): readonly CanonicalMe
     sender: 'assistant-service', messageType: 'assistant', replyToMessageId: batch.id, turnSeq: 2, turnIncludesHuman: true,
   });
   const marker = row(sessionKey, `${prefix}-marker`, `Hidden assistant substrate marker ${prefix}`, {
-    sender: 'process:notifications', messageType: 'substrate',
+    sender: 'process:notifications', messageType: 'substrate', turnSeq: 77,
   });
   const agentWake = row(sessionKey, `${prefix}-agent-wake`, `Hidden agent wake ${prefix}`, {
     role: 'user', sender: 'agent:external', messageType: 'agent', turnSeq: 3,
@@ -171,9 +171,23 @@ function expectVisibilityMix(log: HTMLElement, prefix: string): void {
   expect(batchBubble?.textContent).not.toContain('coalesced by');
   for (const label of [
     `Hidden assistant substrate marker ${prefix}`, `Hidden agent wake ${prefix}`,
-    `Hidden reply to agent wake ${prefix}`, `Hidden process notice ${prefix}`,
-    `Hidden reply to process notice ${prefix}`,
+    `Hidden process notice ${prefix}`,
+  ]) {
+    const renderedAsBubble = [...log.querySelectorAll<HTMLElement>('.tb-chat-bubble')]
+      .some(element => element.textContent?.includes(label));
+    expect(renderedAsBubble).toBe(false);
+    expect(within(log).queryByText(label)).toBeNull();
+  }
+  for (const label of [
+    `Hidden reply to agent wake ${prefix}`, `Hidden reply to process notice ${prefix}`,
   ]) expect(within(log).queryByText(label)).toBeNull();
+}
+
+function expectActivityText(log: HTMLElement, label: string): void {
+  const rows = [...log.querySelectorAll<HTMLElement>('.tb-chat-activity-line')]
+    .filter(element => element.textContent?.includes(label));
+  expect(rows).toHaveLength(1);
+  expect(rows[0].closest('.tb-chat-bubble')).toBeNull();
 }
 
 describe('conversation surface', () => {
@@ -251,9 +265,13 @@ describe('conversation surface', () => {
     }
   });
 
-  it('filters with message provenance and renders safe Markdown without exposing batch wrappers', async () => {
+  it('keeps owner-scoped activity pills while filtering other history and rendering safe Markdown', async () => {
     const sessionKey = 'conversation-a';
     const human = row(sessionKey, 'human-trigger', 'Could you explain this?', { seq: 1, role: 'user', sender: 'user:person', turnSeq: 1 });
+    const outsideOwnerMarker = row(sessionKey, 'outside-owner-marker',
+      'A non-owner system marker after the owner exchange', {
+        seq: 11, role: 'assistant', sender: 'process:notifications', messageType: 'substrate', turnSeq: 77,
+      });
     const unprovenHuman = row(sessionKey, 'unproven-human', 'A user row with no sender stays visible', { seq: 8, role: 'user' });
     const mismatchedHuman = row(sessionKey, 'mismatched-human', 'A differently marked user row stays visible', {
       seq: 9, role: 'user', sender: 'user:another-person', messageType: 'chat',
@@ -281,7 +299,7 @@ describe('conversation surface', () => {
       'Batch question from the person',
       '',
       '[2] source=event-b sender=process:maintenance cause=refresh class=fyi',
-      'Substrate payload must stay hidden',
+      'A process notice in the batch',
       '',
       'coalesced by notice-batching-v1',
     ].join('\n');
@@ -294,8 +312,9 @@ describe('conversation surface', () => {
     const runtime = new FakeRuntime(sessionKey, {
       records: [human, answer, otherTrigger, otherAnswer, batch,
         row(sessionKey, 'batch-member', 'Batch question from the person', { seq: 3, role: 'user', sender: 'user:person', turnSeq: 3 }),
-        batchAnswer, unprovenHuman, mismatchedHuman, substrateMarker],
+        batchAnswer, unprovenHuman, mismatchedHuman, substrateMarker, outsideOwnerMarker],
       provenanceAvailable: false,
+      activityTurnStateAvailable: true,
     });
     render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
 
@@ -312,14 +331,19 @@ describe('conversation surface', () => {
     expect(batchBubble?.classList.contains('tb-chat-bubble-human')).toBe(true);
     expect(batchBubble?.getAttribute('aria-label')).toBe('Message from You');
     expect(batchBubble?.textContent).not.toContain('coalesced by');
-    const substrateLine = within(log).getByRole('note', { name: 'Activity: Substrate payload must stay hidden' });
+    const substrateLine = within(log).getByRole('note', { name: 'Notice: A process notice in the batch' });
     expect(substrateLine.classList.contains('tb-chat-activity-substrate')).toBe(true);
-    expect(substrateLine.querySelector('.tb-chat-activity-pill-slate')).toBeTruthy();
+    expect(substrateLine.querySelector('.tb-chat-activity-pill-blue svg')).toBeTruthy();
+    expect(substrateLine.querySelector('.tb-chat-activity-bullet')).toBeNull();
+    expect(substrateLine.textContent).not.toContain('•');
+    expect(substrateLine.textContent).not.toMatch(/[\[\]]/);
     expect(substrateLine.closest('article')?.classList.contains('tb-chat-bubble')).not.toBe(true);
     expect(batch.content).toBe(batchText);
     expect(within(log).getByText('Answer to the batch question')).toBeTruthy();
     expect(within(log).queryByText('A system event marker')).toBeNull();
+    expect(within(log).queryByText('A non-owner system marker after the owner exchange')).toBeNull();
     expect(within(log).queryByText('An agent sent a wake')).toBeNull();
+    expectActivityText(log, 'A process notice in the batch');
     expect(within(log).queryByText('Must remain hidden')).toBeNull();
     const unmarkedBubble = within(log).getByText('A user row with no sender stays visible').closest('article');
     expect(unmarkedBubble?.getAttribute('aria-label')).toBe('Message from User');
@@ -331,9 +355,15 @@ describe('conversation surface', () => {
     expect(screen.queryByRole('button', { name: /load earlier/i })).toBeNull();
     expect(screen.getByRole('textbox', { name: 'Message to Research assistant' }).getAttribute('placeholder'))
       .toBe('Research assistant');
+
+    const visibleActivity = () => [...log.querySelectorAll<HTMLElement>('.tb-chat-activity-pill-row')].map((element) => ({
+      record: element.dataset.recordKey, run: element.dataset.activityRun, text: element.textContent,
+    }));
+    const liveActivity = visibleActivity();
+    expect(liveActivity.map(row => row.record)).toContain('member:batch-trigger:member:2');
   });
 
-  it('hides typed non-envelope activity and keeps human exchanges across pages, live updates, and reconnects', async () => {
+  it('keeps owner-scoped activity while preserving human exchanges across pages, live updates, and reconnects', async () => {
     const sessionKey = 'conversation-without-provenance';
     const firstPage = visibilityMix(sessionKey, 'first-page');
     const unprovenAgent = row(sessionKey, 'unproven-agent', 'An unproven assistant reply', {
@@ -358,6 +388,9 @@ describe('conversation surface', () => {
     render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
     const log = screen.getByRole('log');
     expectVisibilityMix(log, 'first-page');
+    expect(within(log).queryByText('Hidden assistant substrate marker first-page')).toBeNull();
+    expect(within(log).queryByText('Hidden agent wake first-page')).toBeNull();
+    expect(within(log).queryByText('Hidden process notice first-page')).toBeNull();
     expect(within(log).queryByText('An unproven assistant reply')).toBeNull();
     expect(within(log).getByText('A selected reply without a provable trigger')).toBeTruthy();
     expect(within(log).getByText('A selected reply without a parent link')).toBeTruthy();
@@ -920,20 +953,27 @@ describe('conversation surface', () => {
     const unknownActivity = row(sessionKey, 'unknown-activity', 'A notice whose kind is not known', {
       seq: 15, role: 'user', sender: 'process:events', messageType: 'substrate', turnSeq: 1,
     });
+    const processActivity = row(sessionKey, 'process-activity', 'A process event', {
+      seq: 16, role: 'user', sender: 'process:events', messageType: 'process', turnSeq: 1,
+    });
+    const sourceActivity = row(sessionKey, 'source-activity', 'An update from another agent', {
+      seq: 17, role: 'user', sender: 'process:events', messageType: 'substrate', turnSeq: 1,
+      raw: { source: 'agent:helper', id: 'source-activity' },
+    });
     const agent = row(sessionKey, 'agent-note', 'A short update', {
-      seq: 16, role: 'user', sender: 'agent:helper', messageType: 'agent', turnSeq: 1,
+      seq: 18, role: 'user', sender: 'agent:helper', messageType: 'agent', turnSeq: 1,
       raw: { source: 'fixture', id: 'agent-note', senderDisplayName: 'Review helper' },
     });
     const agentFollowup = row(sessionKey, 'agent-followup', 'The review is ready', {
-      seq: 17, role: 'user', sender: 'agent:helper', messageType: 'agent', turnSeq: 1,
+      seq: 19, role: 'user', sender: 'agent:helper', messageType: 'agent', turnSeq: 1,
       raw: { source: 'fixture', id: 'agent-followup', senderDisplayName: 'Review helper' },
     });
     const answer = row(sessionKey, 'answer', 'Answer', {
-      seq: 18, sender: 'assistant-service', messageType: 'assistant', replyToMessageId: human.id, turnSeq: 1,
+      seq: 20, sender: 'assistant-service', messageType: 'assistant', replyToMessageId: human.id, turnSeq: 1,
     });
     const runtime = new FakeRuntime(sessionKey, { records: [human, attest, assignment, child, wake, reminder,
       inactiveAssignment, decision, answeredDecision, expiredDecision, workItem, sessionNotice, turnFailure,
-      remedy, unknownActivity, agent, agentFollowup, answer], provenanceAvailable: false,
+      remedy, unknownActivity, processActivity, sourceActivity, agent, agentFollowup, answer], provenanceAvailable: false,
       liveRailDenials: [{ id: 'denial-1', principal: `session:${sessionKey}`, verb: 'attest',
         rule: 'completion-requires-verification', tailEligibleAtArrival: true, occurredAt: 1,
         afterMessageSeq: 1, arrivalOrder: 1 }] });
@@ -957,10 +997,16 @@ describe('conversation surface', () => {
 
     expect(pillFor('Wake: Review the result, fallback').querySelector('.tb-chat-activity-pill-purple')).toBeTruthy();
     const reminderFold = within(log).getByRole('button', {
-      name: /Expand substrate activity run, 2 entries\. Latest: Assignment asg_456789ab/,
+      name: /Expand substrate activity run, 2 entries\. Latest: Assignment: No recent activity · Background task, asg_4567/,
     });
     expect(reminderFold.textContent).toContain('No recent activity · Background task');
     expect(reminderFold.querySelector('.tb-chat-activity-pill-amber')).toBeTruthy();
+    expect(reminderFold.querySelector('.tb-chat-activity-bullet')).toBeNull();
+    expect(reminderFold.textContent).not.toContain('•');
+    expect(reminderFold.textContent).not.toMatch(/[\[\]]/);
+    expect(reminderFold.getAttribute('aria-label')).not.toMatch(/asg_456789ab/);
+    expect(reminderFold.getAttribute('title')).toBe(
+      'Assignment asg_456789ab-1111-4111-8111-123456789abc (Background task) has had no recorded activity since 12');
     fireEvent.click(reminderFold);
     expect(pillFor('Assignment: Quiet for 3 h · Background assignment').querySelector('.tb-chat-activity-pill-amber')).toBeTruthy();
     expect(pillFor('Assignment: No recent activity · Background task, asg_4567')).toBeTruthy();
@@ -971,11 +1017,13 @@ describe('conversation surface', () => {
     expect(pillFor('Session: Retired, s_5678')).toBeTruthy();
     expect(pillFor('Turn: The agent could not complete the reply, turn 13')).toBeTruthy();
     const remedyRow = within(log).getByRole('note', {
-      name: /^Remedy: Review requested changes for asg_6789abcd-1111-4111-8111-123456789abc, asg_6789$/,
+      name: 'Remedy: Review requested changes for asg_6789, asg_6789',
     });
     expect(remedyRow.querySelector('.tb-chat-activity-pill-orange')).toBeTruthy();
-    const unknownRow = pillFor('Activity: A notice whose kind is not known');
-    expect(unknownRow.querySelector('.tb-chat-activity-pill-slate')).toBeTruthy();
+    const unknownRow = pillFor('Notice: A notice whose kind is not known');
+    expect(unknownRow.querySelector('.tb-chat-activity-pill-blue svg')).toBeTruthy();
+    expect(pillFor('System: A process event').querySelector('.tb-chat-activity-pill-purple svg')).toBeTruthy();
+    expect(pillFor('Message: An update from another agent').querySelector('.tb-chat-activity-pill-indigo svg')).toBeTruthy();
 
     const agentFold = within(log).getByRole('button', { name: /Expand agent activity run, 2 entries/ });
     expect(agentFold.classList.contains('tb-chat-activity-pill-toggle')).toBe(true);
@@ -984,10 +1032,19 @@ describe('conversation surface', () => {
     fireEvent.click(agentFold);
     const agentRow = pillFor('Message: A short update, Review helper');
     expect(agentRow.querySelector('.tb-chat-activity-pill')?.textContent).toContain('Message');
+    expect(agentRow.querySelector('.tb-chat-activity-pill-indigo svg')).toBeTruthy();
     expect(agentRow.textContent).toContain('Review helper');
 
     const refusedRow = pillFor('Refused: Completion needs a recorded verification first');
     expect(refusedRow.querySelector('.tb-chat-activity-pill-red')).toBeTruthy();
+
+    for (const pill of within(log).getAllByRole('note').filter(note =>
+      note.classList.contains('tb-chat-activity-pill-row'))) {
+      expect(pill.querySelector('.tb-chat-activity-bullet')).toBeNull();
+      expect(pill.textContent).not.toContain('•');
+      expect(pill.textContent).not.toMatch(/[\[\]]/);
+      expect(pill.textContent).not.toMatch(/\b(?:wi|asg|dr|att|s|w|c|tc)_[a-f0-9]{8}-/i);
+    }
   });
 
   it('updates only a growing activity fold and preserves an away reader', () => {
@@ -1027,7 +1084,7 @@ describe('conversation surface', () => {
       const anchorBefore = layout.offset(anchor);
       expect(anchorBefore).toBeCloseTo(120, 0);
 
-      const toggle = within(viewport).getByRole('button', { name: /2 entries\. Latest: Quiet for 4 h/ });
+      const toggle = within(viewport).getByRole('button', { name: /2 entries\. Latest: Assignment: Quiet for 4 h/ });
       expect(toggle.textContent).toContain('×2');
       const fold = toggle.closest<HTMLElement>('.tb-chat-activity-run')!;
       const content = viewport.querySelector<HTMLElement>('.tb-chat-message-content')!;
@@ -1039,7 +1096,7 @@ describe('conversation surface', () => {
       records = [question, first, second, incoming, reply, laterQuestion, laterReply];
       act(() => runtime.update({ records }));
 
-      const updatedToggle = within(viewport).getByRole('button', { name: /3 entries\. Latest: Quiet for 5 h/ });
+      const updatedToggle = within(viewport).getByRole('button', { name: /3 entries\. Latest: Assignment: Quiet for 5 h/ });
       expect(updatedToggle.textContent).toContain('×3');
       expect(updatedToggle.textContent).toContain('Newest reminder');
       expect(updatedToggle.closest('.tb-chat-activity-run')).toBe(fold);
@@ -1093,12 +1150,12 @@ describe('conversation surface', () => {
       const anchorBefore = layout.offset(anchor);
       expect(anchorBefore).toBeCloseTo(120, 0);
 
-      let toggle = screen.getByRole('button', { name: /6 entries\. Latest: Quiet for .*Background activity 6/ });
+      let toggle = screen.getByRole('button', { name: /6 entries\. Latest: Assignment: Quiet for .*Background activity 6/ });
       expect(toggle.textContent).toContain('×6');
       expect(screen.queryByRole('button', { name: 'Show earlier activity' })).toBeNull();
       expect(toggle.getAttribute('aria-expanded')).toBe('false');
       fireEvent.click(toggle);
-      toggle = screen.getByRole('button', { name: /6 entries\. Latest: Quiet for .*Background activity 6/ });
+      toggle = screen.getByRole('button', { name: /6 entries\. Latest: Assignment: Quiet for .*Background activity 6/ });
       expect(toggle.getAttribute('aria-expanded')).toBe('true');
       expect(screen.getAllByRole('note').map(note => note.querySelector('.tb-chat-activity-pill-text')?.textContent)).toEqual([
         'Quiet for 1 min · Background activity 1', 'Quiet for 2 min · Background activity 2',
@@ -1115,12 +1172,12 @@ describe('conversation surface', () => {
       });
       records = [question, ...activity, incoming, firstReply, ...laterMessages];
       act(() => runtime.update({ records }));
-      toggle = screen.getByRole('button', { name: /7 entries\. Latest: Quiet for 7 min .*Background activity 7/ });
+      toggle = screen.getByRole('button', { name: /7 entries\. Latest: Assignment: Quiet for 7 min .*Background activity 7/ });
       expect(toggle.getAttribute('aria-expanded')).toBe('true');
       expect(layout.offset(anchor)).toBeCloseTo(anchorBefore, 0);
 
       fireEvent.click(toggle);
-      toggle = screen.getByRole('button', { name: /7 entries\. Latest: Quiet for 7 min .*Background activity 7/ });
+      toggle = screen.getByRole('button', { name: /7 entries\. Latest: Assignment: Quiet for 7 min .*Background activity 7/ });
       expect(toggle.getAttribute('aria-expanded')).toBe('false');
       expect(layout.offset(anchor)).toBeCloseTo(anchorBefore, 0);
 
@@ -1129,7 +1186,7 @@ describe('conversation surface', () => {
       });
       records = [question, ...activity, incoming, finalReminder, firstReply, ...laterMessages];
       act(() => runtime.update({ records }));
-      toggle = screen.getByRole('button', { name: /8 entries\. Latest: Quiet for 8 min .*Background activity 8/ });
+      toggle = screen.getByRole('button', { name: /8 entries\. Latest: Assignment: Quiet for 8 min .*Background activity 8/ });
       expect(toggle.getAttribute('aria-expanded')).toBe('false');
       expect(layout.offset(anchor)).toBeCloseTo(anchorBefore, 0);
     } finally {
@@ -1166,7 +1223,7 @@ describe('conversation surface', () => {
     expect(composer.value).toBe('Unsent draft');
     expect([composer.selectionStart, composer.selectionEnd]).toEqual([2, 6]);
 
-    const laterRun = screen.getByRole('button', { name: /4 entries\. Latest: Quiet for 8 min .*Background event 8/ });
+    const laterRun = screen.getByRole('button', { name: /4 entries\. Latest: Assignment: Quiet for 8 min .*Background event 8/ });
     fireEvent.click(laterRun);
     expect(laterRun.getAttribute('aria-expanded')).toBe('true');
     expect(screen.getAllByRole('note')).toHaveLength(4);
@@ -1177,7 +1234,7 @@ describe('conversation surface', () => {
     });
     const laterReminder = { ...later, content: 'Quiet for 9 min · A later background event' };
     act(() => runtime.update({ records: [prompt, ...activity, boundary, laterReminder, reply] }));
-    const updatedRun = screen.getByRole('button', { name: /5 entries\. Latest: Quiet for 9 min .*A later background event/ });
+    const updatedRun = screen.getByRole('button', { name: /5 entries\. Latest: Assignment: Quiet for 9 min .*A later background event/ });
     expect(updatedRun.getAttribute('aria-expanded')).toBe('true');
     expect(screen.getAllByRole('note')).toHaveLength(5);
     expect(screen.queryByRole('button', { name: 'Show earlier activity' })).toBeNull();
