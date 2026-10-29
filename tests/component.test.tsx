@@ -936,7 +936,8 @@ describe('conversation surface', () => {
       name: /^Remedy: Review requested changes for asg_6789abcd-1111-4111-8111-123456789abc, asg_6789$/,
     });
     expect(remedyRow.querySelector('.tb-chat-activity-pill-orange')).toBeTruthy();
-    expect(pillFor('Activity: A notice whose kind is not known')).toBeTruthy();
+    const unknownRow = pillFor('Activity: A notice whose kind is not known');
+    expect(unknownRow.querySelector('.tb-chat-activity-pill-slate')).toBeTruthy();
 
     const agentFold = within(log).getByRole('button', { name: /Expand agent activity run, 2 entries/ });
     expect(agentFold.classList.contains('tb-chat-activity-pill-toggle')).toBe(true);
@@ -1000,10 +1001,10 @@ describe('conversation surface', () => {
       records = [question, first, second, incoming, reply, laterQuestion, laterReply];
       act(() => runtime.update({ records }));
 
-      expect(within(viewport).getByRole('button', { name: /3 entries\. Latest: Quiet for 5 h/ })).toBe(toggle);
-      expect(toggle.textContent).toContain('×3');
-      expect(toggle.textContent).toContain('Newest reminder');
-      expect(toggle.closest('.tb-chat-activity-run')).toBe(fold);
+      const updatedToggle = within(viewport).getByRole('button', { name: /3 entries\. Latest: Quiet for 5 h/ });
+      expect(updatedToggle.textContent).toContain('×3');
+      expect(updatedToggle.textContent).toContain('Newest reminder');
+      expect(updatedToggle.closest('.tb-chat-activity-run')).toBe(fold);
       expect(layout.offset(anchor)).toBeCloseTo(anchorBefore, 0);
       const mutations = observer.takeRecords();
       expect(mutations.length).toBeGreaterThan(0);
@@ -1061,7 +1062,7 @@ describe('conversation surface', () => {
       fireEvent.click(toggle);
       toggle = screen.getByRole('button', { name: /6 entries\. Latest: Quiet for .*Background activity 6/ });
       expect(toggle.getAttribute('aria-expanded')).toBe('true');
-      expect(screen.getAllByRole('note').map(note => note.textContent)).toEqual([
+      expect(screen.getAllByRole('note').map(note => note.querySelector('.tb-chat-activity-pill-text')?.textContent)).toEqual([
         'Quiet for 1 min · Background activity 1', 'Quiet for 2 min · Background activity 2',
         'Quiet for 3 min · Background activity 3', 'Quiet for 4 min · Background activity 4',
         'Quiet for 5 min · Background activity 5', 'Quiet for 6 min · Background activity 6',

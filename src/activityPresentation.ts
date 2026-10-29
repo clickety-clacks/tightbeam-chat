@@ -74,7 +74,8 @@ function wakePresentation(content: string): ActivityPillPresentation | undefined
           : /^wait\b/i.test(header) ? 'resumed' : 'sent';
     return { label: 'Wake', tone: 'purple', icon: 'alarm',
       text: detail ?? 'A wake was delivered',
-      metadata: status };
+      metadata: fact ? factStatus ? status : shortId('dr', fact[2]) ?? status
+        : shortId('w', header) ?? shortId('asg', header) ?? shortId('dr', header) ?? status };
   }
   if (/^Wait finished on its assignment\b/i.test(first)) {
     return { label: 'Wake', tone: 'purple', icon: 'alarm', text: 'Wait finished on its assignment',
@@ -230,9 +231,9 @@ function refusalPresentation(gist: string): ActivityPillPresentation | undefined
 }
 
 /**
- * Keep source-specific wording limited to recognizable shapes. Any other
- * delivered activity line still gets a neutral pill; tool records use their
- * separate renderer and are intentionally outside this presentation path.
+ * Keep source-specific wording limited to recognizable shapes. Unclassified
+ * activity stays visible with a neutral pill; tool records use their separate
+ * renderer and are intentionally outside this presentation path.
  */
 export function activityPillPresentation(source: ActivityPillSource): ActivityPillPresentation | undefined {
   if (source.kind === 'agent') {

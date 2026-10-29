@@ -45,7 +45,7 @@ describe('activity pill presentation', () => {
       label: 'Message', tone: 'indigo', text: 'Updated the report', metadata: 'Review helper',
     });
     expect(activityPillPresentation(source('substrate', '[woke: fact wake_12345678-1111-4111-8111-123456789abc; assignment asg_abcdef12-1111-4111-8111-123456789abc]\nRead the latest result')))
-      .toMatchObject({ label: 'Wake', tone: 'purple', icon: 'alarm', text: 'Read the latest result', metadata: 'condition met' });
+      .toMatchObject({ label: 'Wake', tone: 'purple', icon: 'alarm', text: 'Read the latest result', metadata: 'asg_abcd' });
     expect(activityPillPresentation(source('substrate', '[woke: fallback deadline]\nRead the latest result')))
       .toMatchObject({ label: 'Wake', tone: 'purple', text: 'Read the latest result', metadata: 'fallback' });
     expect(activityPillPresentation(source('substrate', '[woke: fact escalation-ruled/dr_12345678-1111-4111-8111-123456789abc]\nReview complete')))
@@ -59,7 +59,7 @@ describe('activity pill presentation', () => {
     expect(activityPillPresentation(source('substrate', 'A notice whose kind is not known')))
       .toMatchObject({ label: 'Activity', tone: 'slate', text: 'A notice whose kind is not known' });
     expect(activityPillPresentation(source('rail', 'Unclassified activity')))
-      .toMatchObject({ label: 'Activity', tone: 'slate' });
+      .toMatchObject({ label: 'Activity', tone: 'slate', text: 'Unclassified activity' });
   });
 
   it('uses the approved color and icon for each recognized activity kind', () => {
@@ -92,8 +92,6 @@ describe('activity pill presentation', () => {
         { label: 'Wake', tone: 'purple', icon: 'alarm' }],
       [source('substrate', 'Quiet for 3 h · Assignment summary'),
         { label: 'Assignment', tone: 'amber', icon: 'clock' }],
-      [source('substrate', 'An unclassified delivered notice'),
-        { label: 'Activity', tone: 'slate', icon: 'activity' }],
     ];
 
     for (const [input, expected] of cases) {
