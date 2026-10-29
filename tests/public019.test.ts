@@ -668,6 +668,30 @@ describe('Gateway wire mapping and behavior checks', () => {
     expect(transport.proveCoverage({ sessionKey, rowVersion: 4, displayName: 'Fixture agent', raw: {} }, page, [])).toBe(false);
   });
 
+  it('loads tail and older history from the documented page shape without forward-page fields', async () => {
+    const candidate = setup();
+    const requests: string[] = [];
+    candidate.host.fetch = async (path) => {
+      requests.push(path);
+      return new Response(JSON.stringify({ schemaVersion: 1, resource: 'transcript messages', items: [item],
+        page: { oldestCursor: 'older-cursor', hasMoreBefore: true } }), { status: 200 });
+    };
+    const signal = new AbortController().signal;
+
+    const tail = await candidate.transport.readTail(sessionKey, signal);
+    const older = await candidate.transport.readOlder(sessionKey, 'older-cursor', signal);
+
+    expect(tail.records.map((row) => row.id)).toEqual(['m_1']);
+    expect(tail).toMatchObject({ oldestCursor: 'older-cursor', hasOlder: true, newestCursor: null, hasNewer: false });
+    expect(older).toMatchObject({ oldestCursor: 'older-cursor', hasOlder: true, newestCursor: null, hasNewer: false });
+    expect(requests).toEqual([
+      'https://host.example/api/sessions/s-public/messages?limit=50&tail=true',
+      'https://host.example/api/sessions/s-public/messages?limit=50&before=older-cursor',
+    ]);
+    await expect(candidate.transport.readAfter!(sessionKey, 'newer-cursor', signal))
+      .rejects.toThrow('Invalid transcript page metadata.');
+  });
+
   it('reads forward pages and individual transcript details through the 0.1.11 routes', async () => {
     const { transport, paths } = setup();
     const signal = new AbortController().signal;

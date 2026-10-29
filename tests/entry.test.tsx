@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { HostPage } from '../examples/HostPage';
+import { RuntimeEntry } from '../examples/RuntimeEntry';
 
 const defaultTarget = {
   gateway: 'https://gateway.example:8443',
@@ -112,6 +113,65 @@ describe('direct browser entry', () => {
     expect(paths.some(path => path.endsWith('/turns'))).toBe(false);
     expect(paths.some(path => path.endsWith('/version'))).toBe(false);
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('renders configured-root history from the documented transcript page shape', async () => {
+    const message = {
+      id: 'm_root_1', seq: 1, sessionKey: defaultTarget.sessionKey, role: 'user',
+      sender: `user:${defaultTarget.principalKey}`, deviceId: defaultTarget.deviceId,
+      clientMessageId: 'c_root_1', content: 'Configured root history',
+      at: Date.parse('2026-10-29T00:00:00.000Z'), rowVersion: 1, attachments: [],
+    };
+    class ReadyWebSocket {
+      onopen: ((event: Event) => void) | null = null;
+      onmessage: ((event: MessageEvent) => void) | null = null;
+      onerror: ((event: Event) => void) | null = null;
+      onclose: ((event: CloseEvent) => void) | null = null;
+      constructor(readonly url: string) {
+        queueMicrotask(() => {
+          this.onopen?.(new Event('open'));
+          this.onmessage?.({ data: JSON.stringify({ type: 'auth_result', success: true,
+            userId: defaultTarget.principalKey, sessionKey: defaultTarget.sessionKey }) } as MessageEvent);
+        });
+      }
+      close() {}
+      send(data: string) {
+        const frame = JSON.parse(data);
+        if (frame.type === 'subscribe') {
+          this.onmessage?.({ data: JSON.stringify({ type: 'subscription_ready',
+            subscriptionId: frame.subscriptionId }) } as MessageEvent);
+        }
+      }
+    }
+    const fetchSpy = vi.fn<typeof fetch>(async (input) => {
+      const path = new URL(String(input), window.location.origin).pathname;
+      const body = path === '/chat-config.json'
+        ? defaultTarget
+        : path.endsWith('/tool-calls')
+        ? { schemaVersion: 1, resource: 'tool calls', items: [], page: { hasMoreBefore: false } }
+        : path.endsWith('/turns')
+        ? { schemaVersion: 1, resource: 'turns', items: [], page: { hasMoreBefore: false } }
+        : path.endsWith('/messages')
+        ? { schemaVersion: 1, resource: 'transcript messages', items: [message],
+          page: { oldestCursor: null, hasMoreBefore: false } }
+        : { schemaVersion: 1, resource: 'sessions', item: {
+          sessionKey: defaultTarget.sessionKey, rowVersion: 1, displayName: 'Example agent',
+        } };
+      return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+    vi.stubGlobal('WebSocket', ReadyWebSocket);
+
+    render(<RuntimeEntry />);
+
+    expect(await screen.findByText('Configured root history')).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(fetchSpy.mock.calls[0][0]).toBe('/chat-config.json');
+    const historyRequest = fetchSpy.mock.calls
+      .map(([input]) => new URL(String(input), window.location.origin))
+      .find((url) => url.pathname.endsWith('/messages'));
+    expect(historyRequest?.pathname).toBe(`/__chat/api/sessions/${encodeURIComponent(defaultTarget.sessionKey)}/messages`);
+    expect(historyRequest?.searchParams.get('tail')).toBe('true');
   });
 
   it('keeps a linked target selected and reports its local history failure', async () => {
