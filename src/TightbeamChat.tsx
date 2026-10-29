@@ -998,13 +998,11 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     turnStateAvailable: state.activityTurnStateAvailable === true,
     activeTurnRunning: state.activeTurn?.turn.status === 'running',
     activeOwnerTurnRunning: state.activeTurn?.sourceKind === 'human' && state.activeTurn.turn.status === 'running',
-    liveActivityIds: new Set(state.liveActivityIds ?? []),
-    liveActivityEligibleIds: new Set(state.liveActivityEligibleIds ?? []),
     railDenials: state.liveRailDenials ?? [],
     shownRuns,
     expandedRuns,
   }), [activityRecords, bubbles, transitions, localSendTimes, expandedRuns, shownRuns, state.activityTurnStateAvailable, state.activeTurn,
-    state.liveActivityIds, state.liveActivityEligibleIds, state.liveRailDenials, state.sessionKey,
+    state.liveRailDenials, state.sessionKey,
     state.toolCallsEnabled, toolRecords]);
   const activityFoldIds = useMemo(() => new Set([
     ...activityPlan.messageItems.filter((item): item is ActivityFold => item.kind === 'fold').map(item => item.id),

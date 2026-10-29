@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { buildActivityTrail, historyBackedActivityHasOwnerScope,
-  type ActivityBubble, type ActivityFold, type ActivityLine, type MessageActivityItem } from '../src/activityTrail';
+import { buildActivityTrail, type ActivityBubble, type ActivityFold, type ActivityLine,
+  type MessageActivityItem } from '../src/activityTrail';
 import { decodePublic019Message } from '../src/public019';
 import type { CanonicalMessage, CanonicalTransition, LiveRailDenial, ToolCallRecord } from '../src/types';
 
@@ -31,8 +31,6 @@ function build(input: {
   turnStateAvailable?: boolean;
   activeTurnRunning?: boolean;
   activeOwnerTurnRunning?: boolean;
-  liveActivityIds?: ReadonlySet<string>;
-  liveActivityEligibleIds?: ReadonlySet<string>;
   railDenials?: readonly LiveRailDenial[];
   shownRuns?: ReadonlyMap<string, string>;
   expandedRuns?: ReadonlySet<string>;
@@ -43,8 +41,7 @@ function build(input: {
     tools: input.tools ?? [], toolsEnabled: input.toolsEnabled ?? true,
     turnStateAvailable: input.turnStateAvailable ?? true, activeTurnRunning: input.activeTurnRunning ?? true,
     activeOwnerTurnRunning: input.activeOwnerTurnRunning ?? input.activeTurnRunning ?? true,
-    liveActivityIds: input.liveActivityIds ?? new Set(), railDenials: input.railDenials ?? [],
-    liveActivityEligibleIds: input.liveActivityEligibleIds ?? new Set(),
+    railDenials: input.railDenials ?? [],
     shownRuns: input.shownRuns ?? new Map(), expandedRuns: input.expandedRuns ?? new Set(),
   });
 }
@@ -290,11 +287,9 @@ describe('activity trail projection', () => {
     const delivered = readHistory();
     const liveBubbles = [bubble(delivered[0], 'human'), bubble(delivered[3], 'agent')];
     const whenDelivered = build({ records: [delivered[1], delivered[2]], bubbles: liveBubbles,
-      liveActivityIds: new Set([first.id, second.id]),
-      liveActivityEligibleIds: new Set([first.id, second.id]),
       activeTurnRunning: false,
     });
-    // A new Chat lifetime decodes retained history again, with no live-feed ids.
+    // A new Chat lifetime decodes retained history again from the same canonical rows.
     const reloaded = readHistory();
     const afterReload = build({ records: [reloaded[1], reloaded[2]],
       bubbles: [bubble(reloaded[0], 'human'), bubble(reloaded[3], 'agent')], activeTurnRunning: false });
@@ -310,20 +305,22 @@ describe('activity trail projection', () => {
     ]);
   });
 
-  it('rebuilds a retained tail fold from stored canonical history', () => {
+  it('rebuilds a retained activity fold when a later owner reply closes the history gap', () => {
     const prompt = message('tail-history-prompt', 1, 'user:person', 'A question', {
       role: 'user', messageType: 'chat', turnSeq: 9,
     });
-    const reply = message('tail-history-reply', 2, 'assistant-service', 'The answer', {
-      role: 'assistant', messageType: 'assistant', turnSeq: 9, replyToMessageId: prompt.id,
-    });
-    const reminder = (id: string, seq: number, assignment: string, task: string) => message(id, seq,
-      'process:events', `Assignment ${assignment} (Background ${task}) has had no recorded activity since 12`, {
+    const first = message('tail-reminder-first', 2, 'process:events',
+      'Assignment asg_12345678-1111-4111-8111-123456789abc (Background review) has had no recorded activity since 12', {
         messageType: 'substrate', turnSeq: 9,
       });
-    const first = reminder('tail-reminder-first', 4, 'asg_12345678-1111-4111-8111-123456789abc', 'review');
-    const second = reminder('tail-reminder-second', 5, 'asg_abcdef12-1111-4111-8111-123456789abc', 'build');
-    const storedRows = [prompt, reply, first, second].map(record => ({
+    const second = message('tail-reminder-second', 3, 'process:events',
+      'Assignment asg_abcdef12-1111-4111-8111-123456789abc (Background build) has had no recorded activity since 12', {
+        messageType: 'substrate', turnSeq: 9,
+      });
+    const reply = message('tail-history-reply', 4, 'assistant-service', 'The answer', {
+      role: 'assistant', messageType: 'assistant', turnSeq: 9, replyToMessageId: prompt.id,
+    });
+    const storedRows = [prompt, first, second, reply].map(record => ({
       id: record.id, sessionKey: record.sessionKey, seq: record.seq, rowVersion: record.rowVersion,
       role: record.role, sender: record.sender, content: record.content, messageType: record.messageType,
       turnSeq: record.turnSeq, replyToMessageId: record.replyToMessageId, at: record.seq * 1_000, attachments: [],
@@ -334,14 +331,11 @@ describe('activity trail projection', () => {
       return decoded;
     });
     const delivered = readHistory();
-    const whenDelivered = build({ records: [delivered[2], delivered[3]],
-      bubbles: [bubble(delivered[0], 'human'), bubble(delivered[1], 'agent')],
-      liveActivityIds: new Set([first.id, second.id]), liveActivityEligibleIds: new Set([first.id, second.id]),
-      activeTurnRunning: false,
-    });
+    const whenDelivered = build({ records: [delivered[1], delivered[2]],
+      bubbles: [bubble(delivered[0], 'human'), bubble(delivered[3], 'agent')], activeTurnRunning: false });
     const reloaded = readHistory();
-    const afterReload = build({ records: [reloaded[2], reloaded[3]],
-      bubbles: [bubble(reloaded[0], 'human'), bubble(reloaded[1], 'agent')], activeTurnRunning: false,
+    const afterReload = build({ records: [reloaded[1], reloaded[2]],
+      bubbles: [bubble(reloaded[0], 'human'), bubble(reloaded[3], 'agent')], activeTurnRunning: false,
     });
 
     expect(afterReload.messageItems).toEqual(whenDelivered.messageItems);
@@ -392,29 +386,22 @@ describe('activity trail projection', () => {
       if (decoded.kind !== 'message') throw new Error('Expected retained message row');
       return decoded;
     });
-    const project = (records: readonly CanonicalMessage[], live = false) => {
+    const project = (records: readonly CanonicalMessage[]) => {
       const byId = new Map(records.map(record => [record.id, record]));
       const activity = records.filter(record => record.isBatchCarrier === true ||
         record.id.startsWith('history-older-page') || record.id === 'history-owner-gap' ||
         record.id.startsWith('history-other-agent') || record.id === 'history-process-notice' ||
         record.id === 'history-external-reply' || record.id === 'history-unrelated-marker');
-      const liveIds = live ? new Set(activity.map(record => record.id)) : new Set<string>();
-      const liveEligibleIds = live
-        ? new Set(activity.filter(record => historyBackedActivityHasOwnerScope(record, records, 'person', undefined,
-          false)).map(record => record.id))
-        : new Set<string>();
       return build({ records: activity, bubbles: [
         bubble(byId.get('history-prompt-one')!, 'human'), bubble(byId.get('history-reply-one')!, 'agent'),
         bubble(byId.get('history-prompt-two')!, 'human'), bubble(byId.get('history-reply-two')!, 'agent'),
-      ], liveActivityIds: liveIds, liveActivityEligibleIds: liveEligibleIds, activeTurnRunning: false });
+      ], activeTurnRunning: false });
     };
     const history = readHistory();
     expect(history.filter(record => record.isBatchCarrier).map(record => record.turnSeq)).toEqual([77, 77, 77, 77, 77]);
     expect(history.filter(record => record.id.startsWith('history-prompt') || record.id.startsWith('history-reply'))
       .map(record => record.turnSeq)).toEqual([1, 1, 2, 2]);
-    const ineligibleBatch = history.find(record => record.id === 'history-older-non-owner')!;
-    expect(historyBackedActivityHasOwnerScope(ineligibleBatch, history, 'person', undefined, false)).toBe(false);
-    const beforeLeave = project(history, true);
+    const beforeLeave = project(history);
     const afterReturn = project(readHistory());
     const afterReload = project(readHistory());
 
@@ -423,14 +410,13 @@ describe('activity trail projection', () => {
     expect(beforeLeave.messageItems.some(item => item.id.includes('member:history-older-non-owner'))).toBe(false);
     const renderedIds = beforeLeave.messageItems.flatMap(item => item.kind === 'fold' ? item.lines.map(line => line.id) : [item.id]);
     for (const hiddenId of ['history-older-page-process', 'history-older-non-owner', 'history-other-agent-wake',
-      'history-process-notice', 'history-external-reply', 'history-unrelated-marker']) {
+      'history-process-notice', 'history-external-reply', 'history-unrelated-marker', 'history-owner-gap']) {
       expect(renderedIds.some(id => id.includes(hiddenId))).toBe(false);
     }
     expect(afterReturn.messageItems).toMatchObject([
       { kind: 'fold', id: 'member:history-gap-first:member:3', runKey: 'run:history-prompt-one',
         lines: [{ id: 'member:history-gap-first:member:3' }, { id: 'member:history-gap-second:member:5567' }],
         summary: { presentation: { text: 'No recent activity · Background build', metadata: 'asg_abcd' } } },
-      { kind: 'substrate', id: 'message:history-owner-gap', runKey: 'run:history-reply-one' },
       { kind: 'fold', id: 'member:history-tail-first:member:5569', runKey: 'run:history-prompt-two',
         lines: [{ id: 'member:history-tail-first:member:5569' }, { id: 'member:history-tail-second:member:5570' }],
         summary: { presentation: { text: 'No recent activity · Background build', metadata: 'asg_aaaa' } } },
@@ -515,8 +501,7 @@ describe('activity trail projection', () => {
       'A notice inside the owner turn', '', 'coalesced by notices',
     ].join('\n'), { isBatchCarrier: true, messageType: 'substrate', turnSeq: 77 });
     const live = build({ records: [carrier], bubbles: [bubble(firstPrompt, 'human'), bubble(firstReply, 'agent')],
-      activeTurnRunning: false, liveActivityIds: new Set([carrier.id]),
-      liveActivityEligibleIds: new Set([carrier.id]) });
+      activeTurnRunning: false });
     const afterReload = build({ records: [carrier], bubbles: [bubble(firstPrompt, 'human'), bubble(firstReply, 'agent')],
       activeTurnRunning: false });
 
@@ -526,15 +511,14 @@ describe('activity trail projection', () => {
     expect(afterReload.messageItems[0].position).toEqual({ sequence: 2, phase: 1, order: 5567 });
   });
 
-  it('keeps a later-gap activity only when its retained turn is owner-scoped', () => {
+  it('drops later-gap activity after the owner turn ends without a later reply', () => {
     const prompt = message('prompt', 1, 'user:person');
     const reply = message('reply', 2, 'assistant-service', 'Answer', { role: 'assistant', turnSeq: 1 });
     const beforeTool = message('before-tool', 3, 'process:work', 'Before tool', { messageType: 'substrate', turnSeq: 1 });
     const plan = build({ records: [beforeTool], bubbles: [bubble(prompt, 'human'), bubble(reply, 'agent')],
-      turnStateAvailable: false, activeTurnRunning: false, liveActivityIds: new Set([beforeTool.id]),
-      liveActivityEligibleIds: new Set([beforeTool.id]) });
+      turnStateAvailable: false, activeTurnRunning: false });
 
-    expect(plan.messageItems.map(item => item.id)).toEqual(['message:before-tool']);
+    expect(plan.messageItems).toEqual([]);
   });
 
   it('excludes an unproven external assistant reply from live and reloaded pills', () => {
@@ -546,8 +530,7 @@ describe('activity trail projection', () => {
       role: 'assistant', turnSeq: 1, replyToMessageId: prompt.id,
     });
     const bubbles = [bubble(prompt, 'human'), bubble(reply, 'agent')];
-    const live = build({ records: [externalReply], bubbles, turnStateAvailable: true, activeTurnRunning: false,
-      liveActivityIds: new Set([externalReply.id]), liveActivityEligibleIds: new Set([externalReply.id]) });
+    const live = build({ records: [externalReply], bubbles, turnStateAvailable: true, activeTurnRunning: false });
     const afterReload = build({ records: [externalReply], bubbles, turnStateAvailable: true, activeTurnRunning: false });
 
     expect(live.messageItems).toEqual([]);
@@ -561,8 +544,7 @@ describe('activity trail projection', () => {
       messageType: 'agent', turnSeq: 77,
     });
     const bubbles = [bubble(prompt, 'human'), bubble(reply, 'agent')];
-    const live = build({ records: [activity], bubbles, turnStateAvailable: true, activeTurnRunning: false,
-      liveActivityIds: new Set([activity.id]), liveActivityEligibleIds: new Set([activity.id]) });
+    const live = build({ records: [activity], bubbles, turnStateAvailable: true, activeTurnRunning: false });
     const afterReturn = build({ records: [activity], bubbles, turnStateAvailable: true, activeTurnRunning: false });
     expect(afterReturn.messageItems).toEqual(live.messageItems);
     expect(afterReturn.messageItems).toMatchObject([{ id: 'message:activity', kind: 'agent' }]);
@@ -573,33 +555,69 @@ describe('activity trail projection', () => {
     const nextPrompt = message('next-prompt', 5, 'user:person', 'Next question', { role: 'user', turnSeq: 2 });
     const outsideBubbles = [...bubbles, bubble(nextPrompt, 'human')];
     const liveOlderPage = build({ records: [unmatched], bubbles: outsideBubbles, turnStateAvailable: true,
-      activeTurnRunning: false, liveActivityIds: new Set([unmatched.id]),
-      liveActivityEligibleIds: new Set([unmatched.id]) });
+      activeTurnRunning: false });
     const reloadedOlderPage = build({ records: [unmatched], bubbles: outsideBubbles, turnStateAvailable: true,
       activeTurnRunning: false });
     expect(liveOlderPage.messageItems).toEqual([]);
     expect(reloadedOlderPage.messageItems).toEqual(liveOlderPage.messageItems);
   });
 
-  it('does not preserve an unmatched live tail pill that canonical history cannot reconstruct', () => {
+  it('shows activity after an interim reply during a running owner turn and applies the no-later-reply limit consistently', () => {
     const prompt = message('prompt', 1, 'user:person', 'Question', { role: 'user', turnSeq: 1 });
-    const activity = message('unscoped-tail', 2, 'agent:helper', 'Outside the owner turn', {
-      messageType: 'agent', turnSeq: 77,
+    const interimReply = message('interim-reply', 2, 'assistant-service', 'First part of the answer', {
+      role: 'assistant', turnSeq: 1, replyToMessageId: prompt.id,
     });
-    const live = build({ records: [activity], bubbles: [bubble(prompt, 'human')], turnStateAvailable: true,
-      activeTurnRunning: false, liveActivityIds: new Set([activity.id]),
-      liveActivityEligibleIds: new Set([activity.id]) });
-    const afterReload = build({ records: [activity], bubbles: [bubble(prompt, 'human')], turnStateAvailable: true,
-      activeTurnRunning: false });
-    expect(live.messageItems).toEqual([]);
-    expect(afterReload.messageItems).toEqual(live.messageItems);
+    const activity = message('after-interim', 3, 'process:work', 'A notice during the running owner turn', {
+      messageType: 'substrate', turnSeq: 1,
+    });
+    const bubbles = [bubble(prompt, 'human'), bubble(interimReply, 'agent')];
+    const liveWhileRunning = build({ records: [activity], bubbles, turnStateAvailable: true,
+      activeTurnRunning: true, activeOwnerTurnRunning: true });
+    const reloadedWhileRunning = build({ records: [activity], bubbles, turnStateAvailable: true,
+      activeTurnRunning: true, activeOwnerTurnRunning: true });
 
-    const activeOwnerTail = build({ records: [activity], bubbles: [bubble(prompt, 'human')],
-      turnStateAvailable: true, activeTurnRunning: true, liveActivityIds: new Set([activity.id]) });
-    const reloadedActiveTail = build({ records: [activity], bubbles: [bubble(prompt, 'human')],
-      turnStateAvailable: true, activeTurnRunning: true });
-    expect(activeOwnerTail.messageItems).toEqual(reloadedActiveTail.messageItems);
-    expect(reloadedActiveTail.messageItems).toMatchObject([{ id: 'message:unscoped-tail' }]);
+    expect(liveWhileRunning.messageItems).toEqual(reloadedWhileRunning.messageItems);
+    expect(reloadedWhileRunning.messageItems).toMatchObject([{ id: 'message:after-interim', kind: 'substrate' }]);
+
+    // A matching turnSeq is not an ordered turn-end row; without a later reply,
+    // this activity stops appearing once the owner turn has completed.
+    const liveAfterTurnEnds = build({ records: [activity], bubbles, turnStateAvailable: true,
+      activeTurnRunning: false, activeOwnerTurnRunning: false });
+    const reloadedAfterTurnEnds = build({ records: [activity], bubbles, turnStateAvailable: true,
+      activeTurnRunning: false, activeOwnerTurnRunning: false });
+    expect(liveAfterTurnEnds.messageItems).toEqual(reloadedAfterTurnEnds.messageItems);
+    expect(reloadedAfterTurnEnds.messageItems).toEqual([]);
+
+    const finalReply = message('final-reply', 4, 'assistant-service', 'The answer is complete', {
+      role: 'assistant', turnSeq: 1, replyToMessageId: prompt.id,
+    });
+    const closedByReply = build({ records: [activity], bubbles: [...bubbles, bubble(finalReply, 'agent')],
+      turnStateAvailable: true, activeTurnRunning: false, activeOwnerTurnRunning: false });
+    expect(closedByReply.messageItems).toMatchObject([{ id: 'message:after-interim', kind: 'substrate' }]);
+  });
+
+  it('does not admit unrelated activity just because another turn is running', () => {
+    const prompt = message('prompt', 1, 'user:person', 'Question', { role: 'user', turnSeq: 1 });
+    const unrelated = [
+      message('other-agent-wake', 2, 'agent:helper', '[woke: fallback deadline]\nUnrelated wake', {
+        messageType: 'agent', turnSeq: 77,
+      }),
+      message('direct-process-notice', 3, 'process:events', 'Process notice outside the owner turn', {
+        messageType: 'substrate', turnSeq: 77,
+      }),
+      message('non-owner-marker', 4, 'process:notifications', 'Marker outside the owner turn', {
+        messageType: 'substrate', turnSeq: 77,
+      }),
+    ];
+    const bubbles = [bubble(prompt, 'human')];
+
+    const whileOtherTurnRuns = build({ records: unrelated, bubbles, turnStateAvailable: true,
+      activeTurnRunning: true, activeOwnerTurnRunning: false });
+    const afterReturn = build({ records: unrelated, bubbles, turnStateAvailable: true,
+      activeTurnRunning: false, activeOwnerTurnRunning: false });
+
+    expect(whileOtherTurnRuns.messageItems).toEqual([]);
+    expect(afterReturn.messageItems).toEqual(whileOtherTurnRuns.messageItems);
   });
 
   it('keeps rail denials scoped to the selected session and live tail eligibility', () => {
@@ -623,7 +641,7 @@ describe('activity trail projection', () => {
     const prompt = message('prompt', 1, 'user:person');
     const activity = message('session-message', 2, 'session:helper', 'Helper is working');
     const live = build({ records: [activity], bubbles: [bubble(prompt, 'human')], turnStateAvailable: false,
-      activeTurnRunning: false, liveActivityIds: new Set([activity.id]) });
+      activeTurnRunning: false });
     const afterReload = build({ records: [activity], bubbles: [bubble(prompt, 'human')], turnStateAvailable: false,
       activeTurnRunning: false });
     expect(live.messageItems).toEqual([]);

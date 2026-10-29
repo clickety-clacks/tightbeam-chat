@@ -296,10 +296,6 @@ describe('conversation surface', () => {
         batchAnswer, unprovenHuman, mismatchedHuman, substrateMarker, outsideOwnerMarker],
       provenanceAvailable: false,
       activityTurnStateAvailable: true,
-      liveActivityIds: [outsideOwnerMarker.id, otherTrigger.id, otherAnswer.id, batch.id, substrateMarker.id],
-      // Simulate an over-broad live arrival flag; owner-scoped projection must
-      // still keep unrelated activity hidden and match its reloaded history.
-      liveActivityEligibleIds: [outsideOwnerMarker.id, otherTrigger.id, otherAnswer.id, batch.id, substrateMarker.id],
     });
     render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
 
@@ -346,8 +342,6 @@ describe('conversation surface', () => {
     }));
     const liveActivity = visibleActivity();
     expect(liveActivity.map(row => row.record)).toContain('member:batch-trigger:member:2');
-    act(() => runtime.update({ liveActivityIds: [], liveActivityEligibleIds: [] }));
-    expect(visibleActivity()).toEqual(liveActivity);
   });
 
   it('keeps owner-scoped activity while preserving human exchanges across pages, live updates, and reconnects', async () => {

@@ -125,91 +125,6 @@ class ControlledTransport implements ChatTransport {
 async function settle() { await vi.waitFor(() => {}, { timeout: 50 }); }
 
 describe('framework-independent runtime', () => {
-  it('keeps activity without owner-turn evidence out of the live eligible set', async () => {
-    const transport = new ControlledTransport();
-    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
-    await runtime.rebuild();
-    const activity = message(9, { role: 'user', sender: 'session:helper', messageType: undefined });
-    transport.emit(activity);
-    expect(runtime.getSnapshot().liveActivityIds).toContain(activity.id);
-    expect(runtime.getSnapshot().liveActivityEligibleIds).not.toContain(activity.id);
-    runtime.dispose();
-  });
-
-  it('marks activity live-eligible only when the selected user turn is running at arrival', async () => {
-    const transport = new ControlledTransport();
-    const settledTurn: CanonicalTurn = { seq: 80, sessionKey, status: 'completed', messageId: 'm8',
-      origin: 'user:person', triggerSource: 'mike', raw: { rowVersion: 1 } };
-    transport.tailHook = () => transport.callbacks?.onNotice({ operation: 'turn', turn: settledTurn });
-    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
-    await runtime.rebuild();
-    expect(runtime.getSnapshot().activityTurnStateAvailable).toBe(true);
-
-    const idleActivity = message(9, { role: 'user', sender: 'agent:helper', messageType: 'agent' });
-    transport.emit(idleActivity);
-    expect(runtime.getSnapshot().liveActivityIds).toContain(idleActivity.id);
-    expect(runtime.getSnapshot().liveActivityEligibleIds).not.toContain(idleActivity.id);
-
-    const runningTurn: CanonicalTurn = { ...settledTurn, seq: 81, status: 'running', messageId: 'm9',
-      triggerSource: 'agent',
-      raw: { rowVersion: 1 } };
-    transport.callbacks?.onNotice({ operation: 'turn', turn: runningTurn });
-    expect(runtime.getSnapshot().activeTurn?.turn.seq).toBe(81);
-    expect(runtime.getSnapshot().liveActivityEligibleIds).not.toContain(idleActivity.id);
-    transport.emit({ ...idleActivity, rowVersion: 2, content: 'Updated after the next turn started' });
-    expect(runtime.getSnapshot().liveActivityEligibleIds).not.toContain(idleActivity.id);
-
-    const excludedWhileAnotherAgentRuns = [
-      message(10, { role: 'assistant', sender: 'process:notifications', messageType: 'substrate', turnSeq: 77 }),
-      message(11, { role: 'user', sender: 'agent:helper', messageType: 'agent', turnSeq: 77,
-        content: "[woke: fallback deadline]\nWake outside the selected user's turn" }),
-      message(12, { role: 'user', sender: 'process:events', messageType: 'process', turnSeq: 77 }),
-    ];
-    for (const activity of excludedWhileAnotherAgentRuns) {
-      transport.emit(activity);
-      expect(runtime.getSnapshot().liveActivityIds).toContain(activity.id);
-      expect(runtime.getSnapshot().liveActivityEligibleIds).not.toContain(activity.id);
-    }
-
-    transport.callbacks?.onNotice({ operation: 'turn', turn: { ...runningTurn, status: 'completed',
-      raw: { rowVersion: 2 } } });
-
-    const ownerPrompt = message(20, { role: 'user', sender: 'user:person', messageType: 'chat', turnSeq: 82 });
-    transport.emit(ownerPrompt);
-    const ownerTurn: CanonicalTurn = { ...settledTurn, seq: 82, status: 'running', messageId: ownerPrompt.id,
-      raw: { rowVersion: 1 } };
-    transport.callbacks?.onNotice({ operation: 'turn', turn: ownerTurn });
-    const ownerActivity = message(21, { role: 'user', sender: 'process:work', messageType: 'substrate' });
-    transport.emit(ownerActivity);
-    expect(runtime.getSnapshot().liveActivityEligibleIds).toContain(ownerActivity.id);
-
-    transport.emit({ ...ownerActivity, rowVersion: 2, content: 'Updated while the owner turn remains active' });
-    expect(runtime.getSnapshot().liveActivityEligibleIds).toContain(ownerActivity.id);
-
-    transport.callbacks?.onNotice({ operation: 'turn', turn: { ...ownerTurn, status: 'completed',
-      raw: { rowVersion: 2 } } });
-    const ownerReply = message(30, { role: 'assistant', sender: 'assistant-service', messageType: 'assistant',
-      turnSeq: 82, replyToMessageId: ownerPrompt.id });
-    transport.emit(ownerReply);
-    const delayedOwnerActivity = message(22, { role: 'user', sender: 'process:work', messageType: 'substrate', turnSeq: 82 });
-    transport.emit(delayedOwnerActivity);
-    expect(runtime.getSnapshot().liveActivityEligibleIds).toContain(delayedOwnerActivity.id);
-
-    const laterBatch = message(25, { role: 'user', sender: 'process:notifications', messageType: 'substrate', turnSeq: 77,
-      isBatchCarrier: true, content: [
-        '[from process:notifications]', '', '[batched notices: 1]', 'batchId=late-batch', 'release=example',
-        '[5567] source=process:events sender=process:events cause=notice class=fyi',
-        'A notice delivered between the owner prompt and reply', '', 'coalesced by notices',
-      ].join('\n') });
-    transport.emit(laterBatch);
-    expect(runtime.getSnapshot().liveActivityEligibleIds).toContain(laterBatch.id);
-
-    const outsideOwnerTurn = message(31, { role: 'user', sender: 'process:events', messageType: 'substrate', turnSeq: 77 });
-    transport.emit(outsideOwnerTurn);
-    expect(runtime.getSnapshot().liveActivityEligibleIds).not.toContain(outsideOwnerTurn.id);
-    runtime.dispose();
-  });
-
   it('treats retained rows as history after opening a replacement live subscription', async () => {
     const transport = new ControlledTransport();
     const settledTurn: CanonicalTurn = { seq: 80, sessionKey, status: 'completed', messageId: 'm8',
@@ -226,8 +141,6 @@ describe('framework-independent runtime', () => {
 
     expect(transport.callbacks).not.toBe(previousCallbacks);
     expect(runtime.getSnapshot().records.some(record => record.id === activity.id)).toBe(true);
-    expect(runtime.getSnapshot().liveActivityIds).not.toContain(activity.id);
-    expect(runtime.getSnapshot().liveActivityEligibleIds).not.toContain(activity.id);
     runtime.dispose();
   });
 
