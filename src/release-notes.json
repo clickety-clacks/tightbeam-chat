@@ -3,7 +3,7 @@
     "version": "v0.1.55",
     "items": [
       {
-        "title": "Keep idle live updates connected",
+        "title": "Send a keepalive on idle live updates",
         "description": "The live updates connection now sends a small keepalive while idle, without changing the connection used to send messages."
       }
     ]
