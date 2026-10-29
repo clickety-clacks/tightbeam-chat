@@ -431,7 +431,7 @@ describe('activity trail projection', () => {
       { kind: 'fold', id: 'member:history-gap-first:member:3', runKey: 'run:history-prompt-one',
         lines: [{ id: 'member:history-gap-first:member:3' }, { id: 'member:history-gap-second:member:5567' }],
         summary: { presentation: { text: 'No recent activity · Background build', metadata: 'asg_abcd' } } },
-      { kind: 'line', id: 'message:history-owner-gap', runKey: 'run:history-reply-one' },
+      { kind: 'substrate', id: 'message:history-owner-gap', runKey: 'run:history-reply-one' },
       { kind: 'fold', id: 'member:history-tail-first:member:5569', runKey: 'run:history-prompt-two',
         lines: [{ id: 'member:history-tail-first:member:5569' }, { id: 'member:history-tail-second:member:5570' }],
         summary: { presentation: { text: 'No recent activity · Background build', metadata: 'asg_aaaa' } } },
@@ -524,7 +524,7 @@ describe('activity trail projection', () => {
 
     expect(afterReload.messageItems).toEqual(live.messageItems);
     expect(afterReload.messageItems).toMatchObject([{ id: 'member:owner-turn-carrier:member:5567',
-      runKey: 'run:first-prompt', kind: 'line' }]);
+      runKey: 'run:first-prompt', kind: 'substrate' }]);
     expect(afterReload.messageItems[0].position).toEqual({ sequence: 2, phase: 1, order: 5567 });
   });
 
@@ -550,7 +550,7 @@ describe('activity trail projection', () => {
       liveActivityIds: new Set([activity.id]), liveActivityEligibleIds: new Set([activity.id]) });
     const afterReturn = build({ records: [activity], bubbles, turnStateAvailable: true, activeTurnRunning: false });
     expect(afterReturn.messageItems).toEqual(live.messageItems);
-    expect(afterReturn.messageItems).toMatchObject([{ id: 'message:activity', kind: 'line' }]);
+    expect(afterReturn.messageItems).toMatchObject([{ id: 'message:activity', kind: 'agent' }]);
 
     const unmatched = message('unmatched', 4, 'process:events', 'Outside the owner turn', {
       messageType: 'substrate', turnSeq: 77,
@@ -604,11 +604,14 @@ describe('activity trail projection', () => {
     expect(noTurnState.messageItems).toHaveLength(1);
   });
 
-  it('shows a live session-addressed agent message when turn records are unavailable', () => {
+  it('excludes a session-addressed agent message without owner-turn evidence both live and after reload', () => {
     const prompt = message('prompt', 1, 'user:person');
     const activity = message('session-message', 2, 'session:helper', 'Helper is working');
-    const plan = build({ records: [activity], bubbles: [bubble(prompt, 'human')], turnStateAvailable: false,
+    const live = build({ records: [activity], bubbles: [bubble(prompt, 'human')], turnStateAvailable: false,
       activeTurnRunning: false, liveActivityIds: new Set([activity.id]) });
-    expect(plan.messageItems).toMatchObject([{ kind: 'agent', gist: 'Another agent — Helper is working' }]);
+    const afterReload = build({ records: [activity], bubbles: [bubble(prompt, 'human')], turnStateAvailable: false,
+      activeTurnRunning: false });
+    expect(live.messageItems).toEqual([]);
+    expect(afterReload.messageItems).toEqual(live.messageItems);
   });
 });
