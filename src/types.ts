@@ -285,7 +285,7 @@ export interface RuntimeState {
   readonly activityTurnStateAvailable?: boolean;
   /** Message ids observed on the live subscription; used only for the live-tail rule. */
   readonly liveActivityIds?: readonly string[];
-  /** Live message ids that arrived while turn activity was unknown or running. */
+  /** Live message ids whose delivered sequence falls in the selected owner's conversation. */
   readonly liveActivityEligibleIds?: readonly string[];
   /** Ephemeral rail.denied observations; they are not transcript history. */
   readonly liveRailDenials?: readonly LiveRailDenial[];

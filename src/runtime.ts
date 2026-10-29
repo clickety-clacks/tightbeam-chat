@@ -30,6 +30,7 @@ import {
 } from './types';
 import { ToolHistoryUnavailableError } from './toolHistory';
 import { createTurnProvenance } from './provenance';
+import { historyBackedActivityHasOwnerScope } from './activityTrail';
 import { getIndex, putIndex, trimIndexBelow } from './recordIndex';
 
 const LIVE_RECONNECTING_AFTER_MS = 1_000;
@@ -238,16 +239,15 @@ class SessionRuntime implements ChatRuntime {
     return false;
   }
 
-  private liveOwnerTurnEligibleAtArrival(): boolean {
+  private liveOwnerTurnEligibleAtArrival(record: CanonicalMessage): boolean {
     if (!this.activityTurnStateAvailable) return false;
-    let running: CanonicalTurn | undefined;
-    for (const turn of this.turns.values()) {
-      if (turn.status === 'running' && (!running || turn.seq > running.seq)) running = turn;
-    }
-    if (!running) return false;
-    const records = [...this.rows.values()];
-    return createTurnProvenance(running, records, this.identity.principalKey,
+    const records = recordsFrom(this.rows).filter((row): row is CanonicalMessage => row.kind === 'message');
+    const isOwnerTurn = (turn: CanonicalTurn) => createTurnProvenance(turn, records, this.identity.principalKey,
       this.state.session?.raw.ownerUserId).sourceKind === 'human';
+    const activeOwnerTurnRunning = [...this.turns.values()].some(turn =>
+      turn.status === 'running' && isOwnerTurn(turn));
+    return historyBackedActivityHasOwnerScope(record, records, this.identity.principalKey,
+      this.state.session?.raw.ownerUserId, activeOwnerTurnRunning);
   }
 
   private stopTools(): void {
@@ -508,7 +508,7 @@ class SessionRuntime implements ChatRuntime {
             /^(?:agent|process|remedy|session):/.test(record.sender ?? ''))) {
           const firstLiveArrival = !this.liveActivityIds.has(record.id);
           this.liveActivityIds.add(record.id);
-          if (firstLiveArrival && this.liveOwnerTurnEligibleAtArrival()) this.liveActivityEligibleIds.add(record.id);
+          if (firstLiveArrival && this.liveOwnerTurnEligibleAtArrival(record)) this.liveActivityEligibleIds.add(record.id);
         }
         return true;
       }

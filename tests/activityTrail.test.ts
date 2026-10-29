@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { buildActivityTrail, type ActivityBubble, type ActivityFold, type ActivityLine, type MessageActivityItem } from '../src/activityTrail';
+import { buildActivityTrail, historyBackedActivityHasOwnerScope,
+  type ActivityBubble, type ActivityFold, type ActivityLine, type MessageActivityItem } from '../src/activityTrail';
 import { decodePublic019Message } from '../src/public019';
 import type { CanonicalMessage, CanonicalTransition, LiveRailDenial, ToolCallRecord } from '../src/types';
 
@@ -398,13 +399,9 @@ describe('activity trail projection', () => {
         record.id.startsWith('history-other-agent') || record.id === 'history-process-notice' ||
         record.id === 'history-external-reply' || record.id === 'history-unrelated-marker');
       const liveIds = live ? new Set(activity.map(record => record.id)) : new Set<string>();
-      // Model the runtime's selected-human-turn admission: the batch carriers
-      // inside owner exchanges and the row tied to the retained owner turn are
-      // eligible. Non-owner rows are present on the feed but never admitted.
-      const ownerTurnIds = new Set(['history-gap-first', 'history-gap-second', 'history-owner-gap',
-        'history-tail-first', 'history-tail-second']);
       const liveEligibleIds = live
-        ? new Set(activity.filter(record => ownerTurnIds.has(record.id)).map(record => record.id))
+        ? new Set(activity.filter(record => historyBackedActivityHasOwnerScope(record, records, 'person', undefined,
+          false)).map(record => record.id))
         : new Set<string>();
       return build({ records: activity, bubbles: [
         bubble(byId.get('history-prompt-one')!, 'human'), bubble(byId.get('history-reply-one')!, 'agent'),
@@ -536,6 +533,23 @@ describe('activity trail projection', () => {
       liveActivityEligibleIds: new Set([beforeTool.id]) });
 
     expect(plan.messageItems.map(item => item.id)).toEqual(['message:before-tool']);
+  });
+
+  it('excludes an unproven external assistant reply from live and reloaded pills', () => {
+    const prompt = message('external-reply-prompt', 1, 'user:person', 'Question', { role: 'user', turnSeq: 1 });
+    const externalReply = message('external-reply', 2, 'agent:external', 'Unproven external response', {
+      role: 'assistant', messageType: 'assistant', turnSeq: 77,
+    });
+    const reply = message('external-reply-owner-answer', 3, 'assistant-service', 'Owner answer', {
+      role: 'assistant', turnSeq: 1, replyToMessageId: prompt.id,
+    });
+    const bubbles = [bubble(prompt, 'human'), bubble(reply, 'agent')];
+    const live = build({ records: [externalReply], bubbles, turnStateAvailable: true, activeTurnRunning: false,
+      liveActivityIds: new Set([externalReply.id]), liveActivityEligibleIds: new Set([externalReply.id]) });
+    const afterReload = build({ records: [externalReply], bubbles, turnStateAvailable: true, activeTurnRunning: false });
+
+    expect(live.messageItems).toEqual([]);
+    expect(afterReload.messageItems).toEqual(live.messageItems);
   });
 
   it('uses the same owner-turn evidence for live, returned and reloaded history', () => {

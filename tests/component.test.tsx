@@ -291,6 +291,9 @@ describe('conversation surface', () => {
         row(sessionKey, 'batch-member', 'Batch question from the person', { seq: 3, role: 'user', sender: 'user:person', turnSeq: 3 }),
         batchAnswer, unprovenHuman, mismatchedHuman, substrateMarker],
       provenanceAvailable: false,
+      activityTurnStateAvailable: true,
+      liveActivityIds: [otherTrigger.id, otherAnswer.id, batch.id, substrateMarker.id],
+      liveActivityEligibleIds: [batch.id],
     });
     render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
 
@@ -330,6 +333,14 @@ describe('conversation surface', () => {
     expect(screen.queryByRole('button', { name: /load earlier/i })).toBeNull();
     expect(screen.getByRole('textbox', { name: 'Message to Research assistant' }).getAttribute('placeholder'))
       .toBe('Research assistant');
+
+    const visibleActivity = () => [...log.querySelectorAll<HTMLElement>('.tb-chat-activity-pill-row')].map((element) => ({
+      record: element.dataset.recordKey, run: element.dataset.activityRun, text: element.textContent,
+    }));
+    const liveActivity = visibleActivity();
+    expect(liveActivity.map(row => row.record)).toContain('message:batch-trigger:member:2');
+    act(() => runtime.update({ liveActivityIds: [], liveActivityEligibleIds: [] }));
+    expect(visibleActivity()).toEqual(liveActivity);
   });
 
   it('keeps owner-scoped activity while preserving human exchanges across pages, live updates, and reconnects', async () => {

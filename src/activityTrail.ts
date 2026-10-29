@@ -1,5 +1,5 @@
 import type { CanonicalMessage, CanonicalTransition, LiveRailDenial, ToolCallRecord } from './types';
-import { parseBatchMembers, type HumanMember, type ParsedBatchMember } from './messageVisibility';
+import { parseBatchMembers, projectMessages, type HumanMember, type ParsedBatchMember } from './messageVisibility';
 import { activityPillPresentation, type ActivityPillPresentation } from './activityPresentation';
 
 export type ActivityKind = 'tool' | 'agent' | 'substrate' | 'rail';
@@ -123,6 +123,9 @@ const rawSource = (message: CanonicalMessage): string | undefined =>
 function messageCandidate(message: CanonicalMessage, live: boolean, liveTailEligibleAtArrival: boolean): Candidate | undefined {
   const sender = message.sender ?? '';
   if (message.isBatchCarrier || /^\[batched notices:/i.test(message.content)) return undefined;
+  // An assistant-role reply from another session has no owner-visible parent
+  // relation. Keep it out of activity pills just as the bubble projection does.
+  if (message.role === 'assistant' && /^(?:agent|session):/.test(sender)) return undefined;
   const id = `message:${message.id}`;
   const parsedTime = message.createdAt ? Date.parse(message.createdAt) : Number.NaN;
   const sortTime = Number.isFinite(parsedTime) ? parsedTime : undefined;
@@ -249,6 +252,58 @@ function bubbleEvents(bubbles: readonly ActivityBubble[]): BubbleEvent[] {
   return events;
 }
 
+function retainedOwnerTurnSequences(orderedBubbles: readonly BubbleEvent[]): Set<number> {
+  return new Set(orderedBubbles.filter(bubble => bubble.ownerTurnScoped)
+    .map(bubble => bubble.bubble.record.turnSeq)
+    .filter((turnSeq): turnSeq is number => Number.isSafeInteger(turnSeq)));
+}
+
+function belongsToOwnerTurn(candidate: Candidate, retainedTurnSequences: ReadonlySet<number>): boolean {
+  return candidate.sourceTurnSeq !== undefined && retainedTurnSequences.has(candidate.sourceTurnSeq);
+}
+
+function belongsToOwnerConversation(candidate: Candidate, precedingBubble: BubbleEvent,
+  nextBubble: BubbleEvent | undefined, retainedTurnSequences: ReadonlySet<number>, activeOwnerTurnRunning: boolean): boolean {
+  if (!candidate.historyBacked || !precedingBubble.ownerTurnScoped) return false;
+  const betweenOwnerPromptAndReply = !!nextBubble && nextBubble.ownerTurnScoped &&
+    nextBubble.bubble.side === 'agent' && nextBubble.spanKey === precedingBubble.spanKey;
+  const activeOwnerTail = !nextBubble && activeOwnerTurnRunning && precedingBubble.bubble.side === 'human';
+  return belongsToOwnerTurn(candidate, retainedTurnSequences) || betweenOwnerPromptAndReply || activeOwnerTail;
+}
+
+/** Apply the same delivered-history owner boundary when admitting a live message. */
+export function historyBackedActivityHasOwnerScope(message: CanonicalMessage,
+  records: readonly CanonicalMessage[], principalKey: string | undefined, ownerUserId: unknown,
+  activeOwnerTurnRunning: boolean): boolean {
+  const projection = projectMessages(records, principalKey, ownerUserId);
+  const bubbles: ActivityBubble[] = projection.messages.map(visible => ({
+    key: visible.key, record: visible.source, side: visible.side,
+    ownerScoped: visible.side === 'agent' || visible.senderLabel === 'You', member: visible.member,
+  }));
+  const visibleIds = new Set(bubbles.filter(bubble => !bubble.member).map(bubble => bubble.record.id));
+  if (visibleIds.has(message.id)) return false;
+
+  const members = parseBatchMembers(message);
+  const candidates = members
+    ? members.map(member => memberCandidate(message, member, false, false)).filter((value): value is Candidate => !!value)
+    : [messageCandidate(message, false, false)].filter((value): value is Candidate => !!value);
+  if (!candidates.length) return false;
+
+  const orderedBubbles = bubbleEvents(bubbles);
+  const retainedTurnSequences = retainedOwnerTurnSequences(orderedBubbles);
+  return candidates.some(candidate => {
+    const event: CandidateEvent = { kind: 'candidate', candidate, ...candidate.position };
+    let precedingBubble: BubbleEvent | undefined;
+    let nextBubble: BubbleEvent | undefined;
+    for (const bubble of orderedBubbles) {
+      if (comparePosition(bubble, event) <= 0) precedingBubble = bubble;
+      else { nextBubble = bubble; break; }
+    }
+    return !!precedingBubble && belongsToOwnerConversation(candidate, precedingBubble, nextBubble,
+      retainedTurnSequences, activeOwnerTurnRunning);
+  });
+}
+
 function lineWithRun(candidate: Candidate, runKey: string, includeToolDetails = true): ActivityLine {
   const { live: _live, liveTailEligibleAtArrival: _eligibleAtArrival,
     sourceTurnSeq: _sourceTurnSeq, historyBacked: _historyBacked,
@@ -320,23 +375,15 @@ export function buildActivityTrail(input: {
       kind: 'candidate', candidate, ...candidate.position,
     })),
   ].sort(comparePosition);
-  const retainedTurnSequences = new Set(orderedBubbles.filter(bubble => bubble.ownerTurnScoped).map(bubble => bubble.bubble.record.turnSeq)
-    .filter((turnSeq): turnSeq is number => Number.isSafeInteger(turnSeq)));
-  const belongsToOwnerTurn = (candidate: Candidate) => candidate.sourceTurnSeq !== undefined &&
-    retainedTurnSequences.has(candidate.sourceTurnSeq);
+  const retainedTurnSequences = retainedOwnerTurnSequences(orderedBubbles);
   // Canonical activity must have the same inclusion rule live and after history
   // reload. Ordered owner prompt/reply boundaries place batch members whose
   // carrier turnSeq belongs to the batching turn. A row's own turnSeq can also
   // associate later-gap activity with an already retained owner turn.
   const historyInOwnerConversation = (candidate: Candidate, precedingBubble: BubbleEvent,
     nextBubble?: BubbleEvent) => {
-    if (!candidate.historyBacked || !precedingBubble.ownerTurnScoped) return false;
-    const betweenOwnerPromptAndReply = !!nextBubble && precedingBubble.ownerTurnScoped &&
-      nextBubble.ownerTurnScoped && nextBubble.bubble.side === 'agent' &&
-      nextBubble.spanKey === precedingBubble.spanKey;
-    const activeOwnerTail = !nextBubble && input.activeOwnerTurnRunning && precedingBubble.ownerTurnScoped &&
-      precedingBubble.bubble.side === 'human';
-    return belongsToOwnerTurn(candidate) || betweenOwnerPromptAndReply || activeOwnerTail;
+    return belongsToOwnerConversation(candidate, precedingBubble, nextBubble, retainedTurnSequences,
+      input.activeOwnerTurnRunning);
   };
 
   const eligible = new Map<string, EligibleCandidate[]>();

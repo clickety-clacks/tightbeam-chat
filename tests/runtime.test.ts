@@ -166,15 +166,39 @@ describe('framework-independent runtime', () => {
     transport.callbacks?.onNotice({ operation: 'turn', turn: { ...runningTurn, status: 'completed',
       raw: { rowVersion: 2 } } });
 
-    const ownerTurn: CanonicalTurn = { ...settledTurn, seq: 82, status: 'running', messageId: 'm10',
+    const ownerPrompt = message(20, { role: 'user', sender: 'user:person', messageType: 'chat', turnSeq: 82 });
+    transport.emit(ownerPrompt);
+    const ownerTurn: CanonicalTurn = { ...settledTurn, seq: 82, status: 'running', messageId: ownerPrompt.id,
       raw: { rowVersion: 1 } };
     transport.callbacks?.onNotice({ operation: 'turn', turn: ownerTurn });
-    const ownerActivity = message(11, { role: 'user', sender: 'process:work', messageType: 'substrate' });
+    const ownerActivity = message(21, { role: 'user', sender: 'process:work', messageType: 'substrate' });
     transport.emit(ownerActivity);
     expect(runtime.getSnapshot().liveActivityEligibleIds).toContain(ownerActivity.id);
 
     transport.emit({ ...ownerActivity, rowVersion: 2, content: 'Updated while the owner turn remains active' });
     expect(runtime.getSnapshot().liveActivityEligibleIds).toContain(ownerActivity.id);
+
+    transport.callbacks?.onNotice({ operation: 'turn', turn: { ...ownerTurn, status: 'completed',
+      raw: { rowVersion: 2 } } });
+    const ownerReply = message(30, { role: 'assistant', sender: 'assistant-service', messageType: 'assistant',
+      turnSeq: 82, replyToMessageId: ownerPrompt.id });
+    transport.emit(ownerReply);
+    const delayedOwnerActivity = message(22, { role: 'user', sender: 'process:work', messageType: 'substrate', turnSeq: 82 });
+    transport.emit(delayedOwnerActivity);
+    expect(runtime.getSnapshot().liveActivityEligibleIds).toContain(delayedOwnerActivity.id);
+
+    const laterBatch = message(25, { role: 'user', sender: 'process:notifications', messageType: 'substrate', turnSeq: 77,
+      isBatchCarrier: true, content: [
+        '[from process:notifications]', '', '[batched notices: 1]', 'batchId=late-batch', 'release=example',
+        '[5567] source=process:events sender=process:events cause=notice class=fyi',
+        'A notice delivered between the owner prompt and reply', '', 'coalesced by notices',
+      ].join('\n') });
+    transport.emit(laterBatch);
+    expect(runtime.getSnapshot().liveActivityEligibleIds).toContain(laterBatch.id);
+
+    const outsideOwnerTurn = message(31, { role: 'user', sender: 'process:events', messageType: 'substrate', turnSeq: 77 });
+    transport.emit(outsideOwnerTurn);
+    expect(runtime.getSnapshot().liveActivityEligibleIds).not.toContain(outsideOwnerTurn.id);
     runtime.dispose();
   });
 
