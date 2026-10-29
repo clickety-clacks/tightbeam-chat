@@ -264,7 +264,7 @@ function belongsToOwnerConversation(candidate: Candidate, precedingBubble: Bubbl
   const turnReply = precedingBubble.ownerTurnSeq !== undefined
     ? ownerReplyByTurn.get(precedingBubble.ownerTurnSeq) : undefined;
   const spanReply = precedingBubble.spanKey ? ownerReplyBySpan.get(precedingBubble.spanKey) : undefined;
-  const closedByLaterReply = [turnReply, spanReply].some(reply => reply && comparePosition(reply, candidate) > 0);
+  const closedByLaterReply = [turnReply, spanReply].some(reply => reply && comparePosition(reply, candidate.position) > 0);
   // Running activity belongs only to the active owner's turn. A later owner
   // prompt cannot make an older, completed exchange look live again.
   const matchesActiveTurn = activeOwnerTurnRunning && (
