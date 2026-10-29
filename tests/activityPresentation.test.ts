@@ -4,7 +4,7 @@ import { activityPillPresentation, type ActivityPillSource } from '../src/activi
 const source = (kind: ActivityPillSource['kind'], content: string, gist = content.split('\n')[0] ?? '') =>
   ({ kind, content, gist } satisfies ActivityPillSource);
 
-describe('low-volume activity pill presentation', () => {
+describe('activity pill presentation', () => {
   it('uses stable delivered notice shapes and shortens their primary identifiers', () => {
     const cases: Array<[ActivityPillSource, string, string, string | undefined]> = [
       [source('substrate', 'Attest att_12345678-1111-4111-8111-123456789abc (completion) was filed on assignment asg_abcdef12-1111-4111-8111-123456789abc.'),
@@ -29,7 +29,7 @@ describe('low-volume activity pill presentation', () => {
         'Remedy completion-requires-review sent — Review requested changes'),
         'Remedy', 'Review requested changes', 'asg_abcd'],
       [source('rail', 'attest refused by completion-requires-verification'),
-        'Refused', 'attest refused', undefined],
+        'Refused', 'Completion needs a recorded verification first', undefined],
     ];
 
     for (const [input, label, text, metadata] of cases) {
@@ -39,13 +39,65 @@ describe('low-volume activity pill presentation', () => {
     }
   });
 
-  it('treats agent messages as messages, and leaves wakes, reminders and unclear notices alone', () => {
+  it('presents every delivered non-tool activity line, including wakes and reminders', () => {
     expect(activityPillPresentation({ kind: 'agent', gist: 'Review helper — Updated the report', content: 'Updated the report',
       senderDisplayName: 'Review helper' })).toMatchObject({
       label: 'Message', tone: 'indigo', text: 'Updated the report', metadata: 'Review helper',
     });
-    expect(activityPillPresentation(source('substrate', '[woke: fallback deadline]\nRead the latest result'))).toBeUndefined();
-    expect(activityPillPresentation(source('substrate', 'Quiet for 3 h · Assignment summary'))).toBeUndefined();
-    expect(activityPillPresentation(source('substrate', 'A notice whose kind is not known'))).toBeUndefined();
+    expect(activityPillPresentation(source('substrate', '[woke: fact wake_12345678-1111-4111-8111-123456789abc; assignment asg_abcdef12-1111-4111-8111-123456789abc]\nRead the latest result')))
+      .toMatchObject({ label: 'Wake', tone: 'purple', icon: 'alarm', text: 'Read the latest result', metadata: 'condition met' });
+    expect(activityPillPresentation(source('substrate', '[woke: fallback deadline]\nRead the latest result')))
+      .toMatchObject({ label: 'Wake', tone: 'purple', text: 'Read the latest result', metadata: 'fallback' });
+    expect(activityPillPresentation(source('substrate', '[woke: fact escalation-ruled/dr_12345678-1111-4111-8111-123456789abc]\nReview complete')))
+      .toMatchObject({ label: 'Wake', tone: 'purple', text: 'Review complete', metadata: 'ruled dr_1234' });
+    expect(activityPillPresentation(source('substrate', '[woke: fact an-unrecognized-fact/dr_12345678-1111-4111-8111-123456789abc]\nThe condition is ready')))
+      .toMatchObject({ label: 'Wake', metadata: 'condition met' });
+    expect(activityPillPresentation(source('substrate', 'Quiet for 3 h · Assignment summary')))
+      .toMatchObject({ label: 'Assignment', tone: 'amber', icon: 'clock', text: 'Quiet for 3 h · Assignment summary' });
+    expect(activityPillPresentation(source('substrate', 'Assignment asg_12345678-1111-4111-8111-123456789abc has had no recorded activity since 12')))
+      .toMatchObject({ label: 'Assignment', tone: 'amber', text: 'No recorded activity', metadata: 'asg_1234' });
+    expect(activityPillPresentation(source('substrate', 'A notice whose kind is not known')))
+      .toMatchObject({ label: 'Activity', tone: 'slate', text: 'A notice whose kind is not known' });
+    expect(activityPillPresentation(source('rail', 'Unclassified activity')))
+      .toMatchObject({ label: 'Activity', tone: 'slate' });
+  });
+
+  it('uses the approved color and icon for each recognized activity kind', () => {
+    const cases: Array<[ActivityPillSource, { label: string; tone: string; icon: string }]> = [
+      [source('agent', 'New detail', 'Review helper — New detail'),
+        { label: 'Message', tone: 'indigo', icon: 'message' }],
+      [source('substrate', 'Attest att_12345678 (completion) was filed on assignment asg_abcdef12.'),
+        { label: 'Attest', tone: 'amber', icon: 'attest' }],
+      [source('substrate', '[assignment: asg_12345678]\nCheck the result'),
+        { label: 'Assignment', tone: 'blue', icon: 'assignment' }],
+      [source('substrate', 'Question dr_12345678 from session:agent:helper\nCan it ship?'),
+        { label: 'Decision', tone: 'blue', icon: 'decision' }],
+      [source('substrate', 'Question dr_12345678 was answered by user:person.\nYou asked: Can it ship?'),
+        { label: 'Decision', tone: 'green', icon: 'decision-answered' }],
+      [source('substrate', 'Decision request dr_12345678 expired'),
+        { label: 'Decision', tone: 'slate', icon: 'hourglass' }],
+      [source('substrate', 'terminal-child-owner-notification\nsource_kind="attest"\nassignment_id="asg_12345678"\nchild_session_key="agent:helper s_87654321"\noutcome="completed"'),
+        { label: 'Assignment', tone: 'green', icon: 'flag' }],
+      [source('substrate', 'Work item wi_12345678 opened'),
+        { label: 'Work item', tone: 'slate', icon: 'work-item' }],
+      [source('substrate', 'Session agent:helper s_12345678 was retired'),
+        { label: 'Session', tone: 'slate', icon: 'session' }],
+      [source('substrate', '[turn failed]\nThe reply failed'),
+        { label: 'Turn', tone: 'red', icon: 'turn' }],
+      [source('rail', 'Review requested changes', 'Remedy completion-requires-review sent — Review requested changes'),
+        { label: 'Remedy', tone: 'orange', icon: 'remedy' }],
+      [source('rail', 'attest refused by completion-requires-verification'),
+        { label: 'Refused', tone: 'red', icon: 'refused' }],
+      [source('substrate', '[woke: fallback deadline]\nRead the result'),
+        { label: 'Wake', tone: 'purple', icon: 'alarm' }],
+      [source('substrate', 'Quiet for 3 h · Assignment summary'),
+        { label: 'Assignment', tone: 'amber', icon: 'clock' }],
+      [source('substrate', 'An unclassified delivered notice'),
+        { label: 'Activity', tone: 'slate', icon: 'activity' }],
+    ];
+
+    for (const [input, expected] of cases) {
+      expect(activityPillPresentation(input), input.content).toMatchObject(expected);
+    }
   });
 });

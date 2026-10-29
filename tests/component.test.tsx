@@ -833,7 +833,7 @@ describe('conversation surface', () => {
     }
   });
 
-  it('renders low-volume activity as typed pills while leaving wakes on their existing path', () => {
+  it('renders every delivered non-tool activity kind as a typed pill', () => {
     const sessionKey = 'activity-pill-layout';
     const human = row(sessionKey, 'human', 'Question', {
       seq: 1, role: 'user', sender: 'user:person', messageType: 'chat', turnSeq: 1,
@@ -852,22 +852,60 @@ describe('conversation surface', () => {
       'work_item_id=null', 'child_session_key="agent:helper s_34567890-1111-4111-8111-123456789abc"',
       'outcome="completed"', 'terminal_at=12',
     ].join('\n'), { seq: 4, role: 'user', sender: 'process:events', messageType: 'substrate', turnSeq: 1 });
-    const unknownWake = row(sessionKey, 'wake-notice', '[woke: fallback deadline]\nReview the result', {
+    const wake = row(sessionKey, 'wake-notice', '[woke: fallback deadline]\nReview the result', {
       seq: 5, role: 'user', sender: 'process:events', messageType: 'substrate', turnSeq: 1,
     });
+    const reminder = row(sessionKey, 'quiet-reminder', 'Quiet for 3 h · Background assignment', {
+      seq: 6, role: 'user', sender: 'process:events', messageType: 'substrate', turnSeq: 1,
+    });
+    const inactiveAssignment = row(sessionKey, 'inactive-assignment',
+      'Assignment asg_456789ab-1111-4111-8111-123456789abc (Background task) has had no recorded activity since 12', {
+      seq: 7, role: 'user', sender: 'process:events', messageType: 'substrate', turnSeq: 1,
+    });
+    const decision = row(sessionKey, 'decision',
+      'Question dr_12345678-1111-4111-8111-123456789abc from session:agent:helper\nCan the change ship?', {
+      seq: 8, role: 'user', sender: 'process:events', messageType: 'substrate', turnSeq: 1,
+    });
+    const answeredDecision = row(sessionKey, 'answered-decision',
+      'Question dr_23456789-1111-4111-8111-123456789abc was answered by user:person.\nYou asked: Can it ship?\nAnswer: Yes.', {
+      seq: 9, role: 'user', sender: 'process:events', messageType: 'substrate', turnSeq: 1,
+    });
+    const expiredDecision = row(sessionKey, 'expired-decision', 'Decision request dr_34567890-1111-4111-8111-123456789abc expired', {
+      seq: 10, role: 'user', sender: 'process:events', messageType: 'substrate', turnSeq: 1,
+    });
+    const workItem = row(sessionKey, 'work-item',
+      'route it or icebox it — work item wi_456789ab-1111-4111-8111-123456789abc: Improve the transcript', {
+      seq: 11, role: 'user', sender: 'process:events', messageType: 'substrate', turnSeq: 1,
+    });
+    const sessionNotice = row(sessionKey, 'session-notice', 'Session agent:helper s_56789abc-1111-4111-8111-123456789abc was retired', {
+      seq: 12, role: 'user', sender: 'process:events', messageType: 'substrate', turnSeq: 1,
+    });
+    const turnFailure = row(sessionKey, 'turn-failure', '[turn failed]\nThe agent could not complete the reply', {
+      seq: 13, role: 'user', sender: 'process:events', messageType: 'substrate', turnSeq: 13,
+    });
+    const remedy = row(sessionKey, 'remedy', 'Review requested changes for asg_6789abcd-1111-4111-8111-123456789abc', {
+      seq: 14, role: 'user', sender: 'remedy:completion-requires-review', messageType: 'substrate', turnSeq: 1,
+    });
+    const unknownActivity = row(sessionKey, 'unknown-activity', 'A notice whose kind is not known', {
+      seq: 15, role: 'user', sender: 'process:events', messageType: 'substrate', turnSeq: 1,
+    });
     const agent = row(sessionKey, 'agent-note', 'A short update', {
-      seq: 6, role: 'user', sender: 'agent:helper', messageType: 'agent', turnSeq: 1,
+      seq: 16, role: 'user', sender: 'agent:helper', messageType: 'agent', turnSeq: 1,
       raw: { source: 'fixture', id: 'agent-note', senderDisplayName: 'Review helper' },
     });
     const agentFollowup = row(sessionKey, 'agent-followup', 'The review is ready', {
-      seq: 7, role: 'user', sender: 'agent:helper', messageType: 'agent', turnSeq: 1,
+      seq: 17, role: 'user', sender: 'agent:helper', messageType: 'agent', turnSeq: 1,
       raw: { source: 'fixture', id: 'agent-followup', senderDisplayName: 'Review helper' },
     });
     const answer = row(sessionKey, 'answer', 'Answer', {
-      seq: 8, sender: 'assistant-service', messageType: 'assistant', replyToMessageId: human.id, turnSeq: 1,
+      seq: 18, sender: 'assistant-service', messageType: 'assistant', replyToMessageId: human.id, turnSeq: 1,
     });
-    const runtime = new FakeRuntime(sessionKey, { records: [human, attest, assignment, child, unknownWake, agent, agentFollowup, answer],
-      provenanceAvailable: false });
+    const runtime = new FakeRuntime(sessionKey, { records: [human, attest, assignment, child, wake, reminder,
+      inactiveAssignment, decision, answeredDecision, expiredDecision, workItem, sessionNotice, turnFailure,
+      remedy, unknownActivity, agent, agentFollowup, answer], provenanceAvailable: false,
+      liveRailDenials: [{ id: 'denial-1', principal: `session:${sessionKey}`, verb: 'attest',
+        rule: 'completion-requires-verification', tailEligibleAtArrival: true, occurredAt: 1,
+        afterMessageSeq: 1, arrivalOrder: 1 }] });
     render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
 
     const log = screen.getByRole('log');
@@ -885,6 +923,21 @@ describe('conversation surface', () => {
     expect(childRow.textContent).toContain('Child finished');
     expect(childRow.textContent).toContain('s_3456');
 
+    expect(pillFor('Wake: Review the result, fallback').querySelector('.tb-chat-activity-pill-purple')).toBeTruthy();
+    expect(pillFor('Assignment: Quiet for 3 h · Background assignment').querySelector('.tb-chat-activity-pill-amber')).toBeTruthy();
+    expect(pillFor('Assignment: No recent activity · Background task, asg_4567')).toBeTruthy();
+    expect(pillFor('Decision: Needs a response · Can the change ship?, dr_1234')).toBeTruthy();
+    expect(pillFor('Decision: Answered · Can it ship?, dr_2345').querySelector('.tb-chat-activity-pill-green')).toBeTruthy();
+    expect(pillFor('Decision: Expired, dr_3456').querySelector('.tb-chat-activity-pill-slate')).toBeTruthy();
+    expect(pillFor('Work item: Needs routing · Improve the transcript, wi_4567')).toBeTruthy();
+    expect(pillFor('Session: Retired, s_5678')).toBeTruthy();
+    expect(pillFor('Turn: The agent could not complete the reply, turn 13')).toBeTruthy();
+    const remedyRow = within(log).getByRole('note', {
+      name: /^Remedy: Review requested changes for asg_6789abcd-1111-4111-8111-123456789abc, asg_6789$/,
+    });
+    expect(remedyRow.querySelector('.tb-chat-activity-pill-orange')).toBeTruthy();
+    expect(pillFor('Activity: A notice whose kind is not known')).toBeTruthy();
+
     const agentFold = within(log).getByRole('button', { name: /Expand agent activity run, 2 entries/ });
     expect(agentFold.classList.contains('tb-chat-activity-pill-toggle')).toBe(true);
     expect(agentFold.querySelector('.tb-chat-activity-pill')?.textContent).toContain('Message');
@@ -894,9 +947,71 @@ describe('conversation surface', () => {
     expect(agentRow.querySelector('.tb-chat-activity-pill')?.textContent).toContain('Message');
     expect(agentRow.textContent).toContain('Review helper');
 
-    const wakeRow = pillFor('Substrate: [woke: fallback deadline]');
-    expect(wakeRow.classList.contains('tb-chat-activity-pill-row')).toBe(false);
-    expect(wakeRow.querySelector('.tb-chat-activity-pill')).toBeNull();
+    const refusedRow = pillFor('Refused: Completion needs a recorded verification first');
+    expect(refusedRow.querySelector('.tb-chat-activity-pill-red')).toBeTruthy();
+  });
+
+  it('updates only a growing activity fold and preserves an away reader', () => {
+    const sessionKey = 'activity-fold-row-local-update';
+    const question = row(sessionKey, 'question', 'Question', {
+      seq: 1, role: 'user', sender: 'user:person', messageType: 'chat', turnSeq: 1,
+    });
+    const first = row(sessionKey, 'reminder-1', 'Quiet for 3 h · First reminder', {
+      seq: 2, role: 'user', sender: 'process:events', messageType: 'substrate', turnSeq: 1,
+    });
+    const second = row(sessionKey, 'reminder-2', 'Quiet for 4 h · Second reminder', {
+      seq: 3, role: 'user', sender: 'process:events', messageType: 'substrate', turnSeq: 1,
+    });
+    const reply = row(sessionKey, 'reply', 'Answer', {
+      seq: 10, sender: 'assistant-service', messageType: 'assistant', replyToMessageId: question.id, turnSeq: 1,
+    });
+    const laterQuestion = row(sessionKey, 'later-question', 'Later question', {
+      seq: 20, role: 'user', sender: 'user:person', messageType: 'chat', turnSeq: 2,
+    });
+    const laterReply = row(sessionKey, 'later-reply', 'Later answer', {
+      seq: 21, sender: 'assistant-service', messageType: 'assistant',
+      replyToMessageId: laterQuestion.id, turnSeq: 2,
+    });
+    let records = [question, first, second, reply, laterQuestion, laterReply];
+    const runtime = new FakeRuntime(sessionKey, { records, activityTurnStateAvailable: true, activeTurn: undefined });
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+    const viewport = screen.getByRole('log');
+    const layout = installViewportLayout(viewport);
+    const observer = new MutationObserver(() => {});
+    try {
+      act(() => runtime.update({}));
+
+      const anchor = screen.getByText('Later answer').closest<HTMLElement>('[data-scroll-key]')!;
+      fireEvent.wheel(viewport, { deltaY: -1 });
+      layout.setScrollTop(Math.max(0, layout.scrollTop + layout.offset(anchor) - 120));
+      fireEvent.scroll(viewport);
+      const anchorBefore = layout.offset(anchor);
+      expect(anchorBefore).toBeCloseTo(120, 0);
+
+      const toggle = within(viewport).getByRole('button', { name: /2 entries\. Latest: Quiet for 4 h/ });
+      expect(toggle.textContent).toContain('×2');
+      const fold = toggle.closest<HTMLElement>('.tb-chat-activity-run')!;
+      const content = viewport.querySelector<HTMLElement>('.tb-chat-message-content')!;
+      observer.observe(content, { subtree: true, childList: true, attributes: true, characterData: true });
+
+      const incoming = row(sessionKey, 'reminder-3', 'Quiet for 5 h · Newest reminder', {
+        seq: 4, role: 'user', sender: 'process:events', messageType: 'substrate', turnSeq: 1,
+      });
+      records = [question, first, second, incoming, reply, laterQuestion, laterReply];
+      act(() => runtime.update({ records }));
+
+      expect(within(viewport).getByRole('button', { name: /3 entries\. Latest: Quiet for 5 h/ })).toBe(toggle);
+      expect(toggle.textContent).toContain('×3');
+      expect(toggle.textContent).toContain('Newest reminder');
+      expect(toggle.closest('.tb-chat-activity-run')).toBe(fold);
+      expect(layout.offset(anchor)).toBeCloseTo(anchorBefore, 0);
+      const mutations = observer.takeRecords();
+      expect(mutations.length).toBeGreaterThan(0);
+      expect(mutations.every(mutation => fold.contains(mutation.target))).toBe(true);
+    } finally {
+      observer.disconnect();
+      layout.restore();
+    }
   });
 
   it('folds activity to its newest line and preserves an away reader through growth, expansion, and collapse', () => {

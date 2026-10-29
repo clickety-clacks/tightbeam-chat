@@ -525,8 +525,12 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
 .tb-chat-activity-pill-orange { --tb-chat-pill-ink: var(--tb-chat-teak); }
 .tb-chat-activity-pill-red { --tb-chat-pill-ink: var(--tb-chat-danger); }
 .tb-chat-activity-pill-blue { --tb-chat-pill-ink: var(--tb-chat-fjord); }
+.tb-chat-activity-pill-purple { --tb-chat-pill-ink: #6B3CC0; }
 .tb-chat-activity-pill-indigo { --tb-chat-pill-ink: var(--tb-chat-accent); }
 .tb-chat-activity-pill-slate { --tb-chat-pill-ink: var(--tb-chat-muted); }
+@media (prefers-color-scheme: dark) {
+  .tb-chat-activity-pill-purple { --tb-chat-pill-ink: #C9B7F1; }
+}
 .tb-chat-activity-pill-text {
   flex: 1 1 auto;
   min-width: 0;

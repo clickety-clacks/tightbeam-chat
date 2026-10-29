@@ -1,7 +1,8 @@
-/** Display treatment for the lower-volume activity lines with stable source text. */
-export type ActivityPillTone = 'green' | 'amber' | 'orange' | 'red' | 'blue' | 'indigo' | 'slate';
+/** Display treatment for activity lines built from the selected conversation. */
+export type ActivityPillTone = 'green' | 'amber' | 'orange' | 'red' | 'blue' | 'purple' | 'indigo' | 'slate';
 export type ActivityPillIcon = 'message' | 'attest' | 'assignment' | 'decision' | 'work-item' |
-  'session' | 'turn' | 'remedy' | 'refused';
+  'decision-answered' | 'hourglass' | 'session' | 'turn' | 'remedy' | 'refused' |
+  'alarm' | 'clock' | 'flag' | 'activity';
 
 export interface ActivityPillPresentation {
   readonly label: string;
@@ -48,22 +49,60 @@ function childFinished(content: string): ActivityPillPresentation | undefined {
   const childSession = field(sourceLines.slice(1), 'child_session_key');
   const metadata = childSession ? shortId('s', childSession) : shortId('asg', content);
   if (outcome === 'completed') {
-    return { label: 'Assignment', tone: 'green', icon: 'assignment', text: 'Child finished', metadata };
+    return { label: 'Assignment', tone: 'green', icon: 'flag', text: 'Child finished', metadata };
   }
   if (outcome === 'surrendered') {
-    return { label: 'Assignment', tone: 'amber', icon: 'assignment', text: 'Child surrendered', metadata };
+    return { label: 'Assignment', tone: 'amber', icon: 'flag', text: 'Child surrendered', metadata };
   }
   if (outcome === 'revoked') {
-    return { label: 'Assignment', tone: 'slate', icon: 'assignment', text: 'Child assignment revoked', metadata };
+    return { label: 'Assignment', tone: 'slate', icon: 'flag', text: 'Child assignment revoked', metadata };
   }
-  return { label: 'Assignment', tone: 'slate', icon: 'assignment', text: 'Child activity ended', metadata };
+  return { label: 'Assignment', tone: 'slate', icon: 'flag', text: 'Child activity ended', metadata };
 }
 
-function isExcludedWakeOrReminder(content: string): boolean {
+function wakePresentation(content: string): ActivityPillPresentation | undefined {
+  const sourceLines = lines(content);
+  const first = sourceLines[0] ?? '';
+  if (/^\[woke:/i.test(first)) {
+    const detail = sourceLines.find(line => !/^\[woke:/i.test(line));
+    const header = /^\[woke:\s*([^\]]+)\]/i.exec(first)?.[1] ?? '';
+    const fact = /^fact\s+(.+)\/(dr_[a-z0-9-]+)$/i.exec(header);
+    const factStatus = fact && /(?:^|-)(ruled|answered|returned|expired|cancelled|canceled)$/i.exec(fact[1])?.[1];
+    const status = /\bfallback\b/i.test(header) ? 'fallback'
+      : fact ? factStatus ? `${factStatus} ${shortId('dr', fact[2])}` : 'condition met'
+        : /^fact\b/i.test(header) ? 'condition met'
+          : /^wait\b/i.test(header) ? 'resumed' : 'sent';
+    return { label: 'Wake', tone: 'purple', icon: 'alarm',
+      text: detail ?? 'A wake was delivered',
+      metadata: status };
+  }
+  if (/^Wait finished on its assignment\b/i.test(first)) {
+    return { label: 'Wake', tone: 'purple', icon: 'alarm', text: 'Wait finished on its assignment',
+      metadata: shortId('w', content) ?? shortId('asg', content) };
+  }
+  return undefined;
+}
+
+function reminderPresentation(content: string): ActivityPillPresentation | undefined {
   const first = lines(content)[0] ?? '';
-  return /^\[woke:/i.test(first) || /^Wait finished on its assignment\b/i.test(first) ||
-    /^Quiet for \d+\s+(?:s(?:ec(?:ond)?s?)?|min(?:ute)?s?|h(?:r|our)?s?|d(?:ay)?s?)\s*[·•]/i.test(first) ||
-    /^Assignment\b[^\r\n]*\bhas had no recorded activity since\b/i.test(first);
+  const quiet = /^Quiet for (\d+\s+(?:s(?:ec(?:ond)?s?)?|min(?:ute)?s?|h(?:r|our)?s?|d(?:ay)?s?))\s*[·•]/i.exec(first);
+  if (quiet) {
+    return { label: 'Assignment', tone: 'amber', icon: 'clock', text: first,
+      metadata: shortId('asg', content) ?? shortId('wi', content) };
+  }
+  if (/^Assignment\b[^\r\n]*\bhas had no recorded activity since\b/i.test(first)) {
+    const title = /^Assignment\s+asg_[a-z0-9-]+\s+\(([^)]+)\)/i.exec(first)?.[1];
+    return { label: 'Assignment', tone: 'amber', icon: 'clock',
+      text: title ? `No recent activity · ${title}` : 'No recorded activity', metadata: shortId('asg', content) };
+  }
+  return undefined;
+}
+
+function genericActivity(source: ActivityPillSource): ActivityPillPresentation {
+  const metadata = shortId('asg', source.content) ?? shortId('wi', source.content) ??
+    shortId('dr', source.content) ?? shortId('att', source.content) ?? shortId('s', source.content);
+  return { label: 'Activity', tone: 'slate', icon: 'activity',
+    text: normalize(source.gist) || normalize(lines(source.content)[0] ?? '') || 'Activity received', metadata };
 }
 
 function decisionPresentation(content: string): ActivityPillPresentation | undefined {
@@ -97,9 +136,15 @@ function decisionPresentation(content: string): ActivityPillPresentation | undef
     id = match[1];
     tone = 'green';
     text = 'Ruled';
+  } else if ((match = /^Decision request\s+(dr_[a-z0-9-]+)\s+(?:expired|timed out)\b/i.exec(first))) {
+    id = match[1];
+    tone = 'slate';
+    text = 'Expired';
   }
 
-  return id && text ? { label: 'Decision', tone, icon: 'decision', text,
+  const answered = tone === 'green';
+  const expired = tone === 'slate';
+  return id && text ? { label: 'Decision', tone, icon: answered ? 'decision-answered' : expired ? 'hourglass' : 'decision', text,
     metadata: shortId('dr', id) } : undefined;
 }
 
@@ -175,12 +220,19 @@ function remedyPresentation(gist: string, content: string): ActivityPillPresenta
 function refusalPresentation(gist: string): ActivityPillPresentation | undefined {
   const match = /^(.+?)\s+refused by\s+(.+)$/i.exec(gist);
   if (!match) return undefined;
-  return { label: 'Refused', tone: 'red', icon: 'refused', text: `${match[1]} refused` };
+  const rule = match[2].toLowerCase();
+  const text = rule === 'completion-requires-verification' ? 'Completion needs a recorded verification first'
+    : rule === 'completion-requires-review' ? 'Completion needs an independent review first'
+      : rule === 'completion-requires-artifact' ? 'Completion needs the required artifact first'
+        : `${normalize(match[1])} was not allowed`;
+  return { label: 'Refused', tone: 'red', icon: 'refused', text,
+    metadata: shortId('asg', gist) };
 }
 
 /**
- * Keep the pill treatment limited to stable message shapes. Wakes, inactivity
- * reminders, tools, and unrecognized activity continue through the old renderer.
+ * Keep source-specific wording limited to recognizable shapes. Any other
+ * delivered activity line still gets a neutral pill; tool records use their
+ * separate renderer and are intentionally outside this presentation path.
  */
 export function activityPillPresentation(source: ActivityPillSource): ActivityPillPresentation | undefined {
   if (source.kind === 'agent') {
@@ -190,11 +242,13 @@ export function activityPillPresentation(source: ActivityPillSource): ActivityPi
     const displayName = source.senderDisplayName?.trim() || (sender === 'Another agent' ? undefined : sender);
     return { label: 'Message', tone: 'indigo', icon: 'message', text: text || 'Message received', metadata: displayName };
   }
-  if (source.kind === 'rail') return remedyPresentation(source.gist, source.content) ?? refusalPresentation(source.gist);
-  if (isExcludedWakeOrReminder(source.content)) return undefined;
+  if (source.kind === 'rail') {
+    return remedyPresentation(source.gist, source.content) ?? refusalPresentation(source.gist) ?? genericActivity(source);
+  }
 
-  return childFinished(source.content) ?? turnFailure(source.content, source.turnSeq) ??
+  return wakePresentation(source.content) ?? reminderPresentation(source.content) ??
+    childFinished(source.content) ?? turnFailure(source.content, source.turnSeq) ??
     attestPresentation(source.content) ?? assignmentPresentation(source.content) ??
     decisionPresentation(source.content) ?? workItemPresentation(source.content) ??
-    sessionPresentation(source.content) ?? remedyPresentation(source.gist, source.content);
+    sessionPresentation(source.content) ?? remedyPresentation(source.gist, source.content) ?? genericActivity(source);
 }
