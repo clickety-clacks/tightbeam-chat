@@ -138,7 +138,7 @@ describe('activity pill presentation', () => {
     ].join('\n'), '[from process:notifications]', {
       sender: 'process:notifications', messageType: 'process',
     }));
-    expect(framedUnknown).toMatchObject({ label: 'System', text: 'Unavailable for wi_abcd' });
+    expect(framedUnknown).toMatchObject({ label: 'Turn', text: 'Unavailable for wi_abcd' });
     expect(`${framedUnknown?.label} ${framedUnknown?.text}`).not.toMatch(/[\[\]]/);
     expect(`${framedUnknown?.label} ${framedUnknown?.text}`).not.toContain(fullWorkItemId);
   });
