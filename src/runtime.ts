@@ -182,8 +182,8 @@ class SessionRuntime implements ChatRuntime {
     this.state = Object.freeze({
       sessionKey, principalKey: this.identity.principalKey, generation: 0, recoveryRevision: 0, status: 'loading',
       liveConnectionState: 'connecting', records: Object.freeze([]),
-      // Tool calls are visible by default when supported. The existing toggle
-      // stops both their optional stream and history reads while disabled.
+      // Tool calls start enabled when the optional stream and history are supported.
+      // The conversation surface does not expose a toggle for this setting.
       toolCallsEnabled: transport.openToolChanges && transport.readToolCalls ? true : undefined,
       toolCalls: Object.freeze([]), toolCallIndex: undefined,
       hasOlder: false, loadingOlder: false, sends: Object.freeze([]), targetLabel: profile.label,

@@ -73,21 +73,21 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
   max-width: 46rem;
   margin-inline: auto;
 }
-.tb-chat-runtime-notice-with-tools {
+.tb-chat-runtime-notice-with-tool-history {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) minmax(6rem, 12rem);
   align-items: start;
   gap: .35rem .45rem;
 }
-.tb-chat-runtime-notice-with-tools::before { grid-column: 1; grid-row: 1; margin-block-start: .1rem; }
-.tb-chat-runtime-notice-with-tools > .tb-chat-caption-body {
+.tb-chat-runtime-notice-with-tool-history::before { grid-column: 1; grid-row: 1; margin-block-start: .1rem; }
+.tb-chat-runtime-notice-with-tool-history > .tb-chat-caption-body {
   grid-column: 2;
   grid-row: 1;
   width: auto;
   flex: initial;
 }
-.tb-chat-runtime-tools { grid-column: 3; grid-row: 1; min-width: 0; }
-.tb-chat-runtime-tools .tb-chat-tool-controls {
+.tb-chat-runtime-tool-history { grid-column: 3; grid-row: 1; min-width: 0; }
+.tb-chat-runtime-tool-history .tb-chat-tool-history-status {
   display: flex;
   flex-direction: column;
   align-items: stretch;
@@ -95,12 +95,7 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
   width: 100%;
   margin: 0;
 }
-.tb-chat-runtime-tools .tb-chat-tool-controls > button {
-  width: 100%;
-  min-height: 2.75rem;
-  padding-inline: .45rem;
-}
-.tb-chat-tool-controls-placeholder { visibility: hidden; pointer-events: none; }
+.tb-chat-tool-history-status-placeholder { visibility: hidden; pointer-events: none; }
 .tb-chat-scroll-latest {
   position: absolute;
   z-index: 4;
@@ -473,18 +468,15 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
 
 @media (max-width: 540px) {
   .tb-chat-bubble { max-width: 92%; padding-inline: .85rem; }
-  .tb-chat-runtime-notice-with-tools { grid-template-columns: auto minmax(0, 1fr); }
-  .tb-chat-runtime-notice-with-tools > .tb-chat-runtime-tools {
+  .tb-chat-runtime-notice-with-tool-history { grid-template-columns: auto minmax(0, 1fr); }
+  .tb-chat-runtime-notice-with-tool-history > .tb-chat-runtime-tool-history {
     grid-column: 2;
     grid-row: 2;
     width: 100%;
   }
-  .tb-chat-runtime-tools .tb-chat-tool-controls > button { width: 100%; }
 }
 
-.tb-chat-tool-controls { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin: .5rem 0; font-size: .85rem; }
-.tb-chat-tool-controls > button { font: inherit; color: inherit; background: transparent; border: 1px solid currentColor; border-radius: .75rem; padding: .3rem .65rem; cursor: pointer; }
-.tb-chat-tool-controls > button[aria-pressed="true"] { font-weight: 700; }
+.tb-chat-tool-history-status { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin: .5rem 0; font-size: .85rem; }
 .tb-chat-tool { box-sizing: border-box; width: 100%; margin: .6rem 0; padding: .75rem; border: 1px solid color-mix(in srgb, currentColor 20%, transparent); border-radius: .75rem; }
 .tb-chat-transition { white-space: pre-wrap; }
 .tb-chat-transition-marker {

@@ -1240,16 +1240,14 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     (state.sessionNotFound || state.sessionError || state.conversationError ||
       state.status === 'unauthorized' || state.status === 'unsupported');
   const showReconnect = state.sessionNotFound || state.sessionError || state.conversationError;
-  const showToolControlsInNotice = !state.loadingOlder && !!(state.historyError || localNotice) &&
-    state.toolCallsEnabled !== undefined;
-  const renderToolControls = (placeholder = false) => <div
-    className={`tb-chat-tool-controls${placeholder ? ' tb-chat-tool-controls-placeholder' : ''}`}
+  const hasToolHistoryStatus = state.toolCallsEnabled === true &&
+    (state.toolCallsLoading || visibleToolCallsError !== undefined);
+  const showToolHistoryStatusInNotice = hasToolHistoryStatus && !state.loadingOlder && !!(state.historyError || localNotice);
+  const renderToolHistoryStatus = (placeholder = false) => <div
+    className={`tb-chat-tool-history-status${placeholder ? ' tb-chat-tool-history-status-placeholder' : ''}`}
     aria-hidden={placeholder || undefined}>
-    <button type="button" aria-pressed={state.toolCallsEnabled}
-      disabled={placeholder || undefined} tabIndex={placeholder ? -1 : undefined}
-      onClick={() => runtime.setToolCallsEnabled?.(!state.toolCallsEnabled)}>Tool calls</button>
-    {state.toolCallsEnabled && state.toolCallsLoading && <span className="tb-chat-caption tb-chat-caption-neutral" role="status">Loading tool history…</span>}
-    {state.toolCallsEnabled && visibleToolCallsError && <span className="tb-chat-caption tb-chat-caption-danger" role="status">
+    {state.toolCallsLoading && <span className="tb-chat-caption tb-chat-caption-neutral" role="status">Loading tool history…</span>}
+    {visibleToolCallsError && <span className="tb-chat-caption tb-chat-caption-danger" role="status">
       <span className="tb-chat-caption-body">
         <span>Tool history is not current: {visibleToolCallsError}{' '}</span>
           <button type="button" disabled={placeholder || undefined} tabIndex={placeholder ? -1 : undefined}
@@ -1344,7 +1342,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
       onPointerDown={reading.interrupt} onPointerMove={(event) => { if (event.buttons !== 0) reading.noteUserScroll(); }}
       onKeyDown={(event) => { if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) { reading.interrupt(); reading.noteUserScroll(); } }}
       aria-label={`${agentName || 'Conversation'} messages`} aria-live="polite" aria-relevant="additions text">
-      {showRuntimeNotice && <div className={`tb-chat-runtime-notice ${showToolControlsInNotice ? 'tb-chat-runtime-notice-with-tools ' : ''}${state.loadingOlder ? 'tb-chat-history-loading ' : ''} tb-chat-caption ${state.historyError || state.sessionNotFound || state.sessionError || state.conversationError || state.status === 'unauthorized' || state.status === 'unsupported'
+      {showRuntimeNotice && <div className={`tb-chat-runtime-notice ${showToolHistoryStatusInNotice ? 'tb-chat-runtime-notice-with-tool-history ' : ''}${state.loadingOlder ? 'tb-chat-history-loading ' : ''} tb-chat-caption ${state.historyError || state.sessionNotFound || state.sessionError || state.conversationError || state.status === 'unauthorized' || state.status === 'unsupported'
         ? 'tb-chat-caption-danger' : 'tb-chat-caption-neutral'}`} role={state.historyError || state.sessionNotFound || state.conversationError || state.sessionError || state.status === 'unauthorized' || state.status === 'unsupported' ? 'alert' : 'status'}>
         <span className="tb-chat-caption-body">
           {(state.loadingOlder || state.historyError || localNotice) && <span>{state.loadingOlder ? 'Loading earlier messages…'
@@ -1354,12 +1352,12 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
             <button type="button" onClick={() => void runtime.rebuild({ restart: true })}>Reconnect</button>}
           {showConfiguredConversationLink && <a href={configuredConversationHref}>Open the configured conversation</a>}
         </span>
-        {showToolControlsInNotice && <div className="tb-chat-runtime-tools" role="group" aria-label="Tool history controls">
-          {renderToolControls()}
+        {showToolHistoryStatusInNotice && <div className="tb-chat-runtime-tool-history">
+          {renderToolHistoryStatus()}
         </div>}
       </div>}
       <div className="tb-chat-message-content" ref={reading.content}>
-      {state.toolCallsEnabled !== undefined && renderToolControls(showToolControlsInNotice)}
+      {hasToolHistoryStatus && renderToolHistoryStatus(showToolHistoryStatusInNotice)}
       {projection.issues.length > 0 && <div className="tb-chat-history-error tb-chat-caption tb-chat-caption-danger" role="alert">
         Some message sources could not be interpreted. Conversation filtering is incomplete.
       </div>}
