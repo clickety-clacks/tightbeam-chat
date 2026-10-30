@@ -921,6 +921,34 @@ describe('Gateway wire mapping and behavior checks', () => {
     expect(await third).toMatchObject({ outcome: 'retryable' });
   });
 
+  it('reports frame submission only after sending, never just from opening a connection', async () => {
+    const candidate = setup();
+    let open!: (channel: Public019Channel) => void;
+    candidate.host.openAuthenticatedHuman = () => new Promise(resolve => { open = resolve; });
+    const submitted = vi.fn();
+    const controller = new AbortController();
+    const pending = candidate.transport.sendHuman({ sessionKey, deviceId: 'device-1',
+      clientMessageId: 'c_frame', content: 'hello' }, controller.signal, submitted);
+    expect(submitted).not.toHaveBeenCalled();
+    open(candidate.human);
+    await vi.waitFor(() => expect(submitted).toHaveBeenCalledOnce());
+    expect(candidate.human.sent).toHaveLength(1);
+    candidate.human.emit({ type: 'ack', id: 'c_frame' });
+    expect(await pending).toEqual({ outcome: 'accepted' });
+
+    const cancelled = setup();
+    cancelled.host.openAuthenticatedHuman = () => new Promise(resolve => { open = resolve; });
+    const beforeConnect = new AbortController();
+    const neverSubmitted = vi.fn();
+    const aborted = cancelled.transport.sendHuman({ sessionKey, deviceId: 'device-1',
+      clientMessageId: 'c_cancel', content: 'hello' }, beforeConnect.signal, neverSubmitted);
+    beforeConnect.abort();
+    open(cancelled.human);
+    await aborted;
+    expect(neverSubmitted).not.toHaveBeenCalled();
+    expect(cancelled.human.sent).toEqual([]);
+  });
+
   it('keeps waiting for a human acknowledgement beyond the general response timeout', async () => {
     vi.useFakeTimers();
     try {

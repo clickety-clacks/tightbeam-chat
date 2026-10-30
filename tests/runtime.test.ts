@@ -1,7 +1,7 @@
 import { indexValues } from '../src/recordIndex';
 import { describe, expect, it, vi } from 'vitest';
 import { createTightbeamAdapter } from '../src/runtime';
-import { AuthorizationError, UnsupportedTargetError } from '../src/types';
+import { AuthorizationError, AttachmentUploadError, UnsupportedTargetError } from '../src/types';
 import { ToolHistoryUnavailableError } from '../src/toolHistory';
 import type {
   RuntimeState, ToolCallRecord, ToolCallRange, CanonicalMessage, CanonicalTransition, CanonicalTurn, ChangeCallbacks, ChatTransport,
@@ -108,9 +108,10 @@ class ControlledTransport implements ChatTransport {
     return detail;
   };
   proveCoverage = () => this.coverage;
-  sendHuman = async (submission: HumanSubmission, signal: AbortSignal): Promise<HumanSendResult> => {
+  sendHuman = async (submission: HumanSubmission, signal: AbortSignal, onSubmitted?: () => void): Promise<HumanSendResult> => {
     this.submissions.push(submission);
     this.sendSignals.push(signal);
+    onSubmitted?.();
     return this.nextSend ? this.nextSend(submission) : { outcome: 'accepted' };
   };
   emit(record: ConversationRecord) { this.callbacks?.onNotice({ operation: 'upsert', record }); }
@@ -1678,7 +1679,7 @@ describe('attachment submission recovery', () => {
   });
   it('refreshes after a lost acknowledgement and keeps uncertainty until an explicit identical retry or canonical match', async () => {
     const transport = new AttachmentsTransport();
-    transport.nextSend = async () => ({ outcome: 'retryable', reason: 'Socket dropped' });
+    transport.nextSend = async () => ({ outcome: 'uncertain', reason: 'Socket dropped' });
     const runtime = await ready(transport);
     const reads = transport.readTailCalls;
     const id = runtime.sendAttachments!('caption', [input('photo')])!;
@@ -1704,7 +1705,7 @@ describe('attachment submission recovery', () => {
     transport.nextSend = async submission => {
       transport.rows.push(message(9, { role: 'user', content: submission.content, deviceId: submission.deviceId,
         clientMessageId: submission.clientMessageId, attachments: submission.attachments }));
-      return { outcome: 'retryable', reason: 'Ack lost' };
+      return { outcome: 'uncertain', reason: 'Ack lost' };
     };
     const runtime = await ready(transport);
     runtime.sendAttachments!('', [input('photo')]);
@@ -1728,4 +1729,231 @@ describe('attachment submission recovery', () => {
       runtime.dispose();
     }
   });
+
+  const correlation = 'c_12345678-1234-4234-8234-123456789012';
+  const context = { expectedSessionKey: sessionKey, clientMessageId: correlation,
+    hostSend: { lifetimeId: 'attachment-lifetime', attempt: 1 } };
+  it('shares caller identity capture with web input and rejects mismatched targets without starting work', async () => {
+    const transport = new AttachmentsTransport();
+    const runtime = await ready(transport);
+    expect(runtime.getAttachmentCapabilities!()).toBeUndefined();
+    expect(runtime.sendAttachments!('', [input('file')], { ...context, expectedSessionKey: 'another' })).toBeNull();
+    expect(runtime.sendAttachments!('', [input('file')], { ...context, clientMessageId: 'invalid' })).toBeNull();
+    expect(transport.uploads).toEqual([]);
+    const events: unknown[] = [];
+    runtime.observeHostSend(correlation, event => events.push(event));
+    expect(runtime.sendAttachments!('', [input('file')], context)).toBe(correlation);
+    expect(runtime.getSnapshot().sends[0]).toMatchObject({ sessionKey, deviceId: 'device',
+      clientMessageId: correlation, hostSend: context.hostSend, status: 'pending', postSubmitted: false });
+    expect(events).toEqual([]);
+    await vi.waitFor(() => expect(runtime.getSnapshot().sends[0].status).toBe('accepted'));
+    expect(events).toEqual([{ kind: 'accepted' }]);
+    expect(runtime.getSnapshot().sends[0].postSubmitted).toBe(true);
+    expect(runtime.sendAttachments!('duplicate', [input('file')], context)).toBeNull();
+    expect(transport.submissions).toHaveLength(1);
+    runtime.dispose();
+  });
+
+  it('reports upload failure with its code and retries retained preparation without requiring post dedupe', async () => {
+    const transport = new AttachmentsTransport();
+    const upload = transport.uploadAttachment;
+    let fail = true;
+    transport.uploadAttachment = async (item, signal) => {
+      if (fail && item.id === 'second') throw new AttachmentUploadError('payload_too_large', 'Second file too large');
+      return upload(item, signal);
+    };
+    const runtime = createTightbeamAdapter(transport,
+      { ...profile, capabilities: { ...capabilities, humanSendDedupe: false } }).open(sessionKey);
+    await runtime.rebuild();
+    const events: unknown[] = [];
+    runtime.observeHostSend(correlation, event => events.push(event));
+    runtime.sendAttachments!('', [input('first'), input('second')], context);
+    await vi.waitFor(() => expect(events).toEqual([{ kind: 'failed', reason: 'upload-failed', detail: 'payload_too_large' }]));
+    expect(runtime.getSnapshot().sends[0]).toMatchObject({ postSubmitted: false,
+      attachmentFailure: { reason: 'upload-failed', detail: 'payload_too_large' },
+      attachmentItems: [{ filename: 'first.bin' }, { filename: 'second.bin', errorCode: 'payload_too_large' }] });
+    expect(transport.submissions).toEqual([]);
+    fail = false;
+    await runtime.retryAttachmentSend!(correlation, { ...context, hostSend: { ...context.hostSend, attempt: 2 } });
+    expect(transport.uploads).toEqual(['first', 'second']);
+    expect(transport.submissions).toHaveLength(1);
+    expect(events.at(-1)).toEqual({ kind: 'accepted' });
+    expect(runtime.getSnapshot().sends[0].hostSend?.attempt).toBe(2);
+    runtime.dispose();
+  });
+
+  it('does not post a mismatched upload reference and identifies the affected file', async () => {
+    for (const field of ['mimeType', 'size'] as const) {
+      const transport = new AttachmentsTransport();
+      transport.uploadAttachment = async item => ({ assetId: 'asset', filename: item.filename,
+        mimeType: field === 'mimeType' ? 'image/png' : 'application/octet-stream',
+        size: field === 'size' ? item.bytes.size + 1 : item.bytes.size });
+      const runtime = await ready(transport);
+      const events: unknown[] = [];
+      runtime.observeHostSend(correlation, event => events.push(event));
+      runtime.sendAttachments!('', [input('file')], context);
+      await vi.waitFor(() => expect(events).toEqual([{ kind: 'failed', reason: 'upload-failed', detail: 'reference-mismatch' }]));
+      expect(transport.submissions).toEqual([]);
+      expect(runtime.getSnapshot().sends[0].attachmentItems?.[0]).toMatchObject({
+        filename: 'file.bin', errorCode: 'reference-mismatch', status: 'failed' });
+      runtime.dispose();
+    }
+  });
+
+  it('only reconciles canonical attachments with the same references in order, live and after rebuild', async () => {
+    const transport = new AttachmentsTransport();
+    const runtime = await ready(transport);
+    const events: unknown[] = [];
+    runtime.observeHostSend(correlation, event => events.push(event));
+    runtime.sendAttachments!('', [input('one'), input('two')], context);
+    await vi.waitFor(() => expect(events).toEqual([{ kind: 'accepted' }]));
+    const refs = transport.submissions[0].attachments!;
+    const row = message(9, { role: 'user', content: '', deviceId: 'device', clientMessageId: correlation,
+      attachments: [...refs].reverse() });
+    transport.rows.push(row);
+    transport.emit(row);
+    expect(runtime.getSnapshot().sends[0].reconciled).toBe(false);
+    expect(await runtime.refreshHostSend(correlation)).toBe('absent');
+    await runtime.rebuild();
+    expect(runtime.getSnapshot().sends[0].reconciled).toBe(false);
+    expect(events).toEqual([{ kind: 'accepted' }]);
+    const fixed = { ...row, rowVersion: 2, attachments: refs };
+    transport.rows[transport.rows.length - 1] = fixed;
+    transport.emit(fixed);
+    expect(runtime.getSnapshot().sends[0].reconciled).toBe(true);
+    expect(events.at(-1)).toEqual({ kind: 'reconciled' });
+    runtime.dispose();
+  });
+
+  it('re-asks a dropped post with the same manifest and no uploads, until acknowledged', async () => {
+    const transport = new AttachmentsTransport();
+    let calls = 0;
+    transport.nextSend = async () => ++calls === 1 ? { outcome: 'retryable', reason: 'socket closed' } : { outcome: 'accepted' };
+    const runtime = await ready(transport);
+    runtime.sendAttachments!('', [input('file')], context);
+    await vi.waitFor(() => expect(runtime.getSnapshot().sends[0].status).toBe('accepted'));
+    expect(transport.uploads).toEqual(['file']);
+    expect(transport.submissions).toHaveLength(2);
+    expect(transport.submissions[1]).toEqual(transport.submissions[0]);
+    expect(transport.submissions[1].attachments).toBe(transport.submissions[0].attachments);
+    runtime.dispose();
+  });
+
+  it('tells an unsubmitted connection from a submitted frame at target change', async () => {
+    for (const submitted of [false, true]) {
+      const transport = new AttachmentsTransport();
+      const post = deferred<HumanSendResult>();
+      let entered = false;
+      transport.sendHuman = async (_submission, _signal, onSubmitted) => {
+        entered = true;
+        if (submitted) onSubmitted?.();
+        return post.promise;
+      };
+      const runtime = await ready(transport);
+      const events: unknown[] = [];
+      runtime.observeHostSend(correlation, event => events.push(event));
+      runtime.sendAttachments!('', [input('file')], context);
+      await vi.waitFor(() => expect(entered).toBe(true));
+      expect(runtime.getSnapshot().sends[0].postSubmitted).toBe(submitted);
+      runtime.endAttachmentLifetime!(context.hostSend.lifetimeId, 'target-changed');
+      expect(events).toEqual([submitted
+        ? { kind: 'uncertain', reason: 'lifetime-ended' }
+        : { kind: 'failed', reason: 'upload-failed', detail: 'lifetime-ended' }]);
+      post.resolve({ outcome: 'accepted' });
+      await Promise.resolve();
+      expect(events).toHaveLength(1);
+      runtime.dispose();
+    }
+  });
+
+  it('cancels uploads on lifetime end and emits no outcome on unloading or disposal', async () => {
+    for (const reason of ['target-changed', 'identity-changed', 'unloading', 'disposed'] as const) {
+      const transport = new AttachmentsTransport();
+      transport.uploadGate = deferred<void>();
+      const runtime = await ready(transport);
+      const events: unknown[] = [];
+      runtime.observeHostSend(correlation, event => events.push(event));
+      runtime.sendAttachments!('', [input('file')], context);
+      runtime.endAttachmentLifetime!(context.hostSend.lifetimeId, reason);
+      expect(transport.uploadSignals[0].aborted).toBe(true);
+      expect(events).toEqual(reason === 'target-changed' || reason === 'identity-changed'
+        ? [{ kind: 'failed', reason: 'upload-failed', detail: 'lifetime-ended' }] : []);
+      transport.uploadGate.resolve();
+      await Promise.resolve();
+      expect(transport.submissions).toEqual([]);
+      runtime.dispose();
+    }
+  });
+
+  it('leaves an acknowledged but unreconciled attachment uncertain when its target ends', async () => {
+    const transport = new AttachmentsTransport();
+    const runtime = await ready(transport);
+    const events: unknown[] = [];
+    runtime.observeHostSend(correlation, event => events.push(event));
+    runtime.sendAttachments!('', [input('file')], context);
+    await vi.waitFor(() => expect(events).toEqual([{ kind: 'accepted' }]));
+    runtime.endAttachmentLifetime!(context.hostSend.lifetimeId, 'target-changed');
+    expect(events.at(-1)).toEqual({ kind: 'uncertain', reason: 'accepted-unreconciled' });
+    runtime.dispose();
+  });
+
+  it('reserves one retry while canonical history is being checked', async () => {
+    const transport = new AttachmentsTransport();
+    transport.nextSend = async () => ({ outcome: 'uncertain', reason: 'ack lost' });
+    const runtime = await ready(transport);
+    runtime.sendAttachments!('', [input('file')], context);
+    await vi.waitFor(() => expect(runtime.getSnapshot().sends[0].status).toBe('uncertain'));
+    // Wait for the initial uncertainty refresh before holding the retry read.
+    await vi.waitFor(() => expect(transport.readTailCalls).toBe(2));
+    await Promise.resolve();
+    const read = transport.readTail;
+    const gate = deferred<void>();
+    transport.readTail = async () => { await gate.promise; return read(); };
+    transport.nextSend = async () => ({ outcome: 'accepted' });
+    const retry = runtime.retryAttachmentSend!(correlation, context);
+    await runtime.retryAttachmentSend!(correlation, context);
+    expect(transport.submissions).toHaveLength(1);
+    gate.resolve();
+    await retry;
+    expect(transport.submissions).toHaveLength(2);
+    expect(transport.uploads).toEqual(['file']);
+    runtime.dispose();
+  });
+
+  it('uses transport-supplied restrictions without inventing type or count quotas', async () => {
+    const transport = new AttachmentsTransport();
+    const limits = { maxAttachmentBytes: 2 };
+    Object.assign(transport, { attachmentCapabilities: () => limits });
+    const runtime = await ready(transport);
+    expect(runtime.getAttachmentCapabilities!()).toBe(limits);
+    expect(runtime.sendAttachments!('', [input('file')])).toBeNull();
+    expect(transport.uploads).toEqual([]);
+    Object.assign(transport, { attachmentCapabilities: () => ({}) });
+    const items = Array.from({ length: 12 }, (_, i) => input(String(i)));
+    const id = runtime.sendAttachments!('', items);
+    expect(id).not.toBeNull();
+    await vi.waitFor(() => expect(runtime.getSnapshot().sends[0].status).toBe('accepted'));
+    expect(transport.submissions[0].attachments).toHaveLength(12);
+    runtime.dispose();
+  });
+
+  it('recovers a new lifetime from canonical references or stays uncertain without uploading', async () => {
+    for (const present of [false, true]) {
+      const transport = new AttachmentsTransport();
+      if (present) transport.rows.push(message(9, { role: 'user', content: '', deviceId: 'device',
+        clientMessageId: correlation, attachments: [{ assetId: 'original', filename: 'file.bin',
+          mimeType: 'application/octet-stream', size: 3 }] }));
+      const runtime = await ready(transport);
+      const events: unknown[] = [];
+      runtime.observeHostSend(correlation, event => events.push(event));
+      await runtime.recoverAttachmentSend!('', [input('file')], context);
+      expect(events).toEqual([present ? { kind: 'reconciled' } : { kind: 'uncertain', reason: 'retry-unavailable' }]);
+      expect(runtime.getSnapshot().sends[0].reconciled).toBe(present);
+      await runtime.retrySend(correlation);
+      expect(transport.uploads).toEqual([]);
+      expect(transport.submissions).toEqual([]);
+      runtime.dispose();
+    }
+  });
+
 });

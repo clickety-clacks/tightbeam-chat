@@ -859,11 +859,12 @@ describe('attachment byte routes', () => {
     const assets = new Map();
     const observations = [];
     let rejectUpload = false;
+    let mismatch;
     const gateway = http.createServer(async (request, response) => {
       const url = new URL(request.url, 'http://gateway.invalid');
       observations.push({ path: url.pathname, actingUser: url.searchParams.get('asUser'), auth: request.headers.authorization });
       if (url.pathname === '/upload') {
-        if (rejectUpload) { request.resume(); response.writeHead(413).end('too large'); return; }
+        if (rejectUpload) { request.resume(); response.writeHead(413, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'payload_too_large' })); return; }
         const chunks = []; for await (const chunk of request) chunks.push(chunk);
         const body = Buffer.concat(chunks);
         const form = await new Request('http://gateway.invalid/upload', { method: 'POST',
@@ -873,7 +874,7 @@ describe('attachment byte routes', () => {
         const id = `asset_${assets.size}`;
         assets.set(id, { bytes, type: file.type, filename: file.name });
         response.writeHead(200, { 'content-type': 'application/json' });
-        response.end(JSON.stringify({ asset_id: id, mime_type: file.type, size: bytes.length }));
+        response.end(JSON.stringify({ asset_id: id, mime_type: mismatch === 'type' ? 'text/plain' : file.type, size: bytes.length + (mismatch === 'size' ? 1 : 0) }));
       } else if (url.pathname.startsWith('/download/')) {
         const asset = assets.get(decodeURIComponent(url.pathname.slice('/download/'.length)));
         if (!asset) { response.writeHead(404).end(); return; }
@@ -920,9 +921,16 @@ describe('attachment byte routes', () => {
     expect(result.outcome).toBe('accepted');
     expect(frames).toEqual([{ type: 'message', id: 'c_assets', sessionKey: SESSION, content: '', attachments: refs }]);
     expect(observations.every(row => row.actingUser === PRINCIPAL && row.auth === `Bearer ${TOKEN}`)).toBe(true);
+    for (const field of ['type', 'size']) {
+      mismatch = field;
+      await expect(transport.uploadAttachment({ id: 'mismatch', filename: 'item.bin',
+        bytes: new Blob(['x'], { type: 'application/octet-stream' }) }, new AbortController().signal))
+        .rejects.toMatchObject({ code: 'reference-mismatch' });
+    }
+    mismatch = undefined;
     rejectUpload = true;
     await expect(transport.uploadAttachment({ id: 'rejected', filename: 'large.bin', bytes: new Blob(['x']) },
-      new AbortController().signal)).rejects.toThrow('413');
+      new AbortController().signal)).rejects.toMatchObject({ code: 'payload_too_large' });
     await expect(transport.readAttachment({ ...refs[0], assetId: 'missing' }, new AbortController().signal)).rejects.toThrow('404');
     expect((await fetch(origin + '/__chat/upload', { headers: { origin } })).status).toBe(405);
     expect((await fetch(origin + '/__chat/download/asset_0', { method: 'POST', headers: { origin } })).status).toBe(405);
