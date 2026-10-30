@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.63",
+    "items": [
+      {
+        "title": "Stored summaries for activity lines",
+        "description": "Activity lines can show short summaries that are stored and reused across reloads. Original text stays readable until a summary is ready and remains available on hover. Lines stay usable when summarization is unavailable."
+      }
+    ]
+  },
+  {
     "version": "v0.1.62",
     "items": [
       {
