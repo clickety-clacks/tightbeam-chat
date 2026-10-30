@@ -1327,7 +1327,7 @@ describe('conversation reading position', () => {
     expect(screen.getByRole('button', { name: 'Jump to latest user prompt' }).textContent).toBe('Message 20');
   });
 
-  it('dismisses only the current preview without navigation and allows a newer prompt preview', () => {
+  it('keeps a dismissed preview hidden through history changes and restores it only after a new submission', () => {
     const { runtime, box } = setup();
     readAt(box, 0);
     const original = targetForPreview();
@@ -1340,15 +1340,30 @@ describe('conversation reading position', () => {
     expect(scrollTo).not.toHaveBeenCalled();
     expect(box.querySelector('[data-record-key="message-19"]')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Jump to latest user prompt' })).toBeNull();
+    act(() => runtime.publish({ agentDisplayName: 'Updated assistant' }));
+    expect(screen.queryByRole('button', { name: 'Jump to latest user prompt' })).toBeNull();
     box.scrollTop = box.scrollHeight - box.clientHeight;
     fireEvent.scroll(box);
     readAt(box, 0);
     expect(screen.queryByRole('button', { name: 'Jump to latest user prompt' })).toBeNull();
 
     act(() => runtime.publish({ records: [...runtime.state.records, message(20)] }));
-    const preview = screen.getByRole('button', { name: 'Jump to latest user prompt' });
-    expect(preview.textContent).toBe('Message 20');
-    expect(targetForPreview()?.dataset.recordKey).toBe('message-20');
+    expect(box.querySelector('[data-record-key="message-20"]')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Jump to latest user prompt' })).toBeNull();
+
+    const send = { sessionKey: 'reading', clientMessageId: 'c_new', deviceId: 'browser', content: 'Message 21',
+      status: 'accepted' as const, submittedAt: '2026-10-23T00:00:00Z', reconciled: false };
+    act(() => runtime.publish({ sends: [send] }));
+    let preview = screen.getByRole('button', { name: 'Jump to latest user prompt' });
+    expect(preview.textContent).toBe('Message 21');
+    expect(targetForPreview()?.dataset.recordKey).toBe('local-c_new');
+
+    box.scrollTop = box.scrollHeight - box.clientHeight;
+    fireEvent.scroll(box);
+    expect(screen.queryByRole('button', { name: 'Jump to latest user prompt' })).toBeNull();
+    readAt(box, 0);
+    preview = screen.getByRole('button', { name: 'Jump to latest user prompt' });
+    expect(preview.textContent).toBe('Message 21');
   });
 
   it('jumps to and focuses the exact original prompt when it is outside the viewport', () => {

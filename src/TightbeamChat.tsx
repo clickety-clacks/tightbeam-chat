@@ -1392,7 +1392,25 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   const latestPrompt = useMemo(() => latestUserPrompt(timeline), [timeline]);
   const latestPromptTargetId = latestPrompt
     ? `${promptTargetPrefix}-${encodeURIComponent(latestPrompt.targetKey)}` : undefined;
-  const [dismissedPromptIdentity, setDismissedPromptIdentity] = useState<string | undefined>(undefined);
+  const [latestPromptDismissed, setLatestPromptDismissed] = useState(false);
+  // Transcript refreshes can change the latest row; only a new submission clears dismissal.
+  const observedPromptSubmissions = useRef<Set<string> | null>(null);
+  if (!observedPromptSubmissions.current) {
+    observedPromptSubmissions.current = new Set(state.sends
+      .filter(send => send.sessionKey === state.sessionKey).map(sendIdentity));
+  }
+  useLayoutEffect(() => {
+    const observed = observedPromptSubmissions.current!;
+    let newSubmission = false;
+    for (const send of state.sends) {
+      if (send.sessionKey !== state.sessionKey) continue;
+      const identity = sendIdentity(send);
+      if (observed.has(identity)) continue;
+      observed.add(identity);
+      newSubmission = true;
+    }
+    if (newSubmission) setLatestPromptDismissed(false);
+  }, [state.sends, state.sessionKey]);
   const [latestPromptVisibility, setLatestPromptVisibility] = useState<{
     readonly identity: string;
     readonly offscreen: boolean;
@@ -1633,7 +1651,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   }, [latestPrompt?.identity, latestPrompt?.content, latestPromptTargetId, showRuntimeNotice, showToolHistoryStatusInNotice,
     state.loadingOlder, state.historyError, localNotice, updateLatestPromptVisibility, reading.content]);
   const showLatestPrompt = !!latestPrompt && latestPromptVisibility?.identity === latestPrompt.identity &&
-    latestPromptVisibility.offscreen && dismissedPromptIdentity !== latestPrompt.identity;
+    latestPromptVisibility.offscreen && !latestPromptDismissed;
   const jumpToLatestPrompt = () => {
     const box = viewport.current;
     if (!box || !latestPrompt || !latestPromptTargetId) return;
@@ -1806,7 +1824,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
         <span className="tb-chat-latest-user-prompt-text">{latestPrompt.content}</span>
       </button>
       <button type="button" className="tb-chat-latest-user-prompt-dismiss" aria-label="Dismiss latest user prompt preview"
-        onClick={() => setDismissedPromptIdentity(latestPrompt.identity)}>×</button>
+        onClick={() => setLatestPromptDismissed(true)}>×</button>
     </div>}
     {reading.showLatest && <button type="button" className="tb-chat-scroll-latest" data-scroll-latest="true"
       aria-label="Scroll to latest messages" onMouseDown={(event) => event.preventDefault()} onClick={() => {
