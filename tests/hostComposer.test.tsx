@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { TightbeamChat } from '../src/TightbeamChat';
 import { createTightbeamAdapter } from '../src/runtime';
 import { HOST_COMMAND_NAME, HOST_DECLARATION_NAME, HostComposerBridge, type HostComposerCommandEntry, type HostComposerEvent } from '../src/hostComposer';
@@ -734,7 +734,7 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     await waitFor(() => expect(transport.submissions).toHaveLength(1));
     await waitFor(() => expect(events.some((event) => event.event === 'delivered' &&
       event.lifetimeId === first.lifetimeId && event.correlationId === correlation)).toBe(true));
-    await screen.findByText('send while live updates reconnect');
+    await within(screen.getByRole('log')).findByText('send while live updates reconnect');
     expect(events.some((event) => event.event === 'unavailable' && event.lifetimeId === first.lifetimeId)).toBe(false);
     expect(runtimes[0].getSnapshot().status).toBe('ready');
     transport.changeOpenFailures = 0;
@@ -798,7 +798,7 @@ describe('versioned host composer seam on the real adapter and surface', () => {
 
       layout.setScrollTop(viewport.scrollHeight - viewport.clientHeight);
       fireEvent.scroll(viewport);
-      const newest = screen.getByText('Earlier message 8').closest('article')!;
+      const newest = within(viewport).getByText('Earlier message 8').closest('article')!;
       const newestBefore = layout.offset(newest);
       expect(newestBefore).toBeGreaterThanOrEqual(0);
       expect(newestBefore + 80).toBeLessThanOrEqual(viewport.clientHeight);
@@ -815,7 +815,7 @@ describe('versioned host composer seam on the real adapter and surface', () => {
       await reconnect();
 
       expect(Math.abs(layout.offset(anchor) - anchorBefore)).toBeLessThanOrEqual(1);
-      for (const record of history) expect(screen.getByText(record.content)).toBeTruthy();
+      for (const record of history) expect(within(viewport).getByText(record.content)).toBeTruthy();
       expect(runtimes[0].getSnapshot().records.map((record) => record.id)).toEqual(history.map((record) => record.id));
       expect(events.filter((event) => event.event === 'ready' && event.lifetimeId === ready.lifetimeId)).toHaveLength(1);
       expect(events.some((event) => event.event === 'unavailable' && event.lifetimeId === ready.lifetimeId)).toBe(false);
@@ -863,7 +863,7 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
 
     await waitFor(() => expect(transport.submissions).toHaveLength(1));
-    await screen.findByText('Send while live updates reconnect');
+    await within(screen.getByRole('log')).findByText('Send while live updates reconnect');
     await waitFor(() => expect(runtimes[0].getSnapshot().sends[0]?.status).toBe('accepted'));
     expect(runtimes[0].getSnapshot().status).toBe('ready');
     await waitFor(() => expect(transport.changeOpenCount).toBeGreaterThan(1));

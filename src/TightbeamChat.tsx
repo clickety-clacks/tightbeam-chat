@@ -74,6 +74,34 @@ function canonicalSendIdentity(record: CanonicalMessage): string | undefined {
     : undefined;
 }
 
+function bubblePromptIdentity(bubble: Bubble): string {
+  const identity = bubble.derived ? undefined : canonicalSendIdentity(bubble.record);
+  return identity ? `send:${identity}` : `record:${JSON.stringify([bubble.record.sessionKey, bubble.key])}`;
+}
+
+interface LatestUserPrompt {
+  readonly identity: string;
+  readonly content: string;
+  readonly targetKey: string;
+  readonly scrollKey: string;
+}
+
+function latestUserPrompt(timeline: readonly TimelineItem[]): LatestUserPrompt | undefined {
+  for (let index = timeline.length - 1; index >= 0; index--) {
+    const item = timeline[index];
+    if (item.kind === 'bubble' && item.bubble.side === 'human' && item.bubble.ownerScoped) {
+      return { identity: bubblePromptIdentity(item.bubble),
+        content: item.bubble.displayContent ?? item.bubble.record.content, targetKey: item.bubble.key,
+        scrollKey: item.scrollKey ?? (item.bubble.derived ? item.bubble.key : item.bubble.record.id) };
+    }
+    if (item.kind === 'local') {
+      return { identity: `send:${sendIdentity(item.send)}`, content: item.send.content,
+        targetKey: `local-${item.send.clientMessageId}`, scrollKey: `local-${item.send.clientMessageId}` };
+    }
+  }
+  return undefined;
+}
+
 function itemTime(item: TimelineItem): number | undefined {
   if (item.kind === 'tool') return item.call.startedAt;
   if (item.kind === 'activity' || item.kind === 'activity-fold' || item.kind === 'overflow') return undefined;
@@ -606,7 +634,7 @@ function StatusIcon({ state }: { state: RuntimeState }) {
 }
 
 const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, registerRow, preservePosition,
-  reconcileLayout, scrollKey: scrollKeyOverride }: {
+  reconcileLayout, scrollKey: scrollKeyOverride, promptTargetPrefix }: {
   bubble: Bubble;
   renderMessage?: TightbeamChatProps['renderMessage'];
   agentName: string;
@@ -614,6 +642,7 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, re
   preservePosition: () => void;
   reconcileLayout: () => void;
   scrollKey?: string;
+  promptTargetPrefix: string;
 }) {
   const { record } = bubble;
   const scrollKey = scrollKeyOverride ?? (bubble.derived ? bubble.key : record.id);
@@ -642,7 +671,8 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, re
       memberIndex: bubble.member.index, sender: bubble.member.sender, content: bubble.member.content }),
   }) : record;
   const custom = renderMessage?.(displayRecord, context);
-  return <article ref={rowRef} className={`tb-chat-bubble tb-chat-bubble-${bubble.side}`} data-record-key={bubble.key} data-scroll-key={scrollKey}
+  return <article ref={rowRef} id={`${promptTargetPrefix}-${encodeURIComponent(bubble.key)}`}
+    className={`tb-chat-bubble tb-chat-bubble-${bubble.side}`} data-record-key={bubble.key} data-scroll-key={scrollKey}
     aria-label={`Message from ${bubble.sender || sourceLabel(bubble.side, agentName)}`}>
     {bubble.side === 'human' && <span className="tb-chat-bubble-sender" aria-hidden="true">{bubble.sender}</span>}
     <div className="tb-chat-bubble-body">{custom === undefined ? context.defaultRender() : custom}</div>
@@ -659,6 +689,7 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, re
   return before.key === after.key && before.record === after.record && before.side === after.side &&
     before.sender === after.sender && before.displayContent === after.displayContent &&
     before.derived === after.derived && sameMember && previous.renderMessage === next.renderMessage &&
+    previous.promptTargetPrefix === next.promptTargetPrefix &&
     previous.agentName === next.agentName && previous.registerRow === next.registerRow &&
     previous.preservePosition === next.preservePosition && previous.reconcileLayout === next.reconcileLayout &&
     previous.scrollKey === next.scrollKey;
@@ -1067,6 +1098,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   configuredConversationHref?: string;
 }) {
   const state = useSyncExternalStore(runtime.subscribe, runtime.getSnapshot, runtime.getSnapshot);
+  const promptTargetPrefix = useId();
   const markedOpenRuntime = useRef<ChatRuntime | null>(null);
   const pendingVisibleReturn = useRef(false);
   const markReadPosition = useCallback(() => {
@@ -1165,6 +1197,8 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     if (submitted.length) arriveOwnMessagesRef.current(submitted.map(id => `local-${id}`));
   }, [state.sends]);
   const root = useRef<HTMLElement>(null);
+  const runtimeNotice = useRef<HTMLDivElement>(null);
+  const toolHistoryStatus = useRef<HTMLDivElement>(null);
   const composer = useRef<ComposerHandle>(null);
   const [overlay, setOverlay] = useState<ChatOverlay | null>(null);
   const overlayRef = useRef<ChatOverlay | null>(null);
@@ -1358,8 +1392,69 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   }, [expandedRuns, viewport]);
   const timeline = useMemo(() => composeTimeline(bubbles, localSends, canonicalSends, sendsByIdentity,
     transitions, activityPlan.messageItems), [activityPlan.messageItems, bubbles, canonicalSends, localSends, sendsByIdentity, transitions]);
+  const latestPrompt = useMemo(() => latestUserPrompt(timeline), [timeline]);
+  const latestPromptTargetId = latestPrompt
+    ? `${promptTargetPrefix}-${encodeURIComponent(latestPrompt.targetKey)}` : undefined;
+  const [latestPromptDismissed, setLatestPromptDismissed] = useState(false);
+  // Transcript refreshes can change the latest row; only a new submission clears dismissal.
+  const observedPromptSubmissions = useRef<Set<string> | null>(null);
+  if (!observedPromptSubmissions.current) {
+    observedPromptSubmissions.current = new Set(state.sends
+      .filter(send => send.sessionKey === state.sessionKey).map(sendIdentity));
+  }
+  useLayoutEffect(() => {
+    const observed = observedPromptSubmissions.current!;
+    let newSubmission = false;
+    for (const send of state.sends) {
+      if (send.sessionKey !== state.sessionKey) continue;
+      const identity = sendIdentity(send);
+      if (observed.has(identity)) continue;
+      observed.add(identity);
+      newSubmission = true;
+    }
+    if (newSubmission) setLatestPromptDismissed(false);
+  }, [state.sends, state.sessionKey]);
+  const [latestPromptVisibility, setLatestPromptVisibility] = useState<{
+    readonly identity: string;
+    readonly offscreen: boolean;
+  } | undefined>(undefined);
   const transcript = useMemo(() => transcriptIndex(timeline), [timeline]);
   const pending = useMemo(() => placePending(transcript.placements, tools), [transcript, tools]);
+  const updateLatestPromptVisibility = useCallback(() => {
+    const element = root.current;
+    const notice = runtimeNotice.current;
+    if (element) {
+      const rootTop = element.getBoundingClientRect().top;
+      const noticeBottom = notice?.getBoundingClientRect().bottom;
+      const toolStatusBottom = toolHistoryStatus.current?.getBoundingClientRect().bottom;
+      const blockingBottom = Math.max(noticeBottom ?? Number.NEGATIVE_INFINITY,
+        toolStatusBottom ?? Number.NEGATIVE_INFINITY);
+      const top = Number.isFinite(blockingBottom) ? Math.max(10, blockingBottom - rootTop + 8) : 10;
+      const topValue = `${top}px`;
+      if (element.style.getPropertyValue('--tb-chat-floating-prompt-top') !== topValue) {
+        element.style.setProperty('--tb-chat-floating-prompt-top', topValue);
+      }
+    }
+
+    const box = viewport.current;
+    if (!box || !latestPrompt) {
+      setLatestPromptVisibility(prior => prior === undefined ? prior : undefined);
+      return;
+    }
+    const target = latestPrompt ? reading.getRow(latestPrompt.scrollKey) : undefined;
+    const targetRect = target?.getBoundingClientRect();
+    const viewportRect = box.getBoundingClientRect();
+    // A zero-sized layout (for example, before the surface is laid out) does
+    // not prove the original is outside the viewport. Keep the miniature
+    // hidden until both vertical bounds can be measured.
+    const hasMeasuredBounds = !!targetRect &&
+      Number.isFinite(targetRect.top) && Number.isFinite(targetRect.bottom) && targetRect.bottom > targetRect.top &&
+      Number.isFinite(viewportRect.top) && Number.isFinite(viewportRect.bottom) && viewportRect.bottom > viewportRect.top;
+    const offscreen = hasMeasuredBounds &&
+      (targetRect.bottom <= viewportRect.top || targetRect.top >= viewportRect.bottom);
+    setLatestPromptVisibility(prior => prior?.identity === latestPrompt.identity && prior.offscreen === offscreen
+      ? prior : { identity: latestPrompt.identity, offscreen });
+  }, [latestPrompt?.identity, latestPrompt?.scrollKey, reading.getRow]);
   useEffect(() => {
     if (host.settingsRequestRevision <= handledSettingsRevision.current) return;
     handledSettingsRevision.current = host.settingsRequestRevision;
@@ -1518,6 +1613,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     const current = box.scrollTop;
     previousScrollTop.current = current;
     reading.onScroll();
+    updateLatestPromptVisibility();
     const movedUp = previous !== undefined && current < previous;
     if (!movedUp || current < 0 || state.status !== 'ready' || !state.hasOlder || state.loadingOlder) return;
     if (state.historyError || current < olderHistoryPrefetchDistance(box)) loadOlder();
@@ -1537,7 +1633,49 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   const hasToolHistoryStatus = state.toolCallsEnabled === true &&
     (state.toolCallsLoading || visibleToolCallsError !== undefined);
   const showToolHistoryStatusInNotice = hasToolHistoryStatus && !state.loadingOlder && !!(state.historyError || localNotice);
+  useLayoutEffect(() => {
+    const box = viewport.current;
+    const content = reading.content.current;
+    const target = latestPrompt ? reading.getRow(latestPrompt.scrollKey) : undefined;
+    const notice = runtimeNotice.current;
+    const toolStatus = toolHistoryStatus.current;
+    const observer = typeof ResizeObserver === 'undefined'
+      ? undefined : new ResizeObserver(updateLatestPromptVisibility);
+    for (const element of [root.current, box, content, target, notice, toolStatus]) if (element) observer?.observe(element);
+    window.addEventListener('resize', updateLatestPromptVisibility);
+    window.visualViewport?.addEventListener('resize', updateLatestPromptVisibility);
+    window.visualViewport?.addEventListener('scroll', updateLatestPromptVisibility);
+    updateLatestPromptVisibility();
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', updateLatestPromptVisibility);
+      window.visualViewport?.removeEventListener('resize', updateLatestPromptVisibility);
+      window.visualViewport?.removeEventListener('scroll', updateLatestPromptVisibility);
+    };
+  }, [latestPrompt?.identity, latestPrompt?.content, latestPrompt?.targetKey, latestPrompt?.scrollKey, latestPromptTargetId,
+    showRuntimeNotice, showToolHistoryStatusInNotice, state.loadingOlder, state.historyError, localNotice,
+    updateLatestPromptVisibility, reading.content, reading.getRow]);
+  const showLatestPrompt = !!latestPrompt && latestPromptVisibility?.identity === latestPrompt.identity &&
+    latestPromptVisibility.offscreen && !latestPromptDismissed;
+  const jumpToLatestPrompt = () => {
+    const box = viewport.current;
+    if (!box || !latestPrompt || !latestPromptTargetId) return;
+    const target = reading.getRow(latestPrompt.scrollKey);
+    if (!target) return;
+    const viewportRect = box.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    const destination = Math.max(0, Math.min(box.scrollHeight - box.clientHeight,
+      box.scrollTop + targetRect.top - viewportRect.top - (box.clientHeight - targetRect.height) / 2));
+    reading.interrupt();
+    reading.noteUserScroll();
+    target.tabIndex = -1;
+    target.focus({ preventScroll: true });
+    const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+    box.scrollTo({ top: destination, behavior: reducedMotion ? 'instant' : 'smooth' });
+    updateLatestPromptVisibility();
+  };
   const renderToolHistoryStatus = (placeholder = false) => <div
+    ref={placeholder ? undefined : toolHistoryStatus}
     className={`tb-chat-tool-history-status${placeholder ? ' tb-chat-tool-history-status-placeholder' : ''}`}
     aria-hidden={placeholder || undefined}>
     {state.toolCallsLoading && <span className="tb-chat-caption tb-chat-caption-neutral" role="status">Loading tool history…</span>}
@@ -1596,7 +1734,8 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
           const { bubble } = item;
           return <RecordRow key={bubble.key} bubble={bubble} scrollKey={item.scrollKey}
             renderMessage={renderMessage} agentName={agentName} registerRow={reading.registerRow}
-            preservePosition={preserveReadingPosition} reconcileLayout={reading.reconcileViewportLayout} />;
+            preservePosition={preserveReadingPosition} reconcileLayout={reading.reconcileViewportLayout}
+            promptTargetPrefix={promptTargetPrefix} />;
         }
         const { send } = item;
         const time = localTimestamp(send.submittedAt);
@@ -1606,8 +1745,11 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
         const reconnectingSend = send.status === 'pending' && unreachable;
         const retryAvailable = !hostManaged && !retryUnavailable &&
           ['failed', 'uncertain'].includes(send.status) && !send.reconciled;
-        return <article ref={element => reading.registerRow(`local-${send.clientMessageId}`, element)} className="tb-chat-bubble tb-chat-bubble-human tb-chat-local" key={send.clientMessageId}
-          data-record-key={`local-${send.clientMessageId}`} data-scroll-key={`local-${send.clientMessageId}`} aria-label={`Your message, ${send.status}`}>
+        const targetKey = `local-${send.clientMessageId}`;
+        return <article ref={element => reading.registerRow(targetKey, element)}
+          id={`${promptTargetPrefix}-${encodeURIComponent(`local-${send.clientMessageId}`)}`}
+          className="tb-chat-bubble tb-chat-bubble-human tb-chat-local" key={send.clientMessageId}
+          data-record-key={targetKey} data-scroll-key={targetKey} aria-label={`Your message, ${send.status}`}>
           <div className="tb-chat-bubble-body">{markdownBody(send.content)}</div>
           <p className="tb-chat-send-state" data-send-status={send.status} role={send.status === 'pending' ? 'status' : undefined}>{send.status === 'uncertain' ? 'Delivery is uncertain'
             : send.status === 'failed' ? 'Message could not be sent'
@@ -1636,7 +1778,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   }, [activityPlan.toolItems, expandedActivityRuns, expandedToolCalls, toggleActivityRun, setToolCallExpanded,
     revealingActivityItems, finishActivityReveal, reading.registerRow, reading.preserveVisiblePosition,
     reading.reconcileViewportLayout, preserveReadingPosition, expandRun,
-    renderMessage, agentName, state.status, runtime]);
+    renderMessage, agentName, state.status, runtime, promptTargetPrefix]);
 
   return <ActivitySummaryProvider transport={activitySummaries}
     connected={state.liveConnectionState ? state.liveConnectionState === 'connected' : state.status === 'ready'}
@@ -1656,7 +1798,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
         }
       }}
       aria-label={`${agentName || 'Conversation'} messages`} aria-live="polite" aria-relevant="additions text">
-      {showRuntimeNotice && <div className={`tb-chat-runtime-notice ${showToolHistoryStatusInNotice ? 'tb-chat-runtime-notice-with-tool-history ' : ''}${state.loadingOlder ? 'tb-chat-history-loading ' : ''} tb-chat-caption ${state.historyError || state.sessionNotFound || state.sessionError || state.conversationError || state.status === 'unauthorized' || state.status === 'unsupported'
+      {showRuntimeNotice && <div ref={runtimeNotice} className={`tb-chat-runtime-notice ${showToolHistoryStatusInNotice ? 'tb-chat-runtime-notice-with-tool-history ' : ''}${state.loadingOlder ? 'tb-chat-history-loading ' : ''} tb-chat-caption ${state.historyError || state.sessionNotFound || state.sessionError || state.conversationError || state.status === 'unauthorized' || state.status === 'unsupported'
         ? 'tb-chat-caption-danger' : 'tb-chat-caption-neutral'}`} role={state.historyError || state.sessionNotFound || state.conversationError || state.sessionError || state.status === 'unauthorized' || state.status === 'unsupported' ? 'alert' : 'status'}>
         <span className="tb-chat-caption-body">
           {(state.loadingOlder || state.historyError || localNotice) && <span>{state.loadingOlder ? 'Loading earlier messages…'
@@ -1683,6 +1825,14 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
         <p className="tb-chat-empty">No messages yet.</p>}
       </div>
     </div>
+    {showLatestPrompt && latestPrompt && <div className="tb-chat-latest-user-prompt">
+      <button type="button" className="tb-chat-latest-user-prompt-jump" aria-controls={latestPromptTargetId}
+        aria-label="Jump to latest user prompt" onClick={jumpToLatestPrompt}>
+        <span className="tb-chat-latest-user-prompt-text">{latestPrompt.content}</span>
+      </button>
+      <button type="button" className="tb-chat-latest-user-prompt-dismiss" aria-label="Dismiss latest user prompt preview"
+        onClick={() => setLatestPromptDismissed(true)}>×</button>
+    </div>}
     {reading.showLatest && <button type="button" className="tb-chat-scroll-latest" data-scroll-latest="true"
       aria-label="Scroll to latest messages" onMouseDown={(event) => event.preventDefault()} onClick={() => {
         markReadPosition();

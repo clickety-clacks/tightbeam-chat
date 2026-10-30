@@ -66,6 +66,7 @@ export function useReadingPosition(
     if (element) registeredRows.current.set(key, element);
     else registeredRows.current.delete(key);
   }, []);
+  const getRow = useCallback((key: string) => registeredRows.current.get(key), []);
   const latestReady = useRef(ready);
   const [showLatest, setShowLatest] = useState(false);
   latestReady.current = ready;
@@ -545,6 +546,6 @@ export function useReadingPosition(
     capture();
   };
 
-  return { viewport, content, registerRow, showLatest, onScroll, interrupt, holdPosition,
+  return { viewport, content, registerRow, getRow, showLatest, onScroll, interrupt, holdPosition,
     preserveVisiblePosition, scrollBy, scrollToLatest, arriveOwnMessages, noteUserScroll, reconcileViewportLayout };
 }
