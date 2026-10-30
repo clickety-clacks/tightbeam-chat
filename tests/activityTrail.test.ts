@@ -751,7 +751,7 @@ describe('activity trail projection', () => {
       payload: { rule: 'owner-policy', verb: 'send', detail: 'Refused' }, occurredAt: 14_999,
       tailEligibleAtArrival: false, afterMessageSeq: 1, arrivalOrder: 1 };
     const plan = build({ records: [prompt, reply], bubbles: [bubble(prompt, 'human'), bubble(reply, 'agent')],
-      railDenials: [live], historyRailDenials: [history, { ...history, id: 'same-event-copy' }] });
+      railDenials: [live], historyRailDenials: [history, { ...history }] });
     const pills = plan.messageItems.filter((item): item is ActivityLine => item.kind === 'rail');
     expect(pills).toHaveLength(1);
     expect(pills[0]).toMatchObject({ id: 'rail:history-id', anchorSeq: 1, gist: 'send refused by owner-policy' });

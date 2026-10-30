@@ -1041,7 +1041,7 @@ describe('conversation surface', () => {
 
     const refusedRow = pillFor('Refused: Completion needs a recorded verification first');
     expect(refusedRow.querySelector('.tb-chat-activity-pill-red')).toBeTruthy();
-    expect(within(log).getAllByRole('note', { name: 'Rail: attest refused by completion-requires-verification' }))
+    expect(within(log).getAllByRole('note', { name: 'Refused: Completion needs a recorded verification first' }))
       .toHaveLength(1);
 
     for (const pill of within(log).getAllByRole('note').filter(note =>
