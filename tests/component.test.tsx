@@ -1075,6 +1075,7 @@ describe('conversation surface', () => {
     const human = row(sessionKey, 'human', 'Question', {
       seq: 1, role: 'user', sender: 'user:person', messageType: 'chat', turnSeq: 1,
     });
+    // This fixture has a filing notice but no readable attest note or stored summary.
     const attest = row(sessionKey, 'attest-notice',
       'Attest att_12345678-1111-4111-8111-123456789abc (completion) was filed on assignment asg_abcdef12-1111-4111-8111-123456789abc.', {
         seq: 2, role: 'user', sender: 'process:events', messageType: 'substrate', turnSeq: 1,
@@ -1163,6 +1164,7 @@ describe('conversation surface', () => {
     expect(attestRow.classList.contains('tb-chat-activity-pill-row')).toBe(true);
     expect(attestRow.querySelector('.tb-chat-activity-pill')?.textContent).toContain('Attest');
     expect(attestRow.textContent).toContain('Filed completion on assignment asg_abcd');
+    expect(attestRow.querySelector('.tb-chat-summary-marker')).toBeNull();
 
     const assignmentRow = pillFor('Assignment: New · Review the next change, asg_2345');
     expect(assignmentRow.querySelector('.tb-chat-activity-pill')?.textContent).toContain('Assignment');
