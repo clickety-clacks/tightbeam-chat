@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.61",
+    "items": [
+      {
+        "title": "Clearer colors for tool activity",
+        "description": "Individual tool-call rows use muted grey text. Folded tool-call summaries use a yellow-tan accent, and terminal icons follow the surrounding text color."
+      }
+    ]
+  },
+  {
     "version": "v0.1.60",
     "items": [
       {
