@@ -700,6 +700,16 @@ function ActivityPillIconView({ icon }: { readonly icon: ActivityPillIcon }) {
   return <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">{activityPillIconPaths[icon]}</svg>;
 }
 
+function ToolCallTerminalIcon({ className }: { readonly className: string }) {
+  return <svg className={className} viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <rect x="3" y="3" width="18" height="18" rx="3" fill="currentColor" />
+    <path d="m7 9 3 3-3 3" fill="none" stroke="var(--tb-chat-background)" strokeWidth={1.8}
+      strokeLinecap="round" strokeLinejoin="round" />
+    <path d="M12.5 15h4.5" fill="none" stroke="var(--tb-chat-background)" strokeWidth={1.8}
+      strokeLinecap="round" />
+  </svg>;
+}
+
 function ActivityPillContents({ presentation }: { readonly presentation: ActivityPillPresentation }) {
   return <>
     <span className={`tb-chat-activity-pill tb-chat-activity-pill-${presentation.tone}`}>
@@ -774,7 +784,7 @@ const ToolCallRow = memo(function ToolCallRow({ call, entry, registerRow, preser
     aria-label={accessibleText} onToggle={event => updateExpanded(event.currentTarget.open)}>
       <summary aria-label={`${accessibleText}. Show input and result`}
         onClick={preservePosition}>
-        <span className="tb-chat-activity-bullet" aria-hidden="true">•</span>
+        <ToolCallTerminalIcon className="tb-chat-tool-terminal-icon" />
         <span className="tb-chat-activity-gist">{gist}</span>
       </summary>
       {expanded && <div>
@@ -805,6 +815,7 @@ const ActivityRunRow = memo(function ActivityRunRow({ entry, expanded, toggle, r
   readonly expandedToolCalls: ReadonlySet<string>;
   readonly setToolCallExpanded: (id: string, expanded: boolean) => void;
 }) {
+  const toolRun = entry.activityKind === 'tool';
   const detailLines = entry.lines;
   const presentation = entry.summary.presentation;
   const latestDescription = presentation
@@ -813,16 +824,21 @@ const ActivityRunRow = memo(function ActivityRunRow({ entry, expanded, toggle, r
   return <div className={`tb-chat-activity-run tb-chat-activity-${entry.activityKind}`} tabIndex={-1}
     ref={element => registerRow(entry.id, element)} data-record-key={entry.id} data-scroll-key={entry.id}
     data-activity-run={entry.runKey} data-activity-fold="true" data-run-expanded={expanded ? 'true' : 'false'}>
-    <button type="button" className={`tb-chat-activity-run-toggle tb-chat-activity-${entry.activityKind}${presentation ? ' tb-chat-activity-pill-toggle' : ''}`}
+    <button type="button" className={`tb-chat-activity-run-toggle tb-chat-activity-${entry.activityKind}${toolRun ? ' tb-chat-activity-tool-run-toggle' : ''}${presentation ? ' tb-chat-activity-pill-toggle' : ''}`}
       aria-expanded={expanded}
       aria-label={`${expanded ? 'Collapse' : 'Expand'} ${entry.activityKind} activity run, ${entry.lines.length} entries. Latest: ${latestDescription}`}
       title={presentation ? entry.summary.originalContent ?? entry.summary.accessibleText : undefined}
       onClick={() => { preservePosition(); toggle(entry.id); }}>
-      {!presentation && <span className="tb-chat-activity-bullet" aria-hidden="true">•</span>}
-      <span className={`tb-chat-activity-run-chevron${expanded ? ' is-expanded' : ''}`} aria-hidden="true" />
+      {toolRun
+        ? <ToolCallTerminalIcon className="tb-chat-tool-terminal-icon" />
+        : <>
+          {!presentation && <span className="tb-chat-activity-bullet" aria-hidden="true">•</span>}
+          <span className={`tb-chat-activity-run-chevron${expanded ? ' is-expanded' : ''}`} aria-hidden="true" />
+        </>}
       {presentation ? <ActivityPillContents presentation={presentation} />
         : <span className="tb-chat-activity-gist">{entry.summary.gist}</span>}
       <span className="tb-chat-activity-run-count" aria-hidden="true">×{entry.lines.length}</span>
+      {toolRun && <span className={`tb-chat-activity-run-chevron${expanded ? ' is-expanded' : ''}`} aria-hidden="true" />}
     </button>
     {expanded && <div className="tb-chat-activity-run-rows">
       {detailLines.map(line => line.kind === 'tool' && line.call

@@ -568,6 +568,7 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
   stroke-linecap: round;
   stroke-linejoin: round;
 }
+.tb-chat-tool-terminal-icon { display: block; flex: 0 0 13px; width: 13px; height: 13px; }
 .tb-chat-activity-pill-green { --tb-chat-pill-ink: var(--tb-chat-ok); }
 .tb-chat-activity-pill-amber { --tb-chat-pill-ink: var(--tb-chat-caution); }
 .tb-chat-activity-pill-orange { --tb-chat-pill-ink: var(--tb-chat-teak); }
@@ -655,6 +656,12 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
 .tb-chat-activity-run-chevron.is-expanded { transform: translateY(-.15em) rotate(45deg); }
 .tb-chat-activity-run-toggle .tb-chat-activity-gist { flex: 1 1 auto; }
 .tb-chat-activity-run-count { flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+.tb-chat-activity-tool-run-toggle { align-items: center; }
+.tb-chat-activity-tool-run-toggle > .tb-chat-tool-terminal-icon { margin-inline-end: .1rem; }
+.tb-chat-activity-tool-run-toggle > .tb-chat-activity-run-chevron {
+  margin-inline-start: .2rem;
+  margin-inline-end: 0;
+}
 .tb-chat-activity-overflow {
   align-self: flex-start;
   min-width: 2rem;
@@ -673,7 +680,7 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
 .tb-chat-activity-overflow:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
 .tb-chat-activity-tool > summary {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   min-width: 0;
   overflow: hidden;
   cursor: pointer;
@@ -681,6 +688,7 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
 }
 .tb-chat-activity-tool > summary::-webkit-details-marker { display: none; }
 .tb-chat-activity-tool > summary::marker { content: ''; }
+.tb-chat-activity-tool > summary > .tb-chat-tool-terminal-icon { margin-inline-end: .45rem; }
 .tb-chat-activity-bullet { flex: 0 0 auto; margin-inline-end: .45rem; }
 .tb-chat-activity-gist { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tb-chat-activity-tool > div { white-space: normal; }
