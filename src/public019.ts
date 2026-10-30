@@ -15,6 +15,9 @@ import {
   type HostIdentity,
   type HumanSendResult,
   type HumanSubmission,
+  type ReadMarkerReadResult,
+  type ReadMarkerWriteRequest,
+  type ReadMarkerWriteResult,
   type SessionRecord,
   type TargetCapabilities,
   type TargetObservation,
@@ -48,6 +51,8 @@ export interface Public019Host {
   /** A host-authorized fetch, including the appropriate bearer header for REST. */
   fetch(input: string, init: RequestInit): Promise<Response>;
   currentIdentity(): HostIdentity;
+  /** Set only when this host already routes marker access through a compatible user-device credential. */
+  readonly readMarkerRoute?: 'gateway-user-device';
   /** Connect /ws/changes?protocolVersion=2, authenticate, then return a fresh socket. */
   openAuthenticatedChanges(signal: AbortSignal): Promise<Public019Channel>;
   /** Connect /ws, authenticate as the human device, await sync_complete, then return a fresh socket. */
@@ -325,6 +330,27 @@ function checkedBaseUrl(raw: string): string {
   return url.href.replace(/\/$/, '');
 }
 
+async function gatewayError(response: Response): Promise<{ code?: string; message?: string }> {
+  try {
+    const body = record(await response.json());
+    if (!body.error || typeof body.error !== 'object' || Array.isArray(body.error)) return {};
+    const error = body.error as Record<string, unknown>;
+    return {
+      ...(typeof error.code === 'string' ? { code: error.code } : {}),
+      ...(typeof error.message === 'string' ? { message: error.message } : {}),
+    };
+  } catch {
+    return {};
+  }
+}
+
+function readMarkerValue(value: unknown): string | number | null | undefined {
+  if (value === null) return null;
+  if (typeof value === 'string' && /^(0|[1-9]\d*)$/.test(value)) return value;
+  if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) return value;
+  return undefined;
+}
+
 function isSessionDetailPath(path: string): boolean {
   try { return /^\/api\/sessions\/[^/]+$/.test(new URL(path, 'https://gateway.invalid').pathname); }
   catch { return false; }
@@ -575,8 +601,60 @@ export function createPublic019Transport(config: Public019Config): { transport: 
       return { close };
     }
 
+  const markerTransport: Pick<ChatTransport, 'readReadMarker' | 'writeReadMarker'> =
+    config.host.readMarkerRoute === 'gateway-user-device' ? {
+      async readReadMarker(scopeKey, signal): Promise<ReadMarkerReadResult> {
+        if (config.host.currentIdentity().principalKey !== 'mike') return { supported: false };
+        const response = await config.host.fetch(`${baseUrl}/api/read-markers/${encodeURIComponent(scopeKey)}`, {
+          method: 'GET', signal, cache: 'no-store',
+        });
+        if (response.status === 401 || response.status === 403) return { supported: false };
+        if (response.status === 404) {
+          const error = await gatewayError(response);
+          return error.code === 'not_found' ? { supported: true, marker: null } : { supported: false };
+        }
+        if (!response.ok) {
+          if (response.status === 405 || response.status === 501) return { supported: false };
+          throw new Error(`Read marker request failed with HTTP ${response.status}.`);
+        }
+        const body = record(await response.json());
+        if (body.schemaVersion !== 1 || body.resource !== 'read markers') return { supported: false };
+        const item = record(body.item);
+        if (item.userId !== 'mike' || item.scopeKey !== scopeKey) return { supported: false };
+        const marker = readMarkerValue(item.marker);
+        return marker === undefined ? { supported: false } : { supported: true, marker };
+      },
+      async writeReadMarker(request: ReadMarkerWriteRequest, signal): Promise<ReadMarkerWriteResult> {
+        if (request.userId !== 'mike' || config.host.currentIdentity().principalKey !== request.userId) {
+          return 'unsupported';
+        }
+        const response = await config.host.fetch(`${baseUrl}/agent/dispatch`, {
+          method: 'POST', signal, cache: 'no-store',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            verb: 'read-marker-set',
+            params: {
+              scopeKey: request.scopeKey,
+              marker: request.sequence,
+              expectedCurrent: request.expectedCurrent,
+            },
+          }),
+        });
+        if (response.status === 401 || response.status === 403) return 'unsupported';
+        if (response.ok && response.status === 200) return 'written';
+        const error = await gatewayError(response);
+        if (error.code === 'read_marker_conflict') return 'conflict';
+        if (response.status === 404 || response.status === 405 || response.status === 501 ||
+            (error.code === 'invalid_message' && (!error.message || error.message.includes('verb not allowed: read-marker-set')))) {
+          return 'unsupported';
+        }
+        throw new Error(`Read marker write failed with HTTP ${response.status}${error.code ? ` (${error.code})` : ''}.`);
+      },
+    } : {};
+
   const transport: ChatTransport = {
     currentIdentity: () => config.host.currentIdentity(),
+    ...markerTransport,
     targetGateway: config.targetGateway,
     async inspectTarget(_signal): Promise<TargetObservation> {
       // This is the transport's declared backend profile, not a probe of

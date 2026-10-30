@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.62",
+    "items": [
+      {
+        "title": "Read positions for compatible hosts",
+        "description": "Hosts with a compatible read-marker connection can record your position when you open a conversation, send or retry, scroll manually, or return to the visible conversation. Passive replies and automatic scrolling leave it unchanged. Hosts without that connection keep existing conversation behavior."
+      }
+    ]
+  },
+  {
     "version": "v0.1.61",
     "items": [
       {

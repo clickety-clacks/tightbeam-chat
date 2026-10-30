@@ -77,6 +77,7 @@ class FakeRuntime implements ChatRuntime {
   refreshHostSend = async () => 'absent' as const;
   retryHostSend = (id: string, content: string) => { this.retried.push(`${id}:${content}`); };
   recordHostSendOutcome = () => {};
+  markReadPosition = vi.fn(async () => {});
   markHostSendUncertain = () => {};
   rebuild = async (options?: { restart?: boolean }) => { this.rebuildCalls++; this.rebuildOptions.push(options); const snapshot = this.rebuildSnapshots.shift(); if (snapshot) this.update(snapshot); };
   setToolCallsEnabled = (enabled: boolean) => this.update({ toolCallsEnabled: enabled });
@@ -84,6 +85,21 @@ class FakeRuntime implements ChatRuntime {
 }
 
 function adapterFor(runtime: FakeRuntime): TightbeamAdapter { return { open: () => runtime }; }
+
+function setDocumentVisibility(initial: DocumentVisibilityState) {
+  const previous = Object.getOwnPropertyDescriptor(document, 'visibilityState');
+  const set = (value: DocumentVisibilityState) => Object.defineProperty(document, 'visibilityState', {
+    configurable: true, value,
+  });
+  set(initial);
+  return {
+    set,
+    restore() {
+      if (previous) Object.defineProperty(document, 'visibilityState', previous);
+      else Reflect.deleteProperty(document, 'visibilityState');
+    },
+  };
+}
 
 function installViewportLayout(viewport: HTMLElement, trailingSpace = 200) {
   const content = viewport.querySelector<HTMLElement>('.tb-chat-message-content')!;
@@ -191,6 +207,91 @@ function expectActivityText(log: HTMLElement, label: string): void {
 }
 
 describe('conversation surface', () => {
+  it('marks once when each opened runtime first becomes ready', () => {
+    const visibility = setDocumentVisibility('visible');
+    try {
+      const runtime = new FakeRuntime('read-marker-open', { status: 'loading' });
+      const mark = vi.fn(async () => {});
+      runtime.markReadPosition = mark;
+      const view = render(<TightbeamChat sessionKey="read-marker-open" adapter={adapterFor(runtime)} />);
+
+      expect(mark).not.toHaveBeenCalled();
+      act(() => runtime.update({ status: 'ready' }));
+      expect(mark).toHaveBeenCalledTimes(1);
+
+      act(() => runtime.update({ records: [row('read-marker-open', 'reply', 'New reply')], status: 'ready' }));
+      act(() => runtime.update({ status: 'stale' }));
+      act(() => runtime.update({ status: 'ready' }));
+      expect(mark).toHaveBeenCalledTimes(1);
+
+      view.unmount();
+      const reopened = new FakeRuntime('read-marker-open', { status: 'ready' });
+      const markReopened = vi.fn(async () => {});
+      reopened.markReadPosition = markReopened;
+      render(<TightbeamChat sessionKey="read-marker-open" adapter={adapterFor(reopened)} />);
+      expect(markReopened).toHaveBeenCalledTimes(1);
+    } finally {
+      visibility.restore();
+    }
+  });
+
+  it('marks reader scroll and jump-to-latest, not automatic reply growth', () => {
+    const visibility = setDocumentVisibility('visible');
+    const sessionKey = 'read-marker-reader-actions';
+    const runtime = new FakeRuntime(sessionKey, { records: [
+      row(sessionKey, 'first', 'First', { seq: 1 }),
+      row(sessionKey, 'second', 'Second', { seq: 2 }),
+      row(sessionKey, 'third', 'Third', { seq: 3 }),
+    ] });
+    const mark = runtime.markReadPosition;
+    const view = render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+    const viewport = screen.getByRole('log');
+    const layout = installViewportLayout(viewport);
+    try {
+      mark.mockClear();
+      layout.setScrollTop(viewport.scrollHeight - viewport.clientHeight);
+      fireEvent.scroll(viewport);
+
+      act(() => runtime.update({ records: [...runtime.state.records, row(sessionKey, 'reply', 'Reply', { seq: 4 })] }));
+      expect(mark).not.toHaveBeenCalled();
+
+      fireEvent.wheel(viewport, { deltaY: -140 });
+      layout.setScrollTop(layout.scrollTop - 140);
+      fireEvent.scroll(viewport);
+      expect(mark).toHaveBeenCalledTimes(1);
+
+      mark.mockClear();
+      fireEvent.click(screen.getByRole('button', { name: 'Scroll to latest messages' }));
+      expect(mark).toHaveBeenCalledTimes(1);
+    } finally {
+      view.unmount();
+      layout.restore();
+      visibility.restore();
+    }
+  });
+
+  it('does not mark a hidden conversation until it returns to visible Chat', () => {
+    const visibility = setDocumentVisibility('hidden');
+    const sessionKey = 'read-marker-visible-return';
+    const runtime = new FakeRuntime(sessionKey, { records: [row(sessionKey, 'existing', 'Existing', { seq: 8 })] });
+    const mark = runtime.markReadPosition;
+    const view = render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+    try {
+      expect(mark).not.toHaveBeenCalled();
+      act(() => runtime.update({ records: [...runtime.state.records, row(sessionKey, 'reply', 'Reply', { seq: 9 })] }));
+      expect(mark).not.toHaveBeenCalled();
+
+      visibility.set('visible');
+      act(() => document.dispatchEvent(new Event('visibilitychange')));
+      expect(mark).toHaveBeenCalledTimes(1);
+      act(() => document.dispatchEvent(new Event('visibilitychange')));
+      expect(mark).toHaveBeenCalledTimes(1);
+    } finally {
+      view.unmount();
+      visibility.restore();
+    }
+  });
+
   it('shows the plain empty state after loading when all loaded messages are hidden and older history remains', () => {
     const sessionKey = 'hidden-loaded-history';
     const hiddenReply = row(sessionKey, 'hidden-reply', 'A reply excluded by the loaded visibility evidence', {
@@ -1735,6 +1836,7 @@ describe('conversation surface', () => {
   it('opens Settings from the composer while disconnected, clears the draft and restores focus on close', async () => {
     const runtime = new FakeRuntime('local-settings', { status: 'stale' });
     render(<TightbeamChat sessionKey="local-settings" adapter={adapterFor(runtime)} />);
+    runtime.markReadPosition.mockClear();
     const composer = screen.getByRole('textbox', { name: 'Message to Research assistant' }) as HTMLTextAreaElement;
     fireEvent.change(composer, { target: { value: '  /settings\n' } });
 
@@ -1742,6 +1844,7 @@ describe('conversation surface', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
 
     expect(runtime.sent).toEqual([]);
+    expect(runtime.markReadPosition).not.toHaveBeenCalled();
     expect(composer.value).toBe('');
     expect(await screen.findByRole('dialog', { name: 'Settings' })).toBeTruthy();
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Close Settings' }));

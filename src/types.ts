@@ -174,6 +174,26 @@ export interface HumanSubmission {
   readonly content: string;
 }
 
+/** A session message position that Chat may record when Mike opens its conversation. */
+export interface ReadMarkerCandidate {
+  readonly userId: string;
+  readonly scopeKey: string;
+  /** Canonical base-10 representation of the message sequence. */
+  readonly sequence: string;
+}
+
+/** Conditional write request for a user-scoped read marker. */
+export interface ReadMarkerWriteRequest extends ReadMarkerCandidate {
+  /** Keep Gateway's stored JSON type so conditional equality remains exact. */
+  readonly expectedCurrent: string | number | null;
+}
+
+export type ReadMarkerReadResult =
+  | { readonly supported: true; readonly marker: string | number | null }
+  | { readonly supported: false };
+
+export type ReadMarkerWriteResult = 'written' | 'conflict' | 'unsupported';
+
 /** In-page correlation metadata for one host-managed logical message. */
 export interface HostSendContext {
   readonly lifetimeId: string;
@@ -222,6 +242,10 @@ export interface ChatTransport {
   /** Refresh one known in-place-editable transcript row without rereading a page. */
   readMessage?(sessionKey: string, messageId: string, signal: AbortSignal): Promise<ConversationRecord>;
   readSession(sessionKey: string, signal: AbortSignal): Promise<SessionRecord>;
+  /** Optional Gateway marker support; older or unverified routes keep Chat unchanged. */
+  readReadMarker?(scopeKey: string, signal: AbortSignal): Promise<ReadMarkerReadResult>;
+  /** Conditionally advance the authenticated user's marker for this scope. */
+  writeReadMarker?(request: ReadMarkerWriteRequest, signal: AbortSignal): Promise<ReadMarkerWriteResult>;
   /** Exact non-secret Gateway origin selected by the host, when the transport knows it. */
   readonly targetGateway?: string;
   /** Establishes the elected target's snapshot/notice coverage rule. */
@@ -346,6 +370,8 @@ export interface ChatRuntime {
   /** Retain only the latest terminal outcome beside its local message row for same-lifetime checks. */
   recordHostSendOutcome(clientMessageId: string, hostSend: HostSendContext,
     outcome: 'delivered' | 'failed' | 'uncertain'): void;
+  /** Record the newest loaded message after a qualifying user engagement. */
+  markReadPosition?(): Promise<void>;
   /** Reflect an accepted attempt that reached a caught-up snapshot without its row. */
   markHostSendUncertain(clientMessageId: string, reason: 'accepted-unreconciled'): void;
   /** Restart bypasses an in-flight attempt for explicit manual recovery. */
