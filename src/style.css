@@ -596,6 +596,34 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
   margin: .1rem 0;
   overflow: hidden;
 }
+.tb-chat-activity-pill-disclosure {
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.tb-chat-activity-pill-disclosure > summary {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  cursor: pointer;
+  list-style: none;
+}
+.tb-chat-activity-pill-disclosure > summary::-webkit-details-marker { display: none; }
+.tb-chat-activity-pill-disclosure > summary::marker { content: ''; }
+.tb-chat-activity-pill-disclosure > summary:focus-visible {
+  outline: 2px solid currentColor;
+  outline-offset: -2px;
+}
+.tb-chat-activity-message-content {
+  margin: .4rem 0;
+  overflow-wrap: anywhere;
+  font: inherit;
+  white-space: pre-wrap;
+  user-select: text;
+}
 .tb-chat-activity-pill {
   box-sizing: border-box;
   display: inline-flex;

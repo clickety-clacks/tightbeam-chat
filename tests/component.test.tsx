@@ -619,6 +619,105 @@ describe('conversation surface', () => {
     expect(liveActivity.map(row => row.record)).toContain('member:batch-trigger:member:2');
   });
 
+  it('opens complete pill messages in place for standalone and grouped rows', () => {
+    const sessionKey = 'activity-pill-details';
+    const prompt = row(sessionKey, 'prompt', 'Question', {
+      seq: 1, role: 'user', sender: 'user:person', messageType: 'chat', turnSeq: 1,
+    });
+    const standaloneContent = [
+      'A complete notice message',
+      'The first stored detail remains readable.',
+      'The second line remains selectable too.',
+    ].join('\n');
+    const standalone = row(sessionKey, 'standalone-pill', standaloneContent, {
+      seq: 2, role: 'user', sender: 'process:events', messageType: 'substrate', turnSeq: 1,
+    });
+    const firstAgentContent = 'Review update: first line\nSecond stored line from the review.';
+    const firstAgent = row(sessionKey, 'agent-pill-1', firstAgentContent, {
+      seq: 3, role: 'user', sender: 'agent:helper', messageType: 'agent', turnSeq: 1,
+    });
+    const secondAgent = row(sessionKey, 'agent-pill-2', 'Another update', {
+      seq: 4, role: 'user', sender: 'agent:helper', messageType: 'agent', turnSeq: 1,
+    });
+    const answer = row(sessionKey, 'answer', 'Answer', {
+      seq: 5, sender: 'assistant-service', messageType: 'assistant', replyToMessageId: prompt.id, turnSeq: 1,
+    });
+    const laterMessages: CanonicalMessage[] = [];
+    for (let index = 2; index <= 8; index++) {
+      const laterPrompt = row(sessionKey, `later-prompt-${index}`, `Later question ${index}`, {
+        seq: index * 10, role: 'user', sender: 'user:person', messageType: 'chat', turnSeq: index,
+      });
+      const laterAnswer = row(sessionKey, `later-answer-${index}`, `Later answer ${index}`, {
+        seq: index * 10 + 1, sender: 'assistant-service', messageType: 'assistant',
+        replyToMessageId: laterPrompt.id, turnSeq: index,
+      });
+      laterMessages.push(laterPrompt, laterAnswer);
+    }
+    const runtime = new FakeRuntime(sessionKey, {
+      records: [prompt, standalone, firstAgent, secondAgent, answer, ...laterMessages],
+      provenanceAvailable: false, activityTurnStateAvailable: true, activeTurn: undefined,
+    });
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+    const viewport = screen.getByRole('log');
+    const layout = installViewportLayout(viewport, 200, element =>
+      element.querySelector('[data-activity-message-content]') ? 180 : undefined);
+    try {
+      act(() => runtime.update({}));
+      const anchor = screen.getByText('Later answer 5').closest<HTMLElement>('[data-scroll-key]')!;
+      fireEvent.wheel(viewport, { deltaY: -1 });
+      layout.setScrollTop(Math.max(0, layout.scrollTop + layout.offset(anchor) - 120));
+      fireEvent.scroll(viewport);
+      const anchorBefore = layout.offset(anchor);
+      expect(anchorBefore).toBeCloseTo(120, 0);
+
+      const standaloneRow = viewport.querySelector<HTMLElement>('[data-record-key="message:standalone-pill"]')!;
+      const standaloneToggle = within(standaloneRow).getByRole('button', { name: /Show full message/ });
+      expect(standaloneToggle.tagName).toBe('SUMMARY');
+      standaloneToggle.focus();
+      expect(document.activeElement).toBe(standaloneToggle);
+      expect(standaloneToggle.getAttribute('aria-expanded')).toBe('false');
+      fireEvent.click(standaloneToggle);
+      expect(standaloneToggle.getAttribute('aria-expanded')).toBe('true');
+      const standaloneBody = standaloneRow.querySelector<HTMLElement>('[data-activity-message-content]')!;
+      expect(standaloneBody.textContent).toBe(standaloneContent);
+      expect(standaloneBody.closest('.tb-chat-tool-detail-rail')).toBeTruthy();
+      expect(layout.offset(anchor)).toBeCloseTo(anchorBefore, 0);
+
+      const selection = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(standaloneBody);
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      expect(selection?.toString()).toBe(standaloneContent);
+      selection?.removeAllRanges();
+      fireEvent.click(standaloneToggle);
+      expect(standaloneToggle.getAttribute('aria-expanded')).toBe('false');
+      expect(layout.offset(anchor)).toBeCloseTo(anchorBefore, 0);
+
+      const groupToggle = screen.getByRole('button', { name: /Expand agent activity run, 2 entries/ });
+      fireEvent.click(groupToggle);
+      expect(groupToggle.getAttribute('aria-expanded')).toBe('true');
+      const groupedRow = viewport.querySelector<HTMLElement>(
+        '.tb-chat-activity-run-rows > [data-record-key="message:agent-pill-1"]')!;
+      const groupedToggle = within(groupedRow).getByRole('button', { name: /Show full message/ });
+      fireEvent.click(groupedToggle);
+      expect(groupedToggle.getAttribute('aria-expanded')).toBe('true');
+      expect(groupedRow.querySelector('[data-activity-message-content]')?.textContent).toBe(firstAgentContent);
+      expect(groupToggle.getAttribute('aria-expanded')).toBe('true');
+      expect(layout.offset(anchor)).toBeCloseTo(anchorBefore, 0);
+
+      fireEvent.click(groupedToggle);
+      expect(groupedToggle.getAttribute('aria-expanded')).toBe('false');
+      expect(groupToggle.getAttribute('aria-expanded')).toBe('true');
+      expect(layout.offset(anchor)).toBeCloseTo(anchorBefore, 0);
+      fireEvent.click(groupToggle);
+      expect(groupToggle.getAttribute('aria-expanded')).toBe('false');
+      expect(layout.offset(anchor)).toBeCloseTo(anchorBefore, 0);
+    } finally {
+      layout.restore();
+    }
+  });
+
   it('keeps owner-scoped activity while preserving human exchanges across pages, live updates, and reconnects', async () => {
     const sessionKey = 'conversation-without-provenance';
     const firstPage = visibilityMix(sessionKey, 'first-page');
@@ -2634,6 +2733,34 @@ describe('tool-call and transition display', () => {
           expect(animations.animations[foldStart].element.classList.contains('tb-chat-activity-run-content')).toBe(true);
           expect((animations.animations[foldStart].keyframes as Keyframe[])[0]).toMatchObject({ height: '0px', opacity: 0 });
           finishLatest(foldStart);
+        }
+
+        const pillRow = rows.querySelector<HTMLElement>('.tb-chat-activity-pill-row')!;
+        const pillSummary = pillRow.querySelector('summary')!;
+        const pillStart = animations.animations.length;
+        fireEvent.click(pillSummary);
+        expect(pillSummary.getAttribute('aria-expanded')).toBe('true');
+        const pillRail = pillRow.querySelector<HTMLElement>('.tb-chat-tool-detail-rail')!;
+        expect(pillRail.classList.contains('tb-chat-fold-content')).toBe(true);
+        if (reduced) expect(animations.animations.length).toBe(pillStart);
+        else {
+          expect(animations.animations.length).toBeGreaterThan(pillStart);
+          expect(animations.animations[pillStart].element).toBe(pillRail);
+          expect((animations.animations[pillStart].keyframes as Keyframe[])[0]).toMatchObject({ height: '0px', opacity: 0 });
+          expect(animations.animations[pillStart].options).toMatchObject({ duration: 180, easing: 'cubic-bezier(0.2, 0, 0, 1)' });
+          finishLatest(pillStart);
+        }
+        const pillCloseStart = animations.animations.length;
+        fireEvent.click(pillSummary);
+        expect(pillSummary.getAttribute('aria-expanded')).toBe('false');
+        if (reduced) {
+          expect(animations.animations.length).toBe(pillCloseStart);
+          expect(pillRow.querySelector('.tb-chat-tool-detail-rail')).toBeNull();
+        } else {
+          expect(animations.animations.length).toBeGreaterThan(pillCloseStart);
+          expect((animations.animations[pillCloseStart].keyframes as Keyframe[])[1]).toMatchObject({ height: '0px', opacity: 0 });
+          finishLatest(pillCloseStart);
+          expect(pillRow.querySelector('.tb-chat-tool-detail-rail')).toBeNull();
         }
 
         const foldCloseStart = animations.animations.length;

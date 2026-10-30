@@ -924,30 +924,60 @@ function sameActivityLine(left: ActivityLine, right: ActivityLine): boolean {
 }
 
 const ActivityMessageRow = memo(function ActivityMessageRow({ entry, registerRow, scrollKey = entry.id, reveal = false,
-  onRevealComplete }: {
+  onRevealComplete, preservePosition, reconcileLayout }: {
   readonly entry: ActivityLine;
   readonly registerRow: (key: string, element: HTMLElement | null) => void;
   readonly scrollKey?: string;
   readonly reveal?: boolean;
   readonly onRevealComplete?: (key: string) => void;
+  readonly preservePosition: () => void;
+  readonly reconcileLayout: () => void;
 }) {
   const revealElement = useActivityRevealAnimation<HTMLDivElement>(reveal, entry.id, onRevealComplete);
   const summary = useActivitySummary(entry);
+  const [expanded, setExpanded] = useState(false);
+  const [detailContentPresent, setDetailContentPresent] = useState(false);
   const presentation = summary.presentation;
   const accessibleText = presentation
     ? `${presentation.label}: ${presentation.text}${presentation.metadata ? `, ${presentation.metadata}` : ''}`
     : entry.accessibleText;
+  const fullMessage = entry.originalContent ?? entry.accessibleText;
+  const registerElement = useCallback((element: HTMLDivElement | null) => {
+    registerRow(scrollKey, element);
+    revealElement.current = element;
+  }, [registerRow, revealElement, scrollKey]);
+  if (presentation) {
+    return <div role="note" tabIndex={-1} aria-label={accessibleText}
+      className={`tb-chat-activity-line tb-chat-activity-${entry.kind} tb-chat-activity-pill-row`}
+      onMouseEnter={summary.restoreOriginal}
+      ref={registerElement} data-record-key={entry.id} data-scroll-key={scrollKey}
+      data-activity-run={entry.runKey} title={summary.original}>
+      <details className="tb-chat-activity-pill-disclosure" open={expanded || detailContentPresent}>
+        <summary role="button" aria-label={`${accessibleText}. Show full message`} aria-expanded={expanded}
+          title={summary.original} onClick={event => {
+            event.preventDefault();
+            preservePosition();
+            setExpanded(value => !value);
+          }}>
+          <ActivityPillContents presentation={presentation} summaryState={summary.state} />
+        </summary>
+        <AnimatedFoldContent expanded={expanded} className="tb-chat-tool-detail-rail"
+          onPresenceChange={setDetailContentPresent} onLayoutChange={reconcileLayout}>
+          {() => <pre className="tb-chat-activity-message-content" data-activity-message-content="true">{fullMessage}</pre>}
+        </AnimatedFoldContent>
+      </details>
+    </div>;
+  }
   return <div role="note" tabIndex={-1} aria-label={accessibleText}
-    className={`tb-chat-activity-line tb-chat-activity-${entry.kind}${presentation ? ' tb-chat-activity-pill-row' : ''}`}
-    onMouseEnter={summary.restoreOriginal}
-    ref={element => { registerRow(scrollKey, element); revealElement.current = element; }} data-record-key={entry.id} data-scroll-key={scrollKey}
-    data-activity-run={entry.runKey} title={presentation ? summary.original : undefined}>
-    {!presentation && <span className="tb-chat-activity-bullet" aria-hidden="true">•</span>}
-    {presentation ? <ActivityPillContents presentation={presentation} summaryState={summary.state} />
-      : <span className="tb-chat-activity-gist">{entry.gist}</span>}
+    className={`tb-chat-activity-line tb-chat-activity-${entry.kind}`}
+    ref={registerElement} data-record-key={entry.id} data-scroll-key={scrollKey}
+    data-activity-run={entry.runKey}>
+    <span className="tb-chat-activity-bullet" aria-hidden="true">•</span>
+    <span className="tb-chat-activity-gist">{entry.gist}</span>
   </div>;
 }, (previous, next) => previous.registerRow === next.registerRow && previous.scrollKey === next.scrollKey &&
   previous.reveal === next.reveal && previous.onRevealComplete === next.onRevealComplete &&
+  previous.preservePosition === next.preservePosition && previous.reconcileLayout === next.reconcileLayout &&
   sameActivityLine(previous.entry, next.entry));
 
 const ToolCallRow = memo(function ToolCallRow({ call, entry, registerRow, preservePosition, reconcileLayout, expandRun,
@@ -1068,7 +1098,8 @@ const ActivityRunRow = memo(function ActivityRunRow({ entry, expanded, toggle, r
             preservePosition={preservePosition} reconcileLayout={reconcileLayout} expandRun={expandHistoryRun}
             expandedToolCalls={expandedToolCalls} setToolCallExpanded={setToolCallExpanded} />
           : <ActivityMessageRow key={line.id} entry={line} registerRow={registerRow}
-            scrollKey={`activity-detail:${line.id}`} />)}
+            scrollKey={`activity-detail:${line.id}`} preservePosition={preservePosition}
+            reconcileLayout={reconcileLayout} />)}
       </div>}
     </AnimatedFoldContent>
   </div>;
@@ -1712,7 +1743,8 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
         }
         if (item.kind === 'activity') return <ActivityMessageRow key={item.entry.id} entry={item.entry}
           registerRow={reading.registerRow} reveal={revealingActivityItems.has(item.entry.id)}
-          onRevealComplete={finishActivityReveal} />;
+          onRevealComplete={finishActivityReveal} preservePosition={reading.preserveVisiblePosition}
+          reconcileLayout={reading.reconcileViewportLayout} />;
         if (item.kind === 'activity-fold') return <ActivityRunRow key={item.entry.id} entry={item.entry}
           expanded={expandedActivityRuns.has(item.entry.id)} toggle={toggleActivityRun}
           registerRow={reading.registerRow} preservePosition={reading.preserveVisiblePosition}
