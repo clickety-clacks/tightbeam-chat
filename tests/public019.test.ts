@@ -49,6 +49,9 @@ function setup(heartbeatTimeoutMs?: number, observedVersion = version, historyIt
     currentIdentity: () => identity,
     fetch: async (path) => {
       paths.push(path);
+      if (path.includes('/record-events?')) return new Response(JSON.stringify({
+        schemaVersion: 1, resource: 'record events', items: [], page: { hasMoreBefore: false },
+      }));
       if (path.includes('/tool-calls?')) return new Response(JSON.stringify({
         schemaVersion: 1, resource: 'tool calls', items: [], page: { hasMoreBefore: false },
       }), { status: 200 });
@@ -308,7 +311,7 @@ describe('Gateway wire mapping and behavior checks', () => {
     const runtime = createTightbeamAdapter(candidate.transport, candidate.profile).open(sessionKey);
     await vi.waitFor(() => expect(candidate.changes.sent).toEqual([
       { type: 'subscribe', protocolVersion: 2, subscriptionId: `chat:${sessionKey}`,
-        filters: { sessionKey, classes: ['message.created', 'transition.recorded', 'session.', 'turn.started', 'turn.ended'] } },
+        filters: { sessionKey, classes: ['message.created', 'transition.recorded', 'session.', 'turn.started', 'turn.ended', 'session_record_event.created'] } },
       { type: 'subscribe', protocolVersion: 2, subscriptionId: `rail:${sessionKey}`,
         filters: { sessionKey, classes: ['rail.denied'] } },
     ]));
@@ -378,7 +381,7 @@ describe('Gateway wire mapping and behavior checks', () => {
     const runtime = createTightbeamAdapter(candidate.transport, candidate.profile).open(sessionKey);
     await vi.waitFor(() => expect(candidate.changes.sent[0]).toEqual({
       type: 'subscribe', protocolVersion: 2, subscriptionId: `chat:${sessionKey}`,
-      filters: { sessionKey, classes: ['message.created', 'transition.recorded', 'session.', 'turn.started', 'turn.ended'] },
+      filters: { sessionKey, classes: ['message.created', 'transition.recorded', 'session.', 'turn.started', 'turn.ended', 'session_record_event.created'] },
     }));
     expect(candidate.changes.sent[1]).toEqual({ type: 'subscribe', protocolVersion: 2,
       subscriptionId: `rail:${sessionKey}`, filters: { sessionKey, classes: ['rail.denied'] } });
@@ -499,7 +502,7 @@ describe('Gateway wire mapping and behavior checks', () => {
 
     await vi.waitFor(() => expect(candidate.changes.sent[0]).toEqual({
       type: 'subscribe', protocolVersion: 2, subscriptionId: `chat:${sessionKey}`,
-      filters: { sessionKey, classes: ['message.created', 'transition.recorded', 'session.', 'turn.started', 'turn.ended'] },
+      filters: { sessionKey, classes: ['message.created', 'transition.recorded', 'session.', 'turn.started', 'turn.ended', 'session_record_event.created'] },
     }));
     candidate.changes.emit({ type: 'subscription_ready', subscriptionId: `chat:${sessionKey}` });
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
@@ -554,7 +557,7 @@ describe('Gateway wire mapping and behavior checks', () => {
     await vi.waitFor(() => expect(candidate.changes.sent).toHaveLength(2));
     expect(candidate.changes.sent[0]).toEqual({
       type: 'subscribe', protocolVersion: 2, subscriptionId: `chat:${sessionKey}`,
-      filters: { sessionKey, classes: ['message.created', 'transition.recorded', 'session.', 'turn.started', 'turn.ended'] },
+      filters: { sessionKey, classes: ['message.created', 'transition.recorded', 'session.', 'turn.started', 'turn.ended', 'session_record_event.created'] },
     });
     expect(candidate.changes.sent[1]).toEqual({ type: 'subscribe', protocolVersion: 2,
       subscriptionId: `rail:${sessionKey}`, filters: { sessionKey, classes: ['rail.denied'] } });
@@ -980,7 +983,7 @@ describe('Gateway wire mapping and behavior checks', () => {
     }, new AbortController().signal);
     await vi.waitFor(() => expect(changes.sent).toHaveLength(2));
     expect(changes.sent[0]).toEqual({ type: 'subscribe', protocolVersion: 2,
-      subscriptionId: 'chat:s-public', filters: { sessionKey, classes: ['message.created', 'transition.recorded', 'session.', 'turn.started', 'turn.ended'] } });
+      subscriptionId: 'chat:s-public', filters: { sessionKey, classes: ['message.created', 'transition.recorded', 'session.', 'turn.started', 'turn.ended', 'session_record_event.created'] } });
     expect(changes.sent[1]).toEqual({ type: 'subscribe', protocolVersion: 2,
       subscriptionId: 'rail:s-public', filters: { sessionKey, classes: ['rail.denied'] } });
     changes.emit({ type: 'subscription_ready', subscriptionId: 'chat:s-public' });
@@ -1190,4 +1193,27 @@ describe('tool-call contract and transition category', () => {
     expect(channels[0].closed).toBe(false);
     main.close();
   });
+});
+
+it('decodes exact record-event notice coverage and reads the same live/history occurrence', async () => {
+  const candidate = setup();
+  const event = { eventId: 'assignment.opened:assignment-example', kind: 'assignment.opened', at: 100,
+    record: { type: 'assignment', id: 'assignment-example', detail: '/api/assignments/assignment-example' },
+    actorSessionKey: 'another-session', tiedAs: ['holder'], cause: null, noticeMessageIds: [] };
+  const notice = decodePublic019Notice({ type: 'change', schemaVersion: 2, class: 'session_record_event.created', refs: { sessionKey },
+    payload: event, resource: 'record events', op: 'upsert' }, sessionKey);
+  expect(notice).toMatchObject({ operation: 'record-event', event: { ...event, sessionKey } });
+  expect(decodePublic019Message({ ...item, recordEventIds: [event.eventId] }, sessionKey))
+    .toMatchObject({ recordEventIds: [event.eventId] });
+  const paths: string[] = [];
+  candidate.host.fetch = async path => {
+    paths.push(path);
+    return new Response(JSON.stringify({ schemaVersion: 1, resource: 'record events', items: [event],
+      page: { oldestCursor: 'event-cursor', hasMoreBefore: true } }));
+  };
+  const page = await candidate.transport.readRecordEvents!(sessionKey, undefined, new AbortController().signal);
+  expect(page.items).toEqual(notice.operation === 'record-event' ? [notice.event] : []);
+  await candidate.transport.readRecordEvents!(sessionKey, 'older event cursor', new AbortController().signal);
+  expect(new URL(paths[0]).searchParams.has('before')).toBe(false);
+  expect(new URL(paths[1]).searchParams.get('before')).toBe('older event cursor');
 });

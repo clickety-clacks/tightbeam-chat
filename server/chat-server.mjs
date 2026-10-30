@@ -279,6 +279,19 @@ export function parseServiceHttpTarget(rawUrl, runtime) {
       };
     }
 
+    const recordEvents = /^\/__chat\/api\/sessions\/([^/]+)\/record-events$/.exec(request.pathname);
+    if (recordEvents) {
+      const selected = decodeSessionPath(recordEvents[1]);
+      if (!selected || request.searchParams.get('limit') !== '50' ||
+          routeParams.some(([name]) => !['limit', 'before'].includes(name)) ||
+          new Set(routeParams.map(([name]) => name)).size !== routeParams.length) return undefined;
+      const query = new URLSearchParams({ asUser: runtime.principalKey, limit: '50' });
+      const before = request.searchParams.get('before');
+      if (before) query.set('before', before);
+      return { kind: 'detail', gatewayOrigin,
+        path: `/api/sessions/${encodeURIComponent(selected)}/record-events?${query}` };
+    }
+
     const messages = /^\/__chat\/api\/sessions\/([^/]+)\/messages$/.exec(request.pathname);
     const messageSession = messages && decodeSessionPath(messages[1]);
     if (!messageSession) return undefined;

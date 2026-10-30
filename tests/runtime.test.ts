@@ -1766,3 +1766,34 @@ describe('optional tool history and live category', () => {
     expect(transport.toolCallbacks).toBeUndefined();
   });
 });
+
+it('rebuilds record-event history after feed recovery, merges overlap and keeps a failed event read separate from sending', async () => {
+  const transport = new ControlledTransport();
+  const occurrence = { eventId: 'work_item.filed:example', sessionKey, kind: 'work_item.filed', at: 100,
+    record: { type: 'work item', id: 'example', detail: '/api/work-items/example' },
+    actorSessionKey: sessionKey, tiedAs: ['creator'], cause: null, noticeMessageIds: [] };
+  let reads = 0;
+  let missing = false;
+  let fail = false;
+  const extended: ChatTransport = Object.assign(transport, { readRecordEvents: async () => {
+    reads++;
+    if (fail) throw new Error('Optional activity endpoint unavailable');
+    return { items: missing ? [occurrence, { ...occurrence, eventId: 'assignment.opened:later', kind: 'assignment.opened', at: 200 }]
+      : [occurrence], oldestCursor: null, hasOlder: false };
+  } });
+  const runtime = createTightbeamAdapter(extended, profile).open(sessionKey);
+  await vi.waitFor(() => expect(runtime.getSnapshot().recordEvents).toHaveLength(1));
+  transport.callbacks!.onNotice({ operation: 'record-event', event: occurrence });
+  expect(runtime.getSnapshot().recordEvents).toHaveLength(1);
+  missing = true;
+  transport.doubt();
+  await runtime.rebuild({ restart: true });
+  await vi.waitFor(() => expect(runtime.getSnapshot().recordEvents).toHaveLength(2));
+  expect(reads).toBeGreaterThan(1);
+  fail = true;
+  runtime.retryRecordEvents!();
+  await vi.waitFor(() => expect(runtime.getSnapshot().recordEventsError).toContain('unavailable'));
+  expect(runtime.getSnapshot().status).toBe('ready');
+  expect(runtime.send('ordinary message')).not.toBeNull();
+  runtime.dispose();
+});

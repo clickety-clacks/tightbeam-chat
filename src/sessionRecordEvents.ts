@@ -1,0 +1,122 @@
+import type { ActivityPillPresentation } from './activityPresentation';
+import type { ChatTransport, ConversationRecord, RuntimeState, SessionRecordEvent } from './types';
+
+const compare = (a: SessionRecordEvent, b: SessionRecordEvent) => a.at - b.at || a.eventId.localeCompare(b.eventId);
+
+/** R1 alone decides active kinds and cutoffs. Never synthesize or backfill events. */
+export class SessionRecordEvents {
+  private rows: readonly SessionRecordEvent[] = Object.freeze([]);
+  private byId = new Map<string, SessionRecordEvent>();
+  private cursor: string | undefined;
+  private hasOlder = false;
+  private controller?: AbortController;
+  private stopped = false;
+  private requestedFloor = Infinity;
+  private loadedFloor = Infinity;
+
+  constructor(private readonly sessionKey: string,
+    private readonly read: NonNullable<ChatTransport['readRecordEvents']>,
+    private readonly publish: (patch: Partial<RuntimeState>) => void) {}
+
+  put(event: SessionRecordEvent): void {
+    if (this.stopped || event.sessionKey !== this.sessionKey) return;
+    const previous = this.byId.get(event.eventId);
+    if (previous) {
+      // Coverage can grow after the occurrence's first frame, without changing
+      // its immutable time/record identity. A stale history page cannot undo it.
+      const notices = [...new Set([...previous.noticeMessageIds, ...event.noticeMessageIds])];
+      if (notices.length === previous.noticeMessageIds.length) return;
+      event = Object.freeze({ ...previous, noticeMessageIds: Object.freeze(notices) });
+      this.rows = Object.freeze(this.rows.map(row => row === previous ? event : row));
+    } else {
+      let low = 0, high = this.rows.length;
+      while (low < high) {
+        const middle = (low + high) >>> 1;
+        if (compare(this.rows[middle], event) < 0) low = middle + 1;
+        else high = middle;
+      }
+      this.rows = Object.freeze([...this.rows.slice(0, low), event, ...this.rows.slice(low)]);
+    }
+    this.byId.set(event.eventId, event);
+  }
+
+  receive(event: SessionRecordEvent): void {
+    const previous = this.rows;
+    this.put(event);
+    if (this.rows !== previous) this.publish({ recordEvents: this.rows });
+  }
+
+  refresh(floor: number): Promise<void> {
+    // Restart after subscription readiness so a lossy disconnect is repaired by R1.
+    this.controller?.abort();
+    return this.readPages(undefined, Math.min(floor, this.loadedFloor));
+  }
+
+  older(floor: number): Promise<void> {
+    this.requestedFloor = Math.min(this.requestedFloor, floor);
+    if (this.controller || !this.hasOlder || !this.cursor) return Promise.resolve();
+    return this.readPages(this.cursor, this.requestedFloor);
+  }
+
+  private async readPages(before: string | undefined, floor: number): Promise<void> {
+    if (this.stopped) return;
+    const controller = new AbortController();
+    this.controller = controller;
+    this.requestedFloor = floor;
+    this.publish({ recordEventsLoading: true, recordEventsError: undefined });
+    try {
+      const cursors = new Set<string>();
+      while (true) {
+        const page = await this.read(this.sessionKey, before, controller.signal);
+        if (controller.signal.aborted || this.stopped) return;
+        if (page.items.some(row => row.sessionKey !== this.sessionKey) ||
+            (page.hasOlder && (!page.oldestCursor || !page.items.length || page.oldestCursor === before || cursors.has(page.oldestCursor)))) {
+          throw new Error('Record-event history did not advance in this conversation.');
+        }
+        for (const row of page.items) this.put(row);
+        this.cursor = page.oldestCursor ?? undefined;
+        this.hasOlder = page.hasOlder;
+        const oldest = page.items[0]?.at ?? Infinity;
+        this.loadedFloor = Math.min(this.loadedFloor, oldest);
+        if (!page.hasOlder || oldest <= this.requestedFloor) break;
+        before = this.cursor;
+        cursors.add(before!);
+      }
+      this.publish({ recordEvents: this.rows, recordEventsHasOlder: this.hasOlder,
+        recordEventsLoading: false, recordEventsError: undefined });
+    } catch (error) {
+      if (!controller.signal.aborted && !this.stopped) this.publish({ recordEvents: this.rows,
+        recordEventsHasOlder: this.hasOlder, recordEventsLoading: false,
+        recordEventsError: error instanceof Error ? error.message : String(error) });
+    } finally {
+      if (this.controller === controller) this.controller = undefined;
+    }
+  }
+
+  stop(): void {
+    this.stopped = true;
+    this.controller?.abort();
+  }
+}
+
+/** Either exact wire link wins, regardless of arrival order or notice text. */
+export function uncoveredRecordEvents(events: readonly SessionRecordEvent[], records: readonly ConversationRecord[]) {
+  const covered = new Set(records.flatMap(row => row.recordEventIds ?? []));
+  return events.filter(event => !covered.has(event.eventId) && event.noticeMessageIds.length === 0);
+}
+
+const presentations: Readonly<Record<string, ActivityPillPresentation>> = {
+  'work_item.filed': { label: 'Work item', text: 'Work item filed', tone: 'blue', icon: 'work-item' },
+  'assignment.opened': { label: 'Assignment', text: 'Assignment opened', tone: 'blue', icon: 'assignment' },
+  'assignment.completed': { label: 'Assignment', text: 'Assignment completed', tone: 'green', icon: 'assignment' },
+  'assignment.revoked': { label: 'Assignment', text: 'Assignment revoked', tone: 'slate', icon: 'assignment' },
+  'attest.filed': { label: 'Attest', text: 'Attest filed', tone: 'green', icon: 'attest' },
+  'decision.raised': { label: 'Decision', text: 'Decision raised', tone: 'amber', icon: 'decision' },
+  'decision.answered': { label: 'Decision', text: 'Decision answered', tone: 'green', icon: 'decision-answered' },
+  'decision.ruled': { label: 'Decision', text: 'Decision ruled', tone: 'green', icon: 'decision-answered' },
+  'artifact.recorded': { label: 'Artifact', text: 'Artifact recorded', tone: 'blue', icon: 'activity' },
+};
+export function recordEventPresentation(event: SessionRecordEvent): ActivityPillPresentation {
+  return { ...(presentations[event.kind] ?? { label: 'Activity', text: event.kind, tone: 'slate', icon: 'activity' }),
+    metadata: event.record.id.replace(/^([a-z]+_)(.{4}).*$/, '$1$2') };
+}
