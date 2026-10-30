@@ -195,8 +195,8 @@ describe('row-local rendering', () => {
     transport.readAttestNote = vi.fn(async () => 'The full attest note remains readable.');
     const note: ActivityLine = { ...line('message:attest', 'Filed a review note.', 'substrate'), sourceRecord: {},
       presentation: { label: 'Attest', tone: 'amber', icon: 'attest', text: 'Filed a review note.', attestId: 'note-reference' } };
-    function Row() {
-      const result = useActivitySummary(note);
+    function Row({ entry }: { entry: ActivityLine }) {
+      const result = useActivitySummary(entry);
       return <div data-testid="attest" title={result.original} data-state={result.state}>{result.presentation?.text}</div>;
     }
     const view = (entry: ActivityLine, show = true) => <ActivitySummaryProvider transport={transport} connected reconcile={() => {}}>
