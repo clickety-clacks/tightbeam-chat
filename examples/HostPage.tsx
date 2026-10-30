@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { TightbeamChat, createPublic019Transport, createTightbeamAdapter, type TightbeamAdapter } from '../src';
+import { createActivitySummaryTransport } from '../src/activitySummaries';
 import { browserHost } from './browserHost';
 import { resolveEntrySelection, type ConfiguredChatTarget } from './entry';
 
@@ -27,7 +28,8 @@ export function HostPage({ defaultTarget, configurationError }: {
         targetGateway: selected.gateway,
         host,
       });
-      setAdapter(createTightbeamAdapter(transport, profile));
+      setAdapter({ ...createTightbeamAdapter(transport, profile),
+        activitySummaries: createActivitySummaryTransport(host.fetch, `${origin}/__chat`) });
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : 'The configured Chat service is unavailable.');
     }

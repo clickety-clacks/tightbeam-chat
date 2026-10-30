@@ -81,3 +81,43 @@ The updater does not change the gateway, other services, credentials, target con
 ## Verification limits
 
 The checks and local bundle exercise the source, package structure, checksum/provenance handling, bridge routes, staging and rollback. They do not publish a tag or release, configure private HTTPS ingress, start a persistent service, install a release on a deployment host, or establish device/browser reachability. Those facts require a later reviewed and merged source tag and separate delivery evidence.
+
+### Stored activity summaries
+
+The server summarizes loaded agent messages, remedies, readable attest notes,
+wake prompts and decision questions. Original text remains visible until a result
+arrives and remains available on hover. Fixed activity labels are unchanged.
+Library hosts without an `activitySummaries` adapter continue showing originals.
+
+The default model endpoint is `http://127.0.0.1:8080/v1/chat/completions`, with
+no model name in the request (the endpoint uses its loaded model). Optional
+non-secret environment settings are:
+
+- `CHAT_SUMMARY_ENDPOINT`: an OpenAI-compatible chat-completions URL.
+- `CHAT_SUMMARY_MODEL`: model name, omitted by default.
+- `CHAT_SUMMARY_TIMEOUT_MS`: whole-attempt timeout, default 60000.
+- `CHAT_SUMMARY_CREDENTIAL_FILE`: path to an owner-private file containing an
+  endpoint credential. The environment file contains the path, never the key.
+- `CHAT_SUMMARY_DATA_DIR`: durable summary directory, default
+  `$XDG_DATA_HOME/tightbeam-chat/summaries`, or
+  `$HOME/.local/share/tightbeam-chat/summaries` when XDG_DATA_HOME is absent.
+
+Keep the data directory outside release directories and retain it through upgrades
+and rollbacks. Exactly one Chat server process owns a directory. Each source key
+has an atomically replaced, synced record. A first attempt is durably reserved
+before inference. Failures retry after five minutes, then after sixty minutes;
+a third failure keeps original text permanently. A restart treats an interrupted
+attempt as failed at startup. Pending sources are retained for scheduled retries
+without a viewer and removed from the record on success or final failure.
+Stored results and final failures never expire or regenerate on model changes.
+
+`POST /__chat/summaries` streams a loaded batch's states as newline-delimited JSON.
+Model requests stay server-side. Waiting retries do not animate or poll; a lost
+answer stream reopens once, then waits for visibility, network or live-feed
+recovery. A model or store outage leaves the rest of Chat usable. The existing
+principal-scoped `GET /__chat/api/attests/:id` proxy supplies readable notes;
+unreadable notes retain their fixed activity wording.
+
+Source verification with controlled endpoints does not establish the serving
+host's model availability, summary quality or real-view acceptance. Those require
+separate served evidence before claiming availability.
