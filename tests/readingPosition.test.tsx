@@ -222,6 +222,10 @@ function readAt(box: HTMLElement, position: number) {
   fireEvent.scroll(box);
   fireEvent(box, new Event('scrollend'));
 }
+function targetForPreview(): HTMLElement | null {
+  const targetId = screen.getByRole('button', { name: 'Jump to latest user prompt' }).getAttribute('aria-controls');
+  return targetId ? document.getElementById(targetId) : null;
+}
 function notifyResizeObservers() {
   act(() => {
     for (const callback of resizeCallbacks) callback([], {} as ResizeObserver);
@@ -398,7 +402,7 @@ describe('conversation reading position', () => {
         await rebuilding;
       });
 
-      expect(screen.getByText('Message 21')).toBeTruthy();
+      expect(box.querySelector('[data-record-key="message-21"]')).toBeTruthy();
       expect(animate).not.toHaveBeenCalled();
       expect(scrollTo).toHaveBeenLastCalledWith({ top: box.scrollHeight - box.clientHeight, behavior: 'instant' });
       expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight);
@@ -446,7 +450,7 @@ describe('conversation reading position', () => {
         await rebuilding;
       });
 
-      expect(screen.getByText('Message 21')).toBeTruthy();
+      expect(box.querySelector('[data-record-key="message-21"]')).toBeTruthy();
       expect(animate).not.toHaveBeenCalled();
       expect(animationFrames.size).toBe(0);
       expect(scrollTo).not.toHaveBeenCalled();
@@ -648,7 +652,7 @@ describe('conversation reading position', () => {
     ].join('\n') };
     act(() => runtime.publish({ records: [...initialRows, carrier, { ...message(21), content: 'A new human message' }] }));
     expect(animate).toHaveBeenCalledTimes(1);
-    expect(animate.mock.contexts[0]).toBe(screen.getByText('A new human message').closest('article'));
+    expect(animate.mock.contexts[0]).toBe(box.querySelector('[data-record-key="message-21"]'));
     expect(screen.queryByText('Nonhuman notice')).toBeNull();
     expect(scrollTo).not.toHaveBeenCalled();
     act(() => runtime.publish({ records: [...initialRows, { ...carrier, rowVersion: 2 }, { ...message(21), content: 'A new human message' }] }));
@@ -711,7 +715,7 @@ describe('conversation reading position', () => {
       expect(runtime.getSnapshot().status).toBe('ready');
       await act(async () => { releaseHistory(); await reconnect; });
       expect(runtime.getSnapshot().status).toBe('ready');
-      expect(screen.getByText('Message 20')).toBeTruthy();
+      expect(box.querySelector('[data-record-key="message-20"]')).toBeTruthy();
       expect(anchor.getBoundingClientRect().top).toBe(offset);
       expect(input.value).toBe('Keep this unsent draft');
       expect(input.selectionStart).toBe(5);
@@ -1299,14 +1303,14 @@ describe('conversation reading position', () => {
     readAt(box, 0);
     const anchor = rows()[3];
     const originalOffset = anchor.getBoundingClientRect().top;
-    let target = box.querySelector<HTMLElement>('[data-latest-user-prompt="true"]');
+    let target = targetForPreview();
     expect(target?.dataset.recordKey).toBe('message-19');
     let preview = screen.getByRole('button', { name: 'Jump to latest user prompt' });
     expect(preview.textContent).toBe('Message 19');
 
     act(() => runtime.publish({ records: [...runtime.state.records, message(20)] }));
 
-    target = box.querySelector<HTMLElement>('[data-latest-user-prompt="true"]');
+    target = targetForPreview();
     expect(target?.dataset.recordKey).toBe('message-20');
     preview = screen.getByRole('button', { name: 'Jump to latest user prompt' });
     expect(preview.textContent).toBe('Message 20');
@@ -1326,7 +1330,7 @@ describe('conversation reading position', () => {
   it('dismisses only the current preview without navigation and allows a newer prompt preview', () => {
     const { runtime, box } = setup();
     readAt(box, 0);
-    const original = box.querySelector<HTMLElement>('[data-latest-user-prompt="true"]');
+    const original = targetForPreview();
     expect(original?.dataset.recordKey).toBe('message-19');
     scrollTo.mockClear();
 
@@ -1344,14 +1348,15 @@ describe('conversation reading position', () => {
     act(() => runtime.publish({ records: [...runtime.state.records, message(20)] }));
     const preview = screen.getByRole('button', { name: 'Jump to latest user prompt' });
     expect(preview.textContent).toBe('Message 20');
-    expect(box.querySelector<HTMLElement>('[data-latest-user-prompt="true"]')?.dataset.recordKey).toBe('message-20');
+    expect(targetForPreview()?.dataset.recordKey).toBe('message-20');
   });
 
   it('jumps to and focuses the exact original prompt when it is outside the viewport', () => {
     reducedMotion = true;
     const { box } = setup();
     readAt(box, 0);
-    const target = box.querySelector<HTMLElement>('[data-latest-user-prompt="true"]');
+    const targetId = screen.getByRole('button', { name: 'Jump to latest user prompt' }).getAttribute('aria-controls');
+    const target = targetId ? document.getElementById(targetId) : null;
     expect(target?.dataset.recordKey).toBe('message-19');
     expect(target?.getBoundingClientRect().top).toBeGreaterThan(box.getBoundingClientRect().bottom);
     scrollTo.mockClear();

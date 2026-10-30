@@ -82,6 +82,7 @@ function bubblePromptIdentity(bubble: Bubble): string {
 interface LatestUserPrompt {
   readonly identity: string;
   readonly content: string;
+  readonly targetKey: string;
 }
 
 function latestUserPrompt(timeline: readonly TimelineItem[]): LatestUserPrompt | undefined {
@@ -89,10 +90,11 @@ function latestUserPrompt(timeline: readonly TimelineItem[]): LatestUserPrompt |
     const item = timeline[index];
     if (item.kind === 'bubble' && item.bubble.side === 'human' && item.bubble.ownerScoped) {
       return { identity: bubblePromptIdentity(item.bubble),
-        content: item.bubble.displayContent ?? item.bubble.record.content };
+        content: item.bubble.displayContent ?? item.bubble.record.content, targetKey: item.bubble.key };
     }
     if (item.kind === 'local') {
-      return { identity: `send:${sendIdentity(item.send)}`, content: item.send.content };
+      return { identity: `send:${sendIdentity(item.send)}`, content: item.send.content,
+        targetKey: `local-${item.send.clientMessageId}` };
     }
   }
   return undefined;
@@ -630,7 +632,7 @@ function StatusIcon({ state }: { state: RuntimeState }) {
 }
 
 const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, registerRow, preservePosition,
-  reconcileLayout, scrollKey: scrollKeyOverride, isLatestPrompt, latestPromptTargetId }: {
+  reconcileLayout, scrollKey: scrollKeyOverride, promptTargetPrefix }: {
   bubble: Bubble;
   renderMessage?: TightbeamChatProps['renderMessage'];
   agentName: string;
@@ -638,8 +640,7 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, re
   preservePosition: () => void;
   reconcileLayout: () => void;
   scrollKey?: string;
-  isLatestPrompt: boolean;
-  latestPromptTargetId: string;
+  promptTargetPrefix: string;
 }) {
   const { record } = bubble;
   const scrollKey = scrollKeyOverride ?? (bubble.derived ? bubble.key : record.id);
@@ -668,8 +669,7 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, re
       memberIndex: bubble.member.index, sender: bubble.member.sender, content: bubble.member.content }),
   }) : record;
   const custom = renderMessage?.(displayRecord, context);
-  return <article ref={rowRef} id={isLatestPrompt ? latestPromptTargetId : undefined} tabIndex={isLatestPrompt ? -1 : undefined}
-    data-latest-user-prompt={isLatestPrompt ? 'true' : undefined}
+  return <article ref={rowRef} id={`${promptTargetPrefix}-${encodeURIComponent(bubble.key)}`}
     className={`tb-chat-bubble tb-chat-bubble-${bubble.side}`} data-record-key={bubble.key} data-scroll-key={scrollKey}
     aria-label={`Message from ${bubble.sender || sourceLabel(bubble.side, agentName)}`}>
     {bubble.side === 'human' && <span className="tb-chat-bubble-sender" aria-hidden="true">{bubble.sender}</span>}
@@ -687,7 +687,7 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, re
   return before.key === after.key && before.record === after.record && before.side === after.side &&
     before.sender === after.sender && before.displayContent === after.displayContent &&
     before.derived === after.derived && sameMember && previous.renderMessage === next.renderMessage &&
-    previous.isLatestPrompt === next.isLatestPrompt && previous.latestPromptTargetId === next.latestPromptTargetId &&
+    previous.promptTargetPrefix === next.promptTargetPrefix &&
     previous.agentName === next.agentName && previous.registerRow === next.registerRow &&
     previous.preservePosition === next.preservePosition && previous.reconcileLayout === next.reconcileLayout &&
     previous.scrollKey === next.scrollKey;
@@ -1096,7 +1096,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   configuredConversationHref?: string;
 }) {
   const state = useSyncExternalStore(runtime.subscribe, runtime.getSnapshot, runtime.getSnapshot);
-  const latestPromptTargetId = useId();
+  const promptTargetPrefix = useId();
   const markedOpenRuntime = useRef<ChatRuntime | null>(null);
   const pendingVisibleReturn = useRef(false);
   const markReadPosition = useCallback(() => {
@@ -1390,6 +1390,8 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   const timeline = useMemo(() => composeTimeline(bubbles, localSends, canonicalSends, sendsByIdentity,
     transitions, activityPlan.messageItems), [activityPlan.messageItems, bubbles, canonicalSends, localSends, sendsByIdentity, transitions]);
   const latestPrompt = useMemo(() => latestUserPrompt(timeline), [timeline]);
+  const latestPromptTargetId = latestPrompt
+    ? `${promptTargetPrefix}-${encodeURIComponent(latestPrompt.targetKey)}` : undefined;
   const [dismissedPromptIdentity, setDismissedPromptIdentity] = useState<string | undefined>(undefined);
   const [latestPromptVisibility, setLatestPromptVisibility] = useState<{
     readonly identity: string;
@@ -1419,14 +1421,15 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
       setLatestPromptVisibility(prior => prior === undefined ? prior : undefined);
       return;
     }
-    const target = box.querySelector<HTMLElement>('[data-latest-user-prompt="true"]');
+    const target = latestPromptTargetId
+      ? box.querySelector<HTMLElement>(`[id="${latestPromptTargetId}"]`) : null;
     const targetRect = target?.getBoundingClientRect();
     const viewportRect = box.getBoundingClientRect();
     const offscreen = !!targetRect &&
       (targetRect.bottom <= viewportRect.top || targetRect.top >= viewportRect.bottom);
     setLatestPromptVisibility(prior => prior?.identity === latestPrompt.identity && prior.offscreen === offscreen
       ? prior : { identity: latestPrompt.identity, offscreen });
-  }, [latestPrompt?.identity]);
+  }, [latestPrompt?.identity, latestPromptTargetId]);
   useEffect(() => {
     if (host.settingsRequestRevision <= handledSettingsRevision.current) return;
     handledSettingsRevision.current = host.settingsRequestRevision;
@@ -1608,8 +1611,8 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   useLayoutEffect(() => {
     const box = viewport.current;
     const content = reading.content.current;
-    const target = box && latestPrompt
-      ? box.querySelector<HTMLElement>('[data-latest-user-prompt="true"]')
+    const target = box && latestPromptTargetId
+      ? box.querySelector<HTMLElement>(`[id="${latestPromptTargetId}"]`)
       : undefined;
     const notice = runtimeNotice.current;
     const toolStatus = root.current?.querySelector<HTMLElement>(
@@ -1627,14 +1630,14 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
       window.visualViewport?.removeEventListener('resize', updateLatestPromptVisibility);
       window.visualViewport?.removeEventListener('scroll', updateLatestPromptVisibility);
     };
-  }, [latestPrompt?.identity, latestPrompt?.content, showRuntimeNotice, showToolHistoryStatusInNotice,
+  }, [latestPrompt?.identity, latestPrompt?.content, latestPromptTargetId, showRuntimeNotice, showToolHistoryStatusInNotice,
     state.loadingOlder, state.historyError, localNotice, updateLatestPromptVisibility, reading.content]);
   const showLatestPrompt = !!latestPrompt && latestPromptVisibility?.identity === latestPrompt.identity &&
     latestPromptVisibility.offscreen && dismissedPromptIdentity !== latestPrompt.identity;
   const jumpToLatestPrompt = () => {
     const box = viewport.current;
-    if (!box || !latestPrompt) return;
-    const target = box.querySelector<HTMLElement>('[data-latest-user-prompt="true"]');
+    if (!box || !latestPrompt || !latestPromptTargetId) return;
+    const target = box.querySelector<HTMLElement>(`[id="${latestPromptTargetId}"]`);
     if (!target) return;
     const viewportRect = box.getBoundingClientRect();
     const targetRect = target.getBoundingClientRect();
@@ -1642,6 +1645,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
       box.scrollTop + targetRect.top - viewportRect.top - (box.clientHeight - targetRect.height) / 2));
     reading.interrupt();
     reading.noteUserScroll();
+    target.tabIndex = -1;
     target.focus({ preventScroll: true });
     const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
     box.scrollTo({ top: destination, behavior: reducedMotion ? 'instant' : 'smooth' });
@@ -1707,7 +1711,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
           return <RecordRow key={bubble.key} bubble={bubble} scrollKey={item.scrollKey}
             renderMessage={renderMessage} agentName={agentName} registerRow={reading.registerRow}
             preservePosition={preserveReadingPosition} reconcileLayout={reading.reconcileViewportLayout}
-            isLatestPrompt={latestPrompt?.identity === bubblePromptIdentity(bubble)} latestPromptTargetId={latestPromptTargetId} />;
+            promptTargetPrefix={promptTargetPrefix} />;
         }
         const { send } = item;
         const time = localTimestamp(send.submittedAt);
@@ -1717,11 +1721,8 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
         const reconnectingSend = send.status === 'pending' && unreachable;
         const retryAvailable = !hostManaged && !retryUnavailable &&
           ['failed', 'uncertain'].includes(send.status) && !send.reconciled;
-        const promptIdentity = `send:${sendIdentity(send)}`;
-        const isLatestPrompt = latestPrompt?.identity === promptIdentity;
         return <article ref={element => reading.registerRow(`local-${send.clientMessageId}`, element)}
-          id={isLatestPrompt ? latestPromptTargetId : undefined} tabIndex={isLatestPrompt ? -1 : undefined}
-          data-latest-user-prompt={isLatestPrompt ? 'true' : undefined}
+          id={`${promptTargetPrefix}-${encodeURIComponent(`local-${send.clientMessageId}`)}`}
           className="tb-chat-bubble tb-chat-bubble-human tb-chat-local" key={send.clientMessageId}
           data-record-key={`local-${send.clientMessageId}`} data-scroll-key={`local-${send.clientMessageId}`} aria-label={`Your message, ${send.status}`}>
           <div className="tb-chat-bubble-body">{markdownBody(send.content)}</div>
@@ -1752,7 +1753,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   }, [activityPlan.toolItems, expandedActivityRuns, expandedToolCalls, toggleActivityRun, setToolCallExpanded,
     revealingActivityItems, finishActivityReveal, reading.registerRow, reading.preserveVisiblePosition,
     reading.reconcileViewportLayout, preserveReadingPosition, expandRun,
-    renderMessage, agentName, state.status, runtime, latestPrompt?.identity, latestPromptTargetId]);
+    renderMessage, agentName, state.status, runtime, promptTargetPrefix]);
 
   return <ActivitySummaryProvider transport={activitySummaries}
     connected={state.liveConnectionState ? state.liveConnectionState === 'connected' : state.status === 'ready'}
