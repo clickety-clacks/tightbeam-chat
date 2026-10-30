@@ -218,10 +218,10 @@ describe('row-local rendering', () => {
     const { calls, transport } = transportFixture();
     let noteReads = 0;
     let resolveRefetch: ((value: string | undefined) => void) | undefined;
-    transport.readAttestNote = vi.fn((_id: string, _signal: AbortSignal) => {
+    transport.readAttestNote = vi.fn((_id: string, _signal: AbortSignal): Promise<string | undefined> => {
       noteReads++;
       if (noteReads === 1) return Promise.resolve('The full attest note remains readable.');
-      return new Promise(resolve => { resolveRefetch = resolve; });
+      return new Promise<string | undefined>(resolve => { resolveRefetch = resolve; });
     });
     const note: ActivityLine = { ...line('message:attest', 'Filed a review note.', 'substrate'),
       presentation: { label: 'Attest', tone: 'amber', icon: 'attest', text: 'Filed a review note.', attestId: 'note-reference' } };
