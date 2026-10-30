@@ -542,7 +542,7 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
   width: 100%;
   max-height: min(60vh, 32rem);
   border-radius: .75rem;
-  background: #111;
+  background: var(--tb-chat-code);
   object-fit: contain;
 }
 .tb-chat-camera-error { color: var(--tb-chat-danger); font-size: .9rem; }
