@@ -29,6 +29,20 @@ export function putIndex<T>(node: RecordIndex<T> | undefined, key: number, value
     maxTime: Math.max(zero?.maxTime ?? -Infinity, one?.maxTime ?? -Infinity) };
 }
 
+/** Remove one key while keeping the fixed-depth lookup metadata current. */
+export function removeIndex<T>(node: RecordIndex<T> | undefined, key: number,
+  bit = 52): RecordIndex<T> | undefined {
+  if (!node) return undefined;
+  if (bit < 0) return undefined;
+  const right = Math.floor(key / 2 ** bit) % 2 !== 0;
+  const zero = right ? node.zero : removeIndex(node.zero, key, bit - 1);
+  const one = right ? removeIndex(node.one, key, bit - 1) : node.one;
+  if (zero === node.zero && one === node.one) return node;
+  if (!zero && !one) return undefined;
+  return { zero, one, min: zero?.min ?? one!.min, max: one?.max ?? zero!.max,
+    maxTime: Math.max(zero?.maxTime ?? -Infinity, one?.maxTime ?? -Infinity) };
+}
+
 export function trimIndexBelow<T>(node: RecordIndex<T> | undefined, floor: number): RecordIndex<T> | undefined {
   if (!node || node.max < floor) return undefined;
   if (node.min >= floor) return node;

@@ -34,6 +34,8 @@ class HostComposerTransport implements ChatTransport {
   changeOpenCount = 0;
   readonly targetGateway = 'https://gateway.example:8443';
   readonly observation: TargetObservation = profile;
+  readReadMarker?: ChatTransport['readReadMarker'];
+  writeReadMarker?: ChatTransport['writeReadMarker'];
   readyGate?: ReturnType<typeof deferred<void>>;
   readGate?: ReturnType<typeof deferred<void>>;
   changeOpenFailures = 0;
@@ -353,6 +355,57 @@ describe('versioned host composer seam on the real adapter and surface', () => {
       correlationId: correlation, content: 'Hello from the host', retry: true }));
     expect(events.at(-1)).toMatchObject({ event: 'rejected', reason: 'already-delivered' });
     expect(transport.submissions).toHaveLength(1);
+  });
+
+  it('marks an accepted host send, but not a rejected local command or a reply by itself', async () => {
+    const events: HostComposerEvent[] = [];
+    const sessionKey = 'agent:sample assistant with space';
+    const acceptedCorrelation = 'c_223e4567-e89b-42d3-a456-426614174001';
+    const transport = new HostComposerTransport();
+    transport.currentIdentity = () => ({ principalKey: 'mike', deviceId: 'device-1' });
+    const initial: CanonicalMessage = { kind: 'message', id: 'initial', sessionKey, seq: 7, rowVersion: 1,
+      role: 'assistant', sender: 'assistant-service', content: 'Initial reply', raw: {} };
+    transport.records.set(sessionKey, [initial]);
+    let marker: string | number | null = null;
+    const read = vi.fn(async () => ({ supported: true as const, marker }));
+    const write = vi.fn(async (request: { sequence: string }) => {
+      marker = request.sequence;
+      return 'written' as const;
+    });
+    transport.readReadMarker = read;
+    transport.writeReadMarker = write;
+    transport.nextSend = async () => ({ outcome: 'refused', reason: 'The Gateway refused the send.' });
+    installDeclaration(events);
+    const { runtimes } = openChat(transport, sessionKey);
+    const ready = await waitForReady(events, sessionKey);
+    await waitFor(() => expect(marker).toBe('7'));
+    read.mockClear();
+    write.mockClear();
+
+    const reply: CanonicalMessage = { kind: 'message', id: 'reply', sessionKey, seq: 8, rowVersion: 1,
+      role: 'assistant', sender: 'assistant-service', content: 'A newer reply', raw: {} };
+    transport.records.get(sessionKey)!.push(reply);
+    act(() => transport.emit(reply));
+    await waitFor(() => expect(runtimes[0].getSnapshot().records.some((record) => record.id === reply.id)).toBe(true));
+    expect(read).not.toHaveBeenCalled();
+    expect(write).not.toHaveBeenCalled();
+
+    act(() => commandEntry()({ type: 'send', lifetimeId: ready.lifetimeId, sessionKey: ready.sessionKey,
+      correlationId: correlation, content: ' /settings ' }));
+    expect(events).toContainEqual(expect.objectContaining({ event: 'rejected', reason: 'local-command' }));
+    expect(read).not.toHaveBeenCalled();
+    expect(write).not.toHaveBeenCalled();
+
+    act(() => commandEntry()({ type: 'send', lifetimeId: ready.lifetimeId, sessionKey: ready.sessionKey,
+      correlationId: acceptedCorrelation, content: 'A regular host message' }));
+    await waitFor(() => expect(write).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(events.some((event) => event.event === 'failed' &&
+      event.correlationId === acceptedCorrelation)).toBe(true));
+    expect(events.some((event) => event.event === 'rejected' && event.correlationId === acceptedCorrelation)).toBe(false);
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(write).toHaveBeenLastCalledWith({ userId: 'mike',
+      scopeKey: `${sessionKey}:session-read-position`, sequence: '8', expectedCurrent: '7' },
+    expect.any(AbortSignal));
   });
 
   it('keeps an acknowledged host send free of a warning while canonical history catches up', async () => {

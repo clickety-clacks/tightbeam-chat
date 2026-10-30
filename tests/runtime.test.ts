@@ -44,6 +44,8 @@ class ControlledTransport implements ChatTransport {
   readSessionCalls = 0;
   closed = 0;
   coverage = true;
+  readReadMarker?: ChatTransport['readReadMarker'];
+  writeReadMarker?: ChatTransport['writeReadMarker'];
   tailPage?: ConversationPage;
   railDenials?: readonly HistoryRailDenial[];
   afterHook?: (cursor: string) => ConversationPage | Promise<ConversationPage>;
@@ -127,6 +129,147 @@ class ControlledTransport implements ChatTransport {
 async function settle() { await vi.waitFor(() => {}, { timeout: 50 }); }
 
 describe('framework-independent runtime', () => {
+  it('records only Mike’s newest loaded message under the exact full session key when opened', async () => {
+    const fullSessionKey = 'agent:sample assistant with space';
+    const transport = new ControlledTransport();
+    transport.identity = { principalKey: 'mike', deviceId: 'fixture-device' };
+    transport.rows = [message(18, { sessionKey: fullSessionKey }), message(21, { sessionKey: fullSessionKey }),
+      { ...switchAt(25, 'model'), sessionKey: fullSessionKey }];
+    transport.readSession = async (key = fullSessionKey) => ({ sessionKey: key, rowVersion: 1,
+      displayName: 'Fixture agent', raw: {}, activity: 'idle' });
+    transport.readTail = async (key = fullSessionKey) => ({ records: transport.rows,
+      oldestCursor: 'm18', newestCursor: 'after:21', hasOlder: false, hasNewer: false, coverage: key });
+    const read = vi.fn(async () => ({ supported: true as const, marker: null }));
+    const write = vi.fn(async () => 'written' as const);
+    transport.readReadMarker = read;
+    transport.writeReadMarker = write;
+
+    const runtime = createTightbeamAdapter(transport, profile).open(fullSessionKey);
+    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+    await runtime.markReadPosition?.();
+
+    const scopeKey = `${fullSessionKey}:session-read-position`;
+    expect(read).toHaveBeenCalledWith(scopeKey, expect.any(AbortSignal));
+    expect(write).toHaveBeenCalledWith({ userId: 'mike', scopeKey, sequence: '21', expectedCurrent: null },
+      expect.any(AbortSignal));
+    runtime.dispose();
+  });
+
+  it('keeps the newest canonical message lookup current through paging, deletion, and clear', async () => {
+    const transport = new ControlledTransport();
+    transport.identity = { principalKey: 'mike', deviceId: 'fixture-device' };
+    transport.rows = [...Array.from({ length: 12 }, (_, index) => message(index + 1)), switchAt(13, 'model')];
+    const read = vi.fn(async () => ({ supported: true as const, marker: null }));
+    const write = vi.fn(async () => 'written' as const);
+    transport.readReadMarker = read;
+    transport.writeReadMarker = write;
+
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+    while (runtime.getSnapshot().hasOlder) await runtime.loadOlder();
+    await runtime.markReadPosition?.();
+    expect(write).toHaveBeenLastCalledWith({ userId: 'mike', scopeKey: `${sessionKey}:session-read-position`,
+      sequence: '12', expectedCurrent: null }, expect.any(AbortSignal));
+
+    const newest = message(14);
+    transport.emit(newest);
+    await runtime.markReadPosition?.();
+    expect(write).toHaveBeenLastCalledWith({ userId: 'mike', scopeKey: `${sessionKey}:session-read-position`,
+      sequence: '14', expectedCurrent: null }, expect.any(AbortSignal));
+
+    transport.callbacks?.onNotice({ operation: 'delete', sessionKey, id: newest.id, rowVersion: 2 });
+    await runtime.markReadPosition?.();
+    expect(write).toHaveBeenLastCalledWith({ userId: 'mike', scopeKey: `${sessionKey}:session-read-position`,
+      sequence: '12', expectedCurrent: null }, expect.any(AbortSignal));
+
+    transport.clearBarrier = 12;
+    const afterClearBarrier = message(15);
+    transport.emit(afterClearBarrier);
+    transport.reset();
+    await runtime.markReadPosition?.();
+    expect(write).toHaveBeenLastCalledWith({ userId: 'mike', scopeKey: `${sessionKey}:session-read-position`,
+      sequence: '15', expectedCurrent: null }, expect.any(AbortSignal));
+
+    transport.callbacks?.onNotice({ operation: 'delete', sessionKey, id: afterClearBarrier.id, rowVersion: 2 });
+    const readsBeforeEmptyMarker = read.mock.calls.length;
+    const writesBeforeEmptyMarker = write.mock.calls.length;
+    await runtime.markReadPosition?.();
+    expect(read).toHaveBeenCalledTimes(readsBeforeEmptyMarker);
+    expect(write).toHaveBeenCalledTimes(writesBeforeEmptyMarker);
+
+    transport.emit(message(16));
+    await runtime.markReadPosition?.();
+    expect(write).toHaveBeenLastCalledWith({ userId: 'mike', scopeKey: `${sessionKey}:session-read-position`,
+      sequence: '16', expectedCurrent: null }, expect.any(AbortSignal));
+    runtime.dispose();
+  });
+
+  it('records accepted sends and user-requested retries, while reply arrival alone stays passive', async () => {
+    const fullSessionKey = 'agent:sample assistant with space';
+    const transport = new ControlledTransport();
+    transport.identity = { principalKey: 'mike', deviceId: 'fixture-device' };
+    transport.rows = [message(18, { sessionKey: fullSessionKey }), message(21, { sessionKey: fullSessionKey })];
+    transport.readSession = async (key = fullSessionKey) => ({ sessionKey: key, rowVersion: 1,
+      displayName: 'Fixture agent', raw: {}, activity: 'idle' });
+    transport.readTail = async (key = fullSessionKey) => ({ records: transport.rows,
+      oldestCursor: 'm18', newestCursor: `after:${transport.rows.at(-1)!.seq}`,
+      hasOlder: false, hasNewer: false, coverage: key });
+    let marker: string | number | null = null;
+    const read = vi.fn(async () => ({ supported: true as const, marker }));
+    const write = vi.fn(async (request: { sequence: string }) => {
+      marker = request.sequence;
+      return 'written' as const;
+    });
+    transport.readReadMarker = read;
+    transport.writeReadMarker = write;
+    const outcomes: HumanSendResult[] = [
+      { outcome: 'refused', reason: 'The send was refused after Chat accepted it.' },
+      { outcome: 'accepted' },
+    ];
+    transport.nextSend = async () => outcomes.shift()!;
+
+    const runtime = createTightbeamAdapter(transport, profile).open(fullSessionKey);
+    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+    const clientMessageId = runtime.send('A message accepted by Chat');
+    expect(clientMessageId).toBeTruthy();
+    await vi.waitFor(() => expect(runtime.getSnapshot().sends[0]?.status).toBe('failed'));
+    await vi.waitFor(() => expect(write).toHaveBeenCalledTimes(1));
+    expect(write).toHaveBeenLastCalledWith({ userId: 'mike',
+      scopeKey: `${fullSessionKey}:session-read-position`, sequence: '21', expectedCurrent: null },
+    expect.any(AbortSignal));
+
+    const reply = message(22, { sessionKey: fullSessionKey, role: 'assistant' });
+    transport.rows.push(reply);
+    transport.emit(reply);
+    await vi.waitFor(() => expect(runtime.getSnapshot().records.some((record) => record.id === reply.id)).toBe(true));
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(write).toHaveBeenCalledTimes(1);
+
+    await runtime.retrySend(clientMessageId!);
+    await vi.waitFor(() => expect(runtime.getSnapshot().sends[0]?.status).toBe('accepted'));
+    await vi.waitFor(() => expect(write).toHaveBeenCalledTimes(2));
+    expect(write).toHaveBeenLastCalledWith({ userId: 'mike',
+      scopeKey: `${fullSessionKey}:session-read-position`, sequence: '22', expectedCurrent: '21' },
+    expect.any(AbortSignal));
+    runtime.dispose();
+  });
+
+  it('does not access read markers for a different authenticated principal', async () => {
+    const transport = new ControlledTransport();
+    const read = vi.fn(async () => ({ supported: true as const, marker: null }));
+    const write = vi.fn(async () => 'written' as const);
+    transport.readReadMarker = read;
+    transport.writeReadMarker = write;
+
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+    await runtime.markReadPosition?.();
+
+    expect(read).not.toHaveBeenCalled();
+    expect(write).not.toHaveBeenCalled();
+    runtime.dispose();
+  });
+
   it('restores selected-session refused actions from history and deduplicates their live notice', async () => {
     const denial: HistoryRailDenial = { id: 'history-14', sessionKey, principal: `session:${sessionKey}`,
       origin: 'chat', verb: 'send', rule: 'owner-policy', payload: { verb: 'send', rule: 'owner-policy' },

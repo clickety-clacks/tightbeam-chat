@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createTightbeamAdapter } from '../src/runtime';
+import { advanceReadMarkerForwardOnly } from '../src/readMarker';
 import {
   createPublic019Transport, decodePublic019Message, decodeToolCall,
   decodePublic019Notice, type Public019Channel, type Public019Host,
@@ -83,6 +84,117 @@ function setup(heartbeatTimeoutMs?: number, observedVersion = version, historyIt
 }
 
 describe('Gateway wire mapping and behavior checks', () => {
+  it('keeps marker transport unavailable without a declared user-device route', () => {
+    const candidate = setup();
+    candidate.host.currentIdentity = () => ({ principalKey: 'mike', deviceId: 'device-mike' });
+
+    expect(candidate.transport.readReadMarker).toBeUndefined();
+    expect(candidate.transport.writeReadMarker).toBeUndefined();
+    expect(candidate.paths).toEqual([]);
+  });
+
+  it('opens normally for Mike on a host without a compatible marker route', async () => {
+    const candidate = setup();
+    candidate.host.currentIdentity = () => ({ principalKey: 'mike', deviceId: 'fixture-device' });
+    const runtime = createTightbeamAdapter(candidate.transport, candidate.profile).open(sessionKey);
+    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+    await runtime.markReadPosition?.();
+
+    expect(runtime.getSnapshot().status).toBe('ready');
+    expect(candidate.paths.some(path => path.includes('/api/read-markers/'))).toBe(false);
+    expect(candidate.paths.some(path => path.endsWith('/agent/dispatch'))).toBe(false);
+    runtime.dispose();
+  });
+
+  it('encodes the full scope key and retains the higher marker after a conditional-write conflict', async () => {
+    const scopeKey = 'agent:sample assistant with space:session-read-position';
+    const requests: Array<{ input: string; init: RequestInit }> = [];
+    let marker: string | null = null;
+    const host: Public019Host = {
+      readMarkerRoute: 'gateway-user-device',
+      currentIdentity: () => ({ principalKey: 'mike', deviceId: 'fixture-device' }),
+      fetch: async (input, init) => {
+        requests.push({ input, init });
+        const url = new URL(input);
+        if (url.pathname.startsWith('/api/read-markers/')) {
+          if (init.method === 'GET') return new Response(JSON.stringify({ schemaVersion: 1,
+            resource: 'read markers', item: { userId: 'mike', scopeKey, marker } }), { status: 200 });
+        }
+        if (url.pathname === '/agent/dispatch' && init.method === 'POST') {
+          marker = '90071992547409931';
+          return new Response(JSON.stringify({ error: { code: 'read_marker_conflict' } }), { status: 409 });
+        }
+        throw new Error(`Unexpected marker request: ${init.method} ${url.pathname}`);
+      },
+      openAuthenticatedChanges: async () => new Channel(),
+      openAuthenticatedHuman: async () => new Channel(),
+    };
+    const { transport } = createPublic019Transport({ baseUrl: 'https://gateway.example', host });
+    const port = { readReadMarker: transport.readReadMarker!, writeReadMarker: transport.writeReadMarker! };
+
+    await advanceReadMarkerForwardOnly(port, { userId: 'mike', scopeKey, sequence: '90071992547409930' },
+      new AbortController().signal);
+
+    const encodedPath = `/api/read-markers/${encodeURIComponent(scopeKey)}`;
+    expect(requests.map(({ input, init }) => [init.method, new URL(input).pathname])).toEqual([
+      ['GET', encodedPath], ['POST', '/agent/dispatch'], ['GET', encodedPath],
+    ]);
+    expect(JSON.parse(String(requests[1].init.body))).toEqual({
+      verb: 'read-marker-set',
+      params: { scopeKey, marker: '90071992547409930', expectedCurrent: null },
+    });
+    expect(requests[0].input).toContain(encodeURIComponent(scopeKey));
+    expect(requests[0].init.cache).toBe('no-store');
+    expect(requests[0].init.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('preserves a stored integer marker type in conditional writes, including after conflict reread', async () => {
+    const scopeKey = 'agent:sample assistant with space:session-read-position';
+    const requests: Array<{ input: string; init: RequestInit }> = [];
+    let marker: number | string = 41;
+    let conflictNextWrite = true;
+    const host: Public019Host = {
+      readMarkerRoute: 'gateway-user-device',
+      currentIdentity: () => ({ principalKey: 'mike', deviceId: 'fixture-device' }),
+      fetch: async (input, init) => {
+        requests.push({ input, init });
+        const url = new URL(input);
+        if (url.pathname.startsWith('/api/read-markers/') && init.method === 'GET') {
+          return new Response(JSON.stringify({ schemaVersion: 1, resource: 'read markers',
+            item: { userId: 'mike', scopeKey, marker } }), { status: 200 });
+        }
+        if (url.pathname === '/agent/dispatch' && init.method === 'POST') {
+          const body = JSON.parse(String(init.body)) as { params: { expectedCurrent: number | string | null; marker: string } };
+          if (conflictNextWrite) {
+            conflictNextWrite = false;
+            marker = 42;
+            return new Response(JSON.stringify({ error: { code: 'read_marker_conflict' } }), { status: 409 });
+          }
+          if (body.params.expectedCurrent !== marker) {
+            return new Response(JSON.stringify({ error: { code: 'read_marker_conflict' } }), { status: 409 });
+          }
+          marker = body.params.marker;
+          return new Response(JSON.stringify({ result: { changed: true } }), { status: 200 });
+        }
+        throw new Error(`Unexpected marker request: ${init.method} ${url.pathname}`);
+      },
+      openAuthenticatedChanges: async () => new Channel(),
+      openAuthenticatedHuman: async () => new Channel(),
+    };
+    const { transport } = createPublic019Transport({ baseUrl: 'https://gateway.example', host });
+
+    await advanceReadMarkerForwardOnly({
+      readReadMarker: transport.readReadMarker!,
+      writeReadMarker: transport.writeReadMarker!,
+    }, { userId: 'mike', scopeKey, sequence: '43' }, new AbortController().signal);
+
+    const writes = requests.filter(({ input }) => new URL(input).pathname === '/agent/dispatch');
+    expect(writes).toHaveLength(2);
+    expect(JSON.parse(String(writes[0].init.body)).params.expectedCurrent).toBe(41);
+    expect(JSON.parse(String(writes[1].init.body)).params.expectedCurrent).toBe(42);
+    expect(JSON.parse(String(writes[1].init.body)).params.marker).toBe('43');
+  });
+
   it('consumes live turn lifecycle payloads and checks the current turn without refreshing history', async () => {
     const humanRow = { ...item, sender: 'user:person-1', turnSeq: 12 };
     const candidate = setup(undefined, version, [humanRow]);

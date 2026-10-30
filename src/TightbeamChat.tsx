@@ -872,6 +872,42 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   configuredConversationHref?: string;
 }) {
   const state = useSyncExternalStore(runtime.subscribe, runtime.getSnapshot, runtime.getSnapshot);
+  const markedOpenRuntime = useRef<ChatRuntime | null>(null);
+  const pendingVisibleReturn = useRef(false);
+  const markReadPosition = useCallback(() => {
+    if (typeof document === 'undefined' || document.visibilityState !== 'visible') return;
+    void runtime.markReadPosition?.();
+  }, [runtime]);
+  useEffect(() => {
+    if (state.status !== 'ready' || markedOpenRuntime.current === runtime) return;
+    markedOpenRuntime.current = runtime;
+    if (document.visibilityState === 'visible') {
+      pendingVisibleReturn.current = false;
+      void runtime.markReadPosition?.();
+    }
+  }, [runtime, state.status]);
+  useEffect(() => {
+    if (!pendingVisibleReturn.current || document.visibilityState !== 'visible' ||
+        state.session?.sessionKey !== state.sessionKey) return;
+    pendingVisibleReturn.current = false;
+    void runtime.markReadPosition?.();
+  }, [runtime, state.session, state.sessionKey, state.status]);
+  useEffect(() => {
+    let wasNotVisible = document.visibilityState !== 'visible';
+    const onVisibilityChange = () => {
+      const visible = document.visibilityState === 'visible';
+      if (!visible) {
+        wasNotVisible = true;
+        return;
+      }
+      if (!wasNotVisible) return;
+      wasNotVisible = false;
+      if (state.session?.sessionKey === state.sessionKey) markReadPosition();
+      else pendingVisibleReturn.current = true;
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+  }, [markReadPosition, state.session, state.sessionKey]);
   const [toolCallsErrorAfterGrace, setToolCallsErrorAfterGrace] = useState<string | undefined>(undefined);
   useEffect(() => {
     const error = state.toolCallsError;
@@ -903,7 +939,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     priorArrivalContext.recoveryRevision === recoveryRevision;
   const reading = useReadingPosition(state.status === 'ready', readingRevision, box =>
     state.loadingOlder || (!state.historyError && state.hasOlder && box.scrollTop < olderHistoryPrefetchDistance(box)),
-    arrivalEligible, state.sessionKey);
+    arrivalEligible, state.sessionKey, markReadPosition);
   useLayoutEffect(() => {
     previousArrivalContext.current = { sessionKey: state.sessionKey, generation: state.generation,
       recoveryRevision, ready: state.status === 'ready' };
@@ -1374,7 +1410,15 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
       onWheel={(event) => { reading.interrupt(); if (event.deltaY !== 0) reading.noteUserScroll(); }}
       onTouchStart={reading.interrupt} onTouchMove={reading.noteUserScroll}
       onPointerDown={reading.interrupt} onPointerMove={(event) => { if (event.buttons !== 0) reading.noteUserScroll(); }}
-      onKeyDown={(event) => { if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) { reading.interrupt(); reading.noteUserScroll(); } }}
+      onKeyDown={(event) => {
+        const target = event.target;
+        const isControl = target instanceof Element &&
+          Boolean(target.closest('button, a, input, textarea, select, [contenteditable="true"]'));
+        if (!isControl && ['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key)) {
+          reading.interrupt();
+          reading.noteUserScroll();
+        }
+      }}
       aria-label={`${agentName || 'Conversation'} messages`} aria-live="polite" aria-relevant="additions text">
       {showRuntimeNotice && <div className={`tb-chat-runtime-notice ${showToolHistoryStatusInNotice ? 'tb-chat-runtime-notice-with-tool-history ' : ''}${state.loadingOlder ? 'tb-chat-history-loading ' : ''} tb-chat-caption ${state.historyError || state.sessionNotFound || state.sessionError || state.conversationError || state.status === 'unauthorized' || state.status === 'unsupported'
         ? 'tb-chat-caption-danger' : 'tb-chat-caption-neutral'}`} role={state.historyError || state.sessionNotFound || state.conversationError || state.sessionError || state.status === 'unauthorized' || state.status === 'unsupported' ? 'alert' : 'status'}>
@@ -1404,7 +1448,10 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
       </div>
     </div>
     {reading.showLatest && <button type="button" className="tb-chat-scroll-latest" data-scroll-latest="true"
-      aria-label="Scroll to latest messages" onMouseDown={(event) => event.preventDefault()} onClick={reading.scrollToLatest}>
+      aria-label="Scroll to latest messages" onMouseDown={(event) => event.preventDefault()} onClick={() => {
+        markReadPosition();
+        reading.scrollToLatest();
+      }}>
       <span aria-hidden="true">↓</span> Latest messages
     </button>}
     {!host.composerHidden && <Composer ref={composer} runtime={runtime} state={state} agentName={agentName}
