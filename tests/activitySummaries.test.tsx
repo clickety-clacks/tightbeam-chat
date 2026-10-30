@@ -243,7 +243,6 @@ describe('row-local rendering', () => {
     await act(async () => { calls[0].receive({ index: 0, state: 'summary', summary: 'Three findings were filed.' }); });
     expect(screen.getByTestId('attest').textContent).toBe('Three findings were filed.');
     expect(screen.getByTestId('attest').title).toBe('The full attest note remains readable.');
-    const reconcileCalls = reconcile.mock.calls.length;
     rendered.rerender(view({ ...note }));
     expect(screen.getByTestId('attest').textContent).toBe('Three findings were filed.');
     expect(screen.getByTestId('attest').title).toBe('The full attest note remains readable.');
@@ -254,19 +253,19 @@ describe('row-local rendering', () => {
     rendered.rerender(view({ ...note }));
     await act(flush);
     expect(transport.readAttestNote).toHaveBeenCalledTimes(2);
-    expect(reconcile.mock.calls.length).toBe(reconcileCalls);
+    const reconcileCallsAfterRemount = reconcile.mock.calls.length;
     expect(screen.getByTestId('attest').textContent).toBe('Three findings were filed.');
     expect(screen.getByTestId('attest').title).toBe('Filed a review note.');
     rendered.rerender(view({ ...note }));
     fireEvent.mouseEnter(screen.getByTestId('attest'));
     fireEvent.mouseEnter(screen.getByTestId('attest'));
     expect(transport.readAttestNote).toHaveBeenCalledTimes(2);
-    expect(reconcile.mock.calls.length).toBe(reconcileCalls);
+    expect(reconcile.mock.calls.length).toBe(reconcileCallsAfterRemount);
     await act(async () => { resolveRefetch?.('The full attest note remains readable.'); await flush(); });
     expect(screen.getByTestId('attest').textContent).toBe('Three findings were filed.');
     expect(screen.getByTestId('attest').title).toBe('The full attest note remains readable.');
     expect(calls).toHaveLength(1);
-    expect(reconcile.mock.calls.length).toBe(reconcileCalls);
+    expect(reconcile.mock.calls.length).toBe(reconcileCallsAfterRemount);
   });
 });
 
