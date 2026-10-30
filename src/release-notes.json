@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.64",
+    "items": [
+      {
+        "title": "Tool detail rails and smooth folds",
+        "description": "Expanded tool-call input and results share a left-side rail. Conversation folds animate open and closed, and revealing earlier activity animates only the new rows. Reduced-motion settings skip the animation."
+      }
+    ]
+  },
+  {
     "version": "v0.1.63",
     "items": [
       {
