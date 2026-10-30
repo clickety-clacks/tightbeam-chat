@@ -2445,3 +2445,22 @@ it('places durable pills at record time after a tied tool, and lets an exact not
   act(() => runtime.update({ recordEvents: [{ ...event, eventId: 'work_item.filed:other' }] }));
   expect(keys()).toContain('record-event:work_item.filed:other');
 });
+
+it('keeps a covering notice visible without a human span, including notice-first arrival and multiple covered events', () => {
+  const sessionKey = 'notice-first';
+  const coverage = ['assignment.opened:first', 'attest.filed:second'];
+  const notice = row(sessionKey, 'notice-first-row', 'Both requested records are now available', {
+    role: 'user', sender: 'agent:another', seq: 1, recordEventIds: coverage,
+  });
+  const runtime = new FakeRuntime(sessionKey, { records: [notice] });
+  const view = render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+  const pill = screen.getByText('Both requested records are now available').closest('[role="note"]');
+  expect(pill).not.toBeNull();
+  expect(pill?.getAttribute('title')).toBe(notice.content);
+  const events = coverage.map((eventId, at) => ({ eventId, sessionKey, at, kind: eventId.split(':')[0],
+    record: { type: 'assignment', id: eventId, detail: '/api/assignments/example' },
+    actorSessionKey: 'another', tiedAs: ['holder'], cause: null, noticeMessageIds: [] }));
+  act(() => runtime.update({ recordEvents: events }));
+  expect(view.container.querySelectorAll('[data-record-key^="record-event:"]')).toHaveLength(0);
+  expect(view.container.querySelectorAll('[data-record-key="message:notice-first-row"]')).toHaveLength(1);
+});

@@ -327,6 +327,7 @@ describe('Gateway wire mapping and behavior checks', () => {
     expect(candidate.paths).toEqual([
       'https://host.example/api/sessions/s-public',
       'https://host.example/api/sessions/s-public/messages?limit=50&tail=true',
+      'https://host.example/api/sessions/s-public/record-events?limit=50',
       'https://host.example/api/sessions/s-public/tool-calls?limit=50&afterMessageSeqFromInclusive=8',
     ]);
     expect(runtime.getSnapshot().records.map((record) => record.id))
@@ -392,6 +393,7 @@ describe('Gateway wire mapping and behavior checks', () => {
     expect(candidate.paths).toEqual([
       'https://host.example/api/sessions/s-public',
       'https://host.example/api/sessions/s-public/messages?limit=50&tail=true',
+      'https://host.example/api/sessions/s-public/record-events?limit=50',
       'https://host.example/api/sessions/s-public/tool-calls?limit=50&afterMessageSeqFromInclusive=9',
     ]);
     expect(runtime.getSnapshot().records.map((record) => record.id)).toEqual(['m_1']);
@@ -518,6 +520,7 @@ describe('Gateway wire mapping and behavior checks', () => {
     expect(candidate.paths).toEqual([
       'https://host.example/api/sessions/s-public',
       'https://host.example/api/sessions/s-public/messages?limit=50&tail=true',
+      'https://host.example/api/sessions/s-public/record-events?limit=50',
       'https://host.example/api/sessions/s-public/tool-calls?limit=50&afterMessageSeqFromInclusive=9',
     ]);
     expect(candidate.paths.some((path) => /^https:\/\/host\.example\/api\/turns\//.test(path))).toBe(false);
@@ -613,6 +616,8 @@ describe('Gateway wire mapping and behavior checks', () => {
           await tailGate;
           body = { schemaVersion: 1, resource: 'transcript messages', items: [item],
             page: { oldestCursor: null, newestCursor: 'newer-cursor', hasMoreBefore: false, hasMoreAfter: false } };
+        } else if (path.includes('/record-events?')) {
+          body = { schemaVersion: 1, resource: 'record events', items: [], page: { hasMoreBefore: false } };
         } else if (path.includes('/tool-calls?')) {
           body = { schemaVersion: 1, resource: 'tool calls', items: [], page: { hasMoreBefore: false } };
         } else if (path.includes('/turns?')) {

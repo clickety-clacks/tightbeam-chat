@@ -1043,6 +1043,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   const projection = useMemo(() => projectMessages(state.records, state.principalKey, state.session?.raw.ownerUserId),
     [state.records, state.principalKey, state.session?.raw.ownerUserId]);
   const bubbles: Bubble[] = useMemo(() => projection.messages
+    .filter(message => message.member || !message.source.recordEventIds?.length)
     .map((message) => ({
       key: message.key, record: message.source, side: message.side,
       ownerScoped: message.side === 'agent' || message.senderLabel === 'You',
