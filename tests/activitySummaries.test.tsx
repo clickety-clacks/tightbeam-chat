@@ -16,7 +16,7 @@ const flush = async () => { for (let i = 0; i < 10; i++) await Promise.resolve()
 function transportFixture() {
   const calls: { sources: readonly SummarySource[]; receive: (answer: SummaryAnswer) => void; end: () => void; fail: () => void }[] = [];
   const transport: ActivitySummaryTransport = {
-    stream: vi.fn((sources, receive, signal) => new Promise<void>((resolve, reject) => {
+    stream: vi.fn((sources: readonly SummarySource[], receive: (answer: SummaryAnswer) => void, signal: AbortSignal) => new Promise<void>((resolve, reject) => {
       calls.push({ sources: sources.map(source => ({ ...source })), receive, end: resolve,
         fail: () => reject(new Error('Disconnected')) });
       signal.addEventListener('abort', () => reject(new Error('Aborted')), { once: true });
@@ -136,7 +136,7 @@ describe('summary answer delivery', () => {
 
   it('parses chunked streamed states and reads an authorized attest response', async () => {
     const encoder = new TextEncoder();
-    const fetcher = vi.fn(async (url: string) => url.includes('/attests/')
+    const fetcher = vi.fn(async (url: string, _init: RequestInit) => url.includes('/attests/')
       ? new Response(JSON.stringify({ attest: { note: 'Readable note' } }))
       : new Response(new ReadableStream({ start(controller) {
         controller.enqueue(encoder.encode('{"index":0,"state":"pend'));
@@ -193,9 +193,8 @@ describe('row-local rendering', () => {
   it('shows an attest note locally as the original and keeps it available on hover after summarizing', async () => {
     const { calls, transport } = transportFixture();
     transport.readAttestNote = vi.fn(async () => 'The full attest note remains readable.');
-    const note = { ...line('message:attest', 'Filed a review note.', 'substrate'),
-      presentation: { ...activityPillPresentation({ kind: 'substrate', gist: 'Filed a review note.', content: 'Filed a review note.' }),
-        attestId: 'note-reference' } };
+    const note: ActivityLine = { ...line('message:attest', 'Filed a review note.', 'substrate'),
+      presentation: { label: 'Attest', tone: 'amber', icon: 'attest', text: 'Filed a review note.', attestId: 'note-reference' } };
     function Row() {
       const result = useActivitySummary(note);
       return <div data-testid="attest" title={result.original} data-state={result.state}>{result.presentation?.text}</div>;
