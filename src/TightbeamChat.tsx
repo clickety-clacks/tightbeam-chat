@@ -961,7 +961,9 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     .map((message) => ({
       key: message.key, record: message.source, side: message.side,
       ownerScoped: message.side === 'agent' || message.senderLabel === 'You',
-      sender: messageSourceLabel(message.source, message.senderLabel ?? sourceLabel(message.side, agentName)),
+      sender: message.side === 'human'
+        ? messageSourceLabel(message.source, message.senderLabel ?? sourceLabel(message.side, agentName))
+        : sourceLabel(message.side, agentName),
       derived: Boolean(message.member),
       displayContent: message.member?.content, member: message.member,
     })), [projection, agentName]);

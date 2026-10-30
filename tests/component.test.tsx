@@ -261,6 +261,27 @@ describe('conversation surface', () => {
     expect(log.textContent).toContain('Review the test results and summarize the failures.');
   });
 
+  it('preserves the agent label when an agent reply carries assignment context', () => {
+    const sessionKey = 'assignment-agent-reply';
+    const humanMessage = decodePublic019Message({
+      id: 'assigned-prompt', seq: 10, rowVersion: 10, sessionKey, role: 'user', sender: 'user:person',
+      messageType: 'chat', content: 'Review the requested changes.', assignmentId: 'task-123', turnSeq: 7,
+      at: Date.parse('2026-10-30T00:00:00Z'), attachments: [],
+    }, sessionKey);
+    const agentReply = decodePublic019Message({
+      id: 'assigned-reply', seq: 11, rowVersion: 11, sessionKey, role: 'assistant', sender: 'assistant-service',
+      messageType: 'assistant', content: 'The changes are ready.', assignmentId: 'task-123', turnSeq: 7,
+      replyToMessageId: 'assigned-prompt', at: Date.parse('2026-10-30T00:01:00Z'), attachments: [],
+    }, sessionKey);
+    const runtime = new FakeRuntime(sessionKey, { records: [humanMessage, agentReply] });
+
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+
+    const reply = within(screen.getByRole('log')).getByText('The changes are ready.')
+      .closest<HTMLElement>('.tb-chat-bubble');
+    expect(reply?.getAttribute('aria-label')).toBe('Message from Research assistant');
+  });
+
   it('does not rebuild the transcript on a foreground return', () => {
     const sessionKey = 'background-resume-session';
     const runtime = new FakeRuntime(sessionKey);
