@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useSyncExternalStore,
   useRef, useState, type ReactNode } from 'react';
 import type { ActivityLine } from './activityTrail';
+import { activitySourceDetail, rememberActivitySourceDetail } from './activityTrail';
 import { ActivitySummaryViewer, type ActivitySummaryTransport } from './activitySummaries';
 
 const SummaryContext = createContext<{
@@ -37,12 +38,13 @@ export function useActivitySummary(entry: ActivityLine) {
   const receiveOriginal = useCallback((text: string) => {
     const value = { key, text };
     originalRef.current = value;
+    rememberActivitySourceDetail(entry, text);
     setAttestNote(value);
-  }, [key]);
+  }, [entry, key]);
   const currentOriginal = useCallback(() => {
     const value = originalRef.current;
-    return value && value.key === key ? value.text : undefined;
-  }, [key]);
+    return value && value.key === key ? value.text : activitySourceDetail(entry);
+  }, [entry, key]);
   // The source key owns the subscription; unrelated row-object publications
   // must not become delivery-retry events.
   const subscribe = useCallback((listener: () => void) =>
@@ -50,7 +52,7 @@ export function useActivitySummary(entry: ActivityLine) {
   [viewer, entry, key, receiveOriginal, currentOriginal]);
   const snapshot = useCallback(() => viewer?.snapshot(key), [viewer, key]);
   const display = useSyncExternalStore(viewer ? subscribe : noSubscribe, viewer ? snapshot : noSnapshot, noSnapshot);
-  const note = attestNote && attestNote.key === key ? attestNote.text : undefined;
+  const note = attestNote && attestNote.key === key ? attestNote.text : activitySourceDetail(entry);
   const text = display?.state === 'summary' ? display.text : note;
   useLayoutEffect(() => { if (text) reconcile?.(); }, [text, reconcile]);
   return { presentation: text && entry.presentation ? { ...entry.presentation, text } : entry.presentation,
