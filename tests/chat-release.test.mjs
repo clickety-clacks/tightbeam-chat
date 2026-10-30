@@ -427,7 +427,7 @@ describe('Chat release packaging and updater', () => {
     expect(noticeText).toContain('React 19.3.0, React DOM 19.3.0, and Scheduler 0.28.0');
     expect(noticeText).toContain('Copyright (c) Meta Platforms, Inc. and affiliates.');
     const files = [
-      'dist/chat-server/public/index.html', 'server/chat-server.mjs', 'scripts/update-chat-release.mjs',
+      'dist/chat-server/public/index.html', 'server/chat-server.mjs', 'server/activity-summaries.mjs', 'scripts/update-chat-release.mjs',
       'scripts/chat-release-updater.mjs', 'scripts/chat-release-watch.mjs', 'packaging/tightbeam-chat.service',
       'packaging/tightbeam-chat-release-watch.service', 'packaging/tightbeam-chat-release-watch.timer',
       'LICENSE', 'THIRD_PARTY_NOTICES.md',
@@ -460,6 +460,7 @@ describe('Chat release packaging and updater', () => {
     const members = execFileSync('tar', ['-tzf', result.assetPath], { encoding: 'utf8' });
     expect(members).toContain('./public/index.html');
     expect(members).toContain('./server/chat-server.mjs');
+    expect(members).toContain('./server/activity-summaries.mjs');
     expect(members).toContain('./bin/chat-release-watch.mjs');
     expect(members).toContain('./packaging/tightbeam-chat-release-watch.service');
     expect(members).toContain('./packaging/tightbeam-chat-release-watch.timer');

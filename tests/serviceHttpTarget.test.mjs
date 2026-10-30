@@ -44,3 +44,11 @@ describe('Chat service message cursor forwarding', () => {
     expect(parseServiceHttpTarget(`${messagesPath}?limit=50&after=cursor&after=cursor`, runtime)).toBeUndefined();
   });
 });
+
+it('forwards attest detail under the selected principal without widening other routes', () => {
+  expect(parseServiceHttpTarget('/__chat/api/attests/att_example', runtime)).toEqual({
+    kind: 'detail', gatewayOrigin: runtime.gatewayOrigin, path: '/api/attests/att_example?asUser=example-user',
+  });
+  expect(parseServiceHttpTarget('/__chat/api/attests', runtime)).toBeUndefined();
+  expect(parseServiceHttpTarget('/__chat/api/attests/att_example?asUser=someone-else', runtime)).toBeUndefined();
+});

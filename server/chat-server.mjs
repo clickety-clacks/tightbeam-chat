@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { ActivitySummaryStore, summaryConfiguration, serveSummaries } from './activity-summaries.mjs';
 import fs from 'node:fs';
 import http from 'node:http';
 import https from 'node:https';
@@ -197,6 +198,13 @@ export function parseServiceHttpTarget(rawUrl, runtime) {
     const routeParams = [...request.searchParams.entries()].filter(([name]) => name !== 'gateway');
     if (request.pathname === '/__chat/gateway/version' && routeParams.length === 0) {
       return { kind: 'version', gatewayOrigin, path: '/version' };
+    }
+
+    const attest = /^\/__chat\/api\/attests\/([^/]+)$/.exec(request.pathname);
+    const attestId = attest && decodeSessionPath(attest[1]);
+    if (attestId && routeParams.length === 0) {
+      return { kind: 'detail', gatewayOrigin,
+        path: `/api/attests/${encodeURIComponent(attestId)}?asUser=${encodeURIComponent(runtime.principalKey)}` };
     }
 
     const detail = /^\/__chat\/api\/sessions\/([^/]+)$/.exec(request.pathname);
@@ -693,6 +701,10 @@ export function createChatServer({
   const runtime = loadRuntimeConfig(environment);
   const manifest = releaseInfo ?? JSON.parse(fs.readFileSync(path.resolve(rootDir, 'release.json'), 'utf8'));
 
+  let summaries;
+  try { summaries = new ActivitySummaryStore(summaryConfiguration(environment)); }
+  catch { console.warn('Activity summary storage is unavailable; original text remains available.'); }
+
   return http.createServer((request, response) => {
     const parsedRequest = new URL(request.url ?? '/', 'http://chat.invalid');
     if (parsedRequest.pathname === '/chat-config.json') {
@@ -710,6 +722,11 @@ export function createChatServer({
     if (parsedRequest.pathname.startsWith('/__chat/')) {
       if (!allowedPublicOrigin(runtime, request)) {
         response.writeHead(403, { 'cache-control': 'no-store' }).end();
+        return;
+      }
+      if (parsedRequest.pathname === '/__chat/summaries') {
+        if (!summaries) { response.writeHead(503).end(); return; }
+        void serveSummaries(request, response, summaries);
         return;
       }
       void serviceHttp(request, response, runtime);
@@ -733,7 +750,7 @@ export function createChatServer({
       return;
     }
     serveAsset(request, response, publicDir);
-  }).on('upgrade', (request, socket, head) => {
+  }).on('close', () => summaries?.close()).on('upgrade', (request, socket, head) => {
     const parsedRequest = new URL(request.url ?? '/', 'http://chat.invalid');
     if (parsedRequest.pathname.startsWith('/__chat/')) {
       if (!allowedPublicOrigin(runtime, request) || request.method !== 'GET' ||
