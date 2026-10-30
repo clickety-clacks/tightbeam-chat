@@ -28,7 +28,7 @@ export interface ActivityLine {
   readonly position: Position;
   readonly gist: string;
   readonly accessibleText: string;
-  /** Original retained content is only exposed through the pill's hover title. */
+  /** Original retained content is exposed through the pill's detail view and hover title. */
   readonly originalContent?: string;
   readonly presentation?: ActivityPillPresentation;
   readonly sortTime?: number;
