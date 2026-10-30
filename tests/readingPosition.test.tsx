@@ -1293,4 +1293,76 @@ describe('conversation reading position', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Scroll to latest messages' }));
     expect(scrollTo).toHaveBeenLastCalledWith({ top: box.scrollHeight - box.clientHeight, behavior: 'instant' });
   });
+
+  it('tracks the newest owner prompt while preserving an away reader and hides its preview when the original is visible', () => {
+    const { runtime, box } = setup();
+    readAt(box, 0);
+    const anchor = rows()[3];
+    const originalOffset = anchor.getBoundingClientRect().top;
+    let target = box.querySelector<HTMLElement>('[data-latest-user-prompt="true"]');
+    expect(target?.dataset.recordKey).toBe('message-19');
+    let preview = screen.getByRole('button', { name: 'Jump to latest user prompt' });
+    expect(preview.textContent).toBe('Message 19');
+
+    act(() => runtime.publish({ records: [...runtime.state.records, message(20)] }));
+
+    target = box.querySelector<HTMLElement>('[data-latest-user-prompt="true"]');
+    expect(target?.dataset.recordKey).toBe('message-20');
+    preview = screen.getByRole('button', { name: 'Jump to latest user prompt' });
+    expect(preview.textContent).toBe('Message 20');
+    expect(box.scrollTop).toBe(0);
+    expect(anchor.getBoundingClientRect().top).toBe(originalOffset);
+
+    box.scrollTop = box.scrollHeight - box.clientHeight;
+    fireEvent.scroll(box);
+    expect(screen.queryByRole('button', { name: 'Jump to latest user prompt' })).toBeNull();
+    expect(target!.getBoundingClientRect().top).toBeGreaterThanOrEqual(box.getBoundingClientRect().top);
+    expect(target!.getBoundingClientRect().bottom).toBeLessThanOrEqual(box.getBoundingClientRect().bottom);
+
+    readAt(box, 0);
+    expect(screen.getByRole('button', { name: 'Jump to latest user prompt' }).textContent).toBe('Message 20');
+  });
+
+  it('dismisses only the current preview without navigation and allows a newer prompt preview', () => {
+    const { runtime, box } = setup();
+    readAt(box, 0);
+    const original = box.querySelector<HTMLElement>('[data-latest-user-prompt="true"]');
+    expect(original?.dataset.recordKey).toBe('message-19');
+    scrollTo.mockClear();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss latest user prompt preview' }));
+
+    expect(box.scrollTop).toBe(0);
+    expect(scrollTo).not.toHaveBeenCalled();
+    expect(box.querySelector('[data-record-key="message-19"]')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Jump to latest user prompt' })).toBeNull();
+    box.scrollTop = box.scrollHeight - box.clientHeight;
+    fireEvent.scroll(box);
+    readAt(box, 0);
+    expect(screen.queryByRole('button', { name: 'Jump to latest user prompt' })).toBeNull();
+
+    act(() => runtime.publish({ records: [...runtime.state.records, message(20)] }));
+    const preview = screen.getByRole('button', { name: 'Jump to latest user prompt' });
+    expect(preview.textContent).toBe('Message 20');
+    expect(box.querySelector<HTMLElement>('[data-latest-user-prompt="true"]')?.dataset.recordKey).toBe('message-20');
+  });
+
+  it('jumps to and focuses the exact original prompt when it is outside the viewport', () => {
+    reducedMotion = true;
+    const { box } = setup();
+    readAt(box, 0);
+    const target = box.querySelector<HTMLElement>('[data-latest-user-prompt="true"]');
+    expect(target?.dataset.recordKey).toBe('message-19');
+    expect(target?.getBoundingClientRect().top).toBeGreaterThan(box.getBoundingClientRect().bottom);
+    scrollTo.mockClear();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Jump to latest user prompt' }));
+
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+    expect(scrollTo).toHaveBeenLastCalledWith(expect.objectContaining({ behavior: 'instant' }));
+    expect(document.activeElement).toBe(target);
+    expect(target!.getBoundingClientRect().top).toBeGreaterThanOrEqual(box.getBoundingClientRect().top);
+    expect(target!.getBoundingClientRect().bottom).toBeLessThanOrEqual(box.getBoundingClientRect().bottom);
+    expect(screen.queryByRole('button', { name: 'Jump to latest user prompt' })).toBeNull();
+  });
 });

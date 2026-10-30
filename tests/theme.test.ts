@@ -171,6 +171,15 @@ describe('Nordic theme', () => {
     expect(rule(componentCss, '.tb-chat-send-actions span')).toContain('color: var(--tb-chat-muted)');
   });
 
+  it('keeps the floating latest-prompt miniature aligned with the human bubble color and three-line limit', () => {
+    const { light, dark } = tokenBlocks(themeCss);
+    expect(rule(componentCss, '.tb-chat-latest-user-prompt')).toContain('background: var(--tb-chat-human-surface)');
+    expect(rule(componentCss, '.tb-chat-latest-user-prompt-jump')).toContain('font-size: .86rem');
+    expect(rule(componentCss, '.tb-chat-latest-user-prompt-text')).toContain('-webkit-line-clamp: 3');
+    expect(light['human-surface']).toBe(expectedLight['human-surface']);
+    expect(dark['human-surface']).toBe(expectedDark['human-surface']);
+  });
+
   it('uses glass for the composer and the approved treatments for pills, status, popup, and host composer', () => {
     const { light, dark } = tokenBlocks(themeCss);
     const shell = rule(componentCss, '.tb-chat-input-shell');
