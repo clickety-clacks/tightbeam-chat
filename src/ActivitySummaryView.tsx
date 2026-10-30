@@ -39,7 +39,10 @@ export function useActivitySummary(entry: ActivityLine) {
     originalRef.current = value;
     setAttestNote(value);
   }, [key]);
-  const currentOriginal = useCallback(() => originalRef.current?.key === key ? originalRef.current.text : undefined, [key]);
+  const currentOriginal = useCallback(() => {
+    const value = originalRef.current;
+    return value?.key === key ? value.text : undefined;
+  }, [key]);
   // The source key owns the subscription; unrelated row-object publications
   // must not become delivery-retry events.
   const subscribe = useCallback((listener: () => void) =>
@@ -47,7 +50,7 @@ export function useActivitySummary(entry: ActivityLine) {
   [viewer, entry, key, receiveOriginal, currentOriginal]);
   const snapshot = useCallback(() => viewer?.snapshot(key), [viewer, key]);
   const display = useSyncExternalStore(viewer ? subscribe : noSubscribe, viewer ? snapshot : noSnapshot, noSnapshot);
-  const note = attestNote?.key === key ? attestNote.text : undefined;
+  const note = attestNote && attestNote.key === key ? attestNote.text : undefined;
   const text = display?.state === 'summary' ? display.text : note;
   useLayoutEffect(() => { if (text) reconcile?.(); }, [text, reconcile]);
   return { presentation: text && entry.presentation ? { ...entry.presentation, text } : entry.presentation,
