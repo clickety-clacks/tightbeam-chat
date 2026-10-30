@@ -317,10 +317,10 @@ describe('conversation surface', () => {
       act(() => runtime.update({}));
       const anchor = screen.getByText('Full original remedy 5').closest<HTMLElement>('[data-scroll-key]')!;
       fireEvent.wheel(viewport, { deltaY: -1 });
-      layout.setScrollTop(layout.scrollTop + layout.offset(anchor) - 120);
+      layout.setScrollTop(layout.scrollTop + layout.offset(anchor));
       fireEvent.scroll(viewport);
       const before = layout.offset(anchor);
-      expect(before).toBeCloseTo(120, 0);
+      expect(before).toBeCloseTo(0, 0);
       const field = screen.getByRole('textbox') as HTMLTextAreaElement;
       fireEvent.change(field, { target: { value: 'Retained draft' } }); field.focus(); field.setSelectionRange(3, 7);
       const pills = [...viewport.querySelectorAll('.tb-chat-activity-pill')];

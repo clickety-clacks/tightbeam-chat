@@ -161,3 +161,19 @@ describe('row-local rendering', () => {
     expect(screen.getByText('Original').dataset.state).toBeUndefined();
   });
 });
+
+it('resumes a previously displayed folded member when it is displayed again after delivery closed', async () => {
+  const { calls, transport } = transportFixture();
+  const viewer = new ActivitySummaryViewer(transport);
+  const entry = line('member:retained', 'Original member');
+  const stop = viewer.subscribe(entry, () => {});
+  await flush();
+  calls[0].receive({ index: 0, state: 'waiting' });
+  stop(); calls[0].end(); await flush();
+  expect(calls).toHaveLength(1);
+  viewer.subscribe(entry, () => {}); await flush();
+  expect(calls).toHaveLength(2);
+  calls[1].receive({ index: 0, state: 'summary', summary: 'Completed.' });
+  expect(viewer.snapshot(viewer.key(entry)).text).toBe('Completed.');
+  viewer.dispose();
+});
