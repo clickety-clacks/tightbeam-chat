@@ -291,6 +291,8 @@ describe('conversation surface', () => {
       view.unmount();
       visibility.restore();
     }
+  });
+
   it('swaps five activity summaries without moving an away reader, changing pills or discarding the draft', async () => {
     const sessionKey = 'summary-reading';
     const human = row(sessionKey, 'question', 'Question', { seq: 1, role: 'user', sender: 'user:person', turnSeq: 1 });
