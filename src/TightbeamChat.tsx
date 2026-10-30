@@ -709,10 +709,17 @@ const Composer = forwardRef<ComposerHandle, {
   root: RefObject<HTMLElement | null>;
   suppressStatus: boolean;
   onSettings: () => void;
-  onSendAccepted: () => void;
-}>(function Composer({ runtime, state, agentName, root, suppressStatus, onSettings, onSendAccepted }, ref) {
+  onSubmitted: () => void;
+}>(function Composer({ runtime, state, agentName, root, suppressStatus, onSettings, onSubmitted }, ref) {
   const [draft, setDraft] = useState('');
   const [statusOpen, setStatusOpen] = useState(false);
+  const editRevision = useRef(0);
+  const submittedRevisions = useRef(new Map<string, number>());
+  const nativeContentSizing = useRef<boolean | null>(null);
+  if (nativeContentSizing.current === null) {
+    nativeContentSizing.current = typeof CSS !== 'undefined' &&
+      typeof CSS.supports === 'function' && CSS.supports('field-sizing', 'content');
+  }
   const input = useRef<HTMLTextAreaElement>(null);
   const pendingCaret = useRef<number | null>(null);
   const statusControl = useRef<HTMLButtonElement>(null);
@@ -723,7 +730,10 @@ const Composer = forwardRef<ComposerHandle, {
   const statusId = `${titleId}-status-details`;
 
   useImperativeHandle(ref, () => ({
-    restore: setDraft,
+    restore: (content) => {
+      editRevision.current++;
+      setDraft(content);
+    },
     contains: (target) => target instanceof Node && Boolean(shell.current?.contains(target)),
     focusAtEnd: () => {
       const element = input.current;
@@ -755,14 +765,30 @@ const Composer = forwardRef<ComposerHandle, {
   useLayoutEffect(() => {
     const element = input.current;
     if (!element) return;
-    element.style.height = 'auto';
-    element.style.height = `${Math.min(element.scrollHeight, Number.parseFloat(getComputedStyle(element).maxHeight) || element.scrollHeight)}px`;
+    if (!nativeContentSizing.current) {
+      // Older browsers retain the existing autosize path; supported browsers
+      // let CSS grow the field without a forced layout read on each edit.
+      element.style.height = 'auto';
+      element.style.height = `${Math.min(element.scrollHeight, Number.parseFloat(getComputedStyle(element).maxHeight) || element.scrollHeight)}px`;
+    }
     if (pendingCaret.current !== null) {
       const caret = Math.min(pendingCaret.current, element.value.length);
       element.setSelectionRange(caret, caret);
       pendingCaret.current = null;
     }
   }, [draft]);
+
+  useEffect(() => {
+    for (const send of state.sends) {
+      const submittedRevision = submittedRevisions.current.get(send.clientMessageId);
+      if (submittedRevision === undefined || send.status === 'pending') continue;
+      submittedRevisions.current.delete(send.clientMessageId);
+      if (send.status === 'accepted' && editRevision.current === submittedRevision) {
+        editRevision.current++;
+        setDraft('');
+      }
+    }
+  }, [state.sends]);
 
   useLayoutEffect(() => {
     const element = shell.current;
@@ -779,15 +805,17 @@ const Composer = forwardRef<ComposerHandle, {
     event.preventDefault();
     if (!draft.trim()) return;
     if (isSettingsCommand(draft)) {
+      editRevision.current++;
       setDraft('');
       setStatusOpen(false);
       onSettings();
       return;
     }
     if (state.status === 'unauthorized') return;
-    if (runtime.send(draft)) {
-      setDraft('');
-      onSendAccepted();
+    const sendId = runtime.send(draft);
+    if (sendId) {
+      submittedRevisions.current.set(sendId, editRevision.current);
+      onSubmitted();
     }
   };
 
@@ -795,7 +823,10 @@ const Composer = forwardRef<ComposerHandle, {
     <label className="tb-chat-sr-only" htmlFor={`${titleId}-input`}>Message to {agentName || 'the selected agent'}</label>
     <div className="tb-chat-input-shell">
       <textarea ref={input} id={`${titleId}-input`} value={draft}
-        onChange={(event) => setDraft(event.target.value)}
+        onChange={(event) => {
+          editRevision.current++;
+          setDraft(event.target.value);
+        }}
         onKeyDown={(event) => {
           if (event.key !== 'Enter') return;
           if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
@@ -808,6 +839,7 @@ const Composer = forwardRef<ComposerHandle, {
             const start = element.selectionStart;
             const end = element.selectionEnd;
             pendingCaret.current = start + 1;
+            editRevision.current++;
             setDraft((current) => `${current.slice(0, start)}\n${current.slice(end)}`);
             return;
           }
@@ -1873,7 +1905,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
       <span aria-hidden="true">↓</span> Latest messages
     </button>}
     {!host.composerHidden && <Composer ref={composer} runtime={runtime} state={state} agentName={agentName}
-      root={root} suppressStatus={host.optedIn} onSettings={openSettings} onSendAccepted={reading.scrollToLatest} />}
+      root={root} suppressStatus={host.optedIn} onSettings={openSettings} onSubmitted={reading.scrollToLatest} />}
     {overlay && <ReleaseNotesDialog overlay={overlay} entries={bundledNotes} onClose={closeOverlay}
       onOpenReleaseNotes={openReleaseNotes} onBack={backToSettings} />}
   </section></ActivitySummaryProvider>;

@@ -410,6 +410,9 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
   -webkit-user-select: text;
   user-select: text;
 }
+@supports (field-sizing: content) {
+  .tb-chat-input-shell textarea { field-sizing: content; }
+}
 .tb-chat-input-shell textarea:focus-visible { outline: none; }
 .tb-chat-input-shell textarea::placeholder { color: var(--tb-chat-placeholder); opacity: 1; }
 .tb-chat-status-control, .tb-chat-send-button {
