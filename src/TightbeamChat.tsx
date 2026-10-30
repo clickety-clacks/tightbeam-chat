@@ -973,7 +973,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     priorArrivalContext.sessionKey === state.sessionKey && priorArrivalContext.generation === state.generation &&
     priorArrivalContext.recoveryRevision === recoveryRevision;
   const reading = useReadingPosition(state.status === 'ready', readingRevision, box =>
-    state.loadingOlder || state.recordEventsLoading || (!state.historyError && (state.hasOlder || state.recordEventsHasOlder) && box.scrollTop < olderHistoryPrefetchDistance(box)),
+    Boolean(state.loadingOlder || state.recordEventsLoading || (!state.historyError && (state.hasOlder || state.recordEventsHasOlder) && box.scrollTop < olderHistoryPrefetchDistance(box))),
     arrivalEligible, state.sessionKey, markReadPosition);
   useLayoutEffect(() => {
     previousArrivalContext.current = { sessionKey: state.sessionKey, generation: state.generation,
