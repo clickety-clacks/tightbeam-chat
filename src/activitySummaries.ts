@@ -76,6 +76,7 @@ export class ActivitySummaryViewer {
   private readonly entries = new Map<string, Entry>();
   private readonly batches = new Set<Batch>();
   private readonly controller = new AbortController();
+  private readonly queuedEntries = new Set<Entry>();
   private queued = false;
   private disposed = false;
   private owners = 0;
@@ -107,12 +108,13 @@ export class ActivitySummaryViewer {
           if (!note || this.disposed) return;
           target.source = { lineId: descriptor.lineId, sourceText: normalized(note) };
           this.update(target, { original: note, text: note });
-          this.queue();
+          this.queue(target);
         }).catch(() => {}); // An unreadable note retains the fixed presentation.
       }
     }
     held.listeners.add(listener);
-    this.queue();
+    this.queue(held);
+    this.resume();
     return () => { held.listeners.delete(listener); };
   }
   private update(entry: Entry, display: ActivitySummaryDisplay) {
@@ -120,13 +122,15 @@ export class ActivitySummaryViewer {
     entry.display = display;
     for (const listener of entry.listeners) listener();
   }
-  private queue() {
+  private queue(entry: Entry) {
+    if (!entry.requested) this.queuedEntries.add(entry);
     if (this.queued || this.disposed) return;
     this.queued = true;
     queueMicrotask(() => {
       this.queued = false;
       if (this.disposed) return;
-      const entries = [...this.entries.values()].filter(entry => entry.source && !entry.requested && entry.listeners.size);
+      const entries = [...this.queuedEntries].filter(entry => entry.source && !entry.requested && entry.listeners.size);
+      this.queuedEntries.clear();
       if (!entries.length) return;
       for (const entry of entries) entry.requested = true;
       const batch: Batch = { entries, waiting: false };
@@ -135,14 +139,13 @@ export class ActivitySummaryViewer {
     });
   }
   private unresolved(batch: Batch) {
-    return batch.entries.filter(entry => entry.listeners.size &&
-      (entry.display.state === 'pending' || entry.display.state === 'waiting'));
+    return batch.entries.filter(entry => entry.display.state === 'pending' || entry.display.state === 'waiting');
   }
   private async open(batch: Batch, reopening: boolean) {
     batch.waiting = false;
     const controller = new AbortController();
     batch.controller = controller;
-    const entries = batch.entries;
+    const entries = batch.entries.filter(entry => entry.listeners.size);
     try {
       await this.transport.stream(entries.map(entry => entry.source!), answer => {
         const entry = entries[answer.index];
@@ -160,13 +163,13 @@ export class ActivitySummaryViewer {
     for (const entry of batch.entries) if (entry.display.state === 'pending') {
       this.update(entry, { ...entry.display, state: 'waiting' });
     }
-    if (!reopening && this.available()) void this.open(batch, true);
+    if (!reopening && this.available() && batch.entries.some(entry => entry.listeners.size)) void this.open(batch, true);
     else batch.waiting = true;
   }
   /** Visibility, network and live-feed recovery events; never called on a timer. */
   resume = () => {
     if (this.disposed || !this.available()) return;
-    for (const batch of this.batches) if (batch.waiting && this.unresolved(batch).length) void this.open(batch, true);
+    for (const batch of this.batches) if (batch.waiting && this.unresolved(batch).some(entry => entry.listeners.size)) void this.open(batch, true);
   };
   dispose() {
     this.disposed = true;
