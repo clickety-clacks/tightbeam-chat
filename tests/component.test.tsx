@@ -16,6 +16,7 @@ afterEach(() => {
   cleanup();
   document.querySelectorAll('style[data-chat-component-test]').forEach(style => style.remove());
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
 function row(sessionKey: string, id: string, content: string, extra: Partial<CanonicalMessage> = {}): CanonicalMessage {
@@ -2024,6 +2025,11 @@ describe('conversation surface', () => {
     fireEvent.change(composer, { target: { value: '  exact  ' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
     expect(runtime.sent).toEqual(['  exact  ']);
+    expect(composer).toHaveProperty('value', '  exact  ');
+    act(() => runtime.update({ sends: [{
+      sessionKey: 'send-session', deviceId: 'device', clientMessageId: 'fixture-send', content: '  exact  ',
+      submittedAt: new Date().toISOString(), status: 'accepted', reconciled: false,
+    }] }));
     expect(composer).toHaveProperty('value', '');
 
     act(() => {
@@ -2164,8 +2170,63 @@ describe('conversation surface', () => {
 
     expect(fireEvent.keyDown(composer, { key: 'Enter' })).toBe(false);
     expect(runtime.sent).toEqual(['plain Return draft']);
+    expect(composer).toHaveProperty('value', 'plain Return draft');
+    act(() => runtime.update({ sends: [{
+      sessionKey: 'keyboard-eligibility', deviceId: 'device', clientMessageId: 'fixture-send',
+      content: 'plain Return draft', submittedAt: new Date().toISOString(),
+      status: 'accepted', reconciled: false,
+    }] }));
     expect(composer).toHaveProperty('value', '');
     expect(document.activeElement).toBe(composer);
+  });
+
+  it.each(['failed', 'uncertain'] as const)('retains the submitted draft when delivery is %s', (status) => {
+    const runtime = new FakeRuntime(`send-${status}`);
+    render(<TightbeamChat sessionKey={`send-${status}`} adapter={adapterFor(runtime)} />);
+    const composer = screen.getByRole('textbox', { name: 'Message to Research assistant' }) as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: 'Keep this text' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    act(() => runtime.update({ sends: [{
+      sessionKey: `send-${status}`, deviceId: 'device', clientMessageId: 'fixture-send',
+      content: 'Keep this text', submittedAt: new Date().toISOString(), status, reconciled: false,
+    }] }));
+    expect(composer.value).toBe('Keep this text');
+  });
+
+  it('keeps edits made after submission even when the text later matches the submitted text', () => {
+    const runtime = new FakeRuntime('newer-edit');
+    render(<TightbeamChat sessionKey="newer-edit" adapter={adapterFor(runtime)} />);
+    const composer = screen.getByRole('textbox', { name: 'Message to Research assistant' }) as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: 'Draft' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    fireEvent.change(composer, { target: { value: 'Draft changed' } });
+    fireEvent.change(composer, { target: { value: 'Draft' } });
+    act(() => runtime.update({ sends: [{
+      sessionKey: 'newer-edit', deviceId: 'device', clientMessageId: 'fixture-send',
+      content: 'Draft', submittedAt: new Date().toISOString(), status: 'accepted', reconciled: false,
+    }] }));
+    expect(composer.value).toBe('Draft');
+  });
+
+  it('uses native textarea content sizing without a synchronous scroll-height read per edit', () => {
+    vi.stubGlobal('CSS', { supports: (property: string, value: string) =>
+      property === 'field-sizing' && value === 'content' });
+    const runtime = new FakeRuntime('native-sizing');
+    render(<TightbeamChat sessionKey="native-sizing" adapter={adapterFor(runtime)} />);
+    const composer = screen.getByRole('textbox', { name: 'Message to Research assistant' }) as HTMLTextAreaElement;
+    let scrollHeightReads = 0;
+    Object.defineProperty(composer, 'scrollHeight', { configurable: true, get: () => {
+      scrollHeightReads++;
+      return 100;
+    } });
+    for (const value of ['a', 'ab', 'abc', 'abcd']) fireEvent.change(composer, { target: { value } });
+    expect(composer.value).toBe('abcd');
+    composer.focus();
+    composer.setSelectionRange(2, 2);
+    fireEvent.keyDown(composer, { key: 'Enter', ctrlKey: true });
+    expect(composer.value).toBe('ab\ncd');
+    expect(composer.selectionStart).toBe(3);
+    expect(scrollHeightReads).toBe(0);
   });
 
   it.each([
