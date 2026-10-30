@@ -1722,6 +1722,55 @@ describe('conversation surface', () => {
     expect(screen.queryByRole('button', { name: 'Remove photo.png' })).toBeNull();
   });
 
+  it('shows runtime-owned attachment progress and item errors, and retries the same send ID', async () => {
+    mockObjectUrls(() => 'blob:pending-send-preview');
+    const runtime = new FakeRuntime('attachment-send-progress');
+    const clientMessageId = 'c_attachment-send-progress';
+    const source = new File(['original bytes'], 'large-photo.png', { type: 'image/png' });
+    const makeSend = (status: LocalSend['status'], attachmentStatus: 'pending' | 'uploading' | 'ready' | 'failed',
+      reason?: string, itemError?: string, attachmentPhase?: 'preparing' | 'failed' | 'posted'): LocalSend => ({
+      sessionKey: 'attachment-send-progress', deviceId: 'device', clientMessageId,
+      content: 'photo caption', submittedAt: new Date().toISOString(), status, reconciled: false,
+      attachmentItems: [{ id: 'photo-item', filename: 'large-photo.png', bytes: source,
+        status: attachmentStatus, ...(itemError ? { error: itemError } : {}) }],
+      attachmentPhase: attachmentPhase ?? (status === 'failed' ? 'failed' : 'preparing'), ...(reason ? { reason } : {}),
+    } as unknown as LocalSend);
+    runtime.sendAttachments = (content, inputs) => {
+      runtime.attachmentSubmissions.push({ content, inputs });
+      runtime.update({ sends: [makeSend('pending', 'pending')] });
+      return clientMessageId;
+    };
+    render(<TightbeamChat sessionKey="attachment-send-progress" adapter={adapterFor(runtime)} />);
+    const composer = screen.getByRole('textbox', { name: 'Message to Research assistant' }) as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: 'photo caption' } });
+    fireEvent.change(document.querySelector<HTMLInputElement>('input[type="file"]')!, {
+      target: { files: [source] },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+
+    expect(await screen.findByText('Preparing attachments…')).toBeTruthy();
+    expect(screen.getByText('large-photo.png')).toBeTruthy();
+    expect(screen.getByText('Waiting to upload')).toBeTruthy();
+    expect(screen.getByText('Sending…')).toBeTruthy();
+    expect(screen.queryByText(/^Sent$/)).toBeNull();
+    expect(composer.value).toBe('');
+    expect(runtime.attachmentSubmissions[0].inputs[0].bytes).toBe(source);
+
+    runtime.update({ sends: [makeSend('pending', 'ready', undefined, undefined, 'posted')] });
+    expect(await screen.findByText('Sending message…')).toBeTruthy();
+    expect(screen.getByText('Uploaded; message not confirmed')).toBeTruthy();
+    expect(screen.queryByText(/^Sent$/)).toBeNull();
+
+    const transportReason = 'HTTP 413: attachment exceeds the transport limit';
+    const submissionReason = 'Upload rejected by the current transport';
+    runtime.update({ sends: [makeSend('failed', 'failed', submissionReason, transportReason, 'failed')] });
+    expect(await screen.findByText('Attachment send failed')).toBeTruthy();
+    expect(screen.getByText(transportReason)).toBeTruthy();
+    expect(screen.getByText(`Submission reason: ${submissionReason}`)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry attachment send' }));
+    expect(runtime.retried).toEqual([clientMessageId]);
+  });
+
   it('pastes image bytes with clipboard text, leaves ordinary text paste native, and reports unreadable clipboard images', () => {
     mockObjectUrls(() => 'blob:pasted-image');
     const runtime = new FakeRuntime('paste-attachments');

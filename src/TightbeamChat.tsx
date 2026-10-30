@@ -520,6 +520,18 @@ interface DraftAttachment {
   readonly previewError?: string;
 }
 
+type PendingSendAttachmentStatus = 'pending' | 'uploading' | 'ready' | 'failed';
+
+interface PendingSendAttachment extends ComposerAttachmentInput {
+  readonly status: PendingSendAttachmentStatus;
+  readonly error?: string;
+}
+
+type AttachmentSendView = LocalSend & {
+  readonly attachmentItems?: readonly PendingSendAttachment[];
+  readonly attachmentPhase?: 'preparing' | 'failed' | 'posted';
+};
+
 type AttachmentSubmitRuntime = ChatRuntime & {
   sendAttachments?: (content: string, inputs: readonly ComposerAttachmentInput[]) => string | null;
 };
@@ -565,6 +577,22 @@ function errorReason(error: unknown): string {
   if (error instanceof Error && error.message.trim()) return error.message.trim();
   if (typeof error === 'string' && error.trim()) return error.trim();
   return 'the browser did not provide a reason';
+}
+
+function attachmentSendHeading(send: AttachmentSendView): string {
+  if (send.status === 'uncertain') return 'Attachment delivery is uncertain';
+  if (send.status === 'failed') return 'Attachment send failed';
+  if (send.attachmentPhase === 'posted') return 'Sending message…';
+  return 'Preparing attachments…';
+}
+
+function pendingAttachmentStatusText(item: PendingSendAttachment, send: AttachmentSendView): string {
+  if (item.status === 'pending') return 'Waiting to upload';
+  if (item.status === 'uploading') return 'Uploading';
+  if (item.status === 'failed') return 'Upload failed';
+  if (send.status === 'uncertain') return 'Uploaded; delivery uncertain';
+  if (send.status === 'failed') return 'Uploaded; message post failed';
+  return 'Uploaded; message not confirmed';
 }
 
 function cameraFailureMessage(error: unknown): string {
@@ -623,6 +651,12 @@ const Composer = forwardRef<ComposerHandle, {
   const statusId = `${titleId}-status-details`;
   const attachmentOptionsId = `${titleId}-attachment-options`;
   const cameraTitleId = `${titleId}-camera-title`;
+  const attachmentSendStates = useMemo(() => state.sends
+    .map(send => send as AttachmentSendView)
+    .filter(send => !send.hostSend && !send.reconciled && send.status !== 'accepted' &&
+      Boolean(send.attachmentItems?.length) &&
+      (send.status === 'pending' || send.status === 'failed' || send.status === 'uncertain')),
+  [state.sends]);
 
   const stopCameraStream = () => {
     const stream = cameraStream.current;
@@ -938,6 +972,34 @@ const Composer = forwardRef<ComposerHandle, {
   return <form className={`tb-chat-composer${cameraState !== 'closed' ? ' tb-chat-composer-camera-open' : ''}`} onSubmit={submit} ref={shell}>
     <label className="tb-chat-sr-only" htmlFor={`${titleId}-input`}>Message to {agentName || 'the selected agent'}</label>
     {acquisitionError && <p className="tb-chat-composer-error" role="alert">{acquisitionError}</p>}
+    {attachmentSendStates.length > 0 && <section className="tb-chat-attachment-send-states" aria-label="Attachment send status">
+      {attachmentSendStates.map(send => {
+        const attachmentItems = send.attachmentItems ?? [];
+        const itemErrors = new Set(attachmentItems.flatMap(item => item.error ? [item.error] : []));
+        const submissionReason = send.reason && !itemErrors.has(send.reason) ? send.reason : undefined;
+        const failed = send.status === 'failed' || send.status === 'uncertain';
+        const retryUnavailable = send.reason === 'retry-unavailable';
+        return <div className="tb-chat-attachment-send" key={send.clientMessageId}>
+          <p className="tb-chat-attachment-send-heading" role={failed ? 'alert' : 'status'}>
+            {attachmentSendHeading(send)}
+          </p>
+          <ul className="tb-chat-attachment-send-items" aria-label="Files in this attachment send">
+            {attachmentItems.map(item => <li className="tb-chat-attachment-send-item" key={item.id}>
+              <span className="tb-chat-attachment-send-name">{item.filename}</span>
+              <span className="tb-chat-attachment-send-item-status">{pendingAttachmentStatusText(item, send)}</span>
+              {item.error && <span className="tb-chat-attachment-send-item-error" role="alert">{item.error}</span>}
+            </li>)}
+          </ul>
+          {submissionReason && <p className="tb-chat-attachment-send-reason" role={failed ? 'alert' : 'status'}>
+            Submission reason: {submissionReason}
+          </p>}
+          {failed && !retryUnavailable && <button type="button" className="tb-chat-attachment-send-retry"
+            disabled={state.status === 'unauthorized'} onClick={() => void runtime.retrySend(send.clientMessageId)}>
+            Retry attachment send
+          </button>}
+        </div>;
+      })}
+    </section>}
     {attachments.length > 0 && <ul className="tb-chat-draft-attachments" aria-label="Attachments in this draft">
       {attachments.map(item => {
         const image = isImageAttachment(item.input);
