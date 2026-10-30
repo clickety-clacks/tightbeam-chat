@@ -372,17 +372,16 @@ function AnimatedFoldContent({ expanded, className, onPresenceChange, onLayoutCh
 }
 
 function useActivityRevealAnimation<T extends HTMLElement>(active: boolean, key: string,
-  onComplete?: (key: string) => void, onLayoutChange?: () => void) {
+  onComplete?: (key: string) => void) {
   const element = useRef<T | null>(null);
-  const callbacks = useRef({ onComplete, onLayoutChange });
-  callbacks.current = { onComplete, onLayoutChange };
+  const complete = useRef(onComplete);
+  complete.current = onComplete;
 
   useLayoutEffect(() => {
     const node = element.current;
     if (!active || !node) return;
     const finish = () => {
-      callbacks.current.onLayoutChange?.();
-      callbacks.current.onComplete?.(key);
+      complete.current?.(key);
     };
     if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches || typeof node.animate !== 'function') {
       finish();
@@ -401,7 +400,6 @@ function useActivityRevealAnimation<T extends HTMLElement>(active: boolean, key:
       { height: '0px', opacity: 0 },
       { height: `${height}px`, opacity: 1 },
     ], { duration: foldMotionDuration, easing: foldMotionEasing, fill: 'forwards' });
-    callbacks.current.onLayoutChange?.();
     let finished = false;
     animation.onfinish = () => {
       finished = true;
@@ -889,15 +887,14 @@ function sameActivityLine(left: ActivityLine, right: ActivityLine): boolean {
 }
 
 const ActivityMessageRow = memo(function ActivityMessageRow({ entry, registerRow, scrollKey = entry.id, reveal = false,
-  onRevealComplete, reconcileLayout }: {
+  onRevealComplete }: {
   readonly entry: ActivityLine;
   readonly registerRow: (key: string, element: HTMLElement | null) => void;
   readonly scrollKey?: string;
   readonly reveal?: boolean;
   readonly onRevealComplete?: (key: string) => void;
-  readonly reconcileLayout?: () => void;
 }) {
-  const revealElement = useActivityRevealAnimation<HTMLDivElement>(reveal, entry.id, onRevealComplete, reconcileLayout);
+  const revealElement = useActivityRevealAnimation<HTMLDivElement>(reveal, entry.id, onRevealComplete);
   const presentation = entry.presentation;
   const accessibleText = presentation
     ? `${presentation.label}: ${presentation.text}${presentation.metadata ? `, ${presentation.metadata}` : ''}`
@@ -912,7 +909,6 @@ const ActivityMessageRow = memo(function ActivityMessageRow({ entry, registerRow
   </div>;
 }, (previous, next) => previous.registerRow === next.registerRow && previous.scrollKey === next.scrollKey &&
   previous.reveal === next.reveal && previous.onRevealComplete === next.onRevealComplete &&
-  previous.reconcileLayout === next.reconcileLayout &&
   sameActivityLine(previous.entry, next.entry));
 
 const ToolCallRow = memo(function ToolCallRow({ call, entry, registerRow, preservePosition, reconcileLayout, expandRun,
@@ -932,8 +928,7 @@ const ToolCallRow = memo(function ToolCallRow({ call, entry, registerRow, preser
   const [detailContentPresent, setDetailContentPresent] = useState(false);
   const expanded = expandedToolCalls ? expandedToolCalls.has(call.id) : localExpanded;
   const rowKey = 'tool-' + call.id;
-  const revealElement = useActivityRevealAnimation<HTMLDetailsElement>(reveal, entry?.id ?? rowKey,
-    onRevealComplete, reconcileLayout);
+  const revealElement = useActivityRevealAnimation<HTMLDetailsElement>(reveal, entry?.id ?? rowKey, onRevealComplete);
   const registerElement = useCallback((element: HTMLDetailsElement | null) => {
     registerRow(rowKey, element);
     revealElement.current = element;
@@ -994,7 +989,7 @@ const ActivityRunRow = memo(function ActivityRunRow({ entry, expanded, toggle, r
   readonly reveal?: boolean;
   readonly onRevealComplete?: (key: string) => void;
 }) {
-  const revealElement = useActivityRevealAnimation<HTMLDivElement>(reveal, entry.id, onRevealComplete, reconcileLayout);
+  const revealElement = useActivityRevealAnimation<HTMLDivElement>(reveal, entry.id, onRevealComplete);
   const registerElement = useCallback((element: HTMLDivElement | null) => {
     registerRow(entry.id, element);
     revealElement.current = element;
@@ -1301,13 +1296,14 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     batch.remaining.delete(key);
     if (batch.remaining.size) return;
     activityRevealBatches.current.delete(runKey);
+    reading.reconcileViewportLayout();
     setRevealingActivityItems(prior => {
       if (![...batch.ids].some(id => prior.has(id))) return prior;
       const next = new Set(prior);
       batch.ids.forEach(id => next.delete(id));
       return next;
     });
-  }, []);
+  }, [reading.reconcileViewportLayout]);
   const expandRun = useCallback((runKey: string, control: HTMLButtonElement, hiddenItemIds: readonly string[] = []) => {
     reading.preserveVisiblePosition();
     focusExpandedRun.current = typeof document !== 'undefined' && document.activeElement === control ? runKey : undefined;
@@ -1567,7 +1563,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
         }
         if (item.kind === 'activity') return <ActivityMessageRow key={item.entry.id} entry={item.entry}
           registerRow={reading.registerRow} reveal={revealingActivityItems.has(item.entry.id)}
-          onRevealComplete={finishActivityReveal} reconcileLayout={reading.reconcileViewportLayout} />;
+          onRevealComplete={finishActivityReveal} />;
         if (item.kind === 'activity-fold') return <ActivityRunRow key={item.entry.id} entry={item.entry}
           expanded={expandedActivityRuns.has(item.entry.id)} toggle={toggleActivityRun}
           registerRow={reading.registerRow} preservePosition={reading.preserveVisiblePosition}
