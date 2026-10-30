@@ -149,12 +149,13 @@ function messageCandidate(message: CanonicalMessage): Candidate | undefined {
   }
   if (message.messageType === 'substrate' || message.messageType === 'process' || sender.startsWith('process:')) {
     const gist = bodyGist(message.content) || 'Substrate activity';
+    const presentation = activityPillPresentation({ kind: 'substrate', gist, content: message.content, sender,
+      source: rawSource(message), messageType: message.messageType, turnSeq: message.turnSeq });
     return { id, kind: 'substrate', runKey: '', anchorSeq: message.seq,
       position: { sequence: message.seq, phase: 1, order: 0 }, gist,
       accessibleText: `Substrate: ${gist}`,
       originalContent: message.content,
-      presentation: activityPillPresentation({ kind: 'substrate', gist, content: message.content, sender,
-        source: rawSource(message), messageType: message.messageType, turnSeq: message.turnSeq }), sortTime,
+      presentation, sortTime,
       historyBacked: true,
       semanticFoldKind: gatewayNoticeFoldKind(message.content) };
   }
@@ -193,11 +194,12 @@ function memberCandidate(carrier: CanonicalMessage, member: ParsedBatchMember): 
   }
   if (member.sender.startsWith('process:')) {
     const gist = detail || 'Substrate activity';
+    const presentation = activityPillPresentation({ kind: 'substrate', gist, content: member.content,
+      sender: member.sender, source: member.source, messageType: carrier.messageType });
     return { id, kind: 'substrate', runKey: '', anchorSeq: carrier.seq, position, gist,
       accessibleText: `Substrate: ${gist}`,
       originalContent: member.content,
-      presentation: activityPillPresentation({ kind: 'substrate', gist, content: member.content, sender: member.sender,
-        source: member.source, messageType: carrier.messageType }),
+      presentation,
       sortTime, historyBacked: true,
       semanticFoldKind: gatewayNoticeFoldKind(member.content) };
   }

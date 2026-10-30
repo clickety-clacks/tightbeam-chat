@@ -1,3 +1,4 @@
+import type { ActivitySummaryTransport, SummaryAnswer, SummarySource } from '../src/activitySummaries';
 import { getIndex, putIndex } from '../src/recordIndex';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -101,7 +102,8 @@ function setDocumentVisibility(initial: DocumentVisibilityState) {
   };
 }
 
-function installViewportLayout(viewport: HTMLElement, trailingSpace = 200, rowHeightOverride?: (row: Element) => number | undefined) {
+function installViewportLayout(viewport: HTMLElement, trailingSpace = 200,
+  rowHeightOverride?: (row: Element) => number | undefined, summaryHeightChange = false) {
   const content = viewport.querySelector<HTMLElement>('.tb-chat-message-content')!;
   const rowHeight = 92;
   const activityDetailHeight = 32;
@@ -113,7 +115,8 @@ function installViewportLayout(viewport: HTMLElement, trailingSpace = 200, rowHe
     const activityRows = row.querySelector('.tb-chat-activity-run-rows')?.children.length ?? 0;
     const toolDetails = row.querySelector('.tb-chat-tool-detail-rail[aria-hidden="false"]')?.querySelectorAll('section').length ?? 0;
     const attachmentDetails = row.querySelector('.tb-chat-attachment-content[aria-hidden="false"] pre') ? 2 : 0;
-    return rowHeight + (activityRows + toolDetails + attachmentDetails) * activityDetailHeight;
+    const baseHeight = summaryHeightChange && row.querySelector('.tb-chat-summary-marker') ? 40 : rowHeight;
+    return baseHeight + (activityRows + toolDetails + attachmentDetails) * activityDetailHeight;
   };
   const rowsHeight = () => [...content.children].reduce((height, row) => height + heightOf(row), 0);
   let scrollTop = 0;
@@ -371,6 +374,55 @@ describe('conversation surface', () => {
       view.unmount();
       visibility.restore();
     }
+  });
+
+  it('swaps five activity summaries without moving an away reader, changing pills or discarding the draft', async () => {
+    const sessionKey = 'summary-reading';
+    const human = row(sessionKey, 'question', 'Question', { seq: 1, role: 'user', sender: 'user:person', turnSeq: 1 });
+    const activity = [1, 2, 3, 4, 5].map(index => row(sessionKey, `remedy-${index}`, `Full original remedy ${index}`, {
+      seq: index + 1, role: 'user', sender: 'remedy:needs-review', messageType: 'substrate', turnSeq: 1,
+    }));
+    const answer = row(sessionKey, 'answer', 'First answer', { seq: 7, sender: 'assistant-service', replyToMessageId: human.id, turnSeq: 1 });
+    const later = Array.from({ length: 12 }, (_, index) => row(sessionKey, `later-${index}`, `Later text ${index}`, {
+      seq: index + 10, role: 'user', sender: 'user:person',
+    }));
+    const runtime = new FakeRuntime(sessionKey, { records: [human, ...activity, answer, ...later] });
+    let receive!: (answer: SummaryAnswer) => void;
+    let sources: readonly SummarySource[] = [];
+    const activitySummaries: ActivitySummaryTransport = { stream: vi.fn((batch, callback, signal) => {
+      sources = batch; receive = callback;
+      return new Promise<void>(resolve => signal.addEventListener('abort', () => resolve(), { once: true }));
+    }) };
+    render(<TightbeamChat sessionKey={sessionKey} adapter={{ ...adapterFor(runtime), activitySummaries }} />);
+    await act(async () => { await Promise.resolve(); });
+    expect(sources).toHaveLength(5);
+    const viewport = screen.getByRole('log');
+    const layout = installViewportLayout(viewport, 200, undefined, true);
+    try {
+      act(() => runtime.update({}));
+      const anchor = screen.getByText('Full original remedy 5').closest<HTMLElement>('[data-scroll-key]')!;
+      fireEvent.wheel(viewport, { deltaY: -1 });
+      layout.setScrollTop(layout.scrollTop + layout.offset(anchor));
+      fireEvent.scroll(viewport);
+      const before = layout.offset(anchor);
+      expect(before).toBeCloseTo(0, 0);
+      const field = screen.getByRole('textbox') as HTMLTextAreaElement;
+      fireEvent.change(field, { target: { value: 'Retained draft' } }); field.focus(); field.setSelectionRange(3, 7);
+      const pills = [...viewport.querySelectorAll('.tb-chat-activity-pill')];
+      const neighbor = screen.getByText('Later text 2').closest('article');
+      for (let index = 0; index < 5; index++) {
+        await act(async () => { receive({ index, state: 'summary', summary: `Correction ${index + 1} requested.` }); });
+        expect(Math.abs(layout.offset(anchor) - before)).toBeLessThanOrEqual(1);
+      }
+      expect([...viewport.querySelectorAll('.tb-chat-activity-pill')]).toEqual(pills);
+      expect(screen.getByText('Later text 2').closest('article')).toBe(neighbor);
+      expect(anchor.title).toBe('Full original remedy 5');
+      expect(screen.getAllByText('summarized')).toHaveLength(5);
+      expect(screen.queryByText('summarizing')).toBeNull();
+      expect(field.value).toBe('Retained draft'); expect(document.activeElement).toBe(field);
+      expect([field.selectionStart, field.selectionEnd]).toEqual([3, 7]);
+      expect(activitySummaries.stream).toHaveBeenCalledTimes(1);
+    } finally { layout.restore(); }
   });
 
   it('shows the plain empty state after loading when all loaded messages are hidden and older history remains', () => {
@@ -1106,6 +1158,7 @@ describe('conversation surface', () => {
     const human = row(sessionKey, 'human', 'Question', {
       seq: 1, role: 'user', sender: 'user:person', messageType: 'chat', turnSeq: 1,
     });
+    // This fixture has a filing notice but no readable attest note or stored summary.
     const attest = row(sessionKey, 'attest-notice',
       'Attest att_12345678-1111-4111-8111-123456789abc (completion) was filed on assignment asg_abcdef12-1111-4111-8111-123456789abc.', {
         seq: 2, role: 'user', sender: 'process:events', messageType: 'substrate', turnSeq: 1,
@@ -1194,6 +1247,7 @@ describe('conversation surface', () => {
     expect(attestRow.classList.contains('tb-chat-activity-pill-row')).toBe(true);
     expect(attestRow.querySelector('.tb-chat-activity-pill')?.textContent).toContain('Attest');
     expect(attestRow.textContent).toContain('Filed completion on assignment asg_abcd');
+    expect(attestRow.querySelector('.tb-chat-summary-marker')).toBeNull();
 
     const assignmentRow = pillFor('Assignment: New · Review the next change, asg_2345');
     expect(assignmentRow.querySelector('.tb-chat-activity-pill')?.textContent).toContain('Assignment');
@@ -2619,4 +2673,31 @@ describe('tool-call and transition display', () => {
       }
     }
   });
+});
+
+it('reopens waiting summary delivery on live-feed recovery while conversation status remains ready', async () => {
+  const sessionKey = 'summary-recovery';
+  const human = row(sessionKey, 'question', 'Question', { seq: 1, role: 'user', sender: 'user:person', turnSeq: 1 });
+  const activity = row(sessionKey, 'agent-note', 'Original activity', { seq: 2, role: 'user', sender: 'agent:helper', turnSeq: 1 });
+  const reply = row(sessionKey, 'reply', 'Reply', { seq: 3, sender: 'assistant-service', replyToMessageId: human.id, turnSeq: 1 });
+  const runtime = new FakeRuntime(sessionKey, { records: [human, activity, reply], liveConnectionState: 'connected' });
+  const calls: { receive: (answer: SummaryAnswer) => void; close: () => void }[] = [];
+  const activitySummaries: ActivitySummaryTransport = { stream: (_sources, receive, signal) => new Promise<void>(resolve => {
+    calls.push({ receive, close: resolve });
+    signal.addEventListener('abort', () => resolve(), { once: true });
+  }) };
+  render(<TightbeamChat sessionKey={sessionKey} adapter={{ ...adapterFor(runtime), activitySummaries }} />);
+  await act(async () => { await Promise.resolve(); });
+  await act(async () => { calls[0].receive({ index: 0, state: 'waiting' }); calls[0].close(); });
+  expect(calls).toHaveLength(2);
+  await act(async () => { calls[1].close(); });
+  act(() => runtime.update({}));
+  expect(calls).toHaveLength(2);
+  act(() => runtime.update({ liveConnectionState: 'reconnecting' }));
+  await act(async () => { runtime.update({ liveConnectionState: 'connected' }); });
+  expect(runtime.state.status).toBe('ready');
+  expect(calls).toHaveLength(3);
+  await act(async () => { calls[2].receive({ index: 0, state: 'summary', summary: 'Completed activity.' }); calls[2].close(); });
+  expect(screen.getByText('Completed activity.')).toBeTruthy();
+  expect(screen.queryByText('summarizing')).toBeNull();
 });

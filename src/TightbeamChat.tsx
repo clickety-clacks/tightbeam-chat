@@ -6,6 +6,8 @@ import remarkGfm from 'remark-gfm';
 import { highlightRecognizedCode } from './markdownHighlight';
 import type { ChatRuntime, CanonicalMessage, CanonicalTransition, ToolCallRecord, ToolCallIndex, ConversationRecord, LocalSend, RuntimeState, TightbeamAdapter, TurnProvenance } from './types';
 import { projectMessages, type HumanMember } from './messageVisibility';
+import { ActivitySummaryProvider, useActivitySummary } from './ActivitySummaryView';
+import type { SummaryAnswer, ActivitySummaryTransport } from './activitySummaries';
 import { buildActivityTrail, type ActivityFold, type ActivityLine, type ActivityOverflow, type MessageActivityItem } from './activityTrail';
 import type { ActivityPillIcon, ActivityPillPresentation } from './activityPresentation';
 import { useReadingPosition } from './useReadingPosition';
@@ -862,13 +864,16 @@ function ToolCallTerminalIcon({ className }: { readonly className: string }) {
   </svg>;
 }
 
-function ActivityPillContents({ presentation }: { readonly presentation: ActivityPillPresentation }) {
+function ActivityPillContents({ presentation, summaryState }: { readonly presentation: ActivityPillPresentation;
+  readonly summaryState?: SummaryAnswer['state'] }) {
   return <>
     <span className={`tb-chat-activity-pill tb-chat-activity-pill-${presentation.tone}`}>
       <ActivityPillIconView icon={presentation.icon} />
       <span>{presentation.label}</span>
     </span>
     <span className="tb-chat-activity-pill-text">{presentation.text}</span>
+    {summaryState === 'pending' && <span className="tb-chat-summary-pending">summarizing</span>}
+    {summaryState === 'summary' && <span className="tb-chat-summary-marker">summarized</span>}
     {presentation.metadata && <span className="tb-chat-activity-pill-meta">{presentation.metadata}</span>}
   </>;
 }
@@ -876,7 +881,8 @@ function ActivityPillContents({ presentation }: { readonly presentation: Activit
 function sameActivityPresentation(left: ActivityPillPresentation | undefined,
   right: ActivityPillPresentation | undefined): boolean {
   return left === right || Boolean(left && right && left.label === right.label && left.tone === right.tone &&
-    left.icon === right.icon && left.text === right.text && left.metadata === right.metadata);
+    left.icon === right.icon && left.text === right.text && left.metadata === right.metadata &&
+    left.summaryText === right.summaryText && left.summaryPrefix === right.summaryPrefix && left.attestId === right.attestId);
 }
 
 function sameActivityLine(left: ActivityLine, right: ActivityLine): boolean {
@@ -895,16 +901,18 @@ const ActivityMessageRow = memo(function ActivityMessageRow({ entry, registerRow
   readonly onRevealComplete?: (key: string) => void;
 }) {
   const revealElement = useActivityRevealAnimation<HTMLDivElement>(reveal, entry.id, onRevealComplete);
-  const presentation = entry.presentation;
+  const summary = useActivitySummary(entry);
+  const presentation = summary.presentation;
   const accessibleText = presentation
     ? `${presentation.label}: ${presentation.text}${presentation.metadata ? `, ${presentation.metadata}` : ''}`
     : entry.accessibleText;
   return <div role="note" tabIndex={-1} aria-label={accessibleText}
     className={`tb-chat-activity-line tb-chat-activity-${entry.kind}${presentation ? ' tb-chat-activity-pill-row' : ''}`}
+    onMouseEnter={summary.restoreOriginal}
     ref={element => { registerRow(scrollKey, element); revealElement.current = element; }} data-record-key={entry.id} data-scroll-key={scrollKey}
-    data-activity-run={entry.runKey} title={presentation ? entry.originalContent ?? entry.accessibleText : undefined}>
+    data-activity-run={entry.runKey} title={presentation ? summary.original : undefined}>
     {!presentation && <span className="tb-chat-activity-bullet" aria-hidden="true">•</span>}
-    {presentation ? <ActivityPillContents presentation={presentation} />
+    {presentation ? <ActivityPillContents presentation={presentation} summaryState={summary.state} />
       : <span className="tb-chat-activity-gist">{entry.gist}</span>}
   </div>;
 }, (previous, next) => previous.registerRow === next.registerRow && previous.scrollKey === next.scrollKey &&
@@ -996,17 +1004,19 @@ const ActivityRunRow = memo(function ActivityRunRow({ entry, expanded, toggle, r
   }, [entry.id, registerRow, revealElement]);
   const toolRun = entry.activityKind === 'tool';
   const detailLines = entry.lines;
-  const presentation = entry.summary.presentation;
+  const summary = useActivitySummary(entry.summary);
+  const presentation = summary.presentation;
   const latestDescription = presentation
     ? `${presentation.label}: ${presentation.text}${presentation.metadata ? `, ${presentation.metadata}` : ''}`
     : entry.summary.gist;
   return <div className={`tb-chat-activity-run tb-chat-activity-${entry.activityKind}`} tabIndex={-1}
+    onMouseEnter={summary.restoreOriginal}
     ref={registerElement} data-record-key={entry.id} data-scroll-key={entry.id}
     data-activity-run={entry.runKey} data-activity-fold="true" data-run-expanded={expanded ? 'true' : 'false'}>
     <button type="button" className={`tb-chat-activity-run-toggle tb-chat-activity-${entry.activityKind}${toolRun ? ' tb-chat-activity-tool-run-toggle' : ''}${presentation ? ' tb-chat-activity-pill-toggle' : ''}`}
       aria-expanded={expanded}
       aria-label={`${expanded ? 'Collapse' : 'Expand'} ${entry.activityKind} activity run, ${entry.lines.length} entries. Latest: ${latestDescription}`}
-      title={presentation ? entry.summary.originalContent ?? entry.summary.accessibleText : undefined}
+      title={presentation ? summary.original : undefined}
       onClick={() => { preservePosition(); toggle(entry.id); }}>
       {toolRun
         ? <ToolCallTerminalIcon className="tb-chat-tool-terminal-icon" />
@@ -1014,7 +1024,7 @@ const ActivityRunRow = memo(function ActivityRunRow({ entry, expanded, toggle, r
           {!presentation && <span className="tb-chat-activity-bullet" aria-hidden="true">•</span>}
           <span className={`tb-chat-activity-run-chevron${expanded ? ' is-expanded' : ''}`} aria-hidden="true" />
         </>}
-      {presentation ? <ActivityPillContents presentation={presentation} />
+      {presentation ? <ActivityPillContents presentation={presentation} summaryState={summary.state} />
         : <span className="tb-chat-activity-gist">{entry.summary.gist}</span>}
       <span className="tb-chat-activity-run-count" aria-hidden="true">×{entry.lines.length}</span>
       {toolRun && <span className={`tb-chat-activity-run-chevron${expanded ? ' is-expanded' : ''}`} aria-hidden="true" />}
@@ -1048,7 +1058,8 @@ const ActivityRunRow = memo(function ActivityRunRow({ entry, expanded, toggle, r
   return before.lines.every((line, index) => sameActivityLine(line, after.lines[index]));
 });
 
-function ChatBody({ runtime, renderMessage, className, hostBridge, configuredConversationHref }: {
+function ChatBody({ runtime, renderMessage, className, hostBridge, configuredConversationHref, activitySummaries }: {
+  activitySummaries?: ActivitySummaryTransport;
   runtime: ChatRuntime;
   renderMessage?: TightbeamChatProps['renderMessage'];
   className?: string;
@@ -1627,7 +1638,9 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     reading.reconcileViewportLayout, preserveReadingPosition, expandRun,
     renderMessage, agentName, state.status, runtime]);
 
-  return <section ref={root} className={`tb-chat ${host.composerHidden ? 'tb-chat-host-composer-hidden' : ''} ${className || ''}`}
+  return <ActivitySummaryProvider transport={activitySummaries}
+    connected={state.liveConnectionState ? state.liveConnectionState === 'connected' : state.status === 'ready'}
+    reconcile={reading.reconcileViewportLayout}><section ref={root} className={`tb-chat ${host.composerHidden ? 'tb-chat-host-composer-hidden' : ''} ${className || ''}`}
     aria-label={agentName ? `${agentName} conversation` : 'Conversation'}>
     <div className="tb-chat-viewport" ref={viewport} onScroll={handleScroll} role="log" tabIndex={-1}
       onWheel={(event) => { reading.interrupt(); if (event.deltaY !== 0) reading.noteUserScroll(); }}
@@ -1681,7 +1694,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
       root={root} suppressStatus={host.optedIn} onSettings={openSettings} onSendAccepted={reading.scrollToLatest} />}
     {overlay && <ReleaseNotesDialog overlay={overlay} entries={bundledNotes} onClose={closeOverlay}
       onOpenReleaseNotes={openReleaseNotes} onBack={backToSettings} />}
-  </section>;
+  </section></ActivitySummaryProvider>;
 }
 
 /** One host-selected session. Changing selection/identity disposes the old runtime. */
@@ -1723,5 +1736,6 @@ export function TightbeamChat({ sessionKey, adapter, identityKey, renderMessage,
     </section>;
   }
   return <ChatBody key={key} runtime={opened.runtime} renderMessage={renderMessage}
-    className={className} hostBridge={hostBridge} configuredConversationHref={configuredConversationHref} />;
+    className={className} hostBridge={hostBridge} configuredConversationHref={configuredConversationHref}
+    activitySummaries={adapter.activitySummaries} />;
 }
