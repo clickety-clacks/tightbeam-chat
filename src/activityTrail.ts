@@ -1,6 +1,7 @@
 import type { CanonicalMessage, CanonicalTransition, HistoryRailDenial, LiveRailDenial, ToolCallRecord } from './types';
 import { parseBatchMembers, type HumanMember, type ParsedBatchMember } from './messageVisibility';
 import { activityPillPresentation, type ActivityPillPresentation } from './activityPresentation';
+import { stripProvenanceMarkup } from './displayText';
 import { sameRailDenial } from './railDenials';
 
 export type ActivityKind = 'tool' | 'agent' | 'substrate' | 'rail';
@@ -138,7 +139,7 @@ function messageCandidate(message: CanonicalMessage): Candidate | undefined {
     const statute = sender.slice('remedy:'.length).trim();
     const lines = message.content.split(/\r?\n/);
     while (lines.length && (!lines[0].trim() || /^\s*\[from [^\]]+\]\s*$/i.test(lines[0]))) lines.shift();
-    const detail = bodyGist(lines.join('\n'));
+    const detail = bodyGist(stripProvenanceMarkup(lines.join('\n')));
     const gist = `Remedy ${statute || 'sent'} sent${detail ? ` — ${detail}` : ''}`;
     return { id, kind: 'rail', runKey: '', anchorSeq: message.seq,
       position: { sequence: message.seq, phase: 1, order: 0 }, gist,
@@ -148,7 +149,7 @@ function messageCandidate(message: CanonicalMessage): Candidate | undefined {
       sortTime, historyBacked: true };
   }
   if (message.messageType === 'substrate' || message.messageType === 'process' || sender.startsWith('process:')) {
-    const gist = bodyGist(message.content) || 'Substrate activity';
+    const gist = bodyGist(stripProvenanceMarkup(message.content)) || 'Substrate activity';
     const presentation = activityPillPresentation({ kind: 'substrate', gist, content: message.content, sender,
       source: rawSource(message), messageType: message.messageType, turnSeq: message.turnSeq });
     return { id, kind: 'substrate', runKey: '', anchorSeq: message.seq,
@@ -161,7 +162,7 @@ function messageCandidate(message: CanonicalMessage): Candidate | undefined {
   }
   if (message.messageType === 'agent' || sender.startsWith('agent:') || sender.startsWith('session:')) {
     const name = rawDisplayName(message) ?? 'Another agent';
-    const detail = bodyGist(message.content);
+    const detail = bodyGist(stripProvenanceMarkup(message.content));
     const gist = detail ? `${name} — ${detail}` : name;
     return { id, kind: 'agent', runKey: '', anchorSeq: message.seq,
       position: { sequence: message.seq, phase: 1, order: 0 }, gist,
@@ -181,7 +182,7 @@ function memberCandidate(carrier: CanonicalMessage, member: ParsedBatchMember): 
   const position = { sequence: carrier.seq, phase: 1, order: member.index };
   const parsedTime = carrier.createdAt ? Date.parse(carrier.createdAt) : Number.NaN;
   const sortTime = Number.isFinite(parsedTime) ? parsedTime : undefined;
-  const detail = bodyGist(member.content);
+  const detail = bodyGist(stripProvenanceMarkup(member.content));
   if (member.sender.startsWith('remedy:')) {
     const statute = member.sender.slice('remedy:'.length).trim();
     const gist = `Remedy ${statute || 'sent'} sent${detail ? ` — ${detail}` : ''}`;

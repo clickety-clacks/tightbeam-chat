@@ -731,6 +731,81 @@ describe('conversation surface', () => {
     }
   });
 
+  it('hides provenance markup in message and pill display without changing source text', () => {
+    const sessionKey = 'provenance-display';
+    const tag = '<engram-src id="123e4567-e89b-42d3-a456-426614174000"/>';
+    const promptContent = `${tag}\n\nA normal message.`;
+    const onBehalfContent = `${tag}\n\nA message shown on your behalf.`;
+    const agentContent = `${tag}\n\nAn agent update with useful detail.`;
+    const prompt = row(sessionKey, 'prompt', promptContent, {
+      seq: 1, role: 'user', sender: 'user:person', messageType: 'chat', turnSeq: 1,
+    });
+    const carrierContent = [
+      '[batched notices: 2]',
+      '[1] source=process:notifications sender=user:person cause=notice class=fyi',
+      onBehalfContent,
+      '',
+      '[2] source=agent:helper sender=agent:helper cause=notice class=fyi',
+      agentContent,
+      '',
+      'coalesced by notices',
+    ].join('\n');
+    const carrier = row(sessionKey, 'carrier', carrierContent, {
+      seq: 2, role: 'user', sender: 'process:notifications', messageType: 'substrate', turnSeq: 1,
+    });
+    const answer = row(sessionKey, 'answer', 'Answer', {
+      seq: 3, sender: 'assistant-service', messageType: 'assistant', replyToMessageId: prompt.id, turnSeq: 1,
+      turnIncludesHuman: true,
+    });
+    const toolInput = `${tag} tool input remains verbatim`;
+    const toolResult = `${tag} tool result remains verbatim`;
+    const toolCall: ToolCallRecord = { id: 'tc-provenance', seq: 40, sessionKey, turnSeq: 1, afterMessageSeq: 3,
+      harnessToolCallId: 'call-provenance', title: 'Read marked content', kind: 'read', toolName: 'read_file',
+      status: 'completed', rawInput: toolInput, rawOutput: toolResult, content: null,
+      truncated: [], startedAt: 1000, endedAt: 1100, rowVersion: 1 };
+    const runtime = new FakeRuntime(sessionKey, { records: [prompt, carrier, answer], toolCallsEnabled: true,
+      toolCalls: [toolCall], provenanceAvailable: false, activityTurnStateAvailable: true, activeTurn: undefined });
+    const receivedRecords: ConversationRecord[] = [];
+    const renderMessage = vi.fn((record: ConversationRecord) => {
+      receivedRecords.push(record);
+      return undefined;
+    });
+    const view = render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} renderMessage={renderMessage} />);
+
+    const promptBubble = view.container.querySelector<HTMLElement>('[data-record-key="prompt"]')!;
+    expect(promptBubble.querySelector('.tb-chat-bubble-body')?.textContent).toBe('A normal message.');
+    const onBehalfBubble = view.container.querySelector<HTMLElement>('[data-record-key="carrier:member:1"]')!;
+    expect(onBehalfBubble.querySelector('.tb-chat-bubble-body')?.textContent).toBe('A message shown on your behalf.');
+    expect(receivedRecords.find(record => record.id === prompt.id)?.content).toBe(promptContent);
+    expect(receivedRecords.find(record => record.id === 'carrier:member:1')?.content).toBe(onBehalfContent);
+
+    const pillRow = view.container.querySelector<HTMLElement>('.tb-chat-activity-pill-row')!;
+    expect(pillRow.textContent).toContain('An agent update with useful detail.');
+    expect(pillRow.textContent).not.toContain(tag);
+    expect(pillRow.title).not.toContain(tag);
+    const pillToggle = within(pillRow).getByRole('button', { name: /Show full message/ });
+    fireEvent.click(pillToggle);
+    expect(pillRow.querySelector('[data-activity-message-content]')?.textContent)
+      .toBe('An agent update with useful detail.');
+
+    const toolRow = view.container.querySelector<HTMLElement>('[data-record-key="tool-tc-provenance"]')!;
+    fireEvent.click(toolRow.querySelector('summary')!);
+    expect(toolRow.textContent).toContain(toolInput);
+    expect(toolRow.textContent).toContain(toolResult);
+
+    expect(runtime.getSnapshot().records.find(record => record.id === prompt.id)?.content).toBe(promptContent);
+    expect(runtime.getSnapshot().records.find(record => record.id === carrier.id)?.content).toBe(carrierContent);
+    const sendContent = `${tag}\n\nSend the original bytes.`;
+    fireEvent.change(screen.getByRole('textbox', { name: 'Message to Research assistant' }), { target: { value: sendContent } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    expect(runtime.sent).toEqual([sendContent]);
+    act(() => runtime.update({ sends: [{ sessionKey, deviceId: 'device', clientMessageId: 'fixture-send',
+      content: sendContent, submittedAt: new Date().toISOString(), status: 'accepted', reconciled: false }] }));
+    const localBubble = view.container.querySelector<HTMLElement>('.tb-chat-local')!;
+    expect(localBubble.querySelector('.tb-chat-bubble-body')?.textContent).toBe('Send the original bytes.');
+    expect(localBubble.textContent).not.toContain(tag);
+  });
+
   it('keeps owner-scoped activity while preserving human exchanges across pages, live updates, and reconnects', async () => {
     const sessionKey = 'conversation-without-provenance';
     const firstPage = visibilityMix(sessionKey, 'first-page');
