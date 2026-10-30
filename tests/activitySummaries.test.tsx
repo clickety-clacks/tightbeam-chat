@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { memo, StrictMode } from 'react';
 import { ActivitySummaryViewer, activitySummaryDescriptor, createActivitySummaryTransport,
   type ActivitySummaryTransport, type SummaryAnswer, type SummarySource } from '../src/activitySummaries';
@@ -125,6 +125,7 @@ describe('summary answer delivery', () => {
     viewer.subscribe({ ...note, id: 'member:another' }, () => {});
     viewer.subscribe(line('message:missing', 'Attest att_99999999 (verdict) was filed on assignment asg_12345678.', 'substrate'), () => {});
     await flush();
+    await waitFor(() => expect(calls).toHaveLength(1));
     expect(transport.readAttestNote).toHaveBeenCalledTimes(2);
     expect(calls).toHaveLength(1);
     expect(calls[0].sources).toEqual([{ lineId: 'att_12345678', sourceText: 'Seven review findings.\nFull original note.' }]);
@@ -142,6 +143,7 @@ describe('summary answer delivery', () => {
     });
     const stops = notes.map(entry => viewer.subscribe(entry, () => {}));
     await flush();
+    await waitFor(() => expect(calls).toHaveLength(1));
     expect(transport.readAttestNote).toHaveBeenCalledTimes(65);
     expect(viewer.snapshot(viewer.key(notes[0])).original).toBeUndefined();
     expect(viewer.snapshot(viewer.key(notes[64])).original).toBe('Full note for att_64');
@@ -252,12 +254,14 @@ describe('row-local rendering', () => {
     rendered.rerender(view({ ...note }));
     await act(flush);
     expect(transport.readAttestNote).toHaveBeenCalledTimes(2);
+    expect(reconcile.mock.calls.length).toBe(reconcileCalls);
     expect(screen.getByTestId('attest').textContent).toBe('Three findings were filed.');
     expect(screen.getByTestId('attest').title).toBe('Filed a review note.');
     rendered.rerender(view({ ...note }));
     fireEvent.mouseEnter(screen.getByTestId('attest'));
     fireEvent.mouseEnter(screen.getByTestId('attest'));
     expect(transport.readAttestNote).toHaveBeenCalledTimes(2);
+    expect(reconcile.mock.calls.length).toBe(reconcileCalls);
     await act(async () => { resolveRefetch?.('The full attest note remains readable.'); await flush(); });
     expect(screen.getByTestId('attest').textContent).toBe('Three findings were filed.');
     expect(screen.getByTestId('attest').title).toBe('The full attest note remains readable.');
