@@ -98,6 +98,7 @@ export class ActivitySummaryViewer {
     const key = this.key(entry);
     if (!descriptor || !key || this.disposed) return () => {};
     let held = this.entries.get(key);
+    const redisplaying = !!held?.requested && held.listeners.size === 0;
     if (!held) {
       held = { key, descriptor, listeners: new Set(), display: emptyDisplay };
       this.entries.set(key, held);
@@ -114,7 +115,9 @@ export class ActivitySummaryViewer {
     }
     held.listeners.add(listener);
     this.queue(held);
-    this.resume();
+    if (redisplaying && this.available()) {
+      for (const batch of this.batches) if (batch.waiting && batch.entries.includes(held)) void this.open(batch, true);
+    }
     return () => { held.listeners.delete(listener); };
   }
   private update(entry: Entry, display: ActivitySummaryDisplay) {

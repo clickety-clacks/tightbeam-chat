@@ -1413,7 +1413,8 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     reading.registerRow, reading.preserveVisiblePosition, expandRun,
     renderMessage, agentName, state.status, runtime]);
 
-  return <ActivitySummaryProvider transport={activitySummaries} connected={state.status === 'ready'}
+  return <ActivitySummaryProvider transport={activitySummaries}
+    connected={state.liveConnectionState ? state.liveConnectionState === 'connected' : state.status === 'ready'}
     reconcile={reading.reconcileViewportLayout}><section ref={root} className={`tb-chat ${host.composerHidden ? 'tb-chat-host-composer-hidden' : ''} ${className || ''}`}
     aria-label={agentName ? `${agentName} conversation` : 'Conversation'}>
     <div className="tb-chat-viewport" ref={viewport} onScroll={handleScroll} role="log" tabIndex={-1}
