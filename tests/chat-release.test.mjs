@@ -320,6 +320,29 @@ async function createBundleFixture(tag, sourceCommit, { noticeContent, includeEx
   return { root, archivePath, assets, archiveBytes, provenance, release };
 }
 
+async function createPackageSourceFixture(rootDir) {
+  const files = [
+    'bin/activity-summaries.mjs',
+    'server/chat-server.mjs',
+    'scripts/update-chat-release.mjs',
+    'scripts/chat-release-updater.mjs',
+    'scripts/chat-release-watch.mjs',
+    'packaging/tightbeam-chat.service',
+    'packaging/tightbeam-chat-release-watch.service',
+    'packaging/tightbeam-chat-release-watch.timer',
+    'LICENSE',
+    'THIRD_PARTY_NOTICES.md',
+  ];
+  for (const relative of files) {
+    const filename = path.join(rootDir, relative);
+    await fs.mkdir(path.dirname(filename), { recursive: true });
+    await fs.copyFile(path.resolve(relative), filename);
+  }
+  const page = path.join(rootDir, 'dist/chat-server/public/index.html');
+  await fs.mkdir(path.dirname(page), { recursive: true });
+  await fs.writeFile(page, '<main>Chat</main>');
+}
+
 function fixtureFetch(tag, sourceCommit, fixture, { corruptAsset, failAsset, absentRelease = false } = {}) {
   return async (request) => {
     const url = new URL(request);
@@ -427,7 +450,7 @@ describe('Chat release packaging and updater', () => {
     expect(noticeText).toContain('React 19.3.0, React DOM 19.3.0, and Scheduler 0.28.0');
     expect(noticeText).toContain('Copyright (c) Meta Platforms, Inc. and affiliates.');
     const files = [
-      'dist/chat-server/public/index.html', 'server/chat-server.mjs', 'server/activity-summaries.mjs', 'scripts/update-chat-release.mjs',
+      'dist/chat-server/public/index.html', 'server/chat-server.mjs', 'bin/activity-summaries.mjs', 'scripts/update-chat-release.mjs',
       'scripts/chat-release-updater.mjs', 'scripts/chat-release-watch.mjs', 'packaging/tightbeam-chat.service',
       'packaging/tightbeam-chat-release-watch.service', 'packaging/tightbeam-chat-release-watch.timer',
       'LICENSE', 'THIRD_PARTY_NOTICES.md',
@@ -460,7 +483,8 @@ describe('Chat release packaging and updater', () => {
     const members = execFileSync('tar', ['-tzf', result.assetPath], { encoding: 'utf8' });
     expect(members).toContain('./public/index.html');
     expect(members).toContain('./server/chat-server.mjs');
-    expect(members).toContain('./server/activity-summaries.mjs');
+    expect(members).toContain('./bin/activity-summaries.mjs');
+    expect(members).not.toContain('./server/activity-summaries.mjs');
     expect(members).toContain('./bin/chat-release-watch.mjs');
     expect(members).toContain('./packaging/tightbeam-chat-release-watch.service');
     expect(members).toContain('./packaging/tightbeam-chat-release-watch.timer');
@@ -474,6 +498,59 @@ describe('Chat release packaging and updater', () => {
       .toEqual(await fs.readFile(path.join(rootDir, 'packaging/tightbeam-chat-release-watch.service')));
     expect(execFileSync('tar', ['-xOzf', result.assetPath, './packaging/tightbeam-chat-release-watch.timer']))
       .toEqual(await fs.readFile(path.join(rootDir, 'packaging/tightbeam-chat-release-watch.timer')));
+  });
+
+  it('keeps the activity-summary archive consumable by the delivered updater', async () => {
+    const tag = 'v1.2.4';
+    const rootDir = await temporaryDirectory('chat-summary-updater-compatibility-');
+    await createPackageSourceFixture(rootDir);
+    const packaged = await packageChatRelease({
+      rootDir,
+      outputDir: path.join(rootDir, 'release-output'),
+      tag,
+      sourceCommit: SOURCE_COMMIT,
+      builtAt: '2026-10-30T00:00:00.000Z',
+      nodeVersion: 'v24.18.0',
+      npmVersion: '11.16.0',
+    });
+    const archiveBytes = await fs.readFile(packaged.assetPath);
+    const assets = new Map([
+      [packaged.assetName, archiveBytes],
+      ['SHA256SUMS', Buffer.from(packaged.assetSha256 + '  ' + packaged.assetName + '\n')],
+      ['release-provenance.json', Buffer.from(JSON.stringify(packaged.provenance) + '\n')],
+    ]);
+    const release = {
+      tag_name: tag,
+      draft: false,
+      prerelease: false,
+      published_at: '2026-10-30T00:00:00Z',
+      assets: [...assets.entries()].map(([name, bytes]) => ({
+        name,
+        size: bytes.length,
+        state: 'uploaded',
+        browser_download_url: 'https://github.com/' + CHAT_RELEASE_REPOSITORY + '/releases/download/' + tag + '/' + name,
+      })),
+    };
+    const fixture = { assets, release };
+    const homeDir = await temporaryDirectory('chat-summary-updater-v62-home-');
+    const { root } = await setupExistingChat(homeDir, { tag: 'v0.1.62' });
+    const serviceManager = mockServiceManager();
+
+    const installed = await installChatRelease(tag, {
+      homeDir,
+      fetchImpl: fixtureFetch(tag, SOURCE_COMMIT, fixture),
+      serviceManager,
+      healthCheck: async expected => expected,
+    });
+
+    expect(installed).toMatchObject({ tag, sourceCommit: SOURCE_COMMIT, staged: true });
+    const stagedRelease = path.join(root, 'releases', tag);
+    await expect(fs.access(path.join(stagedRelease, 'bin/activity-summaries.mjs'))).resolves.toBeUndefined();
+    await expect(fs.access(path.join(stagedRelease, 'server/activity-summaries.mjs')))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await fs.readFile(path.join(stagedRelease, 'server/chat-server.mjs'), 'utf8'))
+      .toContain("from '../bin/activity-summaries.mjs'");
+    expect(serviceManager.calls).toContain('restart:tightbeam-chat.service');
   });
 
   it('stages a checksum-bound draft without publishing it', async () => {

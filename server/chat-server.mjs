@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { ActivitySummaryStore, summaryConfiguration, serveSummaries } from './activity-summaries.mjs';
+import { ActivitySummaryStore, summaryConfiguration, serveSummaries } from '../bin/activity-summaries.mjs';
 import fs from 'node:fs';
 import http from 'node:http';
 import https from 'node:https';

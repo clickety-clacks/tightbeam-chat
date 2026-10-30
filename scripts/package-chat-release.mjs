@@ -33,7 +33,7 @@ export async function packageChatRelease({
   const required = [
     path.join(webDir, 'index.html'),
     path.resolve(rootDir, 'server/chat-server.mjs'),
-    path.resolve(rootDir, 'server/activity-summaries.mjs'),
+    path.resolve(rootDir, 'bin/activity-summaries.mjs'),
     path.resolve(rootDir, 'scripts/update-chat-release.mjs'),
     path.resolve(rootDir, 'scripts/chat-release-updater.mjs'),
     path.resolve(rootDir, 'scripts/chat-release-watch.mjs'),
@@ -54,15 +54,15 @@ export async function packageChatRelease({
     const packageDir = path.join(temporaryDir, 'package');
     await fs.mkdir(packageDir, { recursive: true });
     await fs.mkdir(path.join(packageDir, 'public'), { recursive: true });
-    await fs.mkdir(path.join(packageDir, 'server'), { recursive: true });
     await fs.mkdir(path.join(packageDir, 'bin'), { recursive: true });
+    await fs.mkdir(path.join(packageDir, 'server'), { recursive: true });
     await fs.mkdir(path.join(packageDir, 'packaging'), { recursive: true });
 
     for (const item of await fs.readdir(webDir)) {
       await fs.cp(path.join(webDir, item), path.join(packageDir, 'public', item), { recursive: true });
     }
     await fs.copyFile(path.resolve(rootDir, 'server/chat-server.mjs'), path.join(packageDir, 'server/chat-server.mjs'));
-    await fs.copyFile(path.resolve(rootDir, 'server/activity-summaries.mjs'), path.join(packageDir, 'server/activity-summaries.mjs'));
+    await fs.copyFile(path.resolve(rootDir, 'bin/activity-summaries.mjs'), path.join(packageDir, 'bin/activity-summaries.mjs'));
     await fs.copyFile(path.resolve(rootDir, 'scripts/update-chat-release.mjs'), path.join(packageDir, 'bin/update-chat-release.mjs'));
     await fs.copyFile(path.resolve(rootDir, 'scripts/chat-release-updater.mjs'), path.join(packageDir, 'bin/chat-release-updater.mjs'));
     await fs.copyFile(path.resolve(rootDir, 'scripts/chat-release-watch.mjs'), path.join(packageDir, 'bin/chat-release-watch.mjs'));
