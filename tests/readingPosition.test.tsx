@@ -1327,6 +1327,21 @@ describe('conversation reading position', () => {
     expect(screen.getByRole('button', { name: 'Jump to latest user prompt' }).textContent).toBe('Message 20');
   });
 
+  it('updates prompt visibility from retained elements without querying the transcript on scroll', () => {
+    const { box } = setup();
+    readAt(box, 0);
+    const chat = box.closest<HTMLElement>('.tb-chat')!;
+    const viewportQuery = vi.spyOn(box, 'querySelector');
+    const chatQuery = vi.spyOn(chat, 'querySelector');
+
+    box.scrollTop = box.scrollHeight - box.clientHeight;
+    fireEvent.scroll(box);
+
+    expect(viewportQuery).not.toHaveBeenCalled();
+    expect(chatQuery).not.toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: 'Jump to latest user prompt' })).toBeNull();
+  });
+
   it('keeps a dismissed preview hidden through history changes and restores it only after a new submission', () => {
     const { runtime, box } = setup();
     readAt(box, 0);

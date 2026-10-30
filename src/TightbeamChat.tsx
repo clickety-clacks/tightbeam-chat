@@ -1,6 +1,6 @@
 import { forwardRef, memo, useCallback, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore,
   type AnchorHTMLAttributes, type FormEvent, type HTMLAttributes, type ImgHTMLAttributes,
-  type ReactNode, type RefObject, type TableHTMLAttributes } from 'react';
+  type MutableRefObject, type ReactNode, type RefObject, type TableHTMLAttributes } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { highlightRecognizedCode } from './markdownHighlight';
@@ -632,7 +632,7 @@ function StatusIcon({ state }: { state: RuntimeState }) {
 }
 
 const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, registerRow, preservePosition,
-  reconcileLayout, scrollKey: scrollKeyOverride, promptTargetPrefix }: {
+  reconcileLayout, scrollKey: scrollKeyOverride, promptTargetPrefix, latestPromptTarget, isLatestPromptTarget }: {
   bubble: Bubble;
   renderMessage?: TightbeamChatProps['renderMessage'];
   agentName: string;
@@ -641,12 +641,16 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, re
   reconcileLayout: () => void;
   scrollKey?: string;
   promptTargetPrefix: string;
+  latestPromptTarget: MutableRefObject<HTMLElement | null>;
+  isLatestPromptTarget: boolean;
 }) {
   const { record } = bubble;
   const scrollKey = scrollKeyOverride ?? (bubble.derived ? bubble.key : record.id);
   const rowRef = useCallback((element: HTMLElement | null) => {
     registerRow(scrollKey, element);
-  }, [registerRow, scrollKey]);
+    if (element && isLatestPromptTarget) latestPromptTarget.current = element;
+    else if (!element && latestPromptTarget.current?.dataset.recordKey === bubble.key) latestPromptTarget.current = null;
+  }, [registerRow, scrollKey, isLatestPromptTarget, latestPromptTarget, bubble.key]);
   const time = localTimestamp(record.createdAt);
   const context: RenderContext = {
     sessionKey: record.sessionKey,
@@ -688,6 +692,8 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, re
     before.sender === after.sender && before.displayContent === after.displayContent &&
     before.derived === after.derived && sameMember && previous.renderMessage === next.renderMessage &&
     previous.promptTargetPrefix === next.promptTargetPrefix &&
+    previous.latestPromptTarget === next.latestPromptTarget &&
+    previous.isLatestPromptTarget === next.isLatestPromptTarget &&
     previous.agentName === next.agentName && previous.registerRow === next.registerRow &&
     previous.preservePosition === next.preservePosition && previous.reconcileLayout === next.reconcileLayout &&
     previous.scrollKey === next.scrollKey;
@@ -1196,6 +1202,8 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   }, [state.sends]);
   const root = useRef<HTMLElement>(null);
   const runtimeNotice = useRef<HTMLDivElement>(null);
+  const toolHistoryStatus = useRef<HTMLDivElement>(null);
+  const latestPromptTarget = useRef<HTMLElement | null>(null);
   const composer = useRef<ComposerHandle>(null);
   const [overlay, setOverlay] = useState<ChatOverlay | null>(null);
   const overlayRef = useRef<ChatOverlay | null>(null);
@@ -1423,8 +1431,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     if (element) {
       const rootTop = element.getBoundingClientRect().top;
       const noticeBottom = notice?.getBoundingClientRect().bottom;
-      const toolStatusBottom = element.querySelector<HTMLElement>(
-        '.tb-chat-tool-history-status:not(.tb-chat-tool-history-status-placeholder)')?.getBoundingClientRect().bottom;
+      const toolStatusBottom = toolHistoryStatus.current?.getBoundingClientRect().bottom;
       const blockingBottom = Math.max(noticeBottom ?? Number.NEGATIVE_INFINITY,
         toolStatusBottom ?? Number.NEGATIVE_INFINITY);
       const top = Number.isFinite(blockingBottom) ? Math.max(10, blockingBottom - rootTop + 8) : 10;
@@ -1439,15 +1446,14 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
       setLatestPromptVisibility(prior => prior === undefined ? prior : undefined);
       return;
     }
-    const target = latestPromptTargetId
-      ? box.querySelector<HTMLElement>(`[id="${latestPromptTargetId}"]`) : null;
+    const target = latestPromptTarget.current;
     const targetRect = target?.getBoundingClientRect();
     const viewportRect = box.getBoundingClientRect();
     const offscreen = !!targetRect &&
       (targetRect.bottom <= viewportRect.top || targetRect.top >= viewportRect.bottom);
     setLatestPromptVisibility(prior => prior?.identity === latestPrompt.identity && prior.offscreen === offscreen
       ? prior : { identity: latestPrompt.identity, offscreen });
-  }, [latestPrompt?.identity, latestPromptTargetId]);
+  }, [latestPrompt?.identity]);
   useEffect(() => {
     if (host.settingsRequestRevision <= handledSettingsRevision.current) return;
     handledSettingsRevision.current = host.settingsRequestRevision;
@@ -1629,12 +1635,9 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   useLayoutEffect(() => {
     const box = viewport.current;
     const content = reading.content.current;
-    const target = box && latestPromptTargetId
-      ? box.querySelector<HTMLElement>(`[id="${latestPromptTargetId}"]`)
-      : undefined;
+    const target = latestPromptTarget.current;
     const notice = runtimeNotice.current;
-    const toolStatus = root.current?.querySelector<HTMLElement>(
-      '.tb-chat-tool-history-status:not(.tb-chat-tool-history-status-placeholder)');
+    const toolStatus = toolHistoryStatus.current;
     const observer = typeof ResizeObserver === 'undefined'
       ? undefined : new ResizeObserver(updateLatestPromptVisibility);
     for (const element of [root.current, box, content, target, notice, toolStatus]) if (element) observer?.observe(element);
@@ -1655,7 +1658,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   const jumpToLatestPrompt = () => {
     const box = viewport.current;
     if (!box || !latestPrompt || !latestPromptTargetId) return;
-    const target = box.querySelector<HTMLElement>(`[id="${latestPromptTargetId}"]`);
+    const target = latestPromptTarget.current;
     if (!target) return;
     const viewportRect = box.getBoundingClientRect();
     const targetRect = target.getBoundingClientRect();
@@ -1670,6 +1673,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     updateLatestPromptVisibility();
   };
   const renderToolHistoryStatus = (placeholder = false) => <div
+    ref={placeholder ? undefined : toolHistoryStatus}
     className={`tb-chat-tool-history-status${placeholder ? ' tb-chat-tool-history-status-placeholder' : ''}`}
     aria-hidden={placeholder || undefined}>
     {state.toolCallsLoading && <span className="tb-chat-caption tb-chat-caption-neutral" role="status">Loading tool history…</span>}
@@ -1729,7 +1733,8 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
           return <RecordRow key={bubble.key} bubble={bubble} scrollKey={item.scrollKey}
             renderMessage={renderMessage} agentName={agentName} registerRow={reading.registerRow}
             preservePosition={preserveReadingPosition} reconcileLayout={reading.reconcileViewportLayout}
-            promptTargetPrefix={promptTargetPrefix} />;
+            promptTargetPrefix={promptTargetPrefix} latestPromptTarget={latestPromptTarget}
+            isLatestPromptTarget={latestPrompt?.targetKey === bubble.key} />;
         }
         const { send } = item;
         const time = localTimestamp(send.submittedAt);
@@ -1739,10 +1744,15 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
         const reconnectingSend = send.status === 'pending' && unreachable;
         const retryAvailable = !hostManaged && !retryUnavailable &&
           ['failed', 'uncertain'].includes(send.status) && !send.reconciled;
-        return <article ref={element => reading.registerRow(`local-${send.clientMessageId}`, element)}
+        const targetKey = `local-${send.clientMessageId}`;
+        return <article ref={element => {
+          reading.registerRow(targetKey, element);
+          if (element && latestPrompt?.targetKey === targetKey) latestPromptTarget.current = element;
+          else if (!element && latestPromptTarget.current?.dataset.recordKey === targetKey) latestPromptTarget.current = null;
+        }}
           id={`${promptTargetPrefix}-${encodeURIComponent(`local-${send.clientMessageId}`)}`}
           className="tb-chat-bubble tb-chat-bubble-human tb-chat-local" key={send.clientMessageId}
-          data-record-key={`local-${send.clientMessageId}`} data-scroll-key={`local-${send.clientMessageId}`} aria-label={`Your message, ${send.status}`}>
+          data-record-key={targetKey} data-scroll-key={targetKey} aria-label={`Your message, ${send.status}`}>
           <div className="tb-chat-bubble-body">{markdownBody(send.content)}</div>
           <p className="tb-chat-send-state" data-send-status={send.status} role={send.status === 'pending' ? 'status' : undefined}>{send.status === 'uncertain' ? 'Delivery is uncertain'
             : send.status === 'failed' ? 'Message could not be sent'
@@ -1771,7 +1781,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   }, [activityPlan.toolItems, expandedActivityRuns, expandedToolCalls, toggleActivityRun, setToolCallExpanded,
     revealingActivityItems, finishActivityReveal, reading.registerRow, reading.preserveVisiblePosition,
     reading.reconcileViewportLayout, preserveReadingPosition, expandRun,
-    renderMessage, agentName, state.status, runtime, promptTargetPrefix]);
+    renderMessage, agentName, state.status, runtime, promptTargetPrefix, latestPrompt?.targetKey]);
 
   return <ActivitySummaryProvider transport={activitySummaries}
     connected={state.liveConnectionState ? state.liveConnectionState === 'connected' : state.status === 'ready'}
