@@ -1,5 +1,5 @@
 import { forwardRef, memo, useCallback, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore,
-  type AnchorHTMLAttributes, type FormEvent, type HTMLAttributes, type ImgHTMLAttributes,
+  type AnchorHTMLAttributes, type ClipboardEvent as ReactClipboardEvent, type FormEvent, type HTMLAttributes, type ImgHTMLAttributes,
   type ReactNode, type RefObject, type TableHTMLAttributes } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -507,6 +507,80 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, re
     previous.scrollKey === next.scrollKey;
 });
 
+interface ComposerAttachmentInput {
+  readonly id: string;
+  readonly filename: string;
+  /** The acquired source bytes. Preview creation never replaces this Blob. */
+  readonly bytes: Blob;
+}
+
+interface DraftAttachment {
+  readonly input: ComposerAttachmentInput;
+  readonly previewUrl?: string;
+  readonly previewError?: string;
+}
+
+type AttachmentSubmitRuntime = ChatRuntime & {
+  sendAttachments?: (content: string, inputs: readonly ComposerAttachmentInput[]) => string | null;
+};
+
+function newAttachmentId(): string {
+  return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `attachment-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function isImageAttachment(input: ComposerAttachmentInput): boolean {
+  return input.bytes.type.toLowerCase().startsWith('image/') ||
+    /\.(?:avif|bmp|gif|heic|heif|jpe?g|png|svg|tiff?|webp)$/i.test(input.filename);
+}
+
+function attachmentTypeLabel(input: ComposerAttachmentInput): string {
+  const mime = input.bytes.type.toLowerCase();
+  const extension = input.filename.includes('.') ? input.filename.split('.').pop()?.toLowerCase() : undefined;
+  if (mime.startsWith('image/')) {
+    const imageType = mime.slice('image/'.length).replace('jpeg', 'jpg').toUpperCase();
+    return `${imageType || 'Image'} image`;
+  }
+  if (extension && /^(?:avif|bmp|gif|heic|heif|jpe?g|png|svg|tiff?|webp)$/.test(extension)) {
+    return `${extension.replace('jpeg', 'jpg').toUpperCase()} image`;
+  }
+  if (mime === 'application/pdf' || extension === 'pdf') return 'PDF file';
+  if (mime.startsWith('text/')) return 'Text file';
+  if (extension) return `${extension.toUpperCase()} file`;
+  return mime ? `${mime} file` : 'File';
+}
+
+function pastedImageFilename(blob: Blob): string {
+  const extensionByMime: Record<string, string> = {
+    'image/avif': 'avif', 'image/bmp': 'bmp', 'image/gif': 'gif', 'image/heic': 'heic',
+    'image/heif': 'heif', 'image/jpeg': 'jpg', 'image/png': 'png', 'image/svg+xml': 'svg',
+    'image/tiff': 'tiff', 'image/webp': 'webp',
+  };
+  const extension = extensionByMime[blob.type.toLowerCase()] ?? 'img';
+  return `pasted-image-${Date.now()}.${extension}`;
+}
+
+function errorReason(error: unknown): string {
+  if (error instanceof Error && error.message.trim()) return error.message.trim();
+  if (typeof error === 'string' && error.trim()) return error.trim();
+  return 'the browser did not provide a reason';
+}
+
+function cameraFailureMessage(error: unknown): string {
+  const name = error && typeof error === 'object' && 'name' in error ? String(error.name) : '';
+  if (name === 'NotAllowedError' || name === 'PermissionDeniedError' || name === 'SecurityError') {
+    return 'Camera access was denied. Allow camera access and try again, or choose a photo.';
+  }
+  if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+    return 'No camera is available on this device. Choose a photo or file instead.';
+  }
+  if (name === 'NotReadableError' || name === 'TrackStartError') {
+    return 'The camera could not be opened. It may be in use by another app; close that app and try again.';
+  }
+  return `Camera capture could not start: ${errorReason(error)}. Try again or choose a photo.`;
+}
+
 interface ComposerHandle {
   restore(content: string): void;
   contains(target: EventTarget | null): boolean;
@@ -524,15 +598,210 @@ const Composer = forwardRef<ComposerHandle, {
   onSendAccepted: () => void;
 }>(function Composer({ runtime, state, agentName, root, suppressStatus, onSettings, onSendAccepted }, ref) {
   const [draft, setDraft] = useState('');
+  const [attachments, setAttachments] = useState<readonly DraftAttachment[]>([]);
+  const [acquisitionError, setAcquisitionError] = useState<string | null>(null);
+  const [attachmentOptionsOpen, setAttachmentOptionsOpen] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
+  const [cameraState, setCameraState] = useState<'closed' | 'opening' | 'ready' | 'failed'>('closed');
+  const [cameraError, setCameraError] = useState<string | null>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const pendingCaret = useRef<number | null>(null);
   const statusControl = useRef<HTMLButtonElement>(null);
+  const attachmentControl = useRef<HTMLButtonElement>(null);
   const sendControl = useRef<HTMLButtonElement>(null);
   const shell = useRef<HTMLFormElement>(null);
+  const photoInput = useRef<HTMLInputElement>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const cameraVideo = useRef<HTMLVideoElement>(null);
+  const cameraCaptureControl = useRef<HTMLButtonElement>(null);
+  const cameraCancelControl = useRef<HTMLButtonElement>(null);
+  const cameraStream = useRef<MediaStream | null>(null);
+  const cameraRequest = useRef(0);
+  const previewUrls = useRef(new Map<string, string>());
   const titleId = useId();
   const statusName = statusText(state);
   const statusId = `${titleId}-status-details`;
+  const attachmentOptionsId = `${titleId}-attachment-options`;
+  const cameraTitleId = `${titleId}-camera-title`;
+
+  const stopCameraStream = () => {
+    const stream = cameraStream.current;
+    cameraStream.current = null;
+    stream?.getTracks().forEach(track => track.stop());
+  };
+
+  const releasePreview = (id: string) => {
+    const url = previewUrls.current.get(id);
+    if (!url) return;
+    previewUrls.current.delete(id);
+    try { URL.revokeObjectURL(url); } catch { /* Preview cleanup cannot discard the source bytes. */ }
+  };
+
+  const closeCamera = () => {
+    cameraRequest.current++;
+    stopCameraStream();
+    if (cameraVideo.current) cameraVideo.current.srcObject = null;
+    setCameraState('closed');
+    setCameraError(null);
+    attachmentControl.current?.focus();
+  };
+
+  const addAttachment = (bytes: Blob, filename: string) => {
+    const input: ComposerAttachmentInput = Object.freeze({ id: newAttachmentId(), filename: filename || 'Unnamed file', bytes });
+    let previewUrl: string | undefined;
+    let previewError: string | undefined;
+    if (isImageAttachment(input)) {
+      try {
+        if (typeof URL.createObjectURL !== 'function') throw new Error('This browser cannot create a local image preview.');
+        previewUrl = URL.createObjectURL(bytes);
+        previewUrls.current.set(input.id, previewUrl);
+      } catch (error) {
+        previewError = `Preview unavailable: ${errorReason(error)}. The original image remains attached.`;
+      }
+    }
+    setAttachments(current => [...current, Object.freeze({ input, previewUrl, previewError })]);
+    setAcquisitionError(null);
+  };
+
+  const addSelectedFiles = (files: FileList | readonly File[] | null) => {
+    if (!files?.length) return;
+    for (const file of Array.from(files)) addAttachment(file, file.name || 'Selected file');
+  };
+
+  const openFilePicker = (kind: 'photo' | 'file') => {
+    setAttachmentOptionsOpen(false);
+    const picker = kind === 'photo' ? photoInput.current : fileInput.current;
+    try {
+      if (!picker) throw new Error('The file picker is unavailable.');
+      picker.click();
+    } catch (error) {
+      setAcquisitionError(`${kind === 'photo' ? 'Photo' : 'File'} selection could not start: ${errorReason(error)}. Your draft is still here.`);
+    }
+  };
+
+  const removeAttachment = (id: string) => {
+    releasePreview(id);
+    setAttachments(current => current.filter(item => item.input.id !== id));
+  };
+
+  const failImagePreview = (id: string) => {
+    releasePreview(id);
+    setAttachments(current => current.map(item => item.input.id === id
+      ? Object.freeze({ ...item, previewUrl: undefined,
+        previewError: 'Preview unavailable. The original image remains attached.' })
+      : item));
+  };
+
+  const startCamera = async () => {
+    setAttachmentOptionsOpen(false);
+    setCameraError(null);
+    setCameraState('opening');
+    const request = ++cameraRequest.current;
+    const mediaDevices = typeof navigator !== 'undefined' ? navigator.mediaDevices : undefined;
+    if (!mediaDevices || typeof mediaDevices.getUserMedia !== 'function') {
+      setCameraError('Camera capture is not available in this browser. Choose a photo or file instead.');
+      setCameraState('failed');
+      return;
+    }
+    try {
+      const stream = await mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false });
+      if (cameraRequest.current !== request) {
+        stream.getTracks().forEach(track => track.stop());
+        return;
+      }
+      cameraStream.current = stream;
+      setCameraState('ready');
+    } catch (error) {
+      if (cameraRequest.current !== request) return;
+      setCameraError(cameraFailureMessage(error));
+      setCameraState('failed');
+    }
+  };
+
+  const capturePhoto = () => {
+    const video = cameraVideo.current;
+    if (!video || !video.videoWidth || !video.videoHeight) {
+      setCameraError('The camera preview is not ready. Wait a moment and try again.');
+      return;
+    }
+    const request = cameraRequest.current;
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const context = canvas.getContext('2d');
+      if (!context) {
+        setCameraError('The camera image could not be prepared. Try again or choose a photo.');
+        return;
+      }
+      context.drawImage(video, 0, 0, canvas.width, canvas.height);
+      canvas.toBlob(blob => {
+        if (cameraRequest.current !== request) return;
+        if (!blob) {
+          setCameraError('The camera did not produce an image. Try again or choose a photo.');
+          return;
+        }
+        addAttachment(blob, `camera-${Date.now()}.jpg`);
+        closeCamera();
+      }, 'image/jpeg');
+    } catch (error) {
+      setCameraError(`The camera image could not be captured: ${errorReason(error)}. Try again.`);
+    }
+  };
+
+  useEffect(() => {
+    if (cameraState !== 'ready' || !cameraStream.current || !cameraVideo.current) return;
+    const video = cameraVideo.current;
+    video.srcObject = cameraStream.current;
+    let cancelled = false;
+    try {
+      void Promise.resolve(video.play()).catch(error => {
+        if (cancelled) return;
+        setCameraError(`The camera preview could not start: ${errorReason(error)}. Try again or choose a photo.`);
+        setCameraState('failed');
+        stopCameraStream();
+      });
+    } catch (error) {
+      setCameraError(`The camera preview could not start: ${errorReason(error)}. Try again or choose a photo.`);
+      setCameraState('failed');
+      stopCameraStream();
+    }
+    return () => { cancelled = true; };
+  }, [cameraState]);
+
+  useEffect(() => () => {
+    cameraRequest.current++;
+    stopCameraStream();
+    for (const url of previewUrls.current.values()) {
+      try { URL.revokeObjectURL(url); } catch { /* The component is already being removed. */ }
+    }
+    previewUrls.current.clear();
+  }, []);
+
+  useEffect(() => {
+    if (!attachmentOptionsOpen) return;
+    const dismiss = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      setAttachmentOptionsOpen(false);
+      attachmentControl.current?.focus();
+    };
+    document.addEventListener('keydown', dismiss);
+    return () => document.removeEventListener('keydown', dismiss);
+  }, [attachmentOptionsOpen]);
+
+  useEffect(() => {
+    if (cameraState === 'closed') return;
+    if (cameraState === 'ready') cameraCaptureControl.current?.focus();
+    else cameraCancelControl.current?.focus();
+    const dismiss = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      closeCamera();
+    };
+    document.addEventListener('keydown', dismiss);
+    return () => document.removeEventListener('keydown', dismiss);
+  }, [cameraState]);
 
   useImperativeHandle(ref, () => ({
     restore: setDraft,
@@ -589,25 +858,110 @@ const Composer = forwardRef<ComposerHandle, {
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!draft.trim()) return;
-    if (isSettingsCommand(draft)) {
+    if (!draft.trim() && !attachments.length) return;
+    if (!attachments.length && isSettingsCommand(draft)) {
       setDraft('');
       setStatusOpen(false);
       onSettings();
       return;
     }
     if (state.status === 'unauthorized') return;
-    if (runtime.send(draft)) {
+    let accepted: string | null;
+    if (attachments.length) {
+      const sendAttachments = (runtime as AttachmentSubmitRuntime).sendAttachments;
+      if (!sendAttachments) {
+        setAcquisitionError('This conversation cannot send attachments with its current Chat runtime. Your draft is still here.');
+        return;
+      }
+      try {
+        const originalInputs = Object.freeze(attachments.map(item => item.input));
+        accepted = sendAttachments.call(runtime, draft, originalInputs);
+      } catch (error) {
+        setAcquisitionError(`Attachments were not submitted: ${errorReason(error)}. Your draft is still here.`);
+        return;
+      }
+      if (!accepted) {
+        setAcquisitionError('The conversation did not accept this attachment submission. Check its connection status and try again; your draft is still here.');
+        return;
+      }
+      for (const item of attachments) releasePreview(item.input.id);
+      setAttachments([]);
+    } else {
+      accepted = runtime.send(draft);
+    }
+    if (accepted) {
       setDraft('');
+      setAcquisitionError(null);
       onSendAccepted();
     }
   };
 
-  return <form className="tb-chat-composer" onSubmit={submit} ref={shell}>
+  const pasteIntoDraft = (text: string) => {
+    if (!text) return;
+    const element = input.current;
+    const start = element?.selectionStart ?? draft.length;
+    const end = element?.selectionEnd ?? draft.length;
+    pendingCaret.current = start + text.length;
+    setDraft(current => `${current.slice(0, start)}${text}${current.slice(end)}`);
+  };
+
+  const pasteClipboard = (event: ReactClipboardEvent<HTMLTextAreaElement>) => {
+    const clipboard = event.clipboardData;
+    const imageItems = Array.from(clipboard.items ?? []).filter(item => item.kind === 'file' && item.type.toLowerCase().startsWith('image/'));
+    const clipboardFileErrors: string[] = [];
+    const files = imageItems.length
+      ? imageItems.map(item => {
+        try { return item.getAsFile(); } catch (error) { clipboardFileErrors.push(errorReason(error)); return null; }
+      })
+      : Array.from(clipboard.files ?? []).filter(file => file.type.toLowerCase().startsWith('image/'));
+    if (!imageItems.length && !files.length) return;
+    event.preventDefault();
+    let textReadError: string | undefined;
+    try { pasteIntoDraft(clipboard.getData('text/plain')); }
+    catch (error) { textReadError = `Clipboard text could not be read: ${errorReason(error)}.`; }
+    let unreadable = 0;
+    for (const file of files) {
+      if (!file) unreadable++;
+      else addAttachment(file, file.name || pastedImageFilename(file));
+    }
+    if (unreadable || textReadError) {
+      const imageMessage = unreadable
+        ? `Could not read ${unreadable === 1 ? 'the pasted image' : `${unreadable} pasted images`}${clipboardFileErrors.length ? `: ${clipboardFileErrors.join('; ')}` : ''}.`
+        : '';
+      setAcquisitionError([imageMessage, textReadError,
+        'Any readable content was kept. Try pasting again or use Photo/File selection.'].filter(Boolean).join(' '));
+    }
+  };
+
+  const hasDraft = Boolean(draft.trim() || attachments.length);
+
+  return <form className={`tb-chat-composer${cameraState !== 'closed' ? ' tb-chat-composer-camera-open' : ''}`} onSubmit={submit} ref={shell}>
     <label className="tb-chat-sr-only" htmlFor={`${titleId}-input`}>Message to {agentName || 'the selected agent'}</label>
-    <div className="tb-chat-input-shell">
+    {acquisitionError && <p className="tb-chat-composer-error" role="alert">{acquisitionError}</p>}
+    {attachments.length > 0 && <ul className="tb-chat-draft-attachments" aria-label="Attachments in this draft">
+      {attachments.map(item => {
+        const image = isImageAttachment(item.input);
+        const type = attachmentTypeLabel(item.input);
+        return <li className="tb-chat-draft-attachment" key={item.input.id}>
+          <div className="tb-chat-draft-attachment-preview">
+            {image && item.previewUrl
+              ? <img src={item.previewUrl} alt={`Preview of ${item.input.filename}`} onError={() => failImagePreview(item.input.id)} />
+              : <span aria-hidden="true" className="tb-chat-draft-attachment-kind">{image ? 'Image' : type.split(' ')[0]}</span>}
+          </div>
+          <span className="tb-chat-draft-attachment-details">
+            <span className="tb-chat-draft-attachment-name">{item.input.filename}</span>
+            <span className="tb-chat-draft-attachment-type">{type}</span>
+            {item.previewError && <span className="tb-chat-draft-attachment-error">{item.previewError}</span>}
+          </span>
+          <button type="button" className="tb-chat-draft-attachment-remove"
+            aria-label={`Remove ${item.input.filename}`} onClick={() => removeAttachment(item.input.id)}>×</button>
+        </li>;
+      })}
+    </ul>}
+    <div className={`tb-chat-input-shell${suppressStatus ? ' tb-chat-input-shell-no-status' : ''}`}>
       <textarea ref={input} id={`${titleId}-input`} value={draft}
         onChange={(event) => setDraft(event.target.value)}
+        onPaste={pasteClipboard}
         onKeyDown={(event) => {
           if (event.key !== 'Enter') return;
           if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
@@ -634,6 +988,14 @@ const Composer = forwardRef<ComposerHandle, {
         aria-expanded={statusOpen} aria-controls={statusId} onClick={() => setStatusOpen((open) => !open)}>
         <StatusIcon state={state} />
       </button>}
+      <button ref={attachmentControl} type="button" className="tb-chat-attachment-control"
+        aria-label="Add attachment" aria-expanded={attachmentOptionsOpen} aria-controls={attachmentOptionsId}
+        onClick={() => setAttachmentOptionsOpen(open => !open)}><span aria-hidden="true">+</span></button>
+      {attachmentOptionsOpen && <div className="tb-chat-attachment-options" id={attachmentOptionsId} role="group" aria-label="Add to message">
+        <button type="button" onClick={() => openFilePicker('photo')}>Photo</button>
+        <button type="button" onClick={() => openFilePicker('file')}>File</button>
+        <button type="button" onClick={() => void startCamera()}>Camera</button>
+      </div>}
       {!suppressStatus && statusOpen && <div className="tb-chat-status-popup" id={statusId} role="dialog" aria-label="Connection details">
         <div className="tb-chat-popup-heading"><StatusIcon state={state} />
           <button type="button" aria-label="Close connection details" onClick={closeStatusPopup}>×</button>
@@ -654,11 +1016,45 @@ const Composer = forwardRef<ComposerHandle, {
           <button type="button" onClick={() => void runtime.rebuild({ restart: true })}>Reconnect</button>}
       </div>}
       <button ref={sendControl} type="submit" className="tb-chat-send-button" aria-label="Send message"
-        disabled={!draft.trim() || (state.status === 'unauthorized' && !isSettingsCommand(draft))}>
+        disabled={!hasDraft || (state.status === 'unauthorized' && !(draft && isSettingsCommand(draft) && !attachments.length))}>
         <span className="tb-chat-send-button-disc" aria-hidden="true" />
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5m0 0L6 11m6-6 6 6" /></svg>
       </button>
     </div>
+    <input ref={photoInput} type="file" accept="image/*" multiple hidden aria-label="Choose photos"
+      onChange={event => { addSelectedFiles(event.currentTarget.files); event.currentTarget.value = ''; }} />
+    <input ref={fileInput} type="file" multiple hidden aria-label="Choose files"
+      onChange={event => { addSelectedFiles(event.currentTarget.files); event.currentTarget.value = ''; }} />
+    {cameraState !== 'closed' && <div className="tb-chat-camera-backdrop">
+      <section className="tb-chat-camera-dialog" role="dialog" aria-modal="true" aria-labelledby={cameraTitleId}
+        onKeyDown={event => {
+          if (event.key !== 'Tab') return;
+          const controls = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'));
+          const first = controls[0];
+          const last = controls[controls.length - 1];
+          if (!first || !last) return;
+          if (!event.currentTarget.contains(document.activeElement)) {
+            event.preventDefault();
+            (event.shiftKey ? last : first).focus();
+          } else if (event.shiftKey && document.activeElement === first) {
+            event.preventDefault();
+            last.focus();
+          } else if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault();
+            first.focus();
+          }
+        }}>
+        <h2 id={cameraTitleId}>Take a photo</h2>
+        {cameraState === 'opening' && <p role="status">Opening camera…</p>}
+        {cameraState === 'ready' && <video ref={cameraVideo} className="tb-chat-camera-preview" aria-label="Camera preview" autoPlay muted playsInline />}
+        {cameraError && <p className="tb-chat-camera-error" role="alert">{cameraError}</p>}
+        <div className="tb-chat-camera-actions">
+          {cameraState === 'ready' && <button ref={cameraCaptureControl} type="button" onClick={capturePhoto}>Capture photo</button>}
+          {cameraState === 'failed' && <button type="button" onClick={() => void startCamera()}>Try camera again</button>}
+          <button ref={cameraCancelControl} type="button" onClick={closeCamera}>Cancel</button>
+        </div>
+      </section>
+    </div>}
   </form>;
 });
 
