@@ -32,7 +32,9 @@ const noSnapshot = () => undefined;
 export function useActivitySummary(entry: ActivityLine) {
   const { viewer, reconcile } = useContext(SummaryContext);
   const key = viewer?.key(entry);
-  const subscribe = useCallback((listener: () => void) => viewer?.subscribe(entry, listener) ?? (() => {}), [viewer, key, entry]);
+  // The source key owns the subscription; unrelated row-object publications
+  // must not become delivery-retry events.
+  const subscribe = useCallback((listener: () => void) => viewer?.subscribe(entry, listener) ?? (() => {}), [viewer, key]);
   const snapshot = useCallback(() => viewer?.snapshot(key), [viewer, key]);
   const display = useSyncExternalStore(viewer ? subscribe : noSubscribe, viewer ? snapshot : noSnapshot, noSnapshot);
   useLayoutEffect(() => { if (display?.text) reconcile?.(); }, [display, reconcile]);
