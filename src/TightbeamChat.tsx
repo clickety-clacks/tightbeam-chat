@@ -3,7 +3,8 @@ import { forwardRef, memo, useCallback, useEffect, useId, useImperativeHandle, u
   type ReactNode, type RefObject, type TableHTMLAttributes } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import type { ChatRuntime, CanonicalMessage, CanonicalTransition, ToolCallRecord, ToolCallIndex, ConversationRecord, LocalSend, RuntimeState, TightbeamAdapter, TurnProvenance } from './types';
+import { AttachmentPreparationError } from './types';
+import type { AttachmentInput, ChatRuntime, CanonicalMessage, CanonicalTransition, ToolCallRecord, ToolCallIndex, ConversationRecord, LocalSend, RuntimeState, TightbeamAdapter, TurnProvenance } from './types';
 import { projectMessages, type HumanMember } from './messageVisibility';
 import { buildActivityTrail, type ActivityFold, type ActivityLine, type ActivityOverflow, type MessageActivityItem } from './activityTrail';
 import type { ActivityPillIcon, ActivityPillPresentation } from './activityPresentation';
@@ -507,15 +508,14 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, re
     previous.scrollKey === next.scrollKey;
 });
 
-interface ComposerAttachmentInput {
-  readonly id: string;
-  readonly filename: string;
-  /** The acquired source bytes. Preview creation never replaces this Blob. */
-  readonly bytes: Blob;
-}
+type ComposerAttachmentInput = AttachmentInput;
+
+type AttachmentPreparationState = 'preparing' | 'ready' | 'failed' | 'blocked';
 
 interface DraftAttachment {
   readonly input: ComposerAttachmentInput;
+  readonly preparationState: AttachmentPreparationState;
+  readonly preparationError?: string;
   readonly previewUrl?: string;
   readonly previewError?: string;
 }
@@ -532,10 +532,6 @@ type AttachmentSendView = LocalSend & {
   readonly attachmentPhase?: 'preparing' | 'failed' | 'posted';
 };
 
-type AttachmentSubmitRuntime = ChatRuntime & {
-  sendAttachments?: (content: string, inputs: readonly ComposerAttachmentInput[]) => string | null;
-};
-
 function newAttachmentId(): string {
   return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
     ? crypto.randomUUID()
@@ -543,13 +539,17 @@ function newAttachmentId(): string {
 }
 
 function isImageAttachment(input: ComposerAttachmentInput): boolean {
-  return input.bytes.type.toLowerCase().startsWith('image/') ||
-    /\.(?:avif|bmp|gif|heic|heif|jpe?g|png|svg|tiff?|webp)$/i.test(input.filename);
+  const mime = input.bytes.type.toLowerCase().split(';')[0];
+  const extension = input.filename.split('.').pop()?.toLowerCase();
+  if (mime === 'image/svg+xml' || extension === 'svg') return false;
+  return mime.startsWith('image/') ||
+    /\.(?:avif|bmp|gif|heic|heif|jpe?g|png|tiff?|webp)$/i.test(input.filename);
 }
 
 function attachmentTypeLabel(input: ComposerAttachmentInput): string {
   const mime = input.bytes.type.toLowerCase();
   const extension = input.filename.includes('.') ? input.filename.split('.').pop()?.toLowerCase() : undefined;
+  if (mime.split(';')[0] === 'image/svg+xml' || extension === 'svg') return 'SVG file';
   if (mime.startsWith('image/')) {
     const imageType = mime.slice('image/'.length).replace('jpeg', 'jpg').toUpperCase();
     return `${imageType || 'Image'} image`;
@@ -646,6 +646,9 @@ const Composer = forwardRef<ComposerHandle, {
   const cameraStream = useRef<MediaStream | null>(null);
   const cameraRequest = useRef(0);
   const previewUrls = useRef(new Map<string, string>());
+  const attachmentsRef = useRef<readonly DraftAttachment[]>([]);
+  const preparationController = useRef<AbortController | null>(null);
+  const preparationRevision = useRef(0);
   const titleId = useId();
   const statusName = statusText(state);
   const statusId = `${titleId}-status-details`;
@@ -671,6 +674,11 @@ const Composer = forwardRef<ComposerHandle, {
     try { URL.revokeObjectURL(url); } catch { /* Preview cleanup cannot discard the source bytes. */ }
   };
 
+  const publishAttachments = (next: readonly DraftAttachment[]) => {
+    attachmentsRef.current = next;
+    setAttachments(next);
+  };
+
   const createDraftAttachment = (input: ComposerAttachmentInput): DraftAttachment => {
     let previewUrl: string | undefined;
     let previewError: string | undefined;
@@ -680,10 +688,66 @@ const Composer = forwardRef<ComposerHandle, {
         previewUrl = URL.createObjectURL(input.bytes);
         previewUrls.current.set(input.id, previewUrl);
       } catch (error) {
-        previewError = `Preview unavailable: ${errorReason(error)}. The original image remains attached.`;
+        previewError = `Preview unavailable: ${errorReason(error)}. The converted image remains attached.`;
       }
     }
-    return Object.freeze({ input, previewUrl, previewError });
+    return Object.freeze({ input, preparationState: 'ready', previewUrl, previewError });
+  };
+
+  const prepareDraftAttachments = (items: readonly DraftAttachment[]) => {
+    preparationController.current?.abort();
+    preparationController.current = null;
+    const revision = ++preparationRevision.current;
+    setAcquisitionError(null);
+    if (!items.length) {
+      publishAttachments([]);
+      return;
+    }
+
+    const pending = Object.freeze(items.map(item => Object.freeze({ ...item,
+      preparationState: 'preparing' as const, preparationError: undefined } satisfies DraftAttachment)));
+    publishAttachments(pending);
+    const prepare = runtime.prepareAttachmentInputs;
+    if (!prepare) {
+      publishAttachments(pending.map(item => Object.freeze({ ...item, preparationState: 'failed' as const,
+        preparationError: 'Attachment preparation is unavailable for this conversation.' })));
+      return;
+    }
+
+    const controller = new AbortController();
+    preparationController.current = controller;
+    const inputs = Object.freeze(pending.map(item => item.input));
+    void Promise.resolve().then(() => prepare.call(runtime, inputs, controller.signal)).then(prepared => {
+      if (controller.signal.aborted || preparationRevision.current !== revision) return;
+      if (prepared.length !== pending.length || prepared.some((item, index) => item.id !== pending[index].input.id)) {
+        throw new Error('Attachment preparation did not preserve the selected item order.');
+      }
+      const current = attachmentsRef.current;
+      if (current.length !== pending.length || current.some((item, index) => item.input.id !== pending[index].input.id)) return;
+      const ready = prepared.map((input, index) => {
+        const previous = current[index];
+        if (previous.previewUrl && !previous.previewError && previous.input.bytes === input.bytes &&
+            previous.input.filename === input.filename) {
+          return Object.freeze({ ...previous, input, preparationState: 'ready' as const, preparationError: undefined });
+        }
+        releasePreview(input.id);
+        return createDraftAttachment(input);
+      });
+      publishAttachments(Object.freeze(ready));
+    }).catch(error => {
+      if (controller.signal.aborted || preparationRevision.current !== revision) return;
+      const errorIndex = error instanceof AttachmentPreparationError ? error.attachmentIndex : -1;
+      const failedIndex = Number.isInteger(errorIndex) && errorIndex >= 0 && errorIndex < pending.length ? errorIndex : -1;
+      const reason = error instanceof AttachmentPreparationError
+        ? error.message : `Attachment preparation could not finish: ${errorReason(error)}.`;
+      publishAttachments(Object.freeze(pending.map((item, index) => Object.freeze({ ...item,
+        preparationState: failedIndex === index ? 'failed' as const : failedIndex >= 0 ? 'blocked' as const : 'failed' as const,
+        preparationError: failedIndex === index ? reason : failedIndex >= 0
+          ? 'Remove the unreadable attachment to prepare the remaining items.' : reason,
+      }))));
+    }).finally(() => {
+      if (preparationController.current === controller) preparationController.current = null;
+    });
   };
 
   const closeCamera = () => {
@@ -695,28 +759,34 @@ const Composer = forwardRef<ComposerHandle, {
     attachmentControl.current?.focus();
   };
 
+  const addAttachments = (items: readonly { readonly bytes: Blob; readonly filename: string }[]) => {
+    if (!items.length) return;
+    const additions = items.map(item => Object.freeze({
+      input: Object.freeze({ id: newAttachmentId(), filename: item.filename || 'Unnamed file', bytes: item.bytes }),
+      preparationState: 'preparing' as const,
+    }));
+    prepareDraftAttachments([...attachmentsRef.current, ...additions]);
+  };
+
   const addAttachment = (bytes: Blob, filename: string) => {
-    const input: ComposerAttachmentInput = Object.freeze({ id: newAttachmentId(), filename: filename || 'Unnamed file', bytes });
-    const attachment = createDraftAttachment(input);
-    setAttachments(current => [...current, attachment]);
-    setAcquisitionError(null);
+    addAttachments([{ bytes, filename }]);
   };
 
   const restoreDraft = (content: string, items: readonly ComposerAttachmentInput[] = []) => {
     const restoredAttachments = items.map(item => {
       // Restored items belong to a new editable draft, so give them fresh UI IDs
-      // while retaining the exact source Blob and filename from the failed send.
+      // while retaining the exact prepared Blob and filename from the failed send.
       const input = Object.freeze({ id: newAttachmentId(), filename: item.filename, bytes: item.bytes });
-      return createDraftAttachment(input);
+      return Object.freeze({ input, preparationState: 'preparing' as const });
     });
     setDraft(content);
-    if (restoredAttachments.length) setAttachments(current => [...current, ...restoredAttachments]);
-    setAcquisitionError(null);
+    if (restoredAttachments.length) prepareDraftAttachments([...attachmentsRef.current, ...restoredAttachments]);
+    else setAcquisitionError(null);
   };
 
   const addSelectedFiles = (files: FileList | readonly File[] | null) => {
     if (!files?.length) return;
-    for (const file of Array.from(files)) addAttachment(file, file.name || 'Selected file');
+    addAttachments(Array.from(files).map(file => ({ bytes: file, filename: file.name || 'Selected file' })));
   };
 
   const openFilePicker = (kind: 'photo' | 'file') => {
@@ -732,14 +802,14 @@ const Composer = forwardRef<ComposerHandle, {
 
   const removeAttachment = (id: string) => {
     releasePreview(id);
-    setAttachments(current => current.filter(item => item.input.id !== id));
+    prepareDraftAttachments(attachmentsRef.current.filter(item => item.input.id !== id));
   };
 
   const failImagePreview = (id: string) => {
     releasePreview(id);
-    setAttachments(current => current.map(item => item.input.id === id
+    publishAttachments(attachmentsRef.current.map(item => item.input.id === id
       ? Object.freeze({ ...item, previewUrl: undefined,
-        previewError: 'Preview unavailable. The original image remains attached.' })
+        previewError: 'Preview unavailable. The converted image remains attached.' })
       : item));
   };
 
@@ -823,6 +893,9 @@ const Composer = forwardRef<ComposerHandle, {
   useEffect(() => () => {
     cameraRequest.current++;
     stopCameraStream();
+    preparationRevision.current++;
+    preparationController.current?.abort();
+    preparationController.current = null;
     for (const url of previewUrls.current.values()) {
       try { URL.revokeObjectURL(url); } catch { /* The component is already being removed. */ }
     }
@@ -910,6 +983,7 @@ const Composer = forwardRef<ComposerHandle, {
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!draft.trim() && !attachments.length) return;
+    if (attachments.some(item => item.preparationState !== 'ready')) return;
     if (!attachments.length && isSettingsCommand(draft)) {
       setDraft('');
       setStatusOpen(false);
@@ -919,7 +993,7 @@ const Composer = forwardRef<ComposerHandle, {
     if (state.status === 'unauthorized') return;
     let accepted: string | null;
     if (attachments.length) {
-      const sendAttachments = (runtime as AttachmentSubmitRuntime).sendAttachments;
+      const sendAttachments = runtime.sendAttachments;
       if (!sendAttachments) {
         setAcquisitionError('This conversation cannot send attachments with its current Chat runtime. Your draft is still here.');
         return;
@@ -936,7 +1010,10 @@ const Composer = forwardRef<ComposerHandle, {
         return;
       }
       for (const item of attachments) releasePreview(item.input.id);
-      setAttachments([]);
+      preparationRevision.current++;
+      preparationController.current?.abort();
+      preparationController.current = null;
+      publishAttachments([]);
     } else {
       accepted = runtime.send(draft);
     }
@@ -971,10 +1048,12 @@ const Composer = forwardRef<ComposerHandle, {
     try { pasteIntoDraft(clipboard.getData('text/plain')); }
     catch (error) { textReadError = `Clipboard text could not be read: ${errorReason(error)}.`; }
     let unreadable = 0;
+    const pasted: Array<{ readonly bytes: Blob; readonly filename: string }> = [];
     for (const file of files) {
       if (!file) unreadable++;
-      else addAttachment(file, file.name || pastedImageFilename(file));
+      else pasted.push({ bytes: file, filename: file.name || pastedImageFilename(file) });
     }
+    addAttachments(pasted);
     if (unreadable || textReadError) {
       const imageMessage = unreadable
         ? `Could not read ${unreadable === 1 ? 'the pasted image' : `${unreadable} pasted images`}${clipboardFileErrors.length ? `: ${clipboardFileErrors.join('; ')}` : ''}.`
@@ -985,6 +1064,7 @@ const Composer = forwardRef<ComposerHandle, {
   };
 
   const hasDraft = Boolean(draft.trim() || attachments.length);
+  const attachmentsPrepared = attachments.every(item => item.preparationState === 'ready');
 
   return <form className={`tb-chat-composer${cameraState !== 'closed' ? ' tb-chat-composer-camera-open' : ''}`} onSubmit={submit} ref={shell}>
     <label className="tb-chat-sr-only" htmlFor={`${titleId}-input`}>Message to {agentName || 'the selected agent'}</label>
@@ -1021,22 +1101,30 @@ const Composer = forwardRef<ComposerHandle, {
       {attachments.map(item => {
         const image = isImageAttachment(item.input);
         const type = attachmentTypeLabel(item.input);
+        const preparedPreview = image && item.preparationState === 'ready' && item.previewUrl;
         return <li className="tb-chat-draft-attachment" key={item.input.id}>
           <div className="tb-chat-draft-attachment-preview">
-            {image && item.previewUrl
+            {preparedPreview
               ? <img src={item.previewUrl} alt={`Preview of ${item.input.filename}`} onError={() => failImagePreview(item.input.id)} />
-              : <span aria-hidden="true" className="tb-chat-draft-attachment-kind">{image ? 'Image' : type.split(' ')[0]}</span>}
+              : <span aria-hidden="true" className="tb-chat-draft-attachment-kind">
+                {image ? item.preparationState === 'preparing' ? 'Preparing…' : 'Image' : type.split(' ')[0]}
+              </span>}
           </div>
           <span className="tb-chat-draft-attachment-details">
             <span className="tb-chat-draft-attachment-name">{item.input.filename}</span>
             <span className="tb-chat-draft-attachment-type">{type}</span>
-            {item.previewError && <span className="tb-chat-draft-attachment-error">{item.previewError}</span>}
+            {item.preparationState === 'preparing' && <span className="tb-chat-draft-attachment-type" role="status">Preparing attachment…</span>}
+            {item.preparationError && <span className="tb-chat-draft-attachment-error" role="alert">{item.preparationError}</span>}
+            {item.previewError && <span className="tb-chat-draft-attachment-error" role="alert">{item.previewError}</span>}
           </span>
           <button type="button" className="tb-chat-draft-attachment-remove"
             aria-label={`Remove ${item.input.filename}`} onClick={() => removeAttachment(item.input.id)}>×</button>
         </li>;
       })}
     </ul>}
+    {attachments.some(item => item.preparationState === 'failed') && <button type="button"
+      className="tb-chat-attachment-send-retry" aria-label="Retry attachment preparation"
+      onClick={() => prepareDraftAttachments(attachmentsRef.current)}>Retry preparation</button>}
     <div className={`tb-chat-input-shell${suppressStatus ? ' tb-chat-input-shell-no-status' : ''}`}>
       <textarea ref={input} id={`${titleId}-input`} value={draft}
         onChange={(event) => setDraft(event.target.value)}
@@ -1095,7 +1183,7 @@ const Composer = forwardRef<ComposerHandle, {
           <button type="button" onClick={() => void runtime.rebuild({ restart: true })}>Reconnect</button>}
       </div>}
       <button ref={sendControl} type="submit" className="tb-chat-send-button" aria-label="Send message"
-        disabled={!hasDraft || (state.status === 'unauthorized' && !(draft && isSettingsCommand(draft) && !attachments.length))}>
+        disabled={!hasDraft || !attachmentsPrepared || (state.status === 'unauthorized' && !(draft && isSettingsCommand(draft) && !attachments.length))}>
         <span className="tb-chat-send-button-disc" aria-hidden="true" />
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5m0 0L6 11m6-6 6 6" /></svg>
       </button>

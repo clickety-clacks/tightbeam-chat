@@ -4,8 +4,9 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { TightbeamChat, workingStateOpacity } from '../src/TightbeamChat';
 import type { RenderContext } from '../src/TightbeamChat';
 import { createTurnProvenance } from '../src/provenance';
+import { AttachmentPreparationError } from '../src/types';
 import type {
-  ToolCallIndex, ToolCallRecord, CanonicalMessage, CanonicalTurn, ChatRuntime, ConversationRecord, LocalSend, RuntimeState,
+  AttachmentInput, ToolCallIndex, ToolCallRecord, CanonicalMessage, CanonicalTurn, ChatRuntime, ConversationRecord, LocalSend, RuntimeState,
   TightbeamAdapter, TurnProvenance,
 } from '../src/types';
 
@@ -94,6 +95,7 @@ class FakeRuntime implements ChatRuntime {
   };
   update = (patch: Partial<RuntimeState>) => { this.state = { ...this.state, ...patch }; this.publish(); };
   send = (text: string, clientMessageId?: string) => { this.sent.push(text); return clientMessageId ?? this.sendResult; };
+  prepareAttachmentInputs = async (inputs: readonly AttachmentInput[]) => inputs;
   sendAttachments = (content: string, inputs: readonly { id: string; filename: string; bytes: Blob }[]) => {
     this.attachmentSubmissions.push({ content, inputs });
     return this.attachmentSendResult;
@@ -1672,7 +1674,7 @@ describe('conversation surface', () => {
       .toBe(true);
   });
 
-  it('offers photo and file selection, shows previews and named file tiles, and sends the retained source bytes', async () => {
+  it('offers photo and file selection, shows previews and named file tiles, and retains the selected bytes', async () => {
     mockObjectUrls(() => 'blob:photo-preview');
     const runtime = new FakeRuntime('composer-attachments');
     const view = render(<TightbeamChat sessionKey="composer-attachments" adapter={adapterFor(runtime)} />);
@@ -1693,6 +1695,7 @@ describe('conversation surface', () => {
     expect(await screen.findByRole('img', { name: 'Preview of photo.png' })).toBeTruthy();
     expect(screen.getByRole('img', { name: 'Preview of photo.png' }).getAttribute('src')).toBe('blob:photo-preview');
     fireEvent.change(filePicker, { target: { files: [pdf] } });
+    await screen.findByRole('img', { name: 'Preview of photo.png' });
     expect(screen.getByText('report.pdf')).toBeTruthy();
     expect(screen.getByText('PDF file')).toBeTruthy();
     expect(composer.value).toBe('draft text');
@@ -1703,14 +1706,16 @@ describe('conversation surface', () => {
     expect(screen.getByRole('button', { name: 'Remove report.pdf' })).toBeTruthy();
     expect(composer.value).toBe('draft text');
 
+    await screen.findByRole('img', { name: 'Preview of photo.png' });
     fireEvent.error(screen.getByRole('img', { name: 'Preview of photo.png' }));
-    expect(screen.getByText(/Preview unavailable\. The original image remains attached\./)).toBeTruthy();
+    expect(screen.getByText(/Preview unavailable\. The converted image remains attached\./)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Remove photo.png' })).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'Remove report.pdf' }));
     expect(screen.queryByRole('button', { name: 'Remove report.pdf' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Remove photo.png' })).toBeTruthy();
     expect(composer.value).toBe('draft text');
+    await screen.findByRole('img', { name: 'Preview of photo.png' });
 
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
     expect(runtime.attachmentSubmissions).toHaveLength(1);
@@ -1720,6 +1725,89 @@ describe('conversation surface', () => {
     expect(runtime.sent).toEqual([]);
     expect(composer.value).toBe('');
     expect(screen.queryByRole('button', { name: 'Remove photo.png' })).toBeNull();
+  });
+
+  it('preflights the ordered selection before enabling Send and previews the exact prepared image bytes', async () => {
+    const previewed: Blob[] = [];
+    const objectUrls = mockObjectUrls(blob => {
+      previewed.push(blob);
+      return `blob:prepared-preview-${previewed.length}`;
+    });
+    const runtime = new FakeRuntime('prepared-composer-attachments');
+    const converted = new Blob(['converted jpeg bytes'], { type: 'image/jpeg' });
+    const image = new File(['source heic bytes'], 'camera.HEIC', { type: 'image/heic' });
+    const documentFile = new File(['original pdf bytes'], 'report.pdf', { type: 'application/pdf' });
+    const svg = new File(['<svg xmlns="http://www.w3.org/2000/svg"/>'], 'diagram.svg', { type: 'image/svg+xml' });
+    let resolvePreparation!: (items: readonly AttachmentInput[]) => void;
+    let selected: readonly AttachmentInput[] = [];
+    runtime.prepareAttachmentInputs = vi.fn(inputs => {
+      selected = inputs;
+      return new Promise(resolve => { resolvePreparation = resolve; });
+    });
+    const view = render(<TightbeamChat sessionKey="prepared-composer-attachments" adapter={adapterFor(runtime)} />);
+    const composer = screen.getByRole('textbox', { name: 'Message to Research assistant' }) as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: 'caption' } });
+    const filePicker = view.container.querySelectorAll<HTMLInputElement>('input[type="file"]')[1];
+    fireEvent.change(filePicker, { target: { files: [image, documentFile, svg] } });
+
+    const send = screen.getByRole('button', { name: 'Send message' });
+    expect(send).toHaveProperty('disabled', true);
+    await waitFor(() => expect(selected).toHaveLength(3));
+    expect(selected.map(item => item.filename)).toEqual(['camera.HEIC', 'report.pdf', 'diagram.svg']);
+    expect(screen.getByText('SVG file')).toBeTruthy();
+    expect(screen.queryByRole('img', { name: /diagram\.svg/ })).toBeNull();
+    expect(runtime.attachmentSubmissions).toEqual([]);
+
+    resolvePreparation(selected.map(item => item.filename === 'camera.HEIC'
+      ? { ...item, filename: 'camera.jpg', bytes: converted } : item));
+    const imagePreview = await screen.findByRole('img', { name: 'Preview of camera.jpg' });
+    expect(imagePreview.getAttribute('src')).toBe('blob:prepared-preview-1');
+    expect(objectUrls.createObjectURL).toHaveBeenCalledWith(converted);
+    expect(previewed).toEqual([converted]);
+    await waitFor(() => expect(send).toHaveProperty('disabled', false));
+
+    fireEvent.click(send);
+    expect(runtime.attachmentSubmissions).toHaveLength(1);
+    const sent = runtime.attachmentSubmissions[0].inputs;
+    expect(sent.map(item => item.filename)).toEqual(['camera.jpg', 'report.pdf', 'diagram.svg']);
+    expect(sent[0].bytes).toBe(converted);
+    expect(sent[1].bytes).toBe(documentFile);
+    expect(sent[2].bytes).toBe(svg);
+    expect(composer.value).toBe('');
+  });
+
+  it('shows an undecodable image before upload and lets the remaining ordered draft proceed after removal', async () => {
+    const runtime = new FakeRuntime('unreadable-composer-image');
+    const photo = new File(['unreadable image'], 'broken.heic', { type: 'image/heic' });
+    const documentFile = new File(['original document'], 'notes.pdf', { type: 'application/pdf' });
+    runtime.prepareAttachmentInputs = vi.fn(async inputs => {
+      const failedIndex = inputs.findIndex(item => item.filename === 'broken.heic');
+      if (failedIndex >= 0) throw new AttachmentPreparationError(failedIndex, 'image-unreadable',
+        'Cannot read broken.heic in its image format on this device.');
+      return inputs;
+    });
+    const view = render(<TightbeamChat sessionKey="unreadable-composer-image" adapter={adapterFor(runtime)} />);
+    const composer = screen.getByRole('textbox', { name: 'Message to Research assistant' }) as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: 'keep this text' } });
+    const filePicker = view.container.querySelectorAll<HTMLInputElement>('input[type="file"]')[1];
+    fireEvent.change(filePicker, { target: { files: [photo, documentFile] } });
+
+    expect(await screen.findByText(/Cannot read broken\.heic in its image format on this device/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Send message' })).toHaveProperty('disabled', true);
+    expect(runtime.attachmentSubmissions).toEqual([]);
+    expect(composer.value).toBe('keep this text');
+    expect(screen.getByRole('button', { name: 'Remove notes.pdf' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry attachment preparation' }));
+    await waitFor(() => expect(runtime.prepareAttachmentInputs).toHaveBeenCalledTimes(2));
+    expect(runtime.attachmentSubmissions).toEqual([]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove broken.heic' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send message' })).toHaveProperty('disabled', false));
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    expect(runtime.attachmentSubmissions).toHaveLength(1);
+    expect(runtime.attachmentSubmissions[0].inputs).toHaveLength(1);
+    expect(runtime.attachmentSubmissions[0].inputs[0].filename).toBe('notes.pdf');
+    expect(runtime.attachmentSubmissions[0].inputs[0].bytes).toBe(documentFile);
   });
 
   it('shows runtime-owned attachment progress and item errors, and retries the same send ID', async () => {
@@ -1746,6 +1834,7 @@ describe('conversation surface', () => {
     fireEvent.change(document.querySelector<HTMLInputElement>('input[type="file"]')!, {
       target: { files: [source] },
     });
+    await screen.findByRole('img', { name: 'Preview of large-photo.png' });
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
 
     expect(await screen.findByText('Preparing attachments…')).toBeTruthy();
@@ -1788,7 +1877,7 @@ describe('conversation surface', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Restore draft to the composer' }));
     const composer = screen.getByRole('textbox', { name: 'Message to Research assistant' }) as HTMLTextAreaElement;
     expect(composer.value).toBe('recover this photo');
-    expect(screen.getByRole('img', { name: 'Preview of failed-photo.png' }).getAttribute('src'))
+    expect((await screen.findByRole('img', { name: 'Preview of failed-photo.png' })).getAttribute('src'))
       .toBe('blob:restored-failed-photo');
     expect(screen.getByRole('button', { name: 'Remove failed-photo.png' })).toBeTruthy();
 
@@ -1800,7 +1889,7 @@ describe('conversation surface', () => {
     expect(runtime.attachmentSubmissions[0].inputs[0].bytes).toBe(source);
   });
 
-  it('pastes image bytes with clipboard text, leaves ordinary text paste native, and reports unreadable clipboard images', () => {
+  it('pastes image bytes with clipboard text, leaves ordinary text paste native, and reports unreadable clipboard images', async () => {
     mockObjectUrls(() => 'blob:pasted-image');
     const runtime = new FakeRuntime('paste-attachments');
     render(<TightbeamChat sessionKey="paste-attachments" adapter={adapterFor(runtime)} />);
@@ -1817,7 +1906,7 @@ describe('conversation surface', () => {
     });
     expect(combinedPaste.defaultPrevented).toBe(true);
     expect(composer.value).toBe('hello world');
-    expect(screen.getByRole('img', { name: 'Preview of clipboard.png' })).toBeTruthy();
+    expect(await screen.findByRole('img', { name: 'Preview of clipboard.png' })).toBeTruthy();
 
     const unreadablePaste = dispatchClipboardPaste(composer, {
       items: [{ kind: 'file', type: 'image/png', getAsFile: () => null }],
@@ -1890,6 +1979,7 @@ describe('conversation surface', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Capture photo' }));
     expect(await screen.findByRole('button', { name: /Remove camera-/ })).toBeTruthy();
+    expect(await screen.findByRole('img', { name: /Preview of camera-/ })).toBeTruthy();
     expect(screen.queryByRole('dialog', { name: 'Take a photo' })).toBeNull();
     expect(stopTrack).toHaveBeenCalledOnce();
 
@@ -1918,7 +2008,7 @@ describe('conversation surface', () => {
     expect(stopTrack).toHaveBeenCalledOnce();
   });
 
-  it('retains the original image when local preview creation fails', () => {
+  it('retains the prepared image when local preview creation fails', async () => {
     mockObjectUrls(() => { throw new Error('Preview blocked by browser'); });
     const runtime = new FakeRuntime('preview-creation-failure');
     const view = render(<TightbeamChat sessionKey="preview-creation-failure" adapter={adapterFor(runtime)} />);
@@ -1927,12 +2017,12 @@ describe('conversation surface', () => {
       target: { files: [source] },
     });
 
-    expect(screen.getByText(/Preview unavailable: Preview blocked by browser\. The original image remains attached\./)).toBeTruthy();
+    expect(await screen.findByText(/Preview unavailable: Preview blocked by browser\. The converted image remains attached\./)).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
     expect(runtime.attachmentSubmissions[0].inputs[0].bytes).toBe(source);
   });
 
-  it('keeps selected images and draft content when attachment delivery is unavailable or rejected', () => {
+  it('keeps selected images and draft content when attachment delivery is unavailable or rejected', async () => {
     mockObjectUrls(() => 'blob:retry-image');
     const runtime = new FakeRuntime('attachment-rejected');
     const view = render(<TightbeamChat sessionKey="attachment-rejected" adapter={adapterFor(runtime)} />);
@@ -1942,6 +2032,7 @@ describe('conversation surface', () => {
     fireEvent.change(view.container.querySelector<HTMLInputElement>('input[type="file"][accept="image/*"]')!, {
       target: { files: [source] },
     });
+    await screen.findByRole('img', { name: 'Preview of source.png' });
 
     const availableMethod = runtime.sendAttachments;
     (runtime as unknown as { sendAttachments?: typeof runtime.sendAttachments }).sendAttachments = undefined;
