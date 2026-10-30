@@ -41,7 +41,7 @@ export function useActivitySummary(entry: ActivityLine) {
   }, [key]);
   const currentOriginal = useCallback(() => {
     const value = originalRef.current;
-    return value?.key === key ? value.text : undefined;
+    return value && value.key === key ? value.text : undefined;
   }, [key]);
   // The source key owns the subscription; unrelated row-object publications
   // must not become delivery-retry events.
