@@ -6,7 +6,7 @@ import { ToolHistoryUnavailableError } from '../src/toolHistory';
 import type {
   RuntimeState, ToolCallRecord, ToolCallRange, CanonicalMessage, CanonicalTransition, CanonicalTurn, ChangeCallbacks, ChatTransport,
   ConversationPage, ConversationRecord, HostIdentity, HumanSendResult,
-  HumanSubmission, SessionRecord, TargetObservation, TargetProfile,
+  HistoryRailDenial, HumanSubmission, SessionRecord, TargetObservation, TargetProfile,
 } from '../src/types';
 
 const sessionKey = 's1';
@@ -45,6 +45,7 @@ class ControlledTransport implements ChatTransport {
   closed = 0;
   coverage = true;
   tailPage?: ConversationPage;
+  railDenials?: readonly HistoryRailDenial[];
   afterHook?: (cursor: string) => ConversationPage | Promise<ConversationPage>;
   messageDetails = new Map<string, ConversationRecord>();
   clearBarrier = 0;
@@ -79,6 +80,7 @@ class ControlledTransport implements ChatTransport {
     return { records: rows, oldestCursor: rows.length ? rows[0].id : null,
       newestCursor: rows.length ? `after:${rows.at(-1)!.seq}` : null, hasNewer: false,
       hasOlder: rows.length ? this.rows.some((row) => row.seq < firstSeq! && row.seq > this.clearBarrier) : false,
+      ...(this.railDenials === undefined ? {} : { railDenials: this.railDenials }),
       coverage: 'controlled-fixture' };
   }
   readTail = async (): Promise<ConversationPage> => {
@@ -125,6 +127,29 @@ class ControlledTransport implements ChatTransport {
 async function settle() { await vi.waitFor(() => {}, { timeout: 50 }); }
 
 describe('framework-independent runtime', () => {
+  it('restores selected-session refused actions from history and deduplicates their live notice', async () => {
+    const denial: HistoryRailDenial = { id: 'history-14', sessionKey, principal: `session:${sessionKey}`,
+      origin: 'chat', verb: 'send', rule: 'owner-policy', payload: { verb: 'send', rule: 'owner-policy' },
+      occurredAt: 10_000, afterMessageSeq: 2 };
+    const transport = new ControlledTransport();
+    transport.railDenials = [denial];
+    const adapter = createTightbeamAdapter(transport, profile);
+    const first = adapter.open(sessionKey);
+    await vi.waitFor(() => expect(first.getSnapshot().status).toBe('ready'));
+    expect(first.getSnapshot().historyRailDenials).toEqual([denial]);
+    transport.callbacks?.onNotice({ operation: 'rail-denial', id: 'live-14', sessionKey,
+      principal: `session:${sessionKey}`, origin: 'chat', verb: 'send', rule: 'owner-policy',
+      payload: { rule: 'owner-policy', verb: 'send' }, occurredAt: 14_999 });
+    expect(first.getSnapshot().liveRailDenials).toEqual([]);
+    expect(first.getSnapshot().historyRailDenials).toEqual([denial]);
+    first.dispose();
+
+    const returned = adapter.open(sessionKey);
+    await vi.waitFor(() => expect(returned.getSnapshot().status).toBe('ready'));
+    expect(returned.getSnapshot().historyRailDenials).toEqual([denial]);
+    returned.dispose();
+  });
+
   it('retains deprecated live-activity snapshot fields as optional types without populating runtime state', async () => {
     const optionalLegacyFields: Pick<RuntimeState, 'liveActivityIds' | 'liveActivityEligibleIds'> = {};
     expect(optionalLegacyFields).toEqual({});

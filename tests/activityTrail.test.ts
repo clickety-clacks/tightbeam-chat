@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { buildActivityTrail, type ActivityBubble, type ActivityFold, type ActivityLine,
   type MessageActivityItem } from '../src/activityTrail';
 import { decodePublic019Message } from '../src/public019';
-import type { CanonicalMessage, CanonicalTransition, LiveRailDenial, ToolCallRecord } from '../src/types';
+import type { CanonicalMessage, CanonicalTransition, HistoryRailDenial, LiveRailDenial, ToolCallRecord } from '../src/types';
 
 const message = (id: string, seq: number, sender: string, content = id,
   extra: Partial<CanonicalMessage> = {}): CanonicalMessage => ({
@@ -34,6 +34,7 @@ function build(input: {
   activeOwnerTurnSeq?: number;
   activeOwnerTurnMessageId?: string;
   railDenials?: readonly LiveRailDenial[];
+  historyRailDenials?: readonly HistoryRailDenial[];
   shownRuns?: ReadonlyMap<string, string>;
   expandedRuns?: ReadonlySet<string>;
 }) {
@@ -48,6 +49,7 @@ function build(input: {
     activeOwnerTurnSeq: input.activeOwnerTurnSeq ?? activeOwnerPrompt?.record.turnSeq,
     activeOwnerTurnMessageId: input.activeOwnerTurnMessageId ?? activeOwnerPrompt?.record.id,
     railDenials: input.railDenials ?? [],
+    historyRailDenials: input.historyRailDenials ?? [],
     shownRuns: input.shownRuns ?? new Map(), expandedRuns: input.expandedRuns ?? new Set(),
   });
 }
@@ -723,7 +725,7 @@ describe('activity trail projection', () => {
 
   it('keeps rail denials scoped to the selected session and live tail eligibility', () => {
     const prompt = message('prompt', 1, 'user:person');
-    const denial: LiveRailDenial = { id: 'denial', principal: 'session:session', verb: 'attest',
+    const denial: LiveRailDenial = { id: 'denial', sessionKey: 'session', principal: 'session:session', verb: 'attest',
       rule: 'sample-rule', tailEligibleAtArrival: true, afterMessageSeq: 1, arrivalOrder: 1 };
     const other: LiveRailDenial = { ...denial, id: 'other', principal: 'session:other' };
     const plan = build({ bubbles: [bubble(prompt, 'human')], railDenials: [denial, other] });
@@ -736,6 +738,38 @@ describe('activity trail projection', () => {
     const noTurnState = build({ bubbles: [bubble(prompt, 'human')], railDenials: [denial], turnStateAvailable: false,
       activeTurnRunning: false });
     expect(noTurnState.messageItems).toHaveLength(1);
+  });
+
+  it('shows a history-backed refusal once when its live notice is also present', () => {
+    const prompt = message('prompt', 1, 'user:person', 'Question', { role: 'user' });
+    const reply = message('reply', 3, 'assistant-service', 'Answer', { role: 'assistant' });
+    const history: HistoryRailDenial = { id: 'history-id', sessionKey: 'session',
+      principal: 'session:session', origin: 'chat', verb: 'send', rule: 'owner-policy',
+      payload: { detail: 'Refused', verb: 'send', rule: 'owner-policy' }, occurredAt: 10_000, afterMessageSeq: 1 };
+    const live: LiveRailDenial = { id: 'live-id', sessionKey: 'session',
+      principal: 'session:session', origin: 'chat', verb: 'send', rule: 'owner-policy',
+      payload: { rule: 'owner-policy', verb: 'send', detail: 'Refused' }, occurredAt: 14_999,
+      tailEligibleAtArrival: false, afterMessageSeq: 1, arrivalOrder: 1 };
+    const plan = build({ records: [prompt, reply], bubbles: [bubble(prompt, 'human'), bubble(reply, 'agent')],
+      railDenials: [live], historyRailDenials: [history, { ...history }] });
+    const pills = plan.messageItems.filter((item): item is ActivityLine => item.kind === 'rail');
+    expect(pills).toHaveLength(1);
+    expect(pills[0]).toMatchObject({ id: 'rail:history-id', anchorSeq: 1, gist: 'send refused by owner-policy' });
+  });
+
+  it('places legacy history denials by event time when afterMessageSeq is absent', () => {
+    const prompt = message('prompt', 1, 'user:person', 'Question', { role: 'user',
+      createdAt: '2026-10-12T00:00:00.000Z' });
+    const reply = message('reply', 3, 'assistant-service', 'Answer', { role: 'assistant',
+      createdAt: '2026-10-12T00:00:03.000Z' });
+    const denial: HistoryRailDenial = { id: 'legacy-id', sessionKey: 'session', principal: 'session:session',
+      origin: 'chat', verb: 'send', rule: 'owner-policy', payload: { reason: 'Refused' },
+      occurredAt: Date.parse('2026-10-12T00:00:02.000Z') };
+    const plan = build({ records: [prompt, reply], bubbles: [bubble(prompt, 'human'), bubble(reply, 'agent')],
+      historyRailDenials: [denial], railDenials: [] });
+    const pill = plan.messageItems.find((item): item is ActivityLine => item.kind === 'rail');
+    expect(pill).toMatchObject({ id: 'rail:legacy-id', anchorSeq: 1,
+      position: { sequence: 1, phase: 3 }, gist: 'send refused by owner-policy' });
   });
 
   it('excludes a session-addressed agent message without owner-turn evidence both live and after reload', () => {

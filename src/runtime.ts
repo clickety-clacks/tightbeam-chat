@@ -13,6 +13,7 @@ import {
   type ChatTransport,
   type ConversationPage,
   type ConversationRecord,
+  type HistoryRailDenial,
   type HostIdentity,
   type HostSendObserver,
   type HostSendContext,
@@ -31,6 +32,7 @@ import {
 import { ToolHistoryUnavailableError } from './toolHistory';
 import { createTurnProvenance } from './provenance';
 import { getIndex, putIndex, trimIndexBelow } from './recordIndex';
+import { sameRailDenial } from './railDenials';
 
 const LIVE_RECONNECTING_AFTER_MS = 1_000;
 const LIVE_DISCONNECTED_AFTER_MS = 10_000;
@@ -121,6 +123,7 @@ class SessionRuntime implements ChatRuntime {
   private readonly rows = new Map<string, ConversationRecord>();
   private readonly tombstones = new Map<string, number>();
   private readonly liveRailDenials = new Map<string, LiveRailDenial>();
+  private historyRailDenials: readonly HistoryRailDenial[] = Object.freeze([]);
   private activityTurnStateAvailable = false;
   private railArrivalOrder = 0;
   private readonly sendControllers = new Map<string, AbortController>();
@@ -187,6 +190,7 @@ class SessionRuntime implements ChatRuntime {
       hasOlder: false, loadingOlder: false, sends: Object.freeze([]), targetLabel: profile.label,
       targetGateway: transport.targetGateway, provenance: noProvenance, provenanceAvailable: false,
       activityTurnStateAvailable: false, liveRailDenials: Object.freeze([]),
+      historyRailDenials: this.historyRailDenials,
     });
     void this.rebuild();
   }
@@ -219,11 +223,21 @@ class SessionRuntime implements ChatRuntime {
     for (const listener of this.listeners) listener();
   }
 
-  private activityStatePatch(): Pick<RuntimeState, 'activityTurnStateAvailable' | 'liveRailDenials'> {
+  private activityStatePatch(): Pick<RuntimeState, 'activityTurnStateAvailable' | 'liveRailDenials' | 'historyRailDenials'> {
     return {
       activityTurnStateAvailable: this.activityTurnStateAvailable,
       liveRailDenials: Object.freeze([...this.liveRailDenials.values()]),
+      historyRailDenials: this.historyRailDenials,
     };
+  }
+
+  private replaceHistoryRailDenials(denials: readonly HistoryRailDenial[]): void {
+    this.historyRailDenials = Object.freeze([...denials]);
+    for (const [id, live] of this.liveRailDenials) {
+      if (this.historyRailDenials.some((history) => sameRailDenial(history, live))) {
+        this.liveRailDenials.delete(id);
+      }
+    }
   }
 
   private liveTailEligibleAtArrival(): boolean {
@@ -432,6 +446,7 @@ class SessionRuntime implements ChatRuntime {
     this.rows.clear();
     this.tombstones.clear();
     this.liveRailDenials.clear();
+    this.historyRailDenials = Object.freeze([]);
     this.activityTurnStateAvailable = false;
     this.railArrivalOrder = 0;
     this.turns.clear();
@@ -486,13 +501,16 @@ class SessionRuntime implements ChatRuntime {
         return true;
       }
       case 'rail-denial': {
-        if (notice.principal !== `session:${this.sessionKey}` || !notice.verb.trim() || !notice.rule.trim() ||
-            this.liveRailDenials.has(notice.id)) return false;
-        const afterMessageSeq = Math.max(0, ...[...this.rows.values()].map((row) => row.seq));
-        this.liveRailDenials.set(notice.id, Object.freeze({ id: notice.id, principal: notice.principal,
-          verb: notice.verb, rule: notice.rule, occurredAt: notice.occurredAt,
+        if (notice.sessionKey !== this.sessionKey || notice.principal !== `session:${this.sessionKey}` ||
+            !notice.verb.trim() || !notice.rule.trim() || this.liveRailDenials.has(notice.id)) return false;
+        const denial: LiveRailDenial = Object.freeze({ id: notice.id, sessionKey: notice.sessionKey,
+          principal: notice.principal, verb: notice.verb, rule: notice.rule, origin: notice.origin,
+          payload: notice.payload, occurredAt: notice.occurredAt,
           tailEligibleAtArrival: this.liveTailEligibleAtArrival(),
-          afterMessageSeq, arrivalOrder: ++this.railArrivalOrder }));
+          afterMessageSeq: notice.afterMessageSeq ?? Math.max(0, ...[...this.rows.values()].map((row) => row.seq)),
+          arrivalOrder: ++this.railArrivalOrder });
+        if (this.historyRailDenials.some((history) => sameRailDenial(history, denial))) return false;
+        this.liveRailDenials.set(notice.id, denial);
         return true;
       }
       case 'delete': {
@@ -845,6 +863,7 @@ class SessionRuntime implements ChatRuntime {
     this.rows.clear();
     this.tombstones.clear();
     this.liveRailDenials.clear();
+    this.historyRailDenials = Object.freeze([]);
     this.activityTurnStateAvailable = false;
     this.railArrivalOrder = 0;
     this.cursor = null;
@@ -1037,6 +1056,7 @@ class SessionRuntime implements ChatRuntime {
 
       let cursor = this.cursor;
       let hasOlder = this.state.hasOlder;
+      let historyRailDenials = this.historyRailDenials;
       let historyError: string | undefined;
       if (clearInvalidatesOlderAnchor && !tail) {
         // The previous before-cursor is now below the visibility barrier. Keep
@@ -1047,6 +1067,7 @@ class SessionRuntime implements ChatRuntime {
         historyError = conversationError ?? errorText(tailResult.status === 'rejected' ? tailResult.reason : 'History could not be refreshed.');
       }
       if (tail) {
+        historyRailDenials = tail.railDenials ?? [];
         const candidate = new Map<string, ConversationRecord>();
         for (const record of tail.records) {
           const previous = candidate.get(record.id);
@@ -1068,6 +1089,7 @@ class SessionRuntime implements ChatRuntime {
             if (page.oldestCursor === cursor && page.hasOlder) {
               throw new UnsupportedTargetError('Older cursor did not advance.');
             }
+            historyRailDenials = page.railDenials ?? [];
             for (const record of page.records) {
               const previous = candidate.get(record.id);
               candidate.set(record.id, mergeRecord(previous, record));
@@ -1130,6 +1152,7 @@ class SessionRuntime implements ChatRuntime {
         if (catchingUp) this.newestCursor = tail.newestCursor ?? priorNewestCursor;
         else this.newestCursor = tail.newestCursor ?? null;
         for (const record of candidate.values()) this.put(record);
+        this.replaceHistoryRailDenials(historyRailDenials);
       }
 
       if (!this.connection || !session || !tail || sessionError || conversationError) {
@@ -1316,6 +1339,16 @@ class SessionRuntime implements ChatRuntime {
     for (const record of page.records) {
       if (record.sessionKey !== this.sessionKey) throw new UnsupportedTargetError('History page crossed session boundary.');
     }
+    for (const denial of page.railDenials ?? []) {
+      if (denial.sessionKey !== this.sessionKey || denial.principal !== `session:${this.sessionKey}` ||
+          !denial.id || !denial.verb.trim() || !denial.rule.trim() || !denial.origin.trim() ||
+          !Number.isSafeInteger(denial.occurredAt) || denial.occurredAt < 0 ||
+          (denial.afterMessageSeq !== undefined &&
+            (!Number.isSafeInteger(denial.afterMessageSeq) || denial.afterMessageSeq < 0)) ||
+          denial.payload === null || typeof denial.payload !== 'object' || Array.isArray(denial.payload)) {
+        throw new UnsupportedTargetError('History page contains an invalid refused action.');
+      }
+    }
     for (let index = 1; index < page.records.length; index++) {
       if (compareRecords(page.records[index - 1], page.records[index]) > 0) {
         throw new UnsupportedTargetError('History page is not chronological.');
@@ -1338,10 +1371,12 @@ class SessionRuntime implements ChatRuntime {
       if (page.hasOlder && page.oldestCursor === cursor) throw new InvalidCursorError('Older cursor did not advance.');
       await this.olderTools(page);
       if (!this.isCurrent(generation) || !this.checkIdentity()) return;
+      this.replaceHistoryRailDenials(page.railDenials ?? []);
       for (const record of page.records) this.put(record);
       this.cursor = page.oldestCursor;
       this.restoreDepth++;
-      this.publish({ records: recordsFrom(this.rows), hasOlder: page.hasOlder, loadingOlder: false });
+      this.publish({ records: recordsFrom(this.rows), hasOlder: page.hasOlder, loadingOlder: false,
+        ...this.activityStatePatch() });
       this.publishTools();
     } catch (error) {
       if (!this.isCurrent(generation) || signal.aborted) return;
