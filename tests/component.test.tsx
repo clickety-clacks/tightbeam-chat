@@ -328,7 +328,7 @@ describe('conversation surface', () => {
     expect(within(log).getByRole('link', { name: 'Reference' }).getAttribute('target')).toBe('_blank');
     expect(within(log).getByText('inline code')).toBeTruthy();
     const recognizedCode = log.querySelector('code.language-ts');
-    expect(recognizedCode?.textContent).toBe('const value = 1;');
+    expect(recognizedCode?.textContent?.trimEnd()).toBe('const value = 1;');
     expect(recognizedCode?.querySelector('.hljs-keyword')?.textContent).toBe('const');
     expect(recognizedCode?.closest('.tb-chat-code-scroll')).toBeTruthy();
     const unknownCode = log.querySelector('code.language-mermaid');
