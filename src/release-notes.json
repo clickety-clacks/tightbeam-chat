@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.58",
+    "items": [
+      {
+        "title": "Restore refused-action notices from history",
+        "description": "Chat uses refused-action history supplied by the server to restore notices in their saved position and reconcile matching live notices. Older servers without this history keep refused-action notices live-only."
+      }
+    ]
+  },
+  {
     "version": "v0.1.57",
     "items": [
       {
