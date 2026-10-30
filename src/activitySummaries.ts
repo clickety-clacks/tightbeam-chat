@@ -239,10 +239,10 @@ export class ActivitySummaryViewer {
       // The request body is serialized synchronously by the transport. Drop the
       // per-line strings from the page-local request array while the answer
       // stream remains open; reopens resolve sources from mounted rows again.
-      sources.length = 0;
+      sources = [];
       await stream;
     } catch {
-      sources.length = 0;
+      sources = [];
       // Originals remain readable; delivery resumes only on the rules below.
     }
     if (this.disposed || controller.signal.aborted) return;
