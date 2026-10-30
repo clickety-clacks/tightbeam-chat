@@ -193,17 +193,24 @@ describe('row-local rendering', () => {
   it('shows an attest note locally as the original and keeps it available on hover after summarizing', async () => {
     const { calls, transport } = transportFixture();
     transport.readAttestNote = vi.fn(async () => 'The full attest note remains readable.');
-    const note: ActivityLine = { ...line('message:attest', 'Filed a review note.', 'substrate'),
+    const note: ActivityLine = { ...line('message:attest', 'Filed a review note.', 'substrate'), sourceRecord: {},
       presentation: { label: 'Attest', tone: 'amber', icon: 'attest', text: 'Filed a review note.', attestId: 'note-reference' } };
     function Row() {
       const result = useActivitySummary(note);
       return <div data-testid="attest" title={result.original} data-state={result.state}>{result.presentation?.text}</div>;
     }
-    render(<ActivitySummaryProvider transport={transport} connected reconcile={() => {}}><Row /></ActivitySummaryProvider>);
+    const view = (entry: ActivityLine, show = true) => <ActivitySummaryProvider transport={transport} connected reconcile={() => {}}>
+      {show && <Row entry={entry} />}
+    </ActivitySummaryProvider>;
+    const rendered = render(view(note));
     await act(flush);
     expect(screen.getByTestId('attest').textContent).toBe('The full attest note remains readable.');
     expect(screen.getByTestId('attest').title).toBe('The full attest note remains readable.');
     await act(async () => { calls[0].receive({ index: 0, state: 'summary', summary: 'Three findings were filed.' }); });
+    expect(screen.getByTestId('attest').textContent).toBe('Three findings were filed.');
+    expect(screen.getByTestId('attest').title).toBe('The full attest note remains readable.');
+    rendered.rerender(view(note, false));
+    rendered.rerender(view({ ...note }));
     expect(screen.getByTestId('attest').textContent).toBe('Three findings were filed.');
     expect(screen.getByTestId('attest').title).toBe('The full attest note remains readable.');
     expect(transport.readAttestNote).toHaveBeenCalledTimes(1);

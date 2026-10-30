@@ -30,9 +30,28 @@ export interface ActivityLine {
   readonly accessibleText: string;
   /** Original retained content is only exposed through the pill's hover title. */
   readonly originalContent?: string;
+  /** Stable record owner for source details loaded separately from history. */
+  readonly sourceRecord?: object;
   readonly presentation?: ActivityPillPresentation;
   readonly sortTime?: number;
   readonly call?: ToolCallRecord;
+}
+
+const sourceDetails = new WeakMap<object, Map<string, string>>();
+
+/** Retain a fetched original with its canonical row so a remounted line can reuse it. */
+export function rememberActivitySourceDetail(line: ActivityLine, text: string): void {
+  if (!line.sourceRecord) return;
+  let details = sourceDetails.get(line.sourceRecord);
+  if (!details) {
+    details = new Map();
+    sourceDetails.set(line.sourceRecord, details);
+  }
+  details.set(line.id, text);
+}
+
+export function activitySourceDetail(line: ActivityLine): string | undefined {
+  return line.sourceRecord ? sourceDetails.get(line.sourceRecord)?.get(line.id) : undefined;
 }
 
 export interface ActivityOverflow {
@@ -147,12 +166,13 @@ function messageCandidate(message: CanonicalMessage): Candidate | undefined {
   }
   if (message.messageType === 'substrate' || message.messageType === 'process' || sender.startsWith('process:')) {
     const gist = bodyGist(message.content) || 'Substrate activity';
+    const presentation = activityPillPresentation({ kind: 'substrate', gist, content: message.content, sender,
+      source: rawSource(message), messageType: message.messageType, turnSeq: message.turnSeq });
     return { id, kind: 'substrate', runKey: '', anchorSeq: message.seq,
       position: { sequence: message.seq, phase: 1, order: 0 }, gist,
       accessibleText: `Substrate: ${gist}`,
       originalContent: message.content,
-      presentation: activityPillPresentation({ kind: 'substrate', gist, content: message.content, sender,
-        source: rawSource(message), messageType: message.messageType, turnSeq: message.turnSeq }), sortTime,
+      ...(presentation?.attestId ? { sourceRecord: message } : {}), presentation, sortTime,
       historyBacked: true,
       semanticFoldKind: gatewayNoticeFoldKind(message.content) };
   }
@@ -191,11 +211,12 @@ function memberCandidate(carrier: CanonicalMessage, member: ParsedBatchMember): 
   }
   if (member.sender.startsWith('process:')) {
     const gist = detail || 'Substrate activity';
+    const presentation = activityPillPresentation({ kind: 'substrate', gist, content: member.content,
+      sender: member.sender, source: member.source, messageType: carrier.messageType });
     return { id, kind: 'substrate', runKey: '', anchorSeq: carrier.seq, position, gist,
       accessibleText: `Substrate: ${gist}`,
       originalContent: member.content,
-      presentation: activityPillPresentation({ kind: 'substrate', gist, content: member.content, sender: member.sender,
-        source: member.source, messageType: carrier.messageType }),
+      ...(presentation?.attestId ? { sourceRecord: carrier } : {}), presentation,
       sortTime, historyBacked: true,
       semanticFoldKind: gatewayNoticeFoldKind(member.content) };
   }
