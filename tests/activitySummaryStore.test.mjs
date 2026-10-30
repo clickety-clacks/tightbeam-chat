@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
-import { ActivitySummaryStore, modelCaller, normalizeSummary, sourceIdentity, summaryConfiguration } from '../server/activity-summaries.mjs';
+import { ActivitySummaryStore, modelCaller, normalizeSummary, sourceIdentity, summaryConfiguration } from '../bin/activity-summaries.mjs';
 import { createChatServer } from '../server/chat-server.mjs';
 
 const roots = [], stores = [], servers = [];
