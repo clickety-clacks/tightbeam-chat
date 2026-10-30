@@ -1,5 +1,18 @@
 [
   {
+    "version": "v0.1.65",
+    "items": [
+      {
+        "title": "Keep the latest prompt within reach",
+        "description": "When your latest prompt scrolls out of view, a smaller matching bubble shows up to three lines. Tap it to return to the original, or dismiss it until you submit another prompt. The preview stays hidden while the original is visible."
+      },
+      {
+        "title": "Read complete activity messages",
+        "description": "Tap or click an activity pill to open its full, selectable message, then close it with the same control. Standalone pills and pills inside expanded groups share the detail rail and fold motion used by tool calls."
+      }
+    ]
+  },
+  {
     "version": "v0.1.64",
     "items": [
       {
