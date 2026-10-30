@@ -8,25 +8,38 @@ export interface HumanMember {
 }
 
 export interface ParsedBatchMember extends HumanMember {
+  readonly source: string;
   readonly sender: string;
 }
 
 const batchHeading = /^\[(\d+)\] source=([^\s]+) sender=([^\s]+) cause=([^\s]+) class=([^\s]+)$/;
+const canonicalBatchHeading = /^\[(\d+)\] source=([^\s]+) sender=(.+?) cause=([^\s]+) class=([^\s]+)$/;
+const batchCountHeading = /^\[batched notices: ([1-9]\d*)\]$/;
 
 /** Parse only the delivered, indexed notice-batch form; unknown wrappers stay hidden. */
 export function parseBatchMembers(record: CanonicalMessage): readonly ParsedBatchMember[] | undefined {
-  if (record.isBatchCarrier !== true && !record.sender?.startsWith('process:')) return undefined;
+  const isCanonicalCarrier = record.isBatchCarrier === true;
+  if (!isCanonicalCarrier && !record.sender?.startsWith('process:')) return undefined;
   const lines = record.content.split(/\r?\n/);
-  const countMatch = /^\[batched notices: ([1-9]\d*)\]$/.exec(lines[0] ?? '');
+  // Keep the count-first form already in use while recognizing the process
+  // preamble used by current canonical carriers.
+  const countFirst = batchCountHeading.test(lines[0] ?? '');
+  const hasProcessPreamble = /^\[from process:[^\]]+\]$/.test(lines[0] ?? '') && lines[1] === '';
+  const countLineIndex = countFirst ? 0 : isCanonicalCarrier && hasProcessPreamble ? 2 : -1;
+  if (countLineIndex < 0) return undefined;
+  const countMatch = batchCountHeading.exec(lines[countLineIndex] ?? '');
   if (!countMatch) return undefined;
-  const count = Number(countMatch[1]);
-  if (!Number.isSafeInteger(count)) return undefined;
+  const declaredCount = Number(countMatch[1]);
+  if (!Number.isSafeInteger(declaredCount)) return undefined;
 
   const headers = lines.flatMap((line, lineIndex) => {
-    const match = batchHeading.exec(line);
-    return match ? [{ lineIndex, index: Number(match[1]), sender: match[3] }] : [];
+    const match = (isCanonicalCarrier ? canonicalBatchHeading : batchHeading).exec(line);
+    return match ? [{ lineIndex, index: Number(match[1]), source: match[2], sender: match[3] }] : [];
   });
-  if (headers.length !== count || headers.some((header, index) => header.index !== index + 1)) return undefined;
+  const validIndexes = headers.every((header, index) => Number.isSafeInteger(header.index) && header.index > 0 &&
+    (isCanonicalCarrier ? index === 0 || header.index > headers[index - 1].index : header.index === index + 1));
+  if (!headers.length || headers.length !== declaredCount || !validIndexes ||
+    headers.some(header => header.lineIndex <= countLineIndex)) return undefined;
   const footerIndex = lines.reduce((found, line, index) => /^coalesced by\s+\S/.test(line) ? index : found, -1);
   if (footerIndex <= headers.at(-1)!.lineIndex) return undefined;
 
@@ -37,7 +50,7 @@ export function parseBatchMembers(record: CanonicalMessage): readonly ParsedBatc
     // A single empty line separates a member body from the next framing line.
     if (bodyEnd > bodyStart && lines[bodyEnd - 1] === '') bodyEnd--;
     return Object.freeze({ index: header.index, sourceId: `${record.id}:member:${header.index}`,
-      sender: header.sender, content: lines.slice(bodyStart, bodyEnd).join('\n') });
+      source: header.source, sender: header.sender, content: lines.slice(bodyStart, bodyEnd).join('\n') });
   });
 }
 
@@ -95,7 +108,8 @@ export function projectMessages(records: readonly ConversationRecord[], principa
         if (member.sender.startsWith('user:')) {
           messages.push({ key: `${record.id}:member:${member.index}`, source: record, side: 'human',
             senderLabel: member.sender === `user:${principalKey}` ? 'You' : 'User',
-            provenancePending: false, member });
+            provenancePending: false, member: Object.freeze({ index: member.index, sourceId: member.sourceId,
+              sender: member.sender, content: member.content }) });
         }
       }
     } else if (classification === 'human') {

@@ -2,7 +2,7 @@
 export type ActivityPillTone = 'green' | 'amber' | 'orange' | 'red' | 'blue' | 'purple' | 'indigo' | 'slate';
 export type ActivityPillIcon = 'message' | 'attest' | 'assignment' | 'decision' | 'work-item' |
   'decision-answered' | 'hourglass' | 'session' | 'turn' | 'remedy' | 'refused' |
-  'alarm' | 'clock' | 'flag' | 'activity';
+  'alarm' | 'clock' | 'flag' | 'activity' | 'notice' | 'process';
 
 export interface ActivityPillPresentation {
   readonly label: string;
@@ -18,11 +18,30 @@ export interface ActivityPillSource {
   readonly content: string;
   readonly sender?: string;
   readonly senderDisplayName?: string;
+  readonly source?: string;
+  readonly messageType?: string;
   readonly turnSeq?: number;
 }
 
 const normalize = (value: string): string => value.replace(/\s+/g, ' ').trim();
 const lines = (value: string): string[] => value.split(/\r?\n/).map(normalize).filter(Boolean);
+const transportLine = (line: string): boolean =>
+  /^\[from [^\]]+\]$/i.test(line) || /^\[batched notices:\s*\d+\]$/i.test(line) ||
+  /^batchId=/i.test(line) || /^release=/i.test(line) || /^\[\d+\]\s*(?:source|sender)=/i.test(line) ||
+  /^coalesced by /i.test(line) || /^(?:messageType|source|cause|class|role|sender)=/i.test(line);
+const semanticLines = (value: string): string[] => lines(value).filter(line => !transportLine(line));
+const wireOnlyLine = (line: string): boolean => transportLine(line) ||
+  /^(?:terminal-child-owner-notification|(?:source_kind|source_token|assignment_id|work_item_id|child_session_key|outcome|terminal_at)=)/i.test(line) ||
+  /^\[(?:assignment:|woke:|turn failed\])/i.test(line);
+const shortenVisibleIds = (value: string): string => value.replace(
+  /\b((?:wi|asg|dr|att|s|w|c|tc)_)([a-z0-9]{4})[a-z0-9-]{4,}\b/gi,
+  (_match, prefix: string, firstFour: string) => `${prefix}${firstFour}`,
+);
+function plainText(value: string): string {
+  return shortenVisibleIds(lines(value).filter(line => !wireOnlyLine(line))
+    .map(line => line.replace(/\[([^\]]*)\]/g, '$1').replace(/[\[\]]/g, '')).join(' '));
+}
+
 const idPattern = (prefix: string) => new RegExp(`\\b${prefix}_([a-z0-9][a-z0-9-]*)\\b`, 'i');
 
 function shortId(prefix: string, source: string): string | undefined {
@@ -43,7 +62,7 @@ function field(sourceLines: readonly string[], key: string): string | undefined 
 }
 
 function childFinished(content: string): ActivityPillPresentation | undefined {
-  const sourceLines = lines(content);
+  const sourceLines = semanticLines(content);
   if (sourceLines[0] !== 'terminal-child-owner-notification') return undefined;
   const outcome = field(sourceLines.slice(1), 'outcome');
   const childSession = field(sourceLines.slice(1), 'child_session_key');
@@ -61,7 +80,7 @@ function childFinished(content: string): ActivityPillPresentation | undefined {
 }
 
 function wakePresentation(content: string): ActivityPillPresentation | undefined {
-  const sourceLines = lines(content);
+  const sourceLines = semanticLines(content);
   const first = sourceLines[0] ?? '';
   if (/^\[woke:/i.test(first)) {
     const detail = sourceLines.find(line => !/^\[woke:/i.test(line));
@@ -85,7 +104,7 @@ function wakePresentation(content: string): ActivityPillPresentation | undefined
 }
 
 function reminderPresentation(content: string): ActivityPillPresentation | undefined {
-  const first = lines(content)[0] ?? '';
+  const first = semanticLines(content)[0] ?? '';
   const quiet = /^Quiet for (\d+\s+(?:s(?:ec(?:ond)?s?)?|min(?:ute)?s?|h(?:r|our)?s?|d(?:ay)?s?))\s*[·•]/i.exec(first);
   if (quiet) {
     return { label: 'Assignment', tone: 'amber', icon: 'clock', text: first,
@@ -99,15 +118,38 @@ function reminderPresentation(content: string): ActivityPillPresentation | undef
   return undefined;
 }
 
+function sourceKind(value?: string): string | undefined {
+  const kind = value?.split(':', 1)[0]?.trim().toLowerCase();
+  return kind || undefined;
+}
+
+function substrateTypePresentation(source: ActivityPillSource): ActivityPillPresentation | undefined {
+  const messageType = source.messageType?.trim().toLowerCase().replace(/[_.\s]+/g, '-');
+  const text = plainText(source.gist) || plainText(source.content) || 'Activity received';
+  const metadata = shortId('asg', source.content) ?? shortId('wi', source.content) ??
+    shortId('dr', source.content) ?? shortId('att', source.content) ?? shortId('s', source.content);
+  const originKind = sourceKind(source.source) ?? sourceKind(source.sender);
+  if (originKind === 'agent' || originKind === 'session' || messageType === 'agent') {
+    return { label: 'Message', tone: 'indigo', icon: 'message', text, metadata };
+  }
+  if (originKind === 'remedy') return { label: 'Remedy', tone: 'orange', icon: 'remedy', text, metadata };
+  if (messageType === 'process') return { label: 'System', tone: 'purple', icon: 'process', text, metadata };
+  if (messageType === 'substrate') return { label: 'Notice', tone: 'blue', icon: 'notice', text, metadata };
+  if (originKind === 'process') {
+    return { label: 'System', tone: 'purple', icon: 'process', text, metadata };
+  }
+  return undefined;
+}
+
 function genericActivity(source: ActivityPillSource): ActivityPillPresentation {
   const metadata = shortId('asg', source.content) ?? shortId('wi', source.content) ??
     shortId('dr', source.content) ?? shortId('att', source.content) ?? shortId('s', source.content);
   return { label: 'Activity', tone: 'slate', icon: 'activity',
-    text: normalize(source.gist) || normalize(lines(source.content)[0] ?? '') || 'Activity received', metadata };
+    text: plainText(source.gist) || plainText(source.content) || 'Activity received', metadata };
 }
 
 function decisionPresentation(content: string): ActivityPillPresentation | undefined {
-  const sourceLines = lines(content);
+  const sourceLines = semanticLines(content);
   const first = sourceLines[0] ?? '';
   let id: string | undefined;
   let tone: ActivityPillTone = 'blue';
@@ -150,7 +192,7 @@ function decisionPresentation(content: string): ActivityPillPresentation | undef
 }
 
 function workItemPresentation(content: string): ActivityPillPresentation | undefined {
-  const first = lines(content)[0] ?? '';
+  const first = semanticLines(content)[0] ?? '';
   let match = /^route it or icebox it\s*[—-]\s*work item\s+(wi_[a-z0-9-]+):\s*(.+)$/i.exec(first);
   if (match) {
     return { label: 'Work item', tone: 'amber', icon: 'work-item',
@@ -170,7 +212,7 @@ function workItemPresentation(content: string): ActivityPillPresentation | undef
 }
 
 function assignmentPresentation(content: string): ActivityPillPresentation | undefined {
-  const sourceLines = lines(content);
+  const sourceLines = semanticLines(content);
   const first = sourceLines[0] ?? '';
   const match = /^\[assignment:\s*(asg_[a-z0-9-]+)\s*\]$/i.exec(first);
   if (!match) return undefined;
@@ -180,7 +222,7 @@ function assignmentPresentation(content: string): ActivityPillPresentation | und
 }
 
 function sessionPresentation(content: string): ActivityPillPresentation | undefined {
-  const first = lines(content)[0] ?? '';
+  const first = semanticLines(content)[0] ?? '';
   const id = shortId('s', first);
   if (!id || !/\bsession\b/i.test(first)) return undefined;
   const verb = /\b(retired|archived|restarted|resumed|stopped|created|updated|renamed)\b/i.exec(first)?.[1];
@@ -195,7 +237,7 @@ function sessionPresentation(content: string): ActivityPillPresentation | undefi
 }
 
 function turnFailure(content: string, turnSeq?: number): ActivityPillPresentation | undefined {
-  const sourceLines = lines(content);
+  const sourceLines = semanticLines(content);
   if (sourceLines[0] !== '[turn failed]') return undefined;
   const detail = sourceLines.find(line => line !== '[turn failed]');
   return { label: 'Turn', tone: 'red', icon: 'turn',
@@ -203,7 +245,7 @@ function turnFailure(content: string, turnSeq?: number): ActivityPillPresentatio
 }
 
 function attestPresentation(content: string): ActivityPillPresentation | undefined {
-  const first = lines(content)[0] ?? '';
+  const first = semanticLines(content)[0] ?? '';
   const match = /^Attest\s+(att_[a-z0-9-]+)\s+\(([^)]+)\)\s+was filed on assignment\s+(asg_[a-z0-9-]+)\.?$/i.exec(first);
   if (!match) return undefined;
   return { label: 'Attest', tone: 'amber', icon: 'attest',
@@ -236,20 +278,26 @@ function refusalPresentation(gist: string): ActivityPillPresentation | undefined
  * renderer and are intentionally outside this presentation path.
  */
 export function activityPillPresentation(source: ActivityPillSource): ActivityPillPresentation | undefined {
+  let presentation: ActivityPillPresentation;
   if (source.kind === 'agent') {
     const separator = source.gist.indexOf(' — ');
     const sender = separator >= 0 ? source.gist.slice(0, separator) : 'Another agent';
     const text = separator >= 0 ? source.gist.slice(separator + 3) : source.gist;
     const displayName = source.senderDisplayName?.trim() || (sender === 'Another agent' ? undefined : sender);
-    return { label: 'Message', tone: 'indigo', icon: 'message', text: text || 'Message received', metadata: displayName };
+    presentation = { label: 'Message', tone: 'indigo', icon: 'message',
+      text: plainText(text) || plainText(source.content) || 'Message received', metadata: displayName };
+  } else if (source.kind === 'rail') {
+    presentation = remedyPresentation(source.gist, source.content) ?? refusalPresentation(source.gist) ?? genericActivity(source);
+  } else {
+    presentation = wakePresentation(source.content) ?? reminderPresentation(source.content) ??
+      childFinished(source.content) ?? turnFailure(source.content, source.turnSeq) ??
+      attestPresentation(source.content) ?? assignmentPresentation(source.content) ??
+      decisionPresentation(source.content) ?? workItemPresentation(source.content) ??
+      sessionPresentation(source.content) ?? remedyPresentation(source.gist, source.content) ??
+      substrateTypePresentation(source) ?? genericActivity(source);
   }
-  if (source.kind === 'rail') {
-    return remedyPresentation(source.gist, source.content) ?? refusalPresentation(source.gist) ?? genericActivity(source);
-  }
-
-  return wakePresentation(source.content) ?? reminderPresentation(source.content) ??
-    childFinished(source.content) ?? turnFailure(source.content, source.turnSeq) ??
-    attestPresentation(source.content) ?? assignmentPresentation(source.content) ??
-    decisionPresentation(source.content) ?? workItemPresentation(source.content) ??
-    sessionPresentation(source.content) ?? remedyPresentation(source.gist, source.content) ?? genericActivity(source);
+  return { ...presentation,
+    label: plainText(presentation.label) || 'Activity',
+    text: plainText(presentation.text) || 'Activity received',
+    metadata: presentation.metadata ? plainText(presentation.metadata) || undefined : undefined };
 }

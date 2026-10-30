@@ -502,11 +502,16 @@ describe('conversation reading position', () => {
     cleanup();
 
     const activity = setup();
+    const activeOwnerTurn = createTurnProvenance({
+      seq: 20, sessionKey: 'reading', messageId: initialRows.at(-1)!.id, origin: 'user:person',
+      status: 'running', triggerSource: 'mike', raw: { seq: 20, origin: 'user:person' },
+    }, [initialRows.at(-1)!], 'person', 'person');
     const first = { ...message(20), id: 'activity-1', sender: 'process:events', messageType: 'substrate',
       content: 'Quiet for 3 h · Assignment Alpha' };
     const second = { ...message(21), id: 'activity-2', sender: 'process:events', messageType: 'substrate',
       content: 'Quiet for 4 h · Assignment Beta' };
-    act(() => activity.runtime.publish({ records: [...initialRows, first, second], liveActivityIds: [first.id, second.id] }));
+    act(() => activity.runtime.publish({ activityTurnStateAvailable: true, activeTurn: activeOwnerTurn,
+      records: [...initialRows, first, second] }));
     const fold = document.querySelector('[data-activity-fold="true"]');
     expect(fold).toBeTruthy();
     expect(animate.mock.contexts.at(-1)).toBe(fold);
@@ -514,8 +519,7 @@ describe('conversation reading position', () => {
 
     const third = { ...message(22), id: 'activity-3', sender: 'process:events', messageType: 'substrate',
       content: 'Quiet for 5 h · Assignment Gamma' };
-    act(() => activity.runtime.publish({ records: [...initialRows, first, second, third],
-      liveActivityIds: [first.id, second.id, third.id] }));
+    act(() => activity.runtime.publish({ records: [...initialRows, first, second, third] }));
     expect(document.querySelector<HTMLElement>('[data-activity-fold="true"]')?.dataset.scrollKey)
       .toBe((fold as HTMLElement).dataset.scrollKey);
     expect(animate).toHaveBeenCalledTimes(2);

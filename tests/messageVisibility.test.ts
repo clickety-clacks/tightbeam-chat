@@ -59,11 +59,28 @@ describe('principal-scoped message projection', () => {
     expect(forPerson[0]).toMatchObject({ side: 'human', senderLabel: 'You', member: {
       sender: 'user:person', content: 'Question one',
     } });
+    expect(forPerson[0].member).not.toHaveProperty('source');
 
     const forVisitor = projectMessages([batch, answer], 'visitor', 'person').messages;
     expect(forVisitor.map(row => row.key)).toEqual(['process-batch:member:1']);
     expect(forVisitor[0].senderLabel).toBe('User');
     expect(forPerson[0].member?.content).toBe('Question one');
+  });
+
+  it('keeps explicitly marked batch carriers outside human message projection', () => {
+    const carrier = message('headed-carrier', { sender: 'process:notifications', isBatchCarrier: true,
+      content: [
+        '[from process:notifications]', '', '[batched notices: 2]', 'batchId=example-batch', 'release=example',
+        '[7] source=user:person sender=user:person cause=notice class=fyi', 'Question one', '',
+        '[8] source=agent:helper sender=agent:helper:main session cause=notice class=fyi', 'A helper started', '',
+        'coalesced by notices',
+      ].join('\n') });
+
+    expect(projectMessages([carrier], 'person', 'person').messages).toEqual([]);
+    expect(projectMessages([carrier], 'visitor', 'person').messages).toEqual([]);
+
+    const unmarked = { ...carrier, id: 'unmarked-carrier', isBatchCarrier: undefined };
+    expect(projectMessages([unmarked], 'person', 'person').messages).toEqual([]);
   });
 
   it('requires the complete direct turn relation and reclassifies when older parents arrive', () => {

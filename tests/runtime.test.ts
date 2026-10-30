@@ -125,46 +125,33 @@ class ControlledTransport implements ChatTransport {
 async function settle() { await vi.waitFor(() => {}, { timeout: 50 }); }
 
 describe('framework-independent runtime', () => {
-  it('marks session-addressed live messages as activity without turn history', async () => {
+  it('retains deprecated live-activity snapshot fields as optional types without populating runtime state', async () => {
+    const optionalLegacyFields: Pick<RuntimeState, 'liveActivityIds' | 'liveActivityEligibleIds'> = {};
+    expect(optionalLegacyFields).toEqual({});
+
     const transport = new ControlledTransport();
     const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
     await runtime.rebuild();
-    const activity = message(9, { role: 'user', sender: 'session:helper', messageType: undefined });
-    transport.emit(activity);
-    expect(runtime.getSnapshot().liveActivityIds).toContain(activity.id);
-    expect(runtime.getSnapshot().liveActivityEligibleIds).toContain(activity.id);
-    runtime.dispose();
-  });
 
-  it('keeps live-tail eligibility fixed to turn state when each message arrives', async () => {
-    const transport = new ControlledTransport();
-    const settledTurn: CanonicalTurn = { seq: 80, sessionKey, status: 'completed', messageId: 'm8',
+    const expectDeprecatedFieldsAbsent = () => {
+      expect(runtime.getSnapshot()).not.toHaveProperty('liveActivityIds');
+      expect(runtime.getSnapshot()).not.toHaveProperty('liveActivityEligibleIds');
+    };
+    expectDeprecatedFieldsAbsent();
+
+    const unknownActivity = message(9, { sender: 'agent:helper', messageType: 'agent' });
+    transport.emit(unknownActivity);
+    expectDeprecatedFieldsAbsent();
+
+    const runningTurn: CanonicalTurn = { seq: 81, sessionKey, status: 'running', messageId: 'm9',
       origin: 'user:person', triggerSource: 'mike', raw: { rowVersion: 1 } };
-    transport.tailHook = () => transport.callbacks?.onNotice({ operation: 'turn', turn: settledTurn });
-    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
-    await runtime.rebuild();
-    expect(runtime.getSnapshot().activityTurnStateAvailable).toBe(true);
-
-    const idleActivity = message(9, { role: 'user', sender: 'agent:helper', messageType: 'agent' });
-    transport.emit(idleActivity);
-    expect(runtime.getSnapshot().liveActivityIds).toContain(idleActivity.id);
-    expect(runtime.getSnapshot().liveActivityEligibleIds).not.toContain(idleActivity.id);
-
-    const runningTurn: CanonicalTurn = { ...settledTurn, seq: 81, status: 'running', messageId: 'm9',
-      raw: { rowVersion: 1 } };
     transport.callbacks?.onNotice({ operation: 'turn', turn: runningTurn });
-    expect(runtime.getSnapshot().activeTurn?.turn.seq).toBe(81);
-    expect(runtime.getSnapshot().liveActivityEligibleIds).not.toContain(idleActivity.id);
-    transport.emit({ ...idleActivity, rowVersion: 2, content: 'Updated after the next turn started' });
-    expect(runtime.getSnapshot().liveActivityEligibleIds).not.toContain(idleActivity.id);
+    const runningActivity = message(11, { sender: 'session:worker', messageType: undefined });
+    transport.emit(runningActivity);
+    expectDeprecatedFieldsAbsent();
 
-    const activeActivity = message(10, { role: 'user', sender: 'process:work', messageType: 'substrate' });
-    transport.emit(activeActivity);
-    expect(runtime.getSnapshot().liveActivityEligibleIds).toContain(activeActivity.id);
-
-    transport.callbacks?.onNotice({ operation: 'turn', turn: { ...runningTurn, status: 'completed',
-      raw: { rowVersion: 2 } } });
-    expect(runtime.getSnapshot().liveActivityEligibleIds).toContain(activeActivity.id);
+    await runtime.rebuild({ restart: true });
+    expectDeprecatedFieldsAbsent();
     runtime.dispose();
   });
 
@@ -184,8 +171,6 @@ describe('framework-independent runtime', () => {
 
     expect(transport.callbacks).not.toBe(previousCallbacks);
     expect(runtime.getSnapshot().records.some(record => record.id === activity.id)).toBe(true);
-    expect(runtime.getSnapshot().liveActivityIds).not.toContain(activity.id);
-    expect(runtime.getSnapshot().liveActivityEligibleIds).not.toContain(activity.id);
     runtime.dispose();
   });
 
