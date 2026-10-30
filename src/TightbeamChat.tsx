@@ -752,6 +752,7 @@ const ActivityMessageRow = memo(function ActivityMessageRow({ entry, registerRow
     : entry.accessibleText;
   return <div role="note" tabIndex={-1} aria-label={accessibleText}
     className={`tb-chat-activity-line tb-chat-activity-${entry.kind}${presentation ? ' tb-chat-activity-pill-row' : ''}`}
+    onMouseEnter={summary.restoreOriginal}
     ref={element => registerRow(scrollKey, element)} data-record-key={entry.id} data-scroll-key={scrollKey}
     data-activity-run={entry.runKey} title={presentation ? summary.original : undefined}>
     {!presentation && <span className="tb-chat-activity-bullet" aria-hidden="true">•</span>}
@@ -830,6 +831,7 @@ const ActivityRunRow = memo(function ActivityRunRow({ entry, expanded, toggle, r
     ? `${presentation.label}: ${presentation.text}${presentation.metadata ? `, ${presentation.metadata}` : ''}`
     : entry.summary.gist;
   return <div className={`tb-chat-activity-run tb-chat-activity-${entry.activityKind}`} tabIndex={-1}
+    onMouseEnter={summary.restoreOriginal}
     ref={element => registerRow(entry.id, element)} data-record-key={entry.id} data-scroll-key={entry.id}
     data-activity-run={entry.runKey} data-activity-fold="true" data-run-expanded={expanded ? 'true' : 'false'}>
     <button type="button" className={`tb-chat-activity-run-toggle tb-chat-activity-${entry.activityKind}${toolRun ? ' tb-chat-activity-tool-run-toggle' : ''}${presentation ? ' tb-chat-activity-pill-toggle' : ''}`}

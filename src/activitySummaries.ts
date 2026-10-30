@@ -13,8 +13,10 @@ export interface ActivitySummaryTransport {
 export interface ActivitySummaryDisplay {
   readonly text?: string;
   readonly state?: SummaryAnswer['state'];
+  readonly original?: string;
 }
 const emptyDisplay: ActivitySummaryDisplay = Object.freeze({});
+const MAX_RETAINED_ATTEST_NOTES = 64;
 const normalized = (text: string) => text.replace(/\r\n?/g, '\n').trim();
 
 // The page-local key must distinguish text revisions without retaining the
@@ -93,11 +95,11 @@ interface Entry {
   readonly prefix: string;
   readonly attestId?: string;
   line: WeakRef<ActivityLine>;
-  readonly listeners: Set<{
-    notify: () => void;
-    receiveOriginal?: (text: string) => void;
-    currentOriginal?: () => string | undefined;
-  }>;
+  readonly listeners: Set<() => void>;
+  originalRead?: Promise<string | undefined>;
+  originalReadController?: AbortController;
+  originalAttempted?: boolean;
+  originalEvicted?: boolean;
   display: ActivitySummaryDisplay;
   requested?: boolean;
   opening?: boolean;
@@ -107,6 +109,8 @@ interface Batch { entries: Entry[]; controller?: AbortController; waiting: boole
 /** Page-local delivery only. Durable attempt ownership belongs to the server. */
 export class ActivitySummaryViewer {
   private readonly entries = new Map<string, Entry>();
+  /** Bounded independently of the canonical history rows. */
+  private readonly originalNotes = new Map<string, string>();
   private readonly batches = new Set<Batch>();
   private readonly queuedEntries = new Set<Entry>();
   private queued = false;
@@ -127,8 +131,12 @@ export class ActivitySummaryViewer {
     return JSON.stringify([descriptor.lineId, sourceText.length, sourceFingerprint(sourceText)]);
   }
   snapshot(key?: string): ActivitySummaryDisplay { return key ? this.entries.get(key)?.display ?? emptyDisplay : emptyDisplay; }
-  subscribe(entry: ActivityLine, listener: () => void, receiveOriginal?: (text: string) => void,
-    currentOriginal?: () => string | undefined): () => void {
+  observe(entry: ActivityLine) {
+    const key = this.key(entry);
+    const held = key ? this.entries.get(key) : undefined;
+    if (held) held.line = new WeakRef(entry);
+  }
+  subscribe(entry: ActivityLine, listener: () => void): () => void {
     const descriptor = activitySummaryDescriptor(entry);
     const key = this.key(entry);
     if (!descriptor || !key || this.disposed) return () => {};
@@ -139,24 +147,79 @@ export class ActivitySummaryViewer {
         line: new WeakRef(entry), listeners: new Set(), display: emptyDisplay };
       this.entries.set(key, held);
     } else held.line = new WeakRef(entry);
-    const subscriber = { notify: listener, receiveOriginal, currentOriginal };
-    held.listeners.add(subscriber);
+    held.listeners.add(listener);
+    if (held.requested) void this.readOriginal(held);
     this.queue(held);
     if (redisplaying && this.available()) {
       for (const batch of this.batches) if (batch.waiting && batch.entries.includes(held)) void this.open(batch, true);
     }
-    return () => { held.listeners.delete(subscriber); };
+    return () => {
+      held.listeners.delete(listener);
+      if (!held.listeners.size) queueMicrotask(() => {
+        // useSyncExternalStore may replace a callback synchronously during an
+        // ordinary render. Evict only after that replacement has subscribed.
+        if (held!.listeners.size) return;
+        this.originalNotes.delete(held!.key);
+        held!.display = { ...held!.display, original: undefined };
+        held!.originalReadController?.abort();
+        held!.originalReadController = undefined;
+        held!.originalRead = undefined;
+        held!.originalAttempted = false;
+        held!.originalEvicted = false;
+      });
+    };
   }
   private update(entry: Entry, display: ActivitySummaryDisplay) {
     if (this.disposed) return;
-    entry.display = display;
-    for (const listener of entry.listeners) listener.notify();
+    entry.display = { ...entry.display, ...display };
+    for (const listener of entry.listeners) listener();
   }
   private publishOriginal(entry: Entry, text: string) {
-    for (const listener of entry.listeners) {
-      listener.receiveOriginal?.(text);
-      listener.notify();
+    this.originalNotes.delete(entry.key);
+    this.originalNotes.set(entry.key, text);
+    entry.originalEvicted = false;
+    this.update(entry, { original: text });
+    while (this.originalNotes.size > MAX_RETAINED_ATTEST_NOTES) {
+      const oldestKey = this.originalNotes.keys().next().value as string | undefined;
+      if (!oldestKey) break;
+      this.originalNotes.delete(oldestKey);
+      const oldest = this.entries.get(oldestKey);
+      if (!oldest) continue;
+      oldest.originalEvicted = true;
+      this.update(oldest, { original: undefined });
     }
+  }
+  private readOriginal(entry: Entry): Promise<string | undefined> {
+    const retained = this.originalNotes.get(entry.key) ?? entry.display.original;
+    if (retained) {
+      this.originalNotes.delete(entry.key);
+      this.originalNotes.set(entry.key, retained);
+      return Promise.resolve(retained);
+    }
+    if (!entry.attestId || !this.transport.readAttestNote || !entry.listeners.size) return Promise.resolve(undefined);
+    if (entry.originalRead) return entry.originalRead;
+    if (entry.originalAttempted) return Promise.resolve(undefined);
+
+    const controller = new AbortController();
+    entry.originalReadController = controller;
+    entry.originalAttempted = true;
+    let request: Promise<string | undefined>;
+    request = Promise.resolve()
+      .then(() => this.transport.readAttestNote!(entry.attestId!, controller.signal))
+      .then(note => {
+        if (!note?.trim() || controller.signal.aborted || !entry.listeners.size) return undefined;
+        this.publishOriginal(entry, note);
+        if (!entry.requested && !entry.opening) this.queue(entry);
+        return note;
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (entry.originalRead !== request) return;
+        entry.originalRead = undefined;
+        entry.originalReadController = undefined;
+      });
+    entry.originalRead = request;
+    return request;
   }
   private canResolve(entry: Entry) {
     const line = entry.line.deref();
@@ -172,13 +235,21 @@ export class ActivitySummaryViewer {
     }
     if (!entry.attestId || !this.transport.readAttestNote) return undefined;
     try {
-      const cached = [...entry.listeners].map(listener => listener.currentOriginal?.())
-        .find((value): value is string => !!value?.trim());
-      const note = cached ?? await this.transport.readAttestNote(entry.attestId, signal);
+      const note = await this.readOriginal(entry);
       if (!note || signal.aborted) return undefined;
-      if (!cached) this.publishOriginal(entry, note);
       return { lineId: entry.lineId, sourceText: normalized(note) };
     } catch { return undefined; } // An unreadable note retains the fixed presentation.
+  }
+  /** Restore hover text after a bounded cache eviction, sharing any active read. */
+  restoreOriginal(entry: ActivityLine) {
+    const key = this.key(entry);
+    const held = key ? this.entries.get(key) : undefined;
+    if (!held || !held.listeners.size) return;
+    if (held.originalEvicted && !held.originalRead && !this.originalNotes.has(held.key)) {
+      held.originalAttempted = false;
+      held.originalEvicted = false;
+    }
+    void this.readOriginal(held);
   }
   private queue(entry: Entry) {
     if (!entry.requested && !entry.opening && this.canResolve(entry)) this.queuedEntries.add(entry);
@@ -217,6 +288,9 @@ export class ActivitySummaryViewer {
       batch.controller = undefined;
       if (reopening) batch.waiting = true;
       else this.batches.delete(batch);
+      if (!reopening) for (const entry of entries) {
+        if (entry.display.original && entry.listeners.size && !entry.requested) this.queue(entry);
+      }
       return;
     }
     const requestEntries = ready.map(value => value.entry);
@@ -264,8 +338,10 @@ export class ActivitySummaryViewer {
   dispose() {
     this.disposed = true;
     for (const batch of this.batches) batch.controller?.abort();
+    for (const entry of this.entries.values()) entry.originalReadController?.abort();
     this.batches.clear();
     this.queuedEntries.clear();
+    this.originalNotes.clear();
     this.entries.clear();
   }
 }

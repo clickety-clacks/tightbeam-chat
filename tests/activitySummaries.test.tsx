@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { memo, StrictMode } from 'react';
 import { ActivitySummaryViewer, activitySummaryDescriptor, createActivitySummaryTransport,
   type ActivitySummaryTransport, type SummaryAnswer, type SummarySource } from '../src/activitySummaries';
@@ -121,16 +121,40 @@ describe('summary answer delivery', () => {
     transport.readAttestNote = vi.fn(async id => id === 'att_12345678' ? 'Seven review findings.\nFull original note.' : undefined);
     const viewer = new ActivitySummaryViewer(transport);
     const note = line('message:notice', 'Attest att_12345678 (verdict) was filed on assignment asg_12345678.', 'substrate');
-    const originals: string[] = [];
-    viewer.subscribe(note, () => {}, value => originals.push(value));
-    viewer.subscribe({ ...note, id: 'member:another' }, () => {}, value => originals.push(value));
+    viewer.subscribe(note, () => {});
+    viewer.subscribe({ ...note, id: 'member:another' }, () => {});
     viewer.subscribe(line('message:missing', 'Attest att_99999999 (verdict) was filed on assignment asg_12345678.', 'substrate'), () => {});
     await flush();
     expect(transport.readAttestNote).toHaveBeenCalledTimes(2);
     expect(calls).toHaveLength(1);
     expect(calls[0].sources).toEqual([{ lineId: 'att_12345678', sourceText: 'Seven review findings.\nFull original note.' }]);
-    expect(originals).toEqual(['Seven review findings.\nFull original note.', 'Seven review findings.\nFull original note.']);
-    expect(viewer.snapshot(viewer.key(note))).not.toHaveProperty('original');
+    expect(viewer.snapshot(viewer.key(note)).original).toBe('Seven review findings.\nFull original note.');
+    viewer.dispose();
+  });
+
+  it('bounds full attest notes independently of the number of mounted history rows', async () => {
+    const { calls, transport } = transportFixture();
+    transport.readAttestNote = vi.fn(async id => `Full note for ${id}`);
+    const viewer = new ActivitySummaryViewer(transport);
+    const notes = Array.from({ length: 65 }, (_, index) => {
+      const entry = line(`message:attest-${index}`, `Attest att_${index} was filed.`, 'substrate');
+      return { ...entry, presentation: { ...entry.presentation!, attestId: `att_${index}` } };
+    });
+    const stops = notes.map(entry => viewer.subscribe(entry, () => {}));
+    await flush();
+    expect(transport.readAttestNote).toHaveBeenCalledTimes(65);
+    expect(viewer.snapshot(viewer.key(notes[0])).original).toBeUndefined();
+    expect(viewer.snapshot(viewer.key(notes[64])).original).toBe('Full note for att_64');
+    expect(calls).toHaveLength(1);
+    viewer.restoreOriginal(notes[0]);
+    await flush();
+    expect(transport.readAttestNote).toHaveBeenCalledTimes(66);
+    expect(viewer.snapshot(viewer.key(notes[0])).original).toBe('Full note for att_0');
+    viewer.restoreOriginal(notes[0]);
+    await flush();
+    expect(transport.readAttestNote).toHaveBeenCalledTimes(66);
+    expect(calls).toHaveLength(1);
+    stops.forEach(stop => stop());
     viewer.dispose();
   });
 
@@ -190,16 +214,24 @@ describe('row-local rendering', () => {
     expect(screen.getByText('Original').dataset.state).toBeUndefined();
   });
 
-  it('shows an attest note locally as the original and keeps it available on hover after summarizing', async () => {
+  it('restores an evicted attest note after remount without repeating summary delivery', async () => {
     const { calls, transport } = transportFixture();
-    transport.readAttestNote = vi.fn(async () => 'The full attest note remains readable.');
-    const note: ActivityLine = { ...line('message:attest', 'Filed a review note.', 'substrate'), sourceRecord: {},
+    let noteReads = 0;
+    let resolveRefetch: ((value: string | undefined) => void) | undefined;
+    transport.readAttestNote = vi.fn((_id: string, _signal: AbortSignal) => {
+      noteReads++;
+      if (noteReads === 1) return Promise.resolve('The full attest note remains readable.');
+      return new Promise(resolve => { resolveRefetch = resolve; });
+    });
+    const note: ActivityLine = { ...line('message:attest', 'Filed a review note.', 'substrate'),
       presentation: { label: 'Attest', tone: 'amber', icon: 'attest', text: 'Filed a review note.', attestId: 'note-reference' } };
     function Row({ entry }: { entry: ActivityLine }) {
       const result = useActivitySummary(entry);
-      return <div data-testid="attest" title={result.original} data-state={result.state}>{result.presentation?.text}</div>;
+      return <div data-testid="attest" title={result.original} data-state={result.state}
+        onMouseEnter={result.restoreOriginal}>{result.presentation?.text}</div>;
     }
-    const view = (entry: ActivityLine, show = true) => <ActivitySummaryProvider transport={transport} connected reconcile={() => {}}>
+    const reconcile = vi.fn();
+    const view = (entry: ActivityLine, show = true) => <ActivitySummaryProvider transport={transport} connected reconcile={reconcile}>
       {show && <Row entry={entry} />}
     </ActivitySummaryProvider>;
     const rendered = render(view(note));
@@ -209,11 +241,28 @@ describe('row-local rendering', () => {
     await act(async () => { calls[0].receive({ index: 0, state: 'summary', summary: 'Three findings were filed.' }); });
     expect(screen.getByTestId('attest').textContent).toBe('Three findings were filed.');
     expect(screen.getByTestId('attest').title).toBe('The full attest note remains readable.');
-    rendered.rerender(view(note, false));
+    const reconcileCalls = reconcile.mock.calls.length;
     rendered.rerender(view({ ...note }));
     expect(screen.getByTestId('attest').textContent).toBe('Three findings were filed.');
     expect(screen.getByTestId('attest').title).toBe('The full attest note remains readable.');
     expect(transport.readAttestNote).toHaveBeenCalledTimes(1);
+
+    rendered.rerender(view(note, false));
+    await act(flush);
+    rendered.rerender(view({ ...note }));
+    await act(flush);
+    expect(transport.readAttestNote).toHaveBeenCalledTimes(2);
+    expect(screen.getByTestId('attest').textContent).toBe('Three findings were filed.');
+    expect(screen.getByTestId('attest').title).toBe('Filed a review note.');
+    rendered.rerender(view({ ...note }));
+    fireEvent.mouseEnter(screen.getByTestId('attest'));
+    fireEvent.mouseEnter(screen.getByTestId('attest'));
+    expect(transport.readAttestNote).toHaveBeenCalledTimes(2);
+    await act(async () => { resolveRefetch?.('The full attest note remains readable.'); await flush(); });
+    expect(screen.getByTestId('attest').textContent).toBe('Three findings were filed.');
+    expect(screen.getByTestId('attest').title).toBe('The full attest note remains readable.');
+    expect(calls).toHaveLength(1);
+    expect(reconcile.mock.calls.length).toBe(reconcileCalls);
   });
 });
 

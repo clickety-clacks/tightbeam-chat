@@ -30,28 +30,9 @@ export interface ActivityLine {
   readonly accessibleText: string;
   /** Original retained content is only exposed through the pill's hover title. */
   readonly originalContent?: string;
-  /** Stable record owner for source details loaded separately from history. */
-  readonly sourceRecord?: object;
   readonly presentation?: ActivityPillPresentation;
   readonly sortTime?: number;
   readonly call?: ToolCallRecord;
-}
-
-const sourceDetails = new WeakMap<object, Map<string, string>>();
-
-/** Retain a fetched original with its canonical row so a remounted line can reuse it. */
-export function rememberActivitySourceDetail(line: ActivityLine, text: string): void {
-  if (!line.sourceRecord) return;
-  let details = sourceDetails.get(line.sourceRecord);
-  if (!details) {
-    details = new Map();
-    sourceDetails.set(line.sourceRecord, details);
-  }
-  details.set(line.id, text);
-}
-
-export function activitySourceDetail(line: ActivityLine): string | undefined {
-  return line.sourceRecord ? sourceDetails.get(line.sourceRecord)?.get(line.id) : undefined;
 }
 
 export interface ActivityOverflow {
@@ -172,7 +153,7 @@ function messageCandidate(message: CanonicalMessage): Candidate | undefined {
       position: { sequence: message.seq, phase: 1, order: 0 }, gist,
       accessibleText: `Substrate: ${gist}`,
       originalContent: message.content,
-      ...(presentation?.attestId ? { sourceRecord: message } : {}), presentation, sortTime,
+      presentation, sortTime,
       historyBacked: true,
       semanticFoldKind: gatewayNoticeFoldKind(message.content) };
   }
@@ -216,7 +197,7 @@ function memberCandidate(carrier: CanonicalMessage, member: ParsedBatchMember): 
     return { id, kind: 'substrate', runKey: '', anchorSeq: carrier.seq, position, gist,
       accessibleText: `Substrate: ${gist}`,
       originalContent: member.content,
-      ...(presentation?.attestId ? { sourceRecord: carrier } : {}), presentation,
+      presentation,
       sortTime, historyBacked: true,
       semanticFoldKind: gatewayNoticeFoldKind(member.content) };
   }
