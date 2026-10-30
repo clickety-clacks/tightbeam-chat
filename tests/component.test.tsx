@@ -941,7 +941,7 @@ describe('conversation surface', () => {
     render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} renderMessage={renderMessage} />);
 
     const composer = await screen.findByRole('textbox', { name: 'Message to Research assistant' });
-    expect(await screen.findByText('Message 1200')).toBeTruthy();
+    expect(await within(screen.getByRole('log')).findByText('Message 1200')).toBeTruthy();
     expect(renderMessage).toHaveBeenCalledTimes(messages.length);
 
     fireEvent.change(composer, { target: { value: 'a' } });
@@ -975,8 +975,9 @@ describe('conversation surface', () => {
       for (const listener of runtime.listeners) listener();
     });
 
-    expect(screen.getByText('A new question')).toBeTruthy();
-    expect(screen.getByText('A new answer')).toBeTruthy();
+    const log = screen.getByRole('log');
+    expect(within(log).getByText('A new question')).toBeTruthy();
+    expect(within(log).getByText('A new answer')).toBeTruthy();
     expect(screen.queryByText(/Reconnecting|conversation may be out of date/)).toBeNull();
     const reconnectingButton = screen.getByRole('button', { name: 'Connection status: Reconnecting. Show details' });
     expect(reconnectingButton.querySelector('.tb-chat-status-dot')?.classList.contains('tb-chat-status-stale')).toBe(true);
@@ -1580,7 +1581,7 @@ describe('conversation surface', () => {
       { records: [olderHuman], provenance: [olderTurn], hasOlder: false },
     ];
     render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
-    expect(await screen.findByText('Older human message')).toBeTruthy();
+    expect(await within(screen.getByRole('log')).findByText('Older human message')).toBeTruthy();
     await waitFor(() => expect(runtime.loadOlderCalls).toBe(2));
     expect(screen.queryByText('Not a human conversation')).toBeNull();
     expect(screen.queryByRole('button', { name: /load earlier/i })).toBeNull();
@@ -1893,10 +1894,10 @@ describe('conversation surface', () => {
     const renderMessage = vi.fn((record: ConversationRecord, context: RenderContext) =>
       record.kind === 'message' && record.sessionKey === 'B' ? <em data-record-key={context.recordKey}>Custom B</em> : undefined);
     const view = render(<TightbeamChat sessionKey="A" adapter={adapter} renderMessage={renderMessage} />);
-    await screen.findByText('A question');
+    await within(screen.getByRole('log')).findByText('A question');
     fireEvent.change(screen.getByRole('textbox', { name: 'Message to Research assistant' }), { target: { value: 'draft A' } });
     view.rerender(<TightbeamChat sessionKey="B" adapter={adapter} renderMessage={renderMessage} />);
-    expect(await screen.findByText('Custom B')).toBeTruthy();
+    expect(await within(screen.getByRole('log')).findByText('Custom B')).toBeTruthy();
     expect(runtimes[0].disposed).toBe(true);
     expect(runtimes[0].listeners.size).toBe(0);
     expect(screen.queryByText('draft A')).toBeNull();
@@ -2024,11 +2025,11 @@ describe('conversation surface', () => {
       records: [question], provenance: [provenance(1, sessionKey, question.id, 'user:person', question)],
     });
     render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
-    await screen.findByText('Reader anchor');
     const viewport = screen.getByRole('log');
+    await within(viewport).findByText('Reader anchor');
     const layout = installViewportLayout(viewport);
     try {
-      const anchor = screen.getByText('Reader anchor').closest('article')!;
+      const anchor = within(viewport).getByText('Reader anchor').closest('article')!;
       layout.setScrollTop(70);
       const before = layout.offset(anchor);
       const composer = screen.getByRole('textbox', { name: 'Message to Research assistant' });
@@ -2115,7 +2116,7 @@ describe('conversation surface', () => {
     render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
     expect(screen.getByText('Failed text')).toBeTruthy();
     expect(screen.getByText('Uncertain text')).toBeTruthy();
-    expect(screen.getByText('Offline text')).toBeTruthy();
+    expect(within(screen.getByRole('log')).getByText('Offline text')).toBeTruthy();
     const sendStatus = screen.getByText('Sending…');
     expect(sendStatus.getAttribute('role')).toBe('status');
     expect(screen.queryByText(/Not connected to the server|retrying…/)).toBeNull();
@@ -2465,7 +2466,7 @@ describe('tool-call and transition display', () => {
       'Read first file · running', 'Read second file · running', 'Read third file · running',
     ]);
     expect(screen.getByText('List files · running')).toBeTruthy();
-    expect(screen.getByText('Keep this message visible')).toBeTruthy();
+    expect(within(screen.getByRole('log')).getByText('Keep this message visible')).toBeTruthy();
   });
 
   it('keeps an unmatched send at submission time among tools, then uses its canonical anchor with the same scroll key', () => {
@@ -2491,7 +2492,7 @@ describe('tool-call and transition display', () => {
     act(() => runtime.update({ records: [human, canonical, reply], sends: [{ ...send, reconciled: true, status: 'accepted' }] }));
     expect(keys()).toEqual(['human', 'tool:tc_201', 'local-c_pending', 'reply']);
     expect(screen.getByRole('button', { name: /2 entries\. Latest: Tool 202/ })).toBeTruthy();
-    expect(screen.getAllByText('Follow-up')).toHaveLength(1);
+    expect(within(screen.getByRole('log')).getAllByText('Follow-up')).toHaveLength(1);
   });
 
   it('displays served tool calls automatically and keeps their details and the draft intact', async () => {

@@ -1342,6 +1342,33 @@ describe('conversation reading position', () => {
     expect(screen.queryByRole('button', { name: 'Jump to latest user prompt' })).toBeNull();
   });
 
+  it('waits for measurable bounds before showing the prompt miniature', () => {
+    let layoutAvailable = false;
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (!layoutAvailable) return rect(0, 0);
+      if (this.classList.contains('tb-chat')) return rect(0, 50);
+      if (this.classList.contains('tb-chat-viewport')) return rect(0, renderedViewportHeight());
+      const index = rows().indexOf(this);
+      if (index >= 0) return rect(16 + index * 92 - scrollTop, 80);
+      return rect(0, 50);
+    });
+    const { box } = setup();
+
+    expect(screen.queryByRole('button', { name: 'Jump to latest user prompt' })).toBeNull();
+
+    layoutAvailable = true;
+    readAt(box, 0);
+    expect(screen.getByRole('button', { name: 'Jump to latest user prompt' }).textContent).toBe('Message 19');
+    const target = targetForPreview()!;
+    expect(target.getBoundingClientRect().top).toBeGreaterThan(box.getBoundingClientRect().bottom);
+
+    box.scrollTop = 1724;
+    fireEvent.scroll(box);
+    expect(target.getBoundingClientRect().top).toBeGreaterThanOrEqual(box.getBoundingClientRect().top);
+    expect(target.getBoundingClientRect().bottom).toBeLessThanOrEqual(box.getBoundingClientRect().bottom);
+    expect(screen.queryByRole('button', { name: 'Jump to latest user prompt' })).toBeNull();
+  });
+
   it('keeps a dismissed preview hidden through history changes and restores it only after a new submission', () => {
     const { runtime, box } = setup();
     readAt(box, 0);

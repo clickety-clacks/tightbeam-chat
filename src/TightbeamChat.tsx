@@ -1444,7 +1444,13 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     const target = latestPrompt ? reading.getRow(latestPrompt.scrollKey) : undefined;
     const targetRect = target?.getBoundingClientRect();
     const viewportRect = box.getBoundingClientRect();
-    const offscreen = !!targetRect &&
+    // A zero-sized layout (for example, before the surface is laid out) does
+    // not prove the original is outside the viewport. Keep the miniature
+    // hidden until both vertical bounds can be measured.
+    const hasMeasuredBounds = !!targetRect &&
+      Number.isFinite(targetRect.top) && Number.isFinite(targetRect.bottom) && targetRect.bottom > targetRect.top &&
+      Number.isFinite(viewportRect.top) && Number.isFinite(viewportRect.bottom) && viewportRect.bottom > viewportRect.top;
+    const offscreen = hasMeasuredBounds &&
       (targetRect.bottom <= viewportRect.top || targetRect.top >= viewportRect.bottom);
     setLatestPromptVisibility(prior => prior?.identity === latestPrompt.identity && prior.offscreen === offscreen
       ? prior : { identity: latestPrompt.identity, offscreen });

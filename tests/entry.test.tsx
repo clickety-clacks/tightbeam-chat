@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { HostPage } from '../examples/HostPage';
 import { RuntimeEntry } from '../examples/RuntimeEntry';
 
@@ -170,7 +170,8 @@ describe('direct browser entry', () => {
 
     render(<RuntimeEntry />);
 
-    expect(await screen.findByText('Configured root history')).toBeTruthy();
+    const log = await screen.findByRole('log');
+    expect(await within(log).findByText('Configured root history')).toBeTruthy();
     expect(fetchSpy.mock.calls[0][0]).toBe('/chat-config.json');
     const historyRequest = fetchSpy.mock.calls
       .map(([input]) => new URL(String(input), window.location.origin))
