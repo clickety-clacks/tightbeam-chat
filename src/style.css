@@ -698,3 +698,20 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
 .tb-chat-tool summary { cursor: pointer; }
 .tb-chat-tool h4 { margin: .5rem 0; }
 .tb-chat-tool pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 20rem; overflow: auto; margin: .5rem 0; }
+
+.tb-chat-summary-marker, .tb-chat-summary-pending {
+  flex: none;
+  font-size: .7rem;
+  color: var(--tb-chat-muted);
+}
+.tb-chat-summary-pending {
+  background: linear-gradient(100deg, currentColor 30%, transparent 50%, currentColor 70%);
+  background-size: 250% 100%;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: tb-chat-summary-shimmer 1.8s linear infinite;
+}
+@keyframes tb-chat-summary-shimmer { to { background-position: -250% 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .tb-chat-summary-pending { animation: none; background: none; -webkit-text-fill-color: currentColor; }
+}

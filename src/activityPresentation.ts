@@ -10,6 +10,9 @@ export interface ActivityPillPresentation {
   readonly icon: ActivityPillIcon;
   readonly text: string;
   readonly metadata?: string;
+  readonly summaryText?: string;
+  readonly summaryPrefix?: string;
+  readonly attestId?: string;
 }
 
 export interface ActivityPillSource {
@@ -93,6 +96,7 @@ function wakePresentation(content: string): ActivityPillPresentation | undefined
           : /^wait\b/i.test(header) ? 'resumed' : 'sent';
     return { label: 'Wake', tone: 'purple', icon: 'alarm',
       text: detail ?? 'A wake was delivered',
+      summaryText: detail ? content.replace(/^\s*\[from [^\]]+\]\s*/i, '').replace(/^\s*\[woke:[^\n]*\]\s*/i, '').trim() : undefined,
       metadata: fact ? factStatus ? status : shortId('dr', fact[2]) ?? status
         : shortId('w', header) ?? shortId('asg', header) ?? shortId('dr', header) ?? status };
   }
@@ -154,6 +158,10 @@ function decisionPresentation(content: string): ActivityPillPresentation | undef
   let id: string | undefined;
   let tone: ActivityPillTone = 'blue';
   let text: string | undefined;
+  let summaryText: string | undefined;
+  let summaryPrefix = '';
+  const raw = content.replace(/^\s*\[from [^\]]+\]\s*/i, '').trim();
+  const afterHeader = raw.slice(raw.indexOf('\n') + 1).trim();
 
   let match = /^Question\s+(dr_[a-z0-9-]+)\s+from session:/i.exec(first);
   if (match) {
@@ -185,9 +193,17 @@ function decisionPresentation(content: string): ActivityPillPresentation | undef
     text = 'Expired';
   }
 
+  if (text?.includes(' · ')) {
+    summaryPrefix = text.slice(0, text.indexOf(' · ') + 3);
+    summaryText = /^(Answered|Returned)/.test(text)
+      ? /(?:^|\n)You asked:\s*([\s\S]*?)(?=\n(?:Answer|Response|Returned):|$)/i.exec(raw)?.[1]?.trim()
+      : raw.includes('\n') ? afterHeader : undefined;
+  } else if (/^Decision\s+dr_[a-z0-9-]+:/i.test(first)) {
+    summaryText = raw.replace(/^Decision\s+dr_[a-z0-9-]+:\s*/i, '').trim();
+  }
   const answered = tone === 'green';
   const expired = tone === 'slate';
-  return id && text ? { label: 'Decision', tone, icon: answered ? 'decision-answered' : expired ? 'hourglass' : 'decision', text,
+  return id && text ? { label: 'Decision', tone, summaryText, summaryPrefix, icon: answered ? 'decision-answered' : expired ? 'hourglass' : 'decision', text,
     metadata: shortId('dr', id) } : undefined;
 }
 
@@ -250,7 +266,7 @@ function attestPresentation(content: string): ActivityPillPresentation | undefin
   if (!match) return undefined;
   return { label: 'Attest', tone: 'amber', icon: 'attest',
     text: `Filed ${match[2]} on assignment ${shortId('asg', match[3])}`,
-    metadata: shortId('att', match[1]) };
+    metadata: shortId('att', match[1]), attestId: match[1] };
 }
 
 function remedyPresentation(gist: string, content: string): ActivityPillPresentation | undefined {
@@ -295,6 +311,9 @@ export function activityPillPresentation(source: ActivityPillSource): ActivityPi
       decisionPresentation(source.content) ?? workItemPresentation(source.content) ??
       sessionPresentation(source.content) ?? remedyPresentation(source.gist, source.content) ??
       substrateTypePresentation(source) ?? genericActivity(source);
+  }
+  if (presentation.icon === 'message' || presentation.icon === 'remedy') {
+    presentation = { ...presentation, summaryText: source.content };
   }
   return { ...presentation,
     label: plainText(presentation.label) || 'Activity',

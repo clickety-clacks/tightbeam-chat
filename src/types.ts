@@ -1,3 +1,4 @@
+import type { ActivitySummaryTransport } from './activitySummaries';
 import type { RecordIndex } from './recordIndex';
 /** The host decodes the elected backend's wire schema into these canonical records. */
 export interface CanonicalMessage {
@@ -354,6 +355,7 @@ export interface ChatRuntime {
 }
 
 export interface TightbeamAdapter {
+  readonly activitySummaries?: ActivitySummaryTransport;
   open(sessionKey: string): ChatRuntime;
 }
 
