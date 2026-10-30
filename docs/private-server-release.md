@@ -126,12 +126,14 @@ separate served evidence before claiming availability.
 
 Chat reads the selected conversation's `/api/sessions/:session_key/record-events`
 collection and subscribes to `session_record_event.created`. Durable event pills
-are distinct from tool calls. Exact notice coverage replaces a duplicate event
-pill with the notice already in the transcript. An unavailable event collection
+are distinct from tool calls. A loaded notice's exact `recordEventIds` coverage replaces a duplicate event
+pill with that notice in the transcript. A reference to a notice not yet loaded
+does not by itself remove the event pill. An unavailable event collection
 leaves the conversation usable and offers an activity-history retry.
 
 Each event kind starts at the Gateway release that activates it. Earlier events
 of that kind remain omitted permanently, including events between staged
 releases. An older conversation without those earlier pills is expected; Chat
 does not backfill them from message text, tool output, or storage. Work-item filed
-and assignment opened are the first stage; later kinds use the same feed.
+and assignment opened are the first stage. Later kinds are retained in the wire
+model but are not displayed by this stage.

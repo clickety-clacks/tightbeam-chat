@@ -44,19 +44,22 @@ describe('session record-event history', () => {
     resolve(page([occurrence]));
     await reading;
     expect(state.recordEvents).toHaveLength(1);
-    expect(uncoveredRecordEvents(state.recordEvents!, [])).toEqual([]);
+    expect(state.recordEvents![0].noticeMessageIds).toEqual(['notice-1']);
+    // The referenced notice is not loaded yet: retain the pill until its exact
+    // message-side coverage can replace it with the visible notice.
+    expect(uncoveredRecordEvents(state.recordEvents!, [])).toHaveLength(1);
     history.stop();
   });
 
-  it('uses exact notice IDs, never record-name or text similarity, and preserves later active kinds', () => {
+  it('uses exact notice IDs, never similarity, while retaining later kinds without displaying them', () => {
     const opened = event('a1', 20, 'assignment.opened');
     const filed = event('w1', 10);
     const later = event('artifact-1', 30, 'artifact.recorded');
     const notice: CanonicalMessage = { kind: 'message', id: 'notice', sessionKey: 'selected', seq: 1,
       rowVersion: 1, role: 'assistant', content: 'assignment opened a1', raw: {} };
-    expect(uncoveredRecordEvents([filed, opened, later], [notice])).toHaveLength(3);
+    expect(uncoveredRecordEvents([filed, opened, later], [notice])).toEqual([filed, opened]);
     expect(uncoveredRecordEvents([filed, opened, later], [{ ...notice, recordEventIds: [opened.eventId] }]))
-      .toEqual([filed, later]);
+      .toEqual([filed]);
     expect(recordEventPresentation(later).text).toBe('Artifact recorded');
   });
 

@@ -99,10 +99,14 @@ export class SessionRecordEvents {
   }
 }
 
-/** Either exact wire link wins, regardless of arrival order or notice text. */
+// The first client stage surfaces only these kinds. The wire model retains
+// later kinds without assuming that they have shipped or inventing a cutoff.
+const displayedRecordEventKinds = new Set(['work_item.filed', 'assignment.opened']);
+
+/** A loaded notice's exact coverage wins, regardless of arrival order or text. */
 export function uncoveredRecordEvents(events: readonly SessionRecordEvent[], records: readonly ConversationRecord[]) {
   const covered = new Set(records.flatMap(row => row.recordEventIds ?? []));
-  return events.filter(event => !covered.has(event.eventId) && event.noticeMessageIds.length === 0);
+  return events.filter(event => displayedRecordEventKinds.has(event.kind) && !covered.has(event.eventId));
 }
 
 const presentations: Readonly<Record<string, ActivityPillPresentation>> = {
