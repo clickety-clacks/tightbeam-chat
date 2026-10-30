@@ -1598,3 +1598,119 @@ describe('optional tool history and live category', () => {
     expect(transport.toolCallbacks).toBeUndefined();
   });
 });
+
+
+describe('attachment submission recovery', () => {
+  const input = (id: string) => ({ id, filename: id + '.bin', bytes: new Blob([new Uint8Array([0, 128, 255])]) });
+  class AttachmentsTransport extends ControlledTransport {
+    uploads: string[] = [];
+    failItem?: string;
+    uploadGate?: ReturnType<typeof deferred<void>>;
+    uploadSignals: AbortSignal[] = [];
+    uploadAttachment = async (item: import('../src/types').AttachmentInput, signal: AbortSignal) => {
+      this.uploads.push(item.id);
+      this.uploadSignals.push(signal);
+      await this.uploadGate?.promise;
+      if (this.failItem === item.id) throw new Error('Upload interrupted');
+      return { assetId: 'asset_' + item.id, mimeType: 'application/octet-stream', filename: item.filename, size: item.bytes.size };
+    };
+  }
+  async function ready(transport: AttachmentsTransport) {
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+    return runtime;
+  }
+  it('retains ordered bytes and successful references after a later upload fails; retries only missing preparation', async () => {
+    const transport = new AttachmentsTransport(); transport.failItem = 'second';
+    const runtime = await ready(transport);
+    const inputs = [input('first'), input('second')];
+    const id = runtime.sendAttachments!(' exact text ', inputs)!;
+    inputs.reverse(); inputs[0].filename = 'changed.bin';
+    await vi.waitFor(() => expect(runtime.getSnapshot().sends[0].status).toBe('failed'));
+    expect(transport.submissions).toEqual([]);
+    expect(runtime.getSnapshot().status).toBe('ready');
+    const failed = runtime.getSnapshot().sends[0];
+    expect(failed.attachmentItems?.map(item => [item.id, item.filename, item.status, item.bytes.size])).toEqual([
+      ['first', 'first.bin', 'ready', 3], ['second', 'second.bin', 'failed', 3],
+    ]);
+    expect(failed.attachmentItems?.[0].reference?.assetId).toBe('asset_first');
+    transport.failItem = undefined;
+    await runtime.retrySend(id);
+    expect(transport.uploads).toEqual(['first', 'second', 'second']);
+    expect(transport.submissions).toHaveLength(1);
+    expect(transport.submissions[0]).toMatchObject({ sessionKey, deviceId: 'device', clientMessageId: id, content: ' exact text ',
+      attachments: [{ assetId: 'asset_first', filename: 'first.bin' }, { assetId: 'asset_second', filename: 'second.bin' }] });
+    expect(Object.isFrozen(transport.submissions[0].attachments)).toBe(true);
+    expect(Object.isFrozen(transport.submissions[0].attachments![0])).toBe(true);
+    expect(runtime.getSnapshot().sends[0].status).toBe('accepted');
+    runtime.dispose();
+  });
+  it('supports attachment-only posts and preserves the manifest after refusal without uploading again', async () => {
+    const transport = new AttachmentsTransport();
+    transport.nextSend = async () => ({ outcome: 'refused', reason: 'Try again' });
+    const runtime = await ready(transport);
+    expect(runtime.sendAttachments!('', [])).toBeNull();
+    const id = runtime.sendAttachments!('', [input('photo')])!;
+    await vi.waitFor(() => expect(runtime.getSnapshot().sends[0].status).toBe('failed'));
+    const first = transport.submissions[0];
+    transport.nextSend = async () => ({ outcome: 'accepted' });
+    await runtime.retrySend(id);
+    expect(transport.uploads).toEqual(['photo']);
+    expect(transport.submissions).toEqual([first, first]);
+    expect(transport.submissions[1].attachments).toBe(first.attachments);
+    expect(runtime.getSnapshot().sends[0].attachmentItems?.[0].bytes.size).toBe(3);
+    runtime.dispose();
+  });
+  it('refreshes after a lost acknowledgement and keeps uncertainty until an explicit identical retry or canonical match', async () => {
+    const transport = new AttachmentsTransport();
+    transport.nextSend = async () => ({ outcome: 'retryable', reason: 'Socket dropped' });
+    const runtime = await ready(transport);
+    const reads = transport.readTailCalls;
+    const id = runtime.sendAttachments!('caption', [input('photo')])!;
+    await vi.waitFor(() => expect(runtime.getSnapshot().sends[0].status).toBe('uncertain'));
+    await vi.waitFor(() => expect(transport.readTailCalls).toBeGreaterThan(reads));
+    expect(transport.submissions).toHaveLength(1);
+    const submission = transport.submissions[0];
+    transport.nextSend = async () => ({ outcome: 'accepted' });
+    await runtime.retrySend(id);
+    expect(transport.submissions).toEqual([submission, submission]);
+    transport.emit(message(9, { role: 'user', content: 'caption', deviceId: 'device', clientMessageId: id,
+      attachments: submission.attachments }));
+    transport.emit(message(9, { role: 'user', content: 'caption', deviceId: 'device', clientMessageId: id,
+      attachments: submission.attachments }));
+    expect(runtime.getSnapshot().sends[0].reconciled).toBe(true);
+    expect(runtime.getSnapshot().records.filter(row => row.id === 'm9')).toHaveLength(1);
+    await runtime.retrySend(id);
+    expect(transport.submissions).toHaveLength(2);
+    runtime.dispose();
+  });
+  it('reconciles row-before-ack without resending after a dropped socket', async () => {
+    const transport = new AttachmentsTransport();
+    transport.nextSend = async submission => {
+      transport.rows.push(message(9, { role: 'user', content: submission.content, deviceId: submission.deviceId,
+        clientMessageId: submission.clientMessageId, attachments: submission.attachments }));
+      return { outcome: 'retryable', reason: 'Ack lost' };
+    };
+    const runtime = await ready(transport);
+    runtime.sendAttachments!('', [input('photo')]);
+    await vi.waitFor(() => expect(runtime.getSnapshot().sends[0].reconciled).toBe(true));
+    expect(runtime.getSnapshot().sends[0].status).toBe('accepted');
+    expect(transport.submissions).toHaveLength(1);
+    runtime.dispose();
+  });
+  it('keeps preparation during refresh and never posts after disposal or changed identity', async () => {
+    for (const end of ['dispose', 'identity'] as const) {
+      const transport = new AttachmentsTransport(); transport.uploadGate = deferred<void>();
+      const runtime = await ready(transport);
+      runtime.sendAttachments!('held', [input('file')]);
+      await runtime.rebuild();
+      expect(runtime.getSnapshot().sends[0].attachmentItems?.[0].bytes.size).toBe(3);
+      if (end === 'dispose') runtime.dispose();
+      else transport.identity = { principalKey: 'person', deviceId: 'other-device' };
+      transport.uploadGate.resolve();
+      await vi.waitFor(() => expect(transport.uploadSignals[0].aborted).toBe(true));
+      expect(transport.submissions).toEqual([]);
+      runtime.dispose();
+    }
+  });
+});

@@ -164,11 +164,33 @@ export interface TargetProfile extends TargetObservation {
   readonly label: string;
 }
 
+/** Canonical asset reference returned in transcript history. */
+export interface AttachmentReference {
+  readonly assetId: string;
+  readonly mimeType: string;
+  readonly filename: string;
+  readonly size: number;
+}
+
+/** Original acquired bytes; previews are never substituted for this blob. */
+export interface AttachmentInput {
+  readonly id: string;
+  readonly filename: string;
+  readonly bytes: Blob;
+}
+
+export interface AttachmentItem extends AttachmentInput {
+  readonly status: 'pending' | 'uploading' | 'ready' | 'failed';
+  readonly reference?: AttachmentReference;
+  readonly error?: string;
+}
+
 export interface HumanSubmission {
   readonly sessionKey: string;
   readonly deviceId: string;
   readonly clientMessageId: string;
   readonly content: string;
+  readonly attachments?: readonly AttachmentReference[];
 }
 
 /** In-page correlation metadata for one host-managed logical message. */
@@ -206,6 +228,8 @@ export interface ChangeCallbacks {
  */
 export interface ChatTransport {
   currentIdentity(): HostIdentity;
+  uploadAttachment?(input: AttachmentInput, signal: AbortSignal): Promise<AttachmentReference>;
+  readAttachment?(reference: AttachmentReference, signal: AbortSignal): Promise<Blob>;
   inspectTarget(signal: AbortSignal): Promise<TargetObservation>;
   openChanges(sessionKey: string, callbacks: ChangeCallbacks, signal: AbortSignal): Promise<ChangeConnection>;
   /** Separate category connection so toggling tools does not interrupt messages or sends. */
@@ -232,6 +256,9 @@ export type LiveConnectionState = 'connecting' | 'connected' | 'reconnecting' | 
 export type SendStatus = 'pending' | 'accepted' | 'failed' | 'uncertain';
 
 export interface LocalSend extends HumanSubmission {
+  /** Ordered recovery inputs, retained separately from the frozen posted references. */
+  readonly attachmentItems?: readonly AttachmentItem[];
+  readonly attachmentPhase?: 'preparing' | 'failed' | 'posted';
   readonly submittedAt: string;
   readonly status: SendStatus;
   readonly reason?: string;
@@ -318,6 +345,8 @@ export interface ChatRuntime {
   setToolCallsEnabled?(enabled: boolean): void;
   retryToolCalls?(): void;
   send(content: string, clientMessageId?: string, hostSend?: HostSendContext): string | null;
+  sendAttachments?(content: string, inputs: readonly AttachmentInput[]): string | null;
+  readAttachment?(reference: AttachmentReference, signal: AbortSignal): Promise<Blob>;
   retrySend(clientMessageId: string): Promise<void>;
   /** Subscribe before a host-correlated send so ack and reconciliation order is preserved. */
   observeHostSend(clientMessageId: string, observer: HostSendObserver): () => void;

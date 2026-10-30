@@ -7,6 +7,7 @@ import {
   type ChangeConnection,
   type ChangeCallbacks,
   type ToolCallRecord,
+  type AttachmentReference,
   type ChangeNotice,
   type CanonicalTurn,
   type ChatTransport,
@@ -582,6 +583,26 @@ export function createPublic019Transport(config: Public019Config): { transport: 
       }
       return Object.freeze([...calls.values()].sort((a, b) => a.afterMessageSeq - b.afterMessageSeq || a.seq - b.seq));
     },
+    async uploadAttachment(input, signal) {
+      const body = new FormData();
+      body.append('file', input.bytes, input.filename);
+      const response = await config.host.fetch(`${baseUrl}/upload`, { method: 'POST', body, signal });
+      if (!response.ok) throw new Error(`Attachment upload failed (HTTP ${response.status}).`);
+      const wire = await response.json();
+      if (!wire || typeof wire.asset_id !== 'string' || !wire.asset_id ||
+          typeof wire.mime_type !== 'string' || !wire.mime_type || !Number.isSafeInteger(wire.size) ||
+          wire.size !== input.bytes.size) throw new Error('Attachment upload returned an invalid reference or byte count.');
+      return Object.freeze({ assetId: wire.asset_id, mimeType: wire.mime_type,
+        filename: input.filename, size: wire.size }) as AttachmentReference;
+    },
+    async readAttachment(reference, signal) {
+      const response = await config.host.fetch(`${baseUrl}/download/${encodeURIComponent(reference.assetId)}`,
+        { method: 'GET', signal, cache: 'no-store' });
+      if (!response.ok) throw new Error(`Attachment retrieval failed (HTTP ${response.status}).`);
+      const bytes = await response.blob();
+      if (bytes.size !== reference.size) throw new Error('Attachment retrieval returned an incomplete file.');
+      return bytes;
+    },
     async sendHuman(submission: HumanSubmission, signal: AbortSignal): Promise<HumanSendResult> {
       const submittingIdentity = config.host.currentIdentity();
       if (!submission.clientMessageId.startsWith('c_') ||
@@ -630,7 +651,8 @@ export function createPublic019Transport(config: Public019Config): { transport: 
         else if (!settled) {
           try {
             channel.send({ type: 'message', id: submission.clientMessageId,
-              sessionKey: submission.sessionKey, content: submission.content });
+              sessionKey: submission.sessionKey, content: submission.content,
+              ...(submission.attachments ? { attachments: submission.attachments } : {}) });
           } catch { finish({ outcome: 'retryable', reason: 'Human send connection closed before acknowledgement.' }); }
         }
       });

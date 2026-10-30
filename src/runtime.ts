@@ -5,6 +5,9 @@ import {
   type CanonicalMessage,
   type CanonicalTurn,
   type ToolCallRecord,
+  type AttachmentInput,
+  type AttachmentItem,
+  type AttachmentReference,
   type ToolCallIndex,
   type ToolCallRange,
   type ChangeConnection,
@@ -1365,6 +1368,71 @@ class SessionRuntime implements ChatRuntime {
     return submission.clientMessageId;
   };
 
+  sendAttachments = (content: string, inputs: readonly AttachmentInput[]): string | null => {
+    if (!inputs.length) return this.send(content);
+    if (this.disposed || !this.checkIdentity() || this.state.status !== 'ready') return null;
+    const clientMessageId = `c_${crypto.randomUUID()}`;
+    const attachmentItems = Object.freeze(inputs.map(input => Object.freeze({
+      id: input.id, filename: input.filename, bytes: input.bytes.slice(0, input.bytes.size, input.bytes.type),
+      status: 'pending' as const,
+    })));
+    const send: LocalSend = Object.freeze({ sessionKey: this.sessionKey, deviceId: this.identity.deviceId,
+      clientMessageId, content, submittedAt: new Date().toISOString(), status: 'pending', reconciled: false,
+      attachmentItems, attachmentPhase: 'preparing' });
+    this.publish({ sends: Object.freeze([...this.state.sends, send]) });
+    void this.prepareAttachments(clientMessageId);
+    return clientMessageId;
+  };
+
+  readAttachment = (reference: AttachmentReference, signal: AbortSignal): Promise<Blob> => {
+    if (this.disposed || !this.checkIdentity()) return Promise.reject(new Error('Conversation is no longer available.'));
+    if (!this.transport.readAttachment) return Promise.reject(new Error('Attachment retrieval is unavailable on this connection.'));
+    return this.transport.readAttachment(reference, signal);
+  };
+
+  private async prepareAttachments(id: string): Promise<void> {
+    if (this.sendControllers.has(id)) return;
+    const controller = new AbortController();
+    this.sendControllers.set(id, controller);
+    const current = () => this.state.sends.find(send => send.clientMessageId === id);
+    const replaceItem = (index: number, patch: Partial<AttachmentItem>) => this.updateSend(id, send => ({ ...send,
+      attachmentItems: Object.freeze(send.attachmentItems!.map((item, position) => position === index
+        ? Object.freeze({ ...item, ...patch }) : item)),
+    }));
+    let preparing = -1;
+    try {
+      const original = current();
+      if (!original?.attachmentItems || original.attachmentPhase === 'posted') return;
+      this.updateSend(id, send => ({ ...send, status: 'pending', reason: undefined, attachmentPhase: 'preparing' }));
+      for (let index = 0; index < original.attachmentItems.length; index++) {
+        if (controller.signal.aborted || !this.checkIdentity()) return;
+        const item = current()!.attachmentItems![index];
+        if (item.reference) continue;
+        preparing = index;
+        replaceItem(index, { status: 'uploading', error: undefined });
+        if (!this.transport.uploadAttachment) throw new Error('Attachment upload is unavailable on this connection.');
+        const reference = await this.transport.uploadAttachment(item, controller.signal);
+        if (controller.signal.aborted || !this.checkIdentity()) return;
+        replaceItem(index, { status: 'ready', reference: Object.freeze({ ...reference }), error: undefined });
+      }
+      if (controller.signal.aborted || !this.checkIdentity()) return;
+      const ready = current()!;
+      const attachments = Object.freeze(ready.attachmentItems!.map(item => item.reference!));
+      const submission: HumanSubmission = Object.freeze({ sessionKey: ready.sessionKey, deviceId: ready.deviceId,
+        clientMessageId: ready.clientMessageId, content: ready.content, attachments });
+      this.updateSend(id, send => ({ ...send, attachments, attachmentPhase: 'posted' }));
+      this.sendControllers.delete(id);
+      await this.post(submission);
+    } catch (error) {
+      if (controller.signal.aborted || !this.checkIdentity()) return;
+      const reason = errorText(error);
+      if (preparing >= 0) replaceItem(preparing, { status: 'failed', error: reason });
+      this.updateSend(id, send => ({ ...send, status: 'failed', reason, attachmentPhase: 'failed' }));
+    } finally {
+      if (this.sendControllers.get(id) === controller) this.sendControllers.delete(id);
+    }
+  }
+
   private async post(submission: HumanSubmission): Promise<void> {
     const controller = new AbortController();
     this.sendControllers.set(submission.clientMessageId, controller);
@@ -1383,6 +1451,17 @@ class SessionRuntime implements ChatRuntime {
         if (!current) return;
         if (current.reconciled) {
           result = { outcome: 'accepted' };
+          break;
+        }
+        if (submission.attachments?.length && (result.outcome === 'retryable' || result.outcome === 'uncertain')) {
+          // The post may exist. Refresh canonical state, then require an explicit
+          // same-manifest retry if the bounded slice cannot establish acceptance.
+          const reason = result.reason;
+          this.updateSend(submission.clientMessageId, send => send.reconciled ? send
+            : { ...send, status: 'uncertain', reason });
+          await this.refreshHostSend(submission.clientMessageId);
+          result = this.state.sends.find(send => send.clientMessageId === submission.clientMessageId)?.reconciled
+            ? { outcome: 'accepted' } : { outcome: 'uncertain', reason: result.reason };
           break;
         }
         const shouldReask = result.outcome === 'retryable' || result.outcome === 'unreachable';
@@ -1466,7 +1545,12 @@ class SessionRuntime implements ChatRuntime {
     if (this.state.status === 'unauthorized') return;
     const send = this.state.sends.find((item) => item.clientMessageId === clientMessageId);
     if (!send || !['failed', 'uncertain'].includes(send.status) || send.reconciled ||
-        !this.profile.capabilities.humanSendDedupe) return;
+        this.sendControllers.has(clientMessageId)) return;
+    if (send.attachmentItems && send.attachmentPhase !== 'posted') {
+      await this.prepareAttachments(clientMessageId);
+      return;
+    }
+    if (!this.profile.capabilities.humanSendDedupe) return;
     // Rebuild/query first. Absence from a bounded tail does not mean rejection.
     await this.rebuild();
     if (this.disposed || !this.checkIdentity() || (this.state.status as RuntimeState['status']) === 'unauthorized') return;
@@ -1476,6 +1560,7 @@ class SessionRuntime implements ChatRuntime {
     await this.post({
       sessionKey: send.sessionKey, deviceId: send.deviceId,
       clientMessageId: send.clientMessageId, content: send.content,
+      ...(send.attachments ? { attachments: send.attachments } : {}),
     });
   };
 
@@ -1522,7 +1607,7 @@ class SessionRuntime implements ChatRuntime {
       return;
     }
     const previous = this.state.sends.find((send) => send.clientMessageId === clientMessageId);
-    if (previous && previous.content !== content) return;
+    if (previous && (previous.content !== content || previous.attachmentItems)) return;
     const submission: HumanSubmission = Object.freeze({ sessionKey: this.sessionKey,
       deviceId: this.identity.deviceId, clientMessageId, content });
     const local: LocalSend = Object.freeze({ ...submission,

@@ -1,3 +1,4 @@
+// @vitest-environment node
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import http from 'node:http';
@@ -849,5 +850,81 @@ describe('private direct-entry Chat service bridge', () => {
     const response = await fetch(`${chatOrigin}/__chat/gateway/version`, { headers: { origin: chatOrigin } });
     expect(response.status).toBe(503);
     expect(observed).toEqual([]);
+  });
+});
+
+
+describe('attachment byte routes', () => {
+  it('uploads and retrieves original bytes through the private proxy and maps the complete ordered human post', async () => {
+    const assets = new Map();
+    const observations = [];
+    let rejectUpload = false;
+    const gateway = http.createServer(async (request, response) => {
+      const url = new URL(request.url, 'http://gateway.invalid');
+      observations.push({ path: url.pathname, actingUser: url.searchParams.get('asUser'), auth: request.headers.authorization });
+      if (url.pathname === '/upload') {
+        if (rejectUpload) { request.resume(); response.writeHead(413).end('too large'); return; }
+        const chunks = []; for await (const chunk of request) chunks.push(chunk);
+        const body = Buffer.concat(chunks);
+        const form = await new Request('http://gateway.invalid/upload', { method: 'POST',
+          headers: { 'content-type': request.headers['content-type'] }, body }).formData();
+        const file = form.get('file');
+        const bytes = Buffer.from(await file.arrayBuffer());
+        const id = `asset_${assets.size}`;
+        assets.set(id, { bytes, type: file.type, filename: file.name });
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ asset_id: id, mime_type: file.type, size: bytes.length }));
+      } else if (url.pathname.startsWith('/download/')) {
+        const asset = assets.get(decodeURIComponent(url.pathname.slice('/download/'.length)));
+        if (!asset) { response.writeHead(404).end(); return; }
+        response.writeHead(200, { 'content-type': asset.type, 'content-length': asset.bytes.length });
+        response.end(asset.bytes);
+      } else response.writeHead(404).end();
+    });
+    const gatewayOrigin = `http://127.0.0.1:${await listen(gateway)}`;
+    const port = await unusedPort(), origin = `http://127.0.0.1:${port}`;
+    const { root, publicDir } = await temporaryDirectory();
+    const base = await writeGatewayDescriptor(path.join(root, 'gateway-base'), gatewayOrigin, TOKEN, { advertisedUrl: true });
+    const chat = createChatServer({ rootDir: root, publicDir,
+      releaseInfo: { tag: 'v0.1.2', sourceCommit: '1234567890abcdef1234567890abcdef12345678' },
+      environment: { CHAT_PUBLIC_ORIGIN: origin, CHAT_DEFAULT_GATEWAY_ORIGIN: gatewayOrigin,
+        CHAT_DEFAULT_SESSION_KEY: SESSION, CHAT_DEFAULT_PRINCIPAL_KEY: PRINCIPAL, TIGHTBEAM_BASE_DIR: base } });
+    await listen(chat, port);
+    const frames = [];
+    let onFrame;
+    const host = {
+      currentIdentity: () => ({ principalKey: PRINCIPAL, deviceId: 'device' }),
+      fetch: (url, init) => fetch(url, { ...init, headers: { ...init.headers, origin } }),
+      openAuthenticatedChanges: async () => { throw new Error('not used'); },
+      openAuthenticatedHuman: async () => ({ close() {}, listen(fn) { onFrame = fn; return () => {}; },
+        send(frame) { frames.push(frame); onFrame({ type: 'ack', id: frame.id }); } }),
+    };
+    const { transport } = createPublic019Transport({ baseUrl: origin + '/__chat', host });
+    const original = [new Uint8Array([255]), new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 0, 128]),
+      new Uint8Array(20 * 1024 * 1024).fill(173)];
+    const refs = [];
+    for (let i = 0; i < original.length; i++) {
+      const filename = i === 1 ? 'photo.png' : `file ${i}.bin`;
+      const bytes = new Blob([original[i]], { type: i === 1 ? 'image/png' : 'application/octet-stream' });
+      const ref = await transport.uploadAttachment({ id: String(i), filename, bytes }, new AbortController().signal);
+      expect(ref).toEqual({ assetId: `asset_${i}`, mimeType: bytes.type, filename, size: bytes.size });
+      const retrieved = await transport.readAttachment(ref, new AbortController().signal);
+      expect(retrieved.type).toBe(bytes.type);
+      expect(crypto.createHash('sha256').update(Buffer.from(await retrieved.arrayBuffer())).digest('hex'))
+        .toBe(crypto.createHash('sha256').update(original[i]).digest('hex'));
+      expect(assets.get(ref.assetId).filename).toBe(filename);
+      refs.push(ref);
+    }
+    const result = await transport.sendHuman({ sessionKey: SESSION, deviceId: 'device', clientMessageId: 'c_assets',
+      content: '', attachments: refs }, new AbortController().signal);
+    expect(result.outcome).toBe('accepted');
+    expect(frames).toEqual([{ type: 'message', id: 'c_assets', sessionKey: SESSION, content: '', attachments: refs }]);
+    expect(observations.every(row => row.actingUser === PRINCIPAL && row.auth === `Bearer ${TOKEN}`)).toBe(true);
+    rejectUpload = true;
+    await expect(transport.uploadAttachment({ id: 'rejected', filename: 'large.bin', bytes: new Blob(['x']) },
+      new AbortController().signal)).rejects.toThrow('413');
+    await expect(transport.readAttachment({ ...refs[0], assetId: 'missing' }, new AbortController().signal)).rejects.toThrow('404');
+    expect((await fetch(origin + '/__chat/upload', { headers: { origin } })).status).toBe(405);
+    expect((await fetch(origin + '/__chat/download/asset_0', { method: 'POST', headers: { origin } })).status).toBe(405);
   });
 });
