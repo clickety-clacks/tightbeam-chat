@@ -102,12 +102,22 @@ function setDocumentVisibility(initial: DocumentVisibilityState) {
   };
 }
 
-function installViewportLayout(viewport: HTMLElement, trailingSpace = 200, summaryHeightChange = false) {
+function installViewportLayout(viewport: HTMLElement, trailingSpace = 200,
+  rowHeightOverride?: (row: Element) => number | undefined, summaryHeightChange = false) {
   const content = viewport.querySelector<HTMLElement>('.tb-chat-message-content')!;
   const rowHeight = 92;
   const activityDetailHeight = 32;
-  const heightOf = (row: Element) => (summaryHeightChange && row.querySelector('.tb-chat-summary-marker') ? 40 : rowHeight) +
-    (row.querySelector('.tb-chat-activity-run-rows')?.children.length ?? 0) * activityDetailHeight;
+  const heightOf = (row: Element): number => {
+    const explicitHeight = Number.parseFloat((row as HTMLElement).style.height);
+    if (Number.isFinite(explicitHeight)) return explicitHeight;
+    const override = rowHeightOverride?.(row);
+    if (override !== undefined) return override;
+    const activityRows = row.querySelector('.tb-chat-activity-run-rows')?.children.length ?? 0;
+    const toolDetails = row.querySelector('.tb-chat-tool-detail-rail[aria-hidden="false"]')?.querySelectorAll('section').length ?? 0;
+    const attachmentDetails = row.querySelector('.tb-chat-attachment-content[aria-hidden="false"] pre') ? 2 : 0;
+    const baseHeight = summaryHeightChange && row.querySelector('.tb-chat-summary-marker') ? 40 : rowHeight;
+    return baseHeight + (activityRows + toolDetails + attachmentDetails) * activityDetailHeight;
+  };
   const rowsHeight = () => [...content.children].reduce((height, row) => height + heightOf(row), 0);
   let scrollTop = 0;
   const anchorSpace = () => Number.parseFloat(viewport.style.getPropertyValue('--tb-chat-anchor-space')) || 0;
@@ -139,6 +149,79 @@ function installViewportLayout(viewport: HTMLElement, trailingSpace = 200, summa
     get anchorSpace() { return anchorSpace(); },
     setScrollTop(value: number) { viewport.scrollTop = value; },
     restore() { bounds.mockRestore(); },
+  };
+}
+
+function installFoldAnimationMock() {
+  const previous = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'animate');
+  const animations: Array<{
+    readonly element: HTMLElement;
+    readonly keyframes: Keyframe[] | PropertyIndexedKeyframes;
+    readonly options: number | KeyframeAnimationOptions | undefined;
+    finish(): void;
+  }> = [];
+  Object.defineProperty(HTMLElement.prototype, 'animate', {
+    configurable: true,
+    value: function (this: HTMLElement, keyframes: Keyframe[] | PropertyIndexedKeyframes,
+      options?: number | KeyframeAnimationOptions) {
+      const animation = { cancel: vi.fn(), onfinish: null } as unknown as Animation;
+      animations.push({ element: this, keyframes, options, finish: () => {
+        animation.onfinish?.call(animation, {} as AnimationPlaybackEvent);
+      } });
+      return animation;
+    },
+  });
+  return {
+    animations,
+    restore() {
+      if (previous) Object.defineProperty(HTMLElement.prototype, 'animate', previous);
+      else Reflect.deleteProperty(HTMLElement.prototype, 'animate');
+    },
+  };
+}
+
+function installMotionPreference(reduced: boolean) {
+  const previous = Object.getOwnPropertyDescriptor(window, 'matchMedia');
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    value: (query: string) => ({ matches: reduced, media: query, onchange: null,
+      addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {}, dispatchEvent: () => false }),
+  });
+  return () => {
+    if (previous) Object.defineProperty(window, 'matchMedia', previous);
+    else Reflect.deleteProperty(window, 'matchMedia');
+  };
+}
+
+function installResizeObserverMock() {
+  const observers: Array<{ callback: ResizeObserverCallback; targets: Set<Element> }> = [];
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'ResizeObserver');
+  class TestResizeObserver {
+    private readonly entry: { callback: ResizeObserverCallback; targets: Set<Element> };
+    constructor(callback: ResizeObserverCallback) {
+      this.entry = { callback, targets: new Set() };
+      observers.push(this.entry);
+    }
+    observe(target: Element) { this.entry.targets.add(target); }
+    unobserve(target: Element) { this.entry.targets.delete(target); }
+    takeRecords() { return []; }
+    disconnect() {
+      this.entry.targets.clear();
+      const index = observers.indexOf(this.entry);
+      if (index >= 0) observers.splice(index, 1);
+    }
+  }
+  Object.defineProperty(globalThis, 'ResizeObserver', { configurable: true, value: TestResizeObserver });
+  return {
+    notify(target: Element) {
+      for (const { callback, targets } of observers) {
+        if (targets.has(target)) callback([], {} as ResizeObserver);
+      }
+    },
+    restore() {
+      if (previous) Object.defineProperty(globalThis, 'ResizeObserver', previous);
+      else Reflect.deleteProperty(globalThis, 'ResizeObserver');
+    },
   };
 }
 
@@ -314,7 +397,7 @@ describe('conversation surface', () => {
     await act(async () => { await Promise.resolve(); });
     expect(sources).toHaveLength(5);
     const viewport = screen.getByRole('log');
-    const layout = installViewportLayout(viewport, 200, true);
+    const layout = installViewportLayout(viewport, 200, undefined, true);
     try {
       act(() => runtime.update({}));
       const anchor = screen.getByText('Full original remedy 5').closest<HTMLElement>('[data-scroll-key]')!;
@@ -1352,7 +1435,8 @@ describe('conversation surface', () => {
       ]);
       const expandedRun = toggle.closest<HTMLElement>('.tb-chat-activity-run')!;
       expect(expandedRun.firstElementChild).toBe(toggle);
-      expect(expandedRun.lastElementChild?.classList.contains('tb-chat-activity-run-rows')).toBe(true);
+      expect(expandedRun.lastElementChild?.classList.contains('tb-chat-activity-run-content')).toBe(true);
+      expect(expandedRun.lastElementChild?.firstElementChild?.classList.contains('tb-chat-activity-run-rows')).toBe(true);
       expect(layout.offset(anchor)).toBeCloseTo(anchorBefore, 0);
 
       const incoming = row(sessionKey, 'reminder-7', 'Quiet for 7 min · Background activity 7', {
@@ -2163,9 +2247,9 @@ describe('conversation surface', () => {
 });
 
 describe('tool-call and transition display', () => {
-  it('renders one earlier-activity control when the display cap hides distinct tool groups', () => {
+  it('animates only capped earlier activity into view while keeping the reader anchor and reduced-motion path', () => {
     let index: ToolCallIndex | undefined;
-    const names = ['Bash', 'Read', 'Grep', 'Edit', 'Search', 'Write'];
+    const names = ['Bash', 'Read', 'Grep', 'Edit', 'Search', 'Write', 'Copy', 'Move'];
     for (let seq = 1; seq <= names.length; seq++) {
       const toolName = names[seq - 1];
       const call: ToolCallRecord = { id: `group-${seq}`, seq, sessionKey: 'tool-groups', turnSeq: 1,
@@ -2176,14 +2260,94 @@ describe('tool-call and transition display', () => {
       index = putIndex(index, call.afterMessageSeq, group, group.maxTime);
     }
     const human = row('tool-groups', 'human', 'A question', { seq: 1, role: 'user', sender: 'user:person' });
-    const runtime = new FakeRuntime('tool-groups', { records: [human], toolCallsEnabled: true, toolCallIndex: index });
-    const view = render(<TightbeamChat sessionKey="tool-groups" adapter={adapterFor(runtime)} />);
+    const answer = row('tool-groups', 'answer', 'The answer', {
+      seq: 10, sender: 'assistant-service', messageType: 'assistant', replyToMessageId: human.id, turnSeq: 1,
+    });
+    const resize = installResizeObserverMock();
+    try {
+      for (const reduced of [false, true]) {
+        const animations = installFoldAnimationMock();
+        const restoreMotion = installMotionPreference(reduced);
+        let layout: ReturnType<typeof installViewportLayout> | undefined;
+        let view: ReturnType<typeof render> | undefined;
+        try {
+          const runtime = new FakeRuntime('tool-groups', { records: [human, answer], toolCallsEnabled: true, toolCallIndex: index });
+          view = render(<TightbeamChat sessionKey="tool-groups" adapter={adapterFor(runtime)} />);
+          const viewport = screen.getByRole('log');
+          const content = viewport.querySelector<HTMLElement>('.tb-chat-message-content')!;
+          layout = installViewportLayout(viewport, 200, rowElement => {
+            if (rowElement.matches('.tb-chat-activity-overflow')) return 24;
+            if (rowElement.matches('.tb-chat-activity-tool')) return 48;
+            return undefined;
+          });
 
-    expect(view.container.querySelectorAll('.tb-chat-activity-overflow')).toHaveLength(1);
-    expect(view.container.querySelectorAll('details.tb-chat-activity-line.tb-chat-activity-tool')).toHaveLength(5);
-    fireEvent.click(screen.getByRole('button', { name: 'Show earlier activity' }));
-    expect(view.container.querySelectorAll('.tb-chat-activity-overflow')).toHaveLength(0);
-    expect(view.container.querySelectorAll('details.tb-chat-activity-line.tb-chat-activity-tool')).toHaveLength(6);
+          const visibleRows = () => view!.container.querySelectorAll('details.tb-chat-activity-line.tb-chat-activity-tool');
+          expect(view!.container.querySelectorAll('.tb-chat-activity-overflow')).toHaveLength(1);
+          expect(visibleRows()).toHaveLength(5);
+          expect([...visibleRows()].map(element => element.getAttribute('data-record-key')))
+            .toEqual(['tool-group-4', 'tool-group-5', 'tool-group-6', 'tool-group-7', 'tool-group-8']);
+          const anchor = screen.getByText('The answer').closest('article') as HTMLElement;
+          fireEvent.wheel(viewport, { deltaY: 1 });
+          layout.setScrollTop(200);
+          fireEvent.scroll(viewport);
+          expect(screen.getByRole('button', { name: 'Scroll to latest messages' })).toBeTruthy();
+          const anchorBefore = layout.offset(anchor);
+
+          const animationStart = animations.animations.length;
+          fireEvent.click(screen.getByRole('button', { name: 'Show earlier activity' }));
+          expect(view!.container.querySelectorAll('.tb-chat-activity-overflow')).toHaveLength(0);
+          expect(visibleRows()).toHaveLength(8);
+          const revealedRows = ['tool-group-1', 'tool-group-2', 'tool-group-3'];
+          expect([...visibleRows()].map(element => element.getAttribute('data-record-key')))
+            .toEqual([...revealedRows, 'tool-group-4', 'tool-group-5', 'tool-group-6', 'tool-group-7', 'tool-group-8']);
+          const revealAnimations = animations.animations.slice(animationStart);
+          if (reduced) expect(revealAnimations).toHaveLength(0);
+          else {
+            expect(revealAnimations).toHaveLength(3);
+            expect(revealAnimations.map(animation => animation.element.dataset.recordKey)).toEqual(revealedRows);
+            for (const animation of revealAnimations) {
+              expect((animation.keyframes as Keyframe[])[0]).toMatchObject({ height: '0px', opacity: 0 });
+              expect(animation.options).toMatchObject({ duration: 180, fill: 'forwards' });
+            }
+          }
+          expect(layout.offset(anchor)).toBeCloseTo(anchorBefore, 0);
+
+          if (!reduced) {
+            const heights = revealAnimations.map(animation =>
+              Number.parseFloat(String((animation.keyframes as Keyframe[])[1].height)));
+            act(() => {
+              revealAnimations.forEach((animation, i) => {
+                animation.element.style.height = `${heights[i] / 2}px`;
+              });
+              resize.notify(content);
+            });
+            expect(layout.offset(anchor)).toBeCloseTo(anchorBefore, 0);
+            act(() => {
+              revealAnimations.forEach((animation, i) => {
+                animation.element.style.height = `${heights[i]}px`;
+              });
+              resize.notify(content);
+              revealAnimations.forEach(animation => animation.finish());
+            });
+            expect(layout.offset(anchor)).toBeCloseTo(anchorBefore, 0);
+            for (const key of revealedRows) {
+              expect(view!.container.querySelector(`[data-record-key="${key}"]`)?.getAttribute('style') ?? '')
+                .not.toMatch(/height:|opacity:|overflow:/);
+            }
+          }
+          expect(visibleRows()).toHaveLength(8);
+          expect([...view!.container.querySelectorAll<HTMLElement>('.tb-chat-activity-tool')]
+            .filter(element => !revealedRows.includes(element.dataset.recordKey ?? ''))).toHaveLength(5);
+        } finally {
+          view?.unmount();
+          layout?.restore();
+          restoreMotion();
+          animations.restore();
+        }
+      }
+    } finally {
+      resize.restore();
+    }
   });
 
   it('caps a large tool run and expands its retained details in place', () => {
@@ -2235,8 +2399,7 @@ describe('tool-call and transition display', () => {
     expect(view.container.querySelector('[data-record-key="tool-tc_1"]')?.getAttribute('aria-label'))
       .toBe('Tool call: Read source 1 · running');
     const retained = view.container.querySelector<HTMLDetailsElement>('[data-record-key="tool-tc_1000"]')!;
-    retained.open = true;
-    fireEvent(retained, new Event('toggle'));
+    fireEvent.click(retained.querySelector('summary')!);
     insert(tool(2001));
     act(() => runtime.update({ toolCallIndex: index }));
     const retainedAfterAppend = view.container.querySelector<HTMLDetailsElement>('[data-record-key="tool-tc_1000"]')!;
@@ -2338,48 +2501,177 @@ describe('tool-call and transition display', () => {
       truncated: [], startedAt: 1000, endedAt: null, rowVersion: 1 };
     const human = row('tools', 'human', 'Please read the source', { role: 'user', sender: 'user:person', seq: 1 });
     const reply = row('tools', 'reply', 'Read complete', { seq: 3, replyToMessageId: human.id });
+    const laterMessages = Array.from({ length: 5 }, (_, index) => row('tools', `later-${index + 1}`,
+      `Later message ${index + 1}`, { seq: index + 4, role: 'user', sender: 'user:person' }));
     const marker: ConversationRecord = { kind: 'transition', id: 'boundary', seq: 2, rowVersion: 1,
       sessionKey: 'tools', transition: 'unknown', from: 'old', to: 'new', content: 'A new boundary kind', raw: {} };
-    const runtime = new FakeRuntime('tools', { records: [human, marker, reply], toolCallsEnabled: true, toolCalls: [call] });
+    const runtime = new FakeRuntime('tools', { records: [human, marker, reply, ...laterMessages], toolCallsEnabled: true, toolCalls: [call] });
     const view = render(<TightbeamChat sessionKey="tools" adapter={adapterFor(runtime)} />);
-    expect(screen.queryByRole('button', { name: 'Tool calls' })).toBeNull();
-    expect(screen.queryByText('Tool calls')).toBeNull();
-    expect([...view.container.querySelectorAll('[data-record-key]')].map(node => node.getAttribute('data-record-key')))
-      .toEqual(['human', 'tool-tc_read', 'boundary', 'reply']);
-    expect(screen.getByText('A new boundary kind')).toBeTruthy();
-    expect(screen.getByText('A new boundary kind').closest('.tb-chat-transition-marker')?.getAttribute('role')).toBe('separator');
-    expect(screen.queryByText('source.ts')).toBeNull();
-    const detail = view.container.querySelector('details')!;
-    const terminalIcon = detail.querySelector<SVGSVGElement>('summary > .tb-chat-tool-terminal-icon');
-    expect(terminalIcon?.getAttribute('viewBox')).toBe('0 0 24 24');
-    expect(terminalIcon?.getAttribute('aria-hidden')).toBe('true');
-    expect(terminalIcon?.getAttribute('focusable')).toBe('false');
-    expect(terminalIcon?.querySelector('rect')?.getAttribute('fill')).toBe('currentColor');
-    expect([...(terminalIcon?.querySelectorAll('path') ?? [])].map(path => path.getAttribute('stroke')))
-      .toEqual(['var(--tb-chat-background)', 'var(--tb-chat-background)']);
-    expect([...(terminalIcon?.querySelectorAll('path') ?? [])].map(path => path.getAttribute('stroke-linecap')))
-      .toEqual(['round', 'round']);
-    expect([...(terminalIcon?.querySelectorAll('path') ?? [])].map(path => path.getAttribute('stroke-linejoin')))
-      .toEqual(['round', null]);
-    expect(detail.querySelector('.tb-chat-activity-bullet')).toBeNull();
-    expect(detail.classList.contains('tb-chat-activity-tool')).toBe(true);
-    expect(detail.getAttribute('aria-label')).toBe('Tool call: Read the source file · running');
-    expect(detail.querySelector('summary')?.getAttribute('aria-label'))
-      .toBe('Tool call: Read the source file · running. Show input and result');
-    detail.open = true;
-    fireEvent(detail, new Event('toggle'));
-    await screen.findByText(/source.ts/);
-    expect(screen.getByText('Waiting for result…')).toBeTruthy();
-    const editor = screen.getByRole('textbox');
-    fireEvent.change(editor, { target: { value: 'draft kept' } });
-    act(() => runtime.update({ toolCalls: [{ ...call, status: 'completed', rowVersion: 2,
-      rawOutput: '{"prefix":', truncated: [{ field: 'rawOutput', originalBytes: 20000 }], endedAt: 2000 }] }));
-    expect(screen.getByText('Read the source file · done')).toBeTruthy();
-    expect(screen.getByText('Result truncated — original size 20000 bytes.')).toBeTruthy();
-    expect(screen.getByText('{"prefix":')).toBeTruthy();
-    expect(screen.getByText('A new boundary kind')).toBeTruthy();
-    expect((editor as HTMLTextAreaElement).value).toBe('draft kept');
-    expect(screen.getByText('Read the source file · done')).toBeTruthy();
+    const viewport = screen.getByRole('log');
+    const layout = installViewportLayout(viewport);
+    const anchor = screen.getByText('Read complete').closest<HTMLElement>('[data-scroll-key]')!;
+    layout.setScrollTop(304);
+    fireEvent.scroll(viewport);
+    const anchorBefore = layout.offset(anchor);
+    try {
+      expect(screen.queryByRole('button', { name: 'Tool calls' })).toBeNull();
+      expect(screen.queryByText('Tool calls')).toBeNull();
+      expect([...view.container.querySelectorAll('[data-record-key]')].slice(0, 4).map(node => node.getAttribute('data-record-key')))
+        .toEqual(['human', 'tool-tc_read', 'boundary', 'reply']);
+      expect(screen.getByText('A new boundary kind')).toBeTruthy();
+      expect(screen.getByText('A new boundary kind').closest('.tb-chat-transition-marker')?.getAttribute('role')).toBe('separator');
+      expect(screen.queryByText('source.ts')).toBeNull();
+      const details = view.container.querySelector('details')!;
+      const terminalIcon = details.querySelector<SVGSVGElement>('summary > .tb-chat-tool-terminal-icon');
+      expect(terminalIcon?.getAttribute('viewBox')).toBe('0 0 24 24');
+      expect(terminalIcon?.getAttribute('aria-hidden')).toBe('true');
+      expect(terminalIcon?.getAttribute('focusable')).toBe('false');
+      expect(terminalIcon?.querySelector('rect')?.getAttribute('fill')).toBe('currentColor');
+      expect([...(terminalIcon?.querySelectorAll('path') ?? [])].map(path => path.getAttribute('stroke')))
+        .toEqual(['var(--tb-chat-background)', 'var(--tb-chat-background)']);
+      expect([...(terminalIcon?.querySelectorAll('path') ?? [])].map(path => path.getAttribute('stroke-linecap')))
+        .toEqual(['round', 'round']);
+      expect([...(terminalIcon?.querySelectorAll('path') ?? [])].map(path => path.getAttribute('stroke-linejoin')))
+        .toEqual(['round', null]);
+      expect(details.querySelector('.tb-chat-activity-bullet')).toBeNull();
+      expect(details.classList.contains('tb-chat-activity-tool')).toBe(true);
+      expect(details.getAttribute('aria-label')).toBe('Tool call: Read the source file · running');
+      expect(details.querySelector('summary')?.getAttribute('aria-label'))
+        .toBe('Tool call: Read the source file · running. Show input and result');
+      fireEvent.click(details.querySelector('summary')!);
+      await screen.findByText(/source.ts/);
+      expect(screen.getByText('Waiting for result…')).toBeTruthy();
+      const rail = details.querySelector('.tb-chat-tool-detail-rail')!;
+      expect(rail.getAttribute('aria-hidden')).toBe('false');
+      expect(rail.querySelectorAll('section').length).toBe(2);
+      expect(layout.offset(anchor)).toBeCloseTo(anchorBefore, 0);
+      const editor = screen.getByRole('textbox');
+      fireEvent.change(editor, { target: { value: 'draft kept' } });
+      act(() => runtime.update({ toolCalls: [{ ...call, status: 'completed', rowVersion: 2,
+        rawOutput: '{"prefix":', truncated: [{ field: 'rawOutput', originalBytes: 20000 }], endedAt: 2000 }] }));
+      expect(screen.getByText('Read the source file · done')).toBeTruthy();
+      expect(screen.getByText('Result truncated — original size 20000 bytes.')).toBeTruthy();
+      expect(screen.getByText('{"prefix":')).toBeTruthy();
+      expect(screen.getByText('A new boundary kind')).toBeTruthy();
+      expect((editor as HTMLTextAreaElement).value).toBe('draft kept');
+      expect(screen.getByText('Read the source file · done')).toBeTruthy();
+      fireEvent.click(details.querySelector('summary')!);
+      expect(details.open).toBe(false);
+      expect(layout.offset(anchor)).toBeCloseTo(anchorBefore, 0);
+    } finally {
+      layout.restore();
+    }
+  });
+
+  it('animates tool, activity, and attachment disclosures and skips motion when requested', () => {
+    const sessionKey = 'fold-motion';
+    const human = row(sessionKey, 'question', 'Read these files', {
+      seq: 1, role: 'user', sender: 'user:person', turnSeq: 1, attachments: [{ name: 'notes.txt' }],
+    });
+    const activity = Array.from({ length: 6 }, (_, index) => row(sessionKey, `notice-${index + 1}`,
+      `Quiet for ${index + 1} min · Background activity ${index + 1}`, {
+      seq: index + 2, role: 'user', sender: 'process:events', messageType: 'substrate',
+    }));
+    const reply = row(sessionKey, 'reply', 'Here is the result', {
+      seq: 12, sender: 'assistant-service', messageType: 'assistant', replyToMessageId: human.id, turnSeq: 1,
+    });
+    const call: ToolCallRecord = { id: 'tc_read', seq: 13, sessionKey, turnSeq: 1, afterMessageSeq: 1,
+      harnessToolCallId: 'read-1', title: 'Read notes', kind: 'read', toolName: 'read_file',
+      status: 'completed', rawInput: { path: 'notes.txt' }, rawOutput: 'Done', content: null,
+      truncated: [], startedAt: 1000, endedAt: 1200, rowVersion: 1 };
+
+    for (const reduced of [false, true]) {
+      const animations = installFoldAnimationMock();
+      const restoreMotion = installMotionPreference(reduced);
+      try {
+        const runtime = new FakeRuntime(sessionKey, { records: [human, ...activity, reply],
+          activityTurnStateAvailable: true, toolCallsEnabled: true, toolCalls: [call] });
+        const view = render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+        const finishLatest = (from: number) => act(() => {
+          animations.animations.slice(from).forEach(animation => animation.finish());
+        });
+
+        const attachment = screen.getByText('1 attachment detail').closest('details')!;
+        const attachmentStart = animations.animations.length;
+        fireEvent.click(attachment.querySelector('summary')!);
+        expect(attachment.open).toBe(true);
+        const attachmentContent = attachment.querySelector('.tb-chat-attachment-content')!;
+        expect(attachmentContent.getAttribute('aria-hidden')).toBe('false');
+        if (reduced) expect(animations.animations.length).toBe(attachmentStart);
+        else {
+          expect(animations.animations.length).toBeGreaterThan(attachmentStart);
+          expect(animations.animations[attachmentStart].element).toBe(attachmentContent);
+          expect(animations.animations[attachmentStart].options).toMatchObject({ duration: 180 });
+          finishLatest(attachmentStart);
+        }
+
+        const tool = view.container.querySelector<HTMLDetailsElement>('.tb-chat-activity-tool')!;
+        const toolStart = animations.animations.length;
+        fireEvent.click(tool.querySelector('summary')!);
+        expect(tool.open).toBe(true);
+        const rail = tool.querySelector('.tb-chat-tool-detail-rail')!;
+        expect(rail.classList.contains('tb-chat-fold-content')).toBe(true);
+        expect(rail.querySelectorAll('section')).toHaveLength(2);
+        if (reduced) expect(animations.animations.length).toBe(toolStart);
+        else {
+          expect(animations.animations.length).toBeGreaterThan(toolStart);
+          expect(animations.animations[toolStart].element).toBe(rail);
+          expect((animations.animations[toolStart].keyframes as Keyframe[])[0]).toMatchObject({ height: '0px', opacity: 0 });
+          expect(animations.animations[toolStart].options).toMatchObject({ duration: 180 });
+          finishLatest(toolStart);
+        }
+
+        const fold = screen.getByRole('button', { name: /Expand substrate activity run, 6 entries/ });
+        const foldStart = animations.animations.length;
+        fireEvent.click(fold);
+        expect(fold.getAttribute('aria-expanded')).toBe('true');
+        const rows = fold.closest('.tb-chat-activity-run')?.querySelector('.tb-chat-activity-run-rows')!;
+        expect(rows.children).toHaveLength(6);
+        if (reduced) expect(animations.animations.length).toBe(foldStart);
+        else {
+          expect(animations.animations.length).toBeGreaterThan(foldStart);
+          expect(animations.animations[foldStart].element.classList.contains('tb-chat-activity-run-content')).toBe(true);
+          expect((animations.animations[foldStart].keyframes as Keyframe[])[0]).toMatchObject({ height: '0px', opacity: 0 });
+          finishLatest(foldStart);
+        }
+
+        const foldCloseStart = animations.animations.length;
+        fireEvent.click(fold);
+        expect(fold.getAttribute('aria-expanded')).toBe('false');
+        if (reduced) {
+          expect(animations.animations.length).toBe(foldCloseStart);
+          expect(fold.closest('.tb-chat-activity-run')?.querySelector('.tb-chat-activity-run-content')).toBeNull();
+        } else {
+          expect(animations.animations.length).toBeGreaterThan(foldCloseStart);
+          const content = fold.closest('.tb-chat-activity-run')?.querySelector('.tb-chat-activity-run-content')!;
+          expect(content.getAttribute('aria-hidden')).toBe('true');
+          expect((animations.animations[foldCloseStart].keyframes as Keyframe[])[1]).toMatchObject({ height: '0px', opacity: 0 });
+          finishLatest(foldCloseStart);
+          expect(fold.closest('.tb-chat-activity-run')?.querySelector('.tb-chat-activity-run-content')).toBeNull();
+        }
+
+        const closeStart = animations.animations.length;
+        fireEvent.click(tool.querySelector('summary')!);
+        if (reduced) {
+          expect(tool.open).toBe(false);
+          expect(animations.animations.length).toBe(closeStart);
+        } else {
+          expect(tool.open).toBe(true);
+          expect(tool.querySelector('.tb-chat-tool-detail-rail')?.getAttribute('aria-hidden')).toBe('true');
+          expect(tool.querySelector('.tb-chat-tool-detail-rail')?.hasAttribute('inert')).toBe(true);
+          expect((animations.animations[closeStart].keyframes as Keyframe[])[1]).toMatchObject({ height: '0px', opacity: 0 });
+          finishLatest(closeStart);
+          expect(tool.open).toBe(false);
+        }
+        expect(view.container.querySelector('[data-record-key="tool-tc_read"]')).toBe(tool);
+        expect(tool.querySelector('summary')?.getAttribute('aria-label')).toContain('Read notes · done');
+        view.unmount();
+      } finally {
+        cleanup();
+        restoreMotion();
+        animations.restore();
+      }
+    }
   });
 });
 
