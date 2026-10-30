@@ -1844,7 +1844,6 @@ describe('conversation surface', () => {
     mockObjectUrls(() => { throw new Error('Preview blocked by browser'); });
     const runtime = new FakeRuntime('preview-creation-failure');
     const view = render(<TightbeamChat sessionKey="preview-creation-failure" adapter={adapterFor(runtime)} />);
-    const composer = screen.getByRole('textbox', { name: 'Message to Research assistant' });
     const source = new File(['original'], 'preview-failure.png', { type: 'image/png' });
     fireEvent.change(view.container.querySelector<HTMLInputElement>('input[type="file"][accept="image/*"]')!, {
       target: { files: [source] },
