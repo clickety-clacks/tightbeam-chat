@@ -3,6 +3,18 @@
     "version": "v0.1.57",
     "items": [
       {
+        "title": "Clearer activity pills",
+        "description": "Activity pills use plain wording, distinct kinds and identifiers shortened to their prefix and first four characters. Activity delivered inside message batches reaches its pills, and same-kind arrivals update the existing fold."
+      },
+      {
+        "title": "Keep supported activity with its conversation",
+        "description": "Eligible activity from conversation history returns in the same position and fold when you reopen or reload. Activity after an interim reply stays visible while its turn is running."
+      },
+      {
+        "title": "Understand activity-history limits",
+        "description": "Without a recorded turn end, activity with no later reply disappears when the turn ends. Refused-action notices are live-only and disappear when you leave or reload."
+      },
+      {
         "title": "Activity snapshot compatibility",
         "description": "The deprecated liveActivityIds and liveActivityEligibleIds snapshot fields remain in the public types but are no longer populated at runtime and are intended for later removal."
       }
