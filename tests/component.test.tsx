@@ -1740,9 +1740,9 @@ describe('conversation surface', () => {
     const svg = new File(['<svg xmlns="http://www.w3.org/2000/svg"/>'], 'diagram.svg', { type: 'image/svg+xml' });
     let resolvePreparation!: (items: readonly AttachmentInput[]) => void;
     let selected: readonly AttachmentInput[] = [];
-    runtime.prepareAttachmentInputs = vi.fn(inputs => {
+    runtime.prepareAttachmentInputs = vi.fn((inputs: readonly AttachmentInput[]) => {
       selected = inputs;
-      return new Promise(resolve => { resolvePreparation = resolve; });
+      return new Promise<readonly AttachmentInput[]>(resolve => { resolvePreparation = resolve; });
     });
     const view = render(<TightbeamChat sessionKey="prepared-composer-attachments" adapter={adapterFor(runtime)} />);
     const composer = screen.getByRole('textbox', { name: 'Message to Research assistant' }) as HTMLTextAreaElement;
@@ -1780,7 +1780,7 @@ describe('conversation surface', () => {
     const runtime = new FakeRuntime('unreadable-composer-image');
     const photo = new File(['unreadable image'], 'broken.heic', { type: 'image/heic' });
     const documentFile = new File(['original document'], 'notes.pdf', { type: 'application/pdf' });
-    runtime.prepareAttachmentInputs = vi.fn(async inputs => {
+    runtime.prepareAttachmentInputs = vi.fn(async (inputs: readonly AttachmentInput[]): Promise<readonly AttachmentInput[]> => {
       const failedIndex = inputs.findIndex(item => item.filename === 'broken.heic');
       if (failedIndex >= 0) throw new AttachmentPreparationError(failedIndex, 'image-unreadable',
         'Cannot read broken.heic in its image format on this device.');
@@ -1860,7 +1860,7 @@ describe('conversation surface', () => {
     expect(runtime.retried).toEqual([clientMessageId]);
   });
 
-  it('restores a failed attachment send with its original Blob and filename', () => {
+  it('restores a failed attachment send with its original Blob and filename', async () => {
     mockObjectUrls(() => 'blob:restored-failed-photo');
     const sessionKey = 'restore-failed-attachment';
     const source = new File(['original failed image bytes'], 'failed-photo.png', { type: 'image/png' });
