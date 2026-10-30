@@ -1029,6 +1029,7 @@ describe('conversation surface', () => {
     expect(reminderFold.querySelector('.tb-chat-activity-pill-amber')).toBeTruthy();
     expect(reminderFold.querySelector('.tb-chat-activity-bullet')).toBeNull();
     expect(reminderFold.querySelector('.tb-chat-tool-terminal-icon')).toBeNull();
+    expect(reminderFold.classList.contains('tb-chat-activity-tool-run-toggle')).toBe(false);
     expect(reminderFold.firstElementChild?.classList.contains('tb-chat-activity-run-chevron')).toBe(true);
     expect(reminderFold.tagName).toBe('BUTTON');
     expect(reminderFold.getAttribute('aria-expanded')).toBe('false');
@@ -2056,6 +2057,9 @@ describe('tool-call and transition display', () => {
     expect(screen.queryByRole('button', { name: 'Show earlier activity' })).toBeNull();
     expect(foldedRun.getAttribute('aria-expanded')).toBe('false');
     expect(foldedRun.tagName).toBe('BUTTON');
+    expect(foldedRun.classList.contains('tb-chat-activity-tool-run-toggle')).toBe(true);
+    expect(foldedRun.querySelector('.tb-chat-activity-gist')?.textContent).toBe('Read source 2000 · running');
+    expect(foldedRun.querySelector('.tb-chat-activity-run-count')?.textContent).toBe('×2000');
     expect(foldedRun.getAttribute('aria-label')).toMatch(/^Expand tool activity run, 2000 entries\./);
     expect(foldedRun.firstElementChild?.matches('svg.tb-chat-tool-terminal-icon')).toBe(true);
     expect(foldedRun.querySelector('.tb-chat-activity-bullet')).toBeNull();
@@ -2142,6 +2146,7 @@ describe('tool-call and transition display', () => {
     expect([...(terminalIcon?.querySelectorAll('path') ?? [])].map(path => path.getAttribute('stroke-linejoin')))
       .toEqual(['round', null]);
     expect(detail.querySelector('.tb-chat-activity-bullet')).toBeNull();
+    expect(detail.classList.contains('tb-chat-activity-tool')).toBe(true);
     expect(detail.getAttribute('aria-label')).toBe('Tool call: Read the source file · running');
     expect(detail.querySelector('summary')?.getAttribute('aria-label'))
       .toBe('Tool call: Read the source file · running. Show input and result');

@@ -212,7 +212,8 @@ describe('Nordic theme', () => {
     expect(activity).toContain('text-overflow: ellipsis');
     expect(rule(componentCss, '.tb-chat-activity-agent')).toContain('color: var(--tb-chat-fjord)');
     expect(rule(componentCss, '.tb-chat-activity-substrate')).toContain('color: var(--tb-chat-muted)');
-    expect(rule(componentCss, '.tb-chat-activity-tool')).toContain('color: var(--tb-chat-teak)');
+    expect(rule(componentCss, '.tb-chat-activity-tool')).toContain('color: var(--tb-chat-muted)');
+    expect(rule(componentCss, '.tb-chat-activity-tool-run-toggle')).toContain('color: var(--tb-chat-caution)');
     expect(rule(componentCss, '.tb-chat-activity-rail')).toContain('color: var(--tb-chat-caution)');
     const boundary = rule(componentCss, '.tb-chat-transition-marker');
     expect(boundary).toContain('color: var(--tb-chat-transition)');
@@ -228,6 +229,7 @@ describe('Nordic theme', () => {
       const background = tokenColor(tokens, 'background');
       const activityColors = ['fjord', 'muted', 'teak', 'caution'].map(name => tokens[name]);
       expect(new Set(activityColors).size).toBe(activityColors.length);
+      expect(tokens.caution).not.toBe(tokens.text);
       expect(tokens.transition).not.toBe(tokens.ok);
       for (const color of activityColors) expect(tokens.transition).not.toBe(color);
       const boundaryFill = mix(tokenColor(tokens, 'transition'), tokenColor(tokens, 'background'), .08);
@@ -237,6 +239,10 @@ describe('Nordic theme', () => {
         expect(contrast(mix(tokenColor(tokens, role), background, .94), background), `${role} caption on its theme surface`)
           .toBeGreaterThanOrEqual(4.5);
       }
+      expect(contrast(tokenColor(tokens, 'muted'), background), `${variant}: tool row secondary text`)
+        .toBeGreaterThanOrEqual(4.5);
+      expect(contrast(tokenColor(tokens, 'caution'), background), `${variant}: folded tool summary`)
+        .toBeGreaterThanOrEqual(4.5);
       expect(contrast(tokenColor(tokens, 'transition'), background))
         .toBeLessThan(contrast(tokenColor(tokens, 'text'), background));
     }
