@@ -280,6 +280,9 @@ describe('conversation surface', () => {
       '## A **useful** answer', '', '- first item', '- second item', '',
       '[Reference](https://example.com)', '', '`inline code`', '',
       '```ts', 'const value = 1;', '```', '', '> A quotation', '',
+      '```mermaid', 'const fallback = 2;', '```', '',
+      '```', 'plain = 3', '```', '',
+      '```html', '<script>window.codeCompromised = true</script>', '```', '',
       '| Name | Value |', '| --- | --- |', '| count | 2 |', '',
       '<script>window.compromised = true</script>',
     ].join('\n'), { seq: 2, sender: 'assistant-service', turnSeq: 1, messageType: 'assistant', replyToMessageId: human.id });
@@ -325,6 +328,25 @@ describe('conversation surface', () => {
     expect(within(log).getByRole('link', { name: 'Reference' }).getAttribute('target')).toBe('_blank');
     expect(within(log).getByText('inline code')).toBeTruthy();
     expect(within(log).getByText('const value = 1;')).toBeTruthy();
+    const recognizedCode = log.querySelector('code.language-ts');
+    expect(recognizedCode?.querySelector('.hljs-keyword')?.textContent).toBe('const');
+    expect(recognizedCode?.closest('.tb-chat-code-scroll')).toBeTruthy();
+    const unknownCode = log.querySelector('code.language-mermaid');
+    expect(unknownCode?.textContent).toContain('const fallback = 2;');
+    expect(unknownCode?.querySelector('[class*="hljs-"]')).toBeNull();
+    const untaggedCode = [...log.querySelectorAll('.tb-chat-code-scroll code')]
+      .find(code => ![...code.classList].some(className => className.startsWith('language-')));
+    expect(untaggedCode?.textContent).toContain('plain = 3');
+    expect(untaggedCode?.querySelector('[class*="hljs-"]')).toBeNull();
+    const selection = window.getSelection();
+    const codeRange = document.createRange();
+    codeRange.selectNodeContents(recognizedCode!);
+    selection?.removeAllRanges();
+    selection?.addRange(codeRange);
+    expect(selection?.toString()).toContain('const value = 1;');
+    selection?.removeAllRanges();
+    const htmlCode = log.querySelector('code.language-html');
+    expect(htmlCode?.textContent).toContain('<script>window.codeCompromised = true</script>');
     expect(within(log).getByText('A quotation')).toBeTruthy();
     expect(within(log).getByRole('table')).toBeTruthy();
     const batchBubble = within(log).getByText('Batch question from the person').closest('article');
