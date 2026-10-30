@@ -647,6 +647,7 @@ const Composer = forwardRef<ComposerHandle, {
   const cameraRequest = useRef(0);
   const previewUrls = useRef(new Map<string, string>());
   const attachmentsRef = useRef<readonly DraftAttachment[]>([]);
+  const preparedInputs = useRef<readonly ComposerAttachmentInput[] | null>(null);
   const preparationController = useRef<AbortController | null>(null);
   const preparationRevision = useRef(0);
   const titleId = useId();
@@ -697,6 +698,7 @@ const Composer = forwardRef<ComposerHandle, {
   const prepareDraftAttachments = (items: readonly DraftAttachment[]) => {
     preparationController.current?.abort();
     preparationController.current = null;
+    preparedInputs.current = null;
     const revision = ++preparationRevision.current;
     setAcquisitionError(null);
     if (!items.length) {
@@ -733,6 +735,7 @@ const Composer = forwardRef<ComposerHandle, {
         releasePreview(input.id);
         return createDraftAttachment(input);
       });
+      preparedInputs.current = prepared;
       publishAttachments(Object.freeze(ready));
     }).catch(error => {
       if (controller.signal.aborted || preparationRevision.current !== revision) return;
@@ -998,9 +1001,11 @@ const Composer = forwardRef<ComposerHandle, {
         setAcquisitionError('This conversation cannot send attachments with its current Chat runtime. Your draft is still here.');
         return;
       }
+      const snapshot = preparedInputs.current;
+      if (!snapshot || snapshot.length !== attachments.length ||
+          snapshot.some((item, index) => item !== attachments[index].input)) return;
       try {
-        const originalInputs = Object.freeze(attachments.map(item => item.input));
-        accepted = sendAttachments.call(runtime, draft, originalInputs);
+        accepted = sendAttachments.call(runtime, draft, snapshot);
       } catch (error) {
         setAcquisitionError(`Attachments were not submitted: ${errorReason(error)}. Your draft is still here.`);
         return;
@@ -1010,6 +1015,7 @@ const Composer = forwardRef<ComposerHandle, {
         return;
       }
       for (const item of attachments) releasePreview(item.input.id);
+      preparedInputs.current = null;
       preparationRevision.current++;
       preparationController.current?.abort();
       preparationController.current = null;

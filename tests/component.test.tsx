@@ -1740,6 +1740,7 @@ describe('conversation surface', () => {
     const svg = new File(['<svg xmlns="http://www.w3.org/2000/svg"/>'], 'diagram.svg', { type: 'image/svg+xml' });
     let resolvePreparation!: (items: readonly AttachmentInput[]) => void;
     let selected: readonly AttachmentInput[] = [];
+    let preparedSnapshot: readonly AttachmentInput[] | null = null;
     runtime.prepareAttachmentInputs = vi.fn((inputs: readonly AttachmentInput[]) => {
       selected = inputs;
       return new Promise<readonly AttachmentInput[]>(resolve => { resolvePreparation = resolve; });
@@ -1758,8 +1759,9 @@ describe('conversation surface', () => {
     expect(screen.queryByRole('img', { name: /diagram\.svg/ })).toBeNull();
     expect(runtime.attachmentSubmissions).toEqual([]);
 
-    resolvePreparation(selected.map(item => item.filename === 'camera.HEIC'
-      ? { ...item, filename: 'camera.jpg', bytes: converted } : item));
+    preparedSnapshot = Object.freeze(selected.map(item => item.filename === 'camera.HEIC'
+      ? Object.freeze({ ...item, filename: 'camera.jpg', bytes: converted }) : item));
+    resolvePreparation(preparedSnapshot);
     const imagePreview = await screen.findByRole('img', { name: 'Preview of camera.jpg' });
     expect(imagePreview.getAttribute('src')).toBe('blob:prepared-preview-1');
     expect(objectUrls.createObjectURL).toHaveBeenCalledWith(converted);
@@ -1769,6 +1771,7 @@ describe('conversation surface', () => {
     fireEvent.click(send);
     expect(runtime.attachmentSubmissions).toHaveLength(1);
     const sent = runtime.attachmentSubmissions[0].inputs;
+    expect(sent).toBe(preparedSnapshot);
     expect(sent.map(item => item.filename)).toEqual(['camera.jpg', 'report.pdf', 'diagram.svg']);
     expect(sent[0].bytes).toBe(converted);
     expect(sent[1].bytes).toBe(documentFile);
