@@ -1,4 +1,4 @@
-import type { Element, ElementContent, Root } from 'hast';
+import type { Element, ElementContent, Root, RootContent } from 'hast';
 import { createLowlight } from 'lowlight';
 import bash from 'highlight.js/lib/languages/bash';
 import css from 'highlight.js/lib/languages/css';
@@ -49,8 +49,7 @@ const languageByFenceTag: Readonly<Record<string, string>> = {
 
 function classNames(node: Element): string[] {
   const value = node.properties.className;
-  if (Array.isArray(value)) return value.map(String);
-  return typeof value === 'string' ? value.split(/\s+/).filter(Boolean) : [];
+  return Array.isArray(value) ? value.map(String) : [];
 }
 
 function languageFor(node: Element): string | undefined {
@@ -63,9 +62,9 @@ function languageFor(node: Element): string | undefined {
   return undefined;
 }
 
-function textContent(node: Root | ElementContent): string {
+function textContent(node: Root | RootContent | ElementContent): string {
   if (node.type === 'text') return node.value;
-  if (node.type === 'element' || node.type === 'root') {
+  if ('children' in node) {
     return node.children.map(child => textContent(child)).join('');
   }
   return '';
@@ -76,7 +75,7 @@ function highlightCode(node: Element): void {
   if (!language) return;
 
   const source = node.children.map(child => textContent(child)).join('');
-  const highlighted = lowlight.highlight(language, source, { ignoreIllegals: true });
+  const highlighted = lowlight.highlight(language, source);
   const classes = classNames(node);
   if (!classes.includes('hljs')) classes.push('hljs');
   node.properties.className = classes;
@@ -92,7 +91,7 @@ function visit(node: Root | Element | ElementContent, parentTag?: string): void 
   if (node.type === 'root' || node.type === 'element') {
     const childParent = node.type === 'element' ? node.tagName : undefined;
     for (const child of node.children) {
-      if (child.type === 'root' || child.type === 'element' || child.type === 'text') {
+      if (child.type === 'element' || child.type === 'text') {
         visit(child, childParent);
       }
     }
