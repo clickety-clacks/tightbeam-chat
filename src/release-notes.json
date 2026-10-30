@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.59",
+    "items": [
+      {
+        "title": "Terminal icons for tool calls",
+        "description": "Tool-call rows and folded tool groups use a terminal-prompt icon. Folded groups keep one expand and collapse cue after the count; other activity markers are unchanged."
+      }
+    ]
+  },
+  {
     "version": "v0.1.58",
     "items": [
       {
