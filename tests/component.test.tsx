@@ -1002,12 +1002,18 @@ describe('conversation surface', () => {
     expect(reminderFold.textContent).toContain('No recent activity · Background task');
     expect(reminderFold.querySelector('.tb-chat-activity-pill-amber')).toBeTruthy();
     expect(reminderFold.querySelector('.tb-chat-activity-bullet')).toBeNull();
+    expect(reminderFold.querySelector('.tb-chat-tool-terminal-icon')).toBeNull();
+    expect(reminderFold.firstElementChild?.classList.contains('tb-chat-activity-run-chevron')).toBe(true);
+    expect(reminderFold.tagName).toBe('BUTTON');
+    expect(reminderFold.getAttribute('aria-expanded')).toBe('false');
     expect(reminderFold.textContent).not.toContain('•');
     expect(reminderFold.textContent).not.toMatch(/[\[\]]/);
     expect(reminderFold.getAttribute('aria-label')).not.toMatch(/asg_456789ab/);
     expect(reminderFold.getAttribute('title')).toBe(
       'Assignment asg_456789ab-1111-4111-8111-123456789abc (Background task) has had no recorded activity since 12');
     fireEvent.click(reminderFold);
+    expect(reminderFold.getAttribute('aria-expanded')).toBe('true');
+    expect(reminderFold.firstElementChild?.classList.contains('tb-chat-activity-run-chevron')).toBe(true);
     expect(pillFor('Assignment: Quiet for 3 h · Background assignment').querySelector('.tb-chat-activity-pill-amber')).toBeTruthy();
     expect(pillFor('Assignment: No recent activity · Background task, asg_4567')).toBeTruthy();
     expect(pillFor('Decision: Needs a response · Can the change ship?, dr_1234')).toBeTruthy();
@@ -2021,8 +2027,20 @@ describe('tool-call and transition display', () => {
     foldedRun.focus();
     expect(screen.queryByRole('button', { name: 'Show earlier activity' })).toBeNull();
     expect(foldedRun.getAttribute('aria-expanded')).toBe('false');
+    expect(foldedRun.tagName).toBe('BUTTON');
+    expect(foldedRun.getAttribute('aria-label')).toMatch(/^Expand tool activity run, 2000 entries\./);
+    expect(foldedRun.firstElementChild?.matches('svg.tb-chat-tool-terminal-icon')).toBe(true);
+    expect(foldedRun.querySelector('.tb-chat-activity-bullet')).toBeNull();
+    expect(foldedRun.querySelectorAll('.tb-chat-activity-run-chevron')).toHaveLength(1);
+    expect(foldedRun.lastElementChild?.classList.contains('tb-chat-activity-run-chevron')).toBe(true);
     fireEvent.click(foldedRun);
+    expect(foldedRun.getAttribute('aria-expanded')).toBe('true');
+    expect(foldedRun.querySelector('.tb-chat-activity-run-chevron')?.classList.contains('is-expanded')).toBe(true);
+    expect(foldedRun.querySelectorAll('.tb-chat-activity-run-chevron')).toHaveLength(1);
+    expect(foldedRun.lastElementChild?.classList.contains('tb-chat-activity-run-chevron')).toBe(true);
     expect(view.container.querySelectorAll('details.tb-chat-activity-line.tb-chat-activity-tool')).toHaveLength(2000);
+    expect(view.container.querySelectorAll('details.tb-chat-activity-line.tb-chat-activity-tool svg.tb-chat-tool-terminal-icon'))
+      .toHaveLength(2000);
     const expandedToolTitles = [...view.container.querySelectorAll('.tb-chat-activity-run-rows .tb-chat-activity-gist')]
       .map(element => element.textContent);
     expect(expandedToolTitles).toEqual(Array.from({ length: 2000 }, (_, index) =>
@@ -2084,6 +2102,21 @@ describe('tool-call and transition display', () => {
     expect(screen.getByText('A new boundary kind').closest('.tb-chat-transition-marker')?.getAttribute('role')).toBe('separator');
     expect(screen.queryByText('source.ts')).toBeNull();
     const detail = view.container.querySelector('details')!;
+    const terminalIcon = detail.querySelector<SVGSVGElement>('summary > .tb-chat-tool-terminal-icon');
+    expect(terminalIcon?.getAttribute('viewBox')).toBe('0 0 24 24');
+    expect(terminalIcon?.getAttribute('aria-hidden')).toBe('true');
+    expect(terminalIcon?.getAttribute('focusable')).toBe('false');
+    expect(terminalIcon?.querySelector('rect')?.getAttribute('fill')).toBe('currentColor');
+    expect([...(terminalIcon?.querySelectorAll('path') ?? [])].map(path => path.getAttribute('stroke')))
+      .toEqual(['var(--tb-chat-background)', 'var(--tb-chat-background)']);
+    expect([...(terminalIcon?.querySelectorAll('path') ?? [])].map(path => path.getAttribute('stroke-linecap')))
+      .toEqual(['round', 'round']);
+    expect([...(terminalIcon?.querySelectorAll('path') ?? [])].map(path => path.getAttribute('stroke-linejoin')))
+      .toEqual(['round', null]);
+    expect(detail.querySelector('.tb-chat-activity-bullet')).toBeNull();
+    expect(detail.getAttribute('aria-label')).toBe('Tool call: Read the source file · running');
+    expect(detail.querySelector('summary')?.getAttribute('aria-label'))
+      .toBe('Tool call: Read the source file · running. Show input and result');
     detail.open = true;
     fireEvent(detail, new Event('toggle'));
     await screen.findByText(/source.ts/);
