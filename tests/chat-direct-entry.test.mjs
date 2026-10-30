@@ -900,7 +900,7 @@ describe('attachment byte routes', () => {
         send(frame) { frames.push(frame); onFrame({ type: 'ack', id: frame.id }); } }),
     };
     const { transport } = createPublic019Transport({ baseUrl: origin + '/__chat', host });
-    const original = [new Uint8Array([255]), new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 0, 128]),
+    const original = [new Uint8Array([255]), Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aOLsAAAAASUVORK5CYII=', 'base64'),
       new Uint8Array(20 * 1024 * 1024).fill(173)];
     const refs = [];
     for (let i = 0; i < original.length; i++) {

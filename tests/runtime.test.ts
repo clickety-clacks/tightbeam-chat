@@ -1661,6 +1661,21 @@ describe('attachment submission recovery', () => {
     expect(runtime.getSnapshot().sends[0].attachmentItems?.[0].bytes.size).toBe(3);
     runtime.dispose();
   });
+  it('retains the files and references when the attachment post is refused authorization', async () => {
+    const transport = new AttachmentsTransport();
+    transport.nextSend = async () => { throw new AuthorizationError('Post authorization refused'); };
+    const runtime = await ready(transport);
+    const id = runtime.sendAttachments!('caption', [input('file')])!;
+    await vi.waitFor(() => expect(runtime.getSnapshot().sends[0].status).toBe('failed'));
+    expect(runtime.getSnapshot().sends[0]).toMatchObject({ clientMessageId: id, content: 'caption',
+      attachments: [{ assetId: 'asset_file' }], attachmentItems: [{ filename: 'file.bin', status: 'ready' }] });
+    expect(runtime.getSnapshot().sends[0].attachmentItems![0].bytes.size).toBe(3);
+    expect(runtime.getSnapshot().status).toBe('ready');
+    transport.nextSend = async () => ({ outcome: 'accepted' });
+    await runtime.retrySend(id);
+    expect(transport.uploads).toEqual(['file']);
+    runtime.dispose();
+  });
   it('refreshes after a lost acknowledgement and keeps uncertainty until an explicit identical retry or canonical match', async () => {
     const transport = new AttachmentsTransport();
     transport.nextSend = async () => ({ outcome: 'retryable', reason: 'Socket dropped' });

@@ -1517,6 +1517,13 @@ class SessionRuntime implements ChatRuntime {
     } catch (error) {
       if (!controller.signal.aborted && this.checkIdentity()) {
         if (error instanceof AuthorizationError) {
+          if (submission.attachments?.length) {
+            // Keep the original files and references available for correction;
+            // a refused attachment post is not proof the history connection died.
+            this.updateSend(submission.clientMessageId, send => send.reconciled ? send
+              : { ...send, status: 'failed', reason: errorText(error) });
+            return;
+          }
           this.notifyHostSend(submission.clientMessageId, {
             kind: 'failed', reason: 'refused', detail: 'unauthorized',
           });
