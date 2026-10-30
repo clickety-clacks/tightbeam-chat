@@ -84,6 +84,8 @@ function rule(css: string, selector: string): string {
 const expectedLight: Tokens = {
   background: '#F1EEE9', text: '#31302D', muted: '#5C5854', border: '#DEDAD3',
   'agent-surface': '#E6E1D8', 'human-surface': '#DCE3DA', code: '#E2DCD2',
+  'syntax-keyword': '#693C8E', 'syntax-string': '#28623B', 'syntax-number': '#914A14',
+  'syntax-comment': '#625C55', 'syntax-title': '#175C80',
   accent: '#526657', 'on-accent': '#F3F0EA', teak: '#7A5540', fjord: '#4D6470',
   'pill-purple': '#6B3CC0',
   ok: '#4E6547', caution: '#73592A', transition: '#6B6458', danger: '#A63A2A', idle: '#5C5854',
@@ -95,6 +97,8 @@ const expectedLight: Tokens = {
 const expectedDark: Tokens = {
   background: '#161514', text: '#DDD9D1', muted: '#9E9992', border: '#2C2A27',
   'agent-surface': '#24221F', 'human-surface': '#26302A', code: '#1C1B19',
+  'syntax-keyword': '#C9A6EF', 'syntax-string': '#9AD5A7', 'syntax-number': '#F0B66E',
+  'syntax-comment': '#B6ADA2', 'syntax-title': '#8FCFF0',
   accent: '#A5BAA9', 'on-accent': '#19211B', teak: '#C9A891', fjord: '#9FB4BF',
   'pill-purple': '#C9B7F1',
   ok: '#A5BC9C', caution: '#D8BE84', transition: '#B0A18D', danger: '#EE8B75', idle: '#9E9992',
@@ -119,6 +123,8 @@ describe('Nordic theme', () => {
       ['muted', 'background'], ['muted', 'agent-surface'], ['muted', 'human-surface'],
       ['fjord', 'background'], ['fjord', 'agent-surface'], ['fjord', 'human-surface'], ['fjord', 'code'],
       ['teak', 'code'], ['caution', 'human-surface'], ['danger', 'human-surface'], ['danger', 'background'],
+      ['syntax-keyword', 'code'], ['syntax-string', 'code'], ['syntax-number', 'code'],
+      ['syntax-comment', 'code'], ['syntax-title', 'code'],
       ['on-accent', 'accent'], ['muted', 'background'],
     ];
     const backdrops = [
