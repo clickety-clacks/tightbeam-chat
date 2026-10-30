@@ -2242,6 +2242,67 @@ describe('tool-call and transition display', () => {
     expect(view.container.querySelectorAll('details.tb-chat-activity-line.tb-chat-activity-tool')).toHaveLength(2001);
   });
 
+  it('keeps each collapsed tool group titled by its newest call as calls arrive', () => {
+    let index: ToolCallIndex | undefined;
+    const insert = (seq: number, title: string, toolName = 'read_file') => {
+      const call: ToolCallRecord = { id: `title-${seq}`, seq, sessionKey: 'latest-tool-title', turnSeq: 1,
+        afterMessageSeq: 1, harnessToolCallId: `call-${seq}`, title, kind: 'read', toolName,
+        status: 'in_progress', rawInput: null, rawOutput: null, content: null, truncated: [],
+        startedAt: seq, endedAt: null, rowVersion: 1 };
+      const group = putIndex(getIndex(index, call.afterMessageSeq), call.seq, call, call.startedAt);
+      index = putIndex(index, call.afterMessageSeq, group, group.maxTime);
+    };
+    insert(201, 'Read first file');
+    insert(202, 'Read second file');
+
+    const human = row('latest-tool-title', 'human', 'Keep this message visible', {
+      role: 'user', sender: 'user:person', seq: 1,
+    });
+    const runtime = new FakeRuntime('latest-tool-title', {
+      records: [human], toolCallsEnabled: true, toolCallIndex: index,
+    });
+    const view = render(<TightbeamChat sessionKey="latest-tool-title" adapter={adapterFor(runtime)} />);
+    const foldedRun = screen.getByRole('button', {
+      name: /2 entries\. Latest: Read second file · running/,
+    });
+    const foldKey = foldedRun.closest('[data-activity-fold]')?.getAttribute('data-record-key');
+    expect(foldedRun.querySelector('.tb-chat-activity-gist')?.textContent).toBe('Read second file · running');
+    expect(foldedRun.getAttribute('aria-expanded')).toBe('false');
+    expect(foldedRun.firstElementChild?.matches('svg.tb-chat-tool-terminal-icon')).toBe(true);
+    expect(foldedRun.querySelector('.tb-chat-activity-bullet')).toBeNull();
+    expect(foldedRun.querySelectorAll('.tb-chat-activity-run-chevron')).toHaveLength(1);
+
+    insert(203, 'Read third file');
+    act(() => runtime.update({ toolCallIndex: index }));
+    const updatedFold = screen.getByRole('button', {
+      name: /3 entries\. Latest: Read third file · running/,
+    });
+    expect(updatedFold.closest('[data-activity-fold]')?.getAttribute('data-record-key')).toBe(foldKey);
+    expect(updatedFold.querySelector('.tb-chat-activity-gist')?.textContent).toBe('Read third file · running');
+
+    insert(204, 'List files', 'list_files');
+    act(() => runtime.update({ toolCallIndex: index }));
+    const readFoldAfterBoundary = screen.getByRole('button', { name: /3 entries\. Latest: Read third file · running/ });
+    expect(readFoldAfterBoundary.closest('[data-activity-fold]')?.getAttribute('data-record-key')).toBe(foldKey);
+    expect(view.container.querySelectorAll('.tb-chat-activity-run.tb-chat-activity-tool')).toHaveLength(1);
+    expect(view.container.querySelectorAll('details.tb-chat-activity-line.tb-chat-activity-tool')).toHaveLength(1);
+
+    fireEvent.click(updatedFold);
+    expect(updatedFold.getAttribute('aria-expanded')).toBe('true');
+    const expandedRun = view.container.querySelector<HTMLElement>(
+      `[data-activity-fold][data-record-key="${foldKey}"]`,
+    );
+    expect(expandedRun?.getAttribute('data-run-expanded')).toBe('true');
+    expect([...view.container.querySelectorAll(
+      `[data-activity-fold][data-record-key="${foldKey}"] .tb-chat-activity-run-rows .tb-chat-activity-gist`,
+    )]
+      .map(element => element.textContent)).toEqual([
+      'Read first file · running', 'Read second file · running', 'Read third file · running',
+    ]);
+    expect(screen.getByText('List files · running')).toBeTruthy();
+    expect(screen.getByText('Keep this message visible')).toBeTruthy();
+  });
+
   it('keeps an unmatched send at submission time among tools, then uses its canonical anchor with the same scroll key', () => {
     let index: ToolCallIndex | undefined;
     for (const [seq, startedAt] of [[201, 2000], [202, 4000]]) {
