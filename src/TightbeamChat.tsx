@@ -371,6 +371,58 @@ function AnimatedFoldContent({ expanded, className, onPresenceChange, onLayoutCh
     data-fold-content="true" aria-hidden={!expanded} inert={!expanded}>{content}</div>;
 }
 
+function useActivityRevealAnimation<T extends HTMLElement>(active: boolean, key: string,
+  onComplete?: (key: string) => void, onLayoutChange?: () => void) {
+  const element = useRef<T | null>(null);
+  const callbacks = useRef({ onComplete, onLayoutChange });
+  callbacks.current = { onComplete, onLayoutChange };
+
+  useLayoutEffect(() => {
+    const node = element.current;
+    if (!active || !node) return;
+    const finish = () => {
+      callbacks.current.onLayoutChange?.();
+      callbacks.current.onComplete?.(key);
+    };
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches || typeof node.animate !== 'function') {
+      finish();
+      return;
+    }
+
+    const height = node.getBoundingClientRect().height;
+    if (height <= 0) {
+      finish();
+      return;
+    }
+    node.style.height = '0px';
+    node.style.opacity = '0';
+    node.style.overflow = 'hidden';
+    const animation = node.animate([
+      { height: '0px', opacity: 0 },
+      { height: `${height}px`, opacity: 1 },
+    ], { duration: foldMotionDuration, easing: foldMotionEasing, fill: 'forwards' });
+    callbacks.current.onLayoutChange?.();
+    let finished = false;
+    animation.onfinish = () => {
+      finished = true;
+      node.style.removeProperty('height');
+      node.style.removeProperty('opacity');
+      node.style.removeProperty('overflow');
+      animation.cancel();
+      finish();
+    };
+    return () => {
+      if (finished) return;
+      animation.cancel();
+      node.style.removeProperty('height');
+      node.style.removeProperty('opacity');
+      node.style.removeProperty('overflow');
+    };
+  }, [active, key]);
+
+  return element;
+}
+
 function AttachmentDetails({ record, preservePosition, reconcileLayout }: {
   readonly record: CanonicalMessage;
   readonly preservePosition: () => void;
@@ -770,12 +822,12 @@ const Composer = forwardRef<ComposerHandle, {
 function ActivityOverflowButton({ entry, registerRow, expand }: {
   readonly entry: ActivityOverflow;
   readonly registerRow: (key: string, element: HTMLElement | null) => void;
-  readonly expand: (runKey: string, control: HTMLButtonElement) => void;
+  readonly expand: (runKey: string, control: HTMLButtonElement, hiddenItemIds?: readonly string[]) => void;
 }) {
   return <button type="button" className="tb-chat-activity-overflow" aria-label="Show earlier activity"
     key={entry.id} ref={element => registerRow(entry.id, element)} data-record-key={entry.id}
     data-scroll-key={entry.id} data-activity-run={entry.runKey}
-    onClick={event => expand(entry.runKey, event.currentTarget)}>…</button>;
+    onClick={event => expand(entry.runKey, event.currentTarget, entry.hiddenItemIds)}>…</button>;
 }
 
 const activityPillIconPaths: Record<ActivityPillIcon, ReactNode> = {
@@ -836,40 +888,56 @@ function sameActivityLine(left: ActivityLine, right: ActivityLine): boolean {
     sameActivityPresentation(left.presentation, right.presentation);
 }
 
-const ActivityMessageRow = memo(function ActivityMessageRow({ entry, registerRow, scrollKey = entry.id }: {
+const ActivityMessageRow = memo(function ActivityMessageRow({ entry, registerRow, scrollKey = entry.id, reveal = false,
+  onRevealComplete, reconcileLayout }: {
   readonly entry: ActivityLine;
   readonly registerRow: (key: string, element: HTMLElement | null) => void;
   readonly scrollKey?: string;
+  readonly reveal?: boolean;
+  readonly onRevealComplete?: (key: string) => void;
+  readonly reconcileLayout?: () => void;
 }) {
+  const revealElement = useActivityRevealAnimation<HTMLDivElement>(reveal, entry.id, onRevealComplete, reconcileLayout);
   const presentation = entry.presentation;
   const accessibleText = presentation
     ? `${presentation.label}: ${presentation.text}${presentation.metadata ? `, ${presentation.metadata}` : ''}`
     : entry.accessibleText;
   return <div role="note" tabIndex={-1} aria-label={accessibleText}
     className={`tb-chat-activity-line tb-chat-activity-${entry.kind}${presentation ? ' tb-chat-activity-pill-row' : ''}`}
-    ref={element => registerRow(scrollKey, element)} data-record-key={entry.id} data-scroll-key={scrollKey}
+    ref={element => { registerRow(scrollKey, element); revealElement.current = element; }} data-record-key={entry.id} data-scroll-key={scrollKey}
     data-activity-run={entry.runKey} title={presentation ? entry.originalContent ?? entry.accessibleText : undefined}>
     {!presentation && <span className="tb-chat-activity-bullet" aria-hidden="true">•</span>}
     {presentation ? <ActivityPillContents presentation={presentation} />
       : <span className="tb-chat-activity-gist">{entry.gist}</span>}
   </div>;
 }, (previous, next) => previous.registerRow === next.registerRow && previous.scrollKey === next.scrollKey &&
+  previous.reveal === next.reveal && previous.onRevealComplete === next.onRevealComplete &&
+  previous.reconcileLayout === next.reconcileLayout &&
   sameActivityLine(previous.entry, next.entry));
 
 const ToolCallRow = memo(function ToolCallRow({ call, entry, registerRow, preservePosition, reconcileLayout, expandRun,
-  expandedToolCalls, setToolCallExpanded }: {
+  expandedToolCalls, setToolCallExpanded, reveal = false, onRevealComplete }: {
   call: ToolCallRecord;
   entry?: ActivityLine | ActivityOverflow;
   registerRow: (key: string, element: HTMLElement | null) => void;
   preservePosition: () => void;
   reconcileLayout: () => void;
-  expandRun: (runKey: string, control: HTMLButtonElement) => void;
+  expandRun: (runKey: string, control: HTMLButtonElement, hiddenItemIds?: readonly string[]) => void;
   expandedToolCalls?: ReadonlySet<string>;
   setToolCallExpanded?: (id: string, expanded: boolean) => void;
+  reveal?: boolean;
+  onRevealComplete?: (key: string) => void;
 }) {
   const [localExpanded, setLocalExpanded] = useState(false);
   const [detailContentPresent, setDetailContentPresent] = useState(false);
   const expanded = expandedToolCalls ? expandedToolCalls.has(call.id) : localExpanded;
+  const rowKey = 'tool-' + call.id;
+  const revealElement = useActivityRevealAnimation<HTMLDetailsElement>(reveal, entry?.id ?? rowKey,
+    onRevealComplete, reconcileLayout);
+  const registerElement = useCallback((element: HTMLDetailsElement | null) => {
+    registerRow(rowKey, element);
+    revealElement.current = element;
+  }, [registerRow, revealElement, rowKey]);
   const updateExpanded = (next: boolean) => {
     if (expandedToolCalls) setToolCallExpanded?.(call.id, next);
     else setLocalExpanded(next);
@@ -882,8 +950,7 @@ const ToolCallRow = memo(function ToolCallRow({ call, entry, registerRow, preser
     : call.status === 'completed' ? 'done' : 'failed';
   const gist = entry.gist || `${title} · ${status}`;
   const accessibleText = entry.accessibleText || `Tool call: ${gist}`;
-  const key = 'tool-' + call.id;
-  return <details ref={element => registerRow(key, element)} tabIndex={-1} data-record-key={key} data-scroll-key={key}
+  return <details ref={registerElement} tabIndex={-1} data-record-key={rowKey} data-scroll-key={rowKey}
     open={expanded || detailContentPresent} data-activity-run={entry.runKey} className="tb-chat-activity-line tb-chat-activity-tool"
     aria-label={accessibleText}>
       <summary aria-label={`${accessibleText}. Show input and result`} aria-expanded={expanded}
@@ -914,17 +981,24 @@ const ToolCallRow = memo(function ToolCallRow({ call, entry, registerRow, preser
 });
 
 const ActivityRunRow = memo(function ActivityRunRow({ entry, expanded, toggle, registerRow, preservePosition, reconcileLayout, expandHistoryRun,
-  expandedToolCalls, setToolCallExpanded }: {
+  expandedToolCalls, setToolCallExpanded, reveal = false, onRevealComplete }: {
   readonly entry: ActivityFold;
   readonly expanded: boolean;
   readonly toggle: (id: string) => void;
   readonly registerRow: (key: string, element: HTMLElement | null) => void;
   readonly preservePosition: () => void;
   readonly reconcileLayout: () => void;
-  readonly expandHistoryRun: (runKey: string, control: HTMLButtonElement) => void;
+  readonly expandHistoryRun: (runKey: string, control: HTMLButtonElement, hiddenItemIds?: readonly string[]) => void;
   readonly expandedToolCalls: ReadonlySet<string>;
   readonly setToolCallExpanded: (id: string, expanded: boolean) => void;
+  readonly reveal?: boolean;
+  readonly onRevealComplete?: (key: string) => void;
 }) {
+  const revealElement = useActivityRevealAnimation<HTMLDivElement>(reveal, entry.id, onRevealComplete, reconcileLayout);
+  const registerElement = useCallback((element: HTMLDivElement | null) => {
+    registerRow(entry.id, element);
+    revealElement.current = element;
+  }, [entry.id, registerRow, revealElement]);
   const toolRun = entry.activityKind === 'tool';
   const detailLines = entry.lines;
   const presentation = entry.summary.presentation;
@@ -932,7 +1006,7 @@ const ActivityRunRow = memo(function ActivityRunRow({ entry, expanded, toggle, r
     ? `${presentation.label}: ${presentation.text}${presentation.metadata ? `, ${presentation.metadata}` : ''}`
     : entry.summary.gist;
   return <div className={`tb-chat-activity-run tb-chat-activity-${entry.activityKind}`} tabIndex={-1}
-    ref={element => registerRow(entry.id, element)} data-record-key={entry.id} data-scroll-key={entry.id}
+    ref={registerElement} data-record-key={entry.id} data-scroll-key={entry.id}
     data-activity-run={entry.runKey} data-activity-fold="true" data-run-expanded={expanded ? 'true' : 'false'}>
     <button type="button" className={`tb-chat-activity-run-toggle tb-chat-activity-${entry.activityKind}${toolRun ? ' tb-chat-activity-tool-run-toggle' : ''}${presentation ? ' tb-chat-activity-pill-toggle' : ''}`}
       aria-expanded={expanded}
@@ -970,7 +1044,9 @@ const ActivityRunRow = memo(function ActivityRunRow({ entry, expanded, toggle, r
   const before = previous.entry;
   const after = next.entry;
   if (previous.expanded !== next.expanded || previous.toggle !== next.toggle ||
-      previous.registerRow !== next.registerRow || before.id !== after.id || before.runKey !== after.runKey ||
+      previous.registerRow !== next.registerRow || previous.reveal !== next.reveal ||
+      previous.onRevealComplete !== next.onRevealComplete || previous.reconcileLayout !== next.reconcileLayout ||
+      before.id !== after.id || before.runKey !== after.runKey ||
       before.activityKind !== after.activityKind || before.lines.length !== after.lines.length ||
       !sameActivityLine(before.summary, after.summary)) return false;
   if (!next.expanded) return true;
@@ -1040,6 +1116,9 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   const [expandedRuns, setExpandedRuns] = useState<ReadonlySet<string>>(() => new Set());
   const [expandedActivityRuns, setExpandedActivityRuns] = useState<ReadonlySet<string>>(() => new Set());
   const [expandedToolCalls, setExpandedToolCalls] = useState<ReadonlySet<string>>(() => new Set());
+  const [revealingActivityItems, setRevealingActivityItems] = useState<ReadonlySet<string>>(() => new Set());
+  const activityRevealBatches = useRef(new Map<string, { readonly ids: ReadonlySet<string>; readonly remaining: Set<string> }>());
+  const activityRevealRuns = useRef(new Map<string, string>());
   const [shownRuns, setShownRuns] = useState<ReadonlyMap<string, string>>(() => new Map());
   const focusExpandedRun = useRef<string | undefined>(undefined);
   const readingRevision = useMemo(() => ({ state, host, expandedRuns, expandedActivityRuns, expandedToolCalls }),
@@ -1213,9 +1292,31 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     }
     if (next) setShownRuns(next);
   }, [activityPlan.membership, shownRuns]);
-  const expandRun = useCallback((runKey: string, control: HTMLButtonElement) => {
+  const finishActivityReveal = useCallback((key: string) => {
+    const runKey = activityRevealRuns.current.get(key);
+    if (!runKey) return;
+    activityRevealRuns.current.delete(key);
+    const batch = activityRevealBatches.current.get(runKey);
+    if (!batch) return;
+    batch.remaining.delete(key);
+    if (batch.remaining.size) return;
+    activityRevealBatches.current.delete(runKey);
+    setRevealingActivityItems(prior => {
+      if (![...batch.ids].some(id => prior.has(id))) return prior;
+      const next = new Set(prior);
+      batch.ids.forEach(id => next.delete(id));
+      return next;
+    });
+  }, []);
+  const expandRun = useCallback((runKey: string, control: HTMLButtonElement, hiddenItemIds: readonly string[] = []) => {
     reading.preserveVisiblePosition();
     focusExpandedRun.current = typeof document !== 'undefined' && document.activeElement === control ? runKey : undefined;
+    if (hiddenItemIds.length) {
+      const ids = new Set(hiddenItemIds);
+      activityRevealBatches.current.set(runKey, { ids, remaining: new Set(ids) });
+      ids.forEach(id => activityRevealRuns.current.set(id, runKey));
+      setRevealingActivityItems(prior => new Set([...prior, ...hiddenItemIds]));
+    }
     setExpandedRuns((prior) => {
       if (prior.has(runKey)) return prior;
       const next = new Set(prior);
@@ -1454,20 +1555,25 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
               toggle={toggleActivityRun} registerRow={reading.registerRow}
               preservePosition={reading.preserveVisiblePosition} reconcileLayout={reading.reconcileViewportLayout}
               expandHistoryRun={expandRun}
-              expandedToolCalls={expandedToolCalls} setToolCallExpanded={setToolCallExpanded} />;
+              expandedToolCalls={expandedToolCalls} setToolCallExpanded={setToolCallExpanded}
+              reveal={revealingActivityItems.has(entry.id)} onRevealComplete={finishActivityReveal} />;
           }
           return <ToolCallRow key={'tool-' + item.call.id} call={item.call}
             entry={entry} registerRow={reading.registerRow}
             preservePosition={reading.preserveVisiblePosition} reconcileLayout={reading.reconcileViewportLayout}
             expandRun={expandRun}
-            expandedToolCalls={expandedToolCalls} setToolCallExpanded={setToolCallExpanded} />;
+            expandedToolCalls={expandedToolCalls} setToolCallExpanded={setToolCallExpanded}
+            reveal={Boolean(entry && revealingActivityItems.has(entry.id))} onRevealComplete={finishActivityReveal} />;
         }
-        if (item.kind === 'activity') return <ActivityMessageRow key={item.entry.id} entry={item.entry} registerRow={reading.registerRow} />;
+        if (item.kind === 'activity') return <ActivityMessageRow key={item.entry.id} entry={item.entry}
+          registerRow={reading.registerRow} reveal={revealingActivityItems.has(item.entry.id)}
+          onRevealComplete={finishActivityReveal} reconcileLayout={reading.reconcileViewportLayout} />;
         if (item.kind === 'activity-fold') return <ActivityRunRow key={item.entry.id} entry={item.entry}
           expanded={expandedActivityRuns.has(item.entry.id)} toggle={toggleActivityRun}
           registerRow={reading.registerRow} preservePosition={reading.preserveVisiblePosition}
           reconcileLayout={reading.reconcileViewportLayout}
-          expandHistoryRun={expandRun} expandedToolCalls={expandedToolCalls} setToolCallExpanded={setToolCallExpanded} />;
+          expandHistoryRun={expandRun} expandedToolCalls={expandedToolCalls} setToolCallExpanded={setToolCallExpanded}
+          reveal={revealingActivityItems.has(item.entry.id)} onRevealComplete={finishActivityReveal} />;
         if (item.kind === 'overflow') return <ActivityOverflowButton key={item.entry.id} entry={item.entry}
           registerRow={reading.registerRow} expand={expandRun} />;
         if (item.kind === 'transition') {
@@ -1521,7 +1627,8 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
           <time className="tb-chat-time" dateTime={time.dateTime}>{time.text}</time>
         </article>;
   }, [activityPlan.toolItems, expandedActivityRuns, expandedToolCalls, toggleActivityRun, setToolCallExpanded,
-    reading.registerRow, reading.preserveVisiblePosition, preserveReadingPosition, expandRun,
+    revealingActivityItems, finishActivityReveal, reading.registerRow, reading.preserveVisiblePosition,
+    reading.reconcileViewportLayout, preserveReadingPosition, expandRun,
     renderMessage, agentName, state.status, runtime]);
 
   return <section ref={root} className={`tb-chat ${host.composerHidden ? 'tb-chat-host-composer-hidden' : ''} ${className || ''}`}

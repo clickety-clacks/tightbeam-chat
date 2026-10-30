@@ -101,11 +101,15 @@ function setDocumentVisibility(initial: DocumentVisibilityState) {
   };
 }
 
-function installViewportLayout(viewport: HTMLElement, trailingSpace = 200) {
+function installViewportLayout(viewport: HTMLElement, trailingSpace = 200, rowHeightOverride?: (row: Element) => number | undefined) {
   const content = viewport.querySelector<HTMLElement>('.tb-chat-message-content')!;
   const rowHeight = 92;
   const activityDetailHeight = 32;
-  const heightOf = (row: Element) => {
+  const heightOf = (row: Element): number => {
+    const explicitHeight = Number.parseFloat((row as HTMLElement).style.height);
+    if (Number.isFinite(explicitHeight)) return explicitHeight;
+    const override = rowHeightOverride?.(row);
+    if (override !== undefined) return override;
     const activityRows = row.querySelector('.tb-chat-activity-run-rows')?.children.length ?? 0;
     const toolDetails = row.querySelector('.tb-chat-tool-detail-rail[aria-hidden="false"]')?.querySelectorAll('section').length ?? 0;
     const attachmentDetails = row.querySelector('.tb-chat-attachment-content[aria-hidden="false"] pre') ? 2 : 0;
@@ -183,6 +187,38 @@ function installMotionPreference(reduced: boolean) {
   return () => {
     if (previous) Object.defineProperty(window, 'matchMedia', previous);
     else Reflect.deleteProperty(window, 'matchMedia');
+  };
+}
+
+function installResizeObserverMock() {
+  const observers: Array<{ callback: ResizeObserverCallback; targets: Set<Element> }> = [];
+  const previous = Object.getOwnPropertyDescriptor(globalThis, 'ResizeObserver');
+  class TestResizeObserver {
+    private readonly entry: { callback: ResizeObserverCallback; targets: Set<Element> };
+    constructor(callback: ResizeObserverCallback) {
+      this.entry = { callback, targets: new Set() };
+      observers.push(this.entry);
+    }
+    observe(target: Element) { this.entry.targets.add(target); }
+    unobserve(target: Element) { this.entry.targets.delete(target); }
+    takeRecords() { return []; }
+    disconnect() {
+      this.entry.targets.clear();
+      const index = observers.indexOf(this.entry);
+      if (index >= 0) observers.splice(index, 1);
+    }
+  }
+  Object.defineProperty(globalThis, 'ResizeObserver', { configurable: true, value: TestResizeObserver });
+  return {
+    notify(target: Element) {
+      for (const { callback, targets } of observers) {
+        if (targets.has(target)) callback([], {} as ResizeObserver);
+      }
+    },
+    restore() {
+      if (previous) Object.defineProperty(globalThis, 'ResizeObserver', previous);
+      else Reflect.deleteProperty(globalThis, 'ResizeObserver');
+    },
   };
 }
 
@@ -2157,9 +2193,9 @@ describe('conversation surface', () => {
 });
 
 describe('tool-call and transition display', () => {
-  it('renders one earlier-activity control when the display cap hides distinct tool groups', () => {
+  it('animates only capped earlier activity into view while keeping the reader anchor and reduced-motion path', () => {
     let index: ToolCallIndex | undefined;
-    const names = ['Bash', 'Read', 'Grep', 'Edit', 'Search', 'Write'];
+    const names = ['Bash', 'Read', 'Grep', 'Edit', 'Search', 'Write', 'Copy', 'Move'];
     for (let seq = 1; seq <= names.length; seq++) {
       const toolName = names[seq - 1];
       const call: ToolCallRecord = { id: `group-${seq}`, seq, sessionKey: 'tool-groups', turnSeq: 1,
@@ -2170,14 +2206,94 @@ describe('tool-call and transition display', () => {
       index = putIndex(index, call.afterMessageSeq, group, group.maxTime);
     }
     const human = row('tool-groups', 'human', 'A question', { seq: 1, role: 'user', sender: 'user:person' });
-    const runtime = new FakeRuntime('tool-groups', { records: [human], toolCallsEnabled: true, toolCallIndex: index });
-    const view = render(<TightbeamChat sessionKey="tool-groups" adapter={adapterFor(runtime)} />);
+    const answer = row('tool-groups', 'answer', 'The answer', {
+      seq: 10, sender: 'assistant-service', messageType: 'assistant', replyToMessageId: human.id, turnSeq: 1,
+    });
+    const resize = installResizeObserverMock();
+    try {
+      for (const reduced of [false, true]) {
+        const animations = installFoldAnimationMock();
+        const restoreMotion = installMotionPreference(reduced);
+        let layout: ReturnType<typeof installViewportLayout> | undefined;
+        let view: ReturnType<typeof render> | undefined;
+        try {
+          const runtime = new FakeRuntime('tool-groups', { records: [human, answer], toolCallsEnabled: true, toolCallIndex: index });
+          view = render(<TightbeamChat sessionKey="tool-groups" adapter={adapterFor(runtime)} />);
+          const viewport = screen.getByRole('log');
+          const content = viewport.querySelector<HTMLElement>('.tb-chat-message-content')!;
+          layout = installViewportLayout(viewport, 200, rowElement => {
+            if (rowElement.matches('.tb-chat-activity-overflow')) return 24;
+            if (rowElement.matches('.tb-chat-activity-tool')) return 48;
+            return undefined;
+          });
 
-    expect(view.container.querySelectorAll('.tb-chat-activity-overflow')).toHaveLength(1);
-    expect(view.container.querySelectorAll('details.tb-chat-activity-line.tb-chat-activity-tool')).toHaveLength(5);
-    fireEvent.click(screen.getByRole('button', { name: 'Show earlier activity' }));
-    expect(view.container.querySelectorAll('.tb-chat-activity-overflow')).toHaveLength(0);
-    expect(view.container.querySelectorAll('details.tb-chat-activity-line.tb-chat-activity-tool')).toHaveLength(6);
+          const visibleRows = () => view!.container.querySelectorAll('details.tb-chat-activity-line.tb-chat-activity-tool');
+          expect(view!.container.querySelectorAll('.tb-chat-activity-overflow')).toHaveLength(1);
+          expect(visibleRows()).toHaveLength(5);
+          expect([...visibleRows()].map(element => element.getAttribute('data-record-key')))
+            .toEqual(['tool-group-4', 'tool-group-5', 'tool-group-6', 'tool-group-7', 'tool-group-8']);
+          const anchor = screen.getByText('The answer').closest('article') as HTMLElement;
+          fireEvent.wheel(viewport, { deltaY: 1 });
+          layout.setScrollTop(200);
+          fireEvent.scroll(viewport);
+          expect(screen.getByRole('button', { name: 'Scroll to latest messages' })).toBeTruthy();
+          const anchorBefore = layout.offset(anchor);
+
+          const animationStart = animations.animations.length;
+          fireEvent.click(screen.getByRole('button', { name: 'Show earlier activity' }));
+          expect(view!.container.querySelectorAll('.tb-chat-activity-overflow')).toHaveLength(0);
+          expect(visibleRows()).toHaveLength(8);
+          const revealedRows = ['tool-group-1', 'tool-group-2', 'tool-group-3'];
+          expect([...visibleRows()].map(element => element.getAttribute('data-record-key')))
+            .toEqual([...revealedRows, 'tool-group-4', 'tool-group-5', 'tool-group-6', 'tool-group-7', 'tool-group-8']);
+          const revealAnimations = animations.animations.slice(animationStart);
+          if (reduced) expect(revealAnimations).toHaveLength(0);
+          else {
+            expect(revealAnimations).toHaveLength(3);
+            expect(revealAnimations.map(animation => animation.element.dataset.recordKey)).toEqual(revealedRows);
+            for (const animation of revealAnimations) {
+              expect((animation.keyframes as Keyframe[])[0]).toMatchObject({ height: '0px', opacity: 0 });
+              expect(animation.options).toMatchObject({ duration: 180, fill: 'forwards' });
+            }
+          }
+          expect(layout.offset(anchor)).toBeCloseTo(anchorBefore, 0);
+
+          if (!reduced) {
+            const heights = revealAnimations.map(animation =>
+              Number.parseFloat(String((animation.keyframes as Keyframe[])[1].height)));
+            act(() => {
+              revealAnimations.forEach((animation, i) => {
+                animation.element.style.height = `${heights[i] / 2}px`;
+              });
+              resize.notify(content);
+            });
+            expect(layout.offset(anchor)).toBeCloseTo(anchorBefore, 0);
+            act(() => {
+              revealAnimations.forEach((animation, i) => {
+                animation.element.style.height = `${heights[i]}px`;
+              });
+              resize.notify(content);
+              revealAnimations.forEach(animation => animation.finish());
+            });
+            expect(layout.offset(anchor)).toBeCloseTo(anchorBefore, 0);
+            for (const key of revealedRows) {
+              expect(view!.container.querySelector(`[data-record-key="${key}"]`)?.getAttribute('style') ?? '')
+                .not.toMatch(/height:|opacity:|overflow:/);
+            }
+          }
+          expect(visibleRows()).toHaveLength(8);
+          expect([...view!.container.querySelectorAll<HTMLElement>('.tb-chat-activity-tool')]
+            .filter(element => !revealedRows.includes(element.dataset.recordKey ?? ''))).toHaveLength(5);
+        } finally {
+          view?.unmount();
+          layout?.restore();
+          restoreMotion();
+          animations.restore();
+        }
+      }
+    } finally {
+      resize.restore();
+    }
   });
 
   it('caps a large tool run and expands its retained details in place', () => {

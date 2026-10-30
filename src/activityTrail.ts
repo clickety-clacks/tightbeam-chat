@@ -39,6 +39,8 @@ export interface ActivityOverflow {
   readonly kind: 'overflow';
   readonly id: string;
   readonly runKey: string;
+  /** Stable item identities that become visible when this cap is expanded. */
+  readonly hiddenItemIds: readonly string[];
   readonly anchorSeq: number;
   readonly position: Position;
   readonly sortTime?: number;
@@ -511,7 +513,8 @@ export function buildActivityTrail(input: {
     const first = hiddenItems[0];
     const firstLine = first.kind === 'fold' ? first.lines[0] : first;
     const overflow: ActivityOverflow = { kind: 'overflow', id: `overflow:${runKey}`,
-      runKey, anchorSeq: firstLine.anchorSeq, position: firstLine.position, sortTime: firstLine.sortTime };
+      runKey, hiddenItemIds: hiddenItems.map(item => item.id),
+      anchorSeq: firstLine.anchorSeq, position: firstLine.position, sortTime: firstLine.sortTime };
     for (const item of hiddenItems) {
       const lines = item.kind === 'fold' ? item.lines : [item];
       for (const line of lines) {
