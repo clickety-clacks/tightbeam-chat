@@ -2001,6 +2001,67 @@ describe('attachment submission recovery', () => {
     } finally { runtime.dispose(); vi.restoreAllMocks(); vi.unstubAllGlobals(); }
   });
 
+  it.each(['tighter target', 'residual overflow'] as const)(
+    'submits the previewed selection without re-encoding after %s', async scenario => {
+      const converted = new Blob(['encoded image'], { type: 'image/png' });
+      const decode = vi.fn().mockResolvedValue({ width: 1, height: 1, close: vi.fn() });
+      vi.stubGlobal('createImageBitmap', decode);
+      vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ drawImage: vi.fn() } as unknown as CanvasRenderingContext2D);
+      const encode = vi.spyOn(HTMLCanvasElement.prototype, 'toBlob').mockImplementation(callback => callback(converted));
+      const transport = new AttachmentsTransport();
+      const limits = { maxInlineImageTotalBytes: scenario === 'tighter target' ? 100 : 1 };
+      Object.assign(transport, { attachmentCapabilities: () => limits });
+      const uploaded: import('../src/types').AttachmentInput[] = [];
+      transport.uploadAttachment = async item => {
+        uploaded.push(item);
+        return { assetId: 'asset_' + item.id, mimeType: item.bytes.type, filename: item.filename, size: item.bytes.size };
+      };
+      const runtime = await ready(transport);
+      try {
+        const document = { id: 'document', filename: 'notes.pdf', bytes: new Blob(['original PDF'], { type: 'application/pdf' }) };
+        const vector = { id: 'vector', filename: 'art.svg', bytes: new Blob(['<svg/>'], { type: 'image/svg+xml' }) };
+        const prepared = await runtime.prepareAttachmentInputs!([
+          { id: 'photo', filename: 'camera.webp', bytes: new Blob(['original image'], { type: 'image/webp' }) }, document, vector,
+        ], new AbortController().signal);
+        expect(Object.isFrozen(prepared)).toBe(true);
+        expect(prepared.every(Object.isFrozen)).toBe(true);
+        limits.maxInlineImageTotalBytes = 1;
+        runtime.sendAttachments!('caption', prepared, context);
+        await vi.waitFor(() => expect(runtime.getSnapshot().sends[0].status).toBe('accepted'));
+        expect(uploaded.map(item => item.filename)).toEqual(['camera.png', 'notes.pdf', 'art.svg']);
+        uploaded.forEach((item, index) => expect(item.bytes).toBe(prepared[index].bytes));
+        expect(uploaded[1].bytes).toBe(document.bytes);
+        expect(uploaded[2].bytes).toBe(vector.bytes);
+        expect(transport.submissions[0].attachments).toHaveLength(3);
+        expect(decode).toHaveBeenCalledOnce();
+        expect(encode).toHaveBeenCalledOnce();
+      } finally { runtime.dispose(); vi.restoreAllMocks(); vi.unstubAllGlobals(); }
+    });
+
+  it('preflights a changed selection even when it contains an earlier prepared image', async () => {
+    const converted = new Blob(['encoded image'], { type: 'image/png' });
+    const decode = vi.fn().mockResolvedValueOnce({ width: 1, height: 1, close: vi.fn() })
+      .mockRejectedValue(new Error('unsupported format'));
+    vi.stubGlobal('createImageBitmap', decode);
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ drawImage: vi.fn() } as unknown as CanvasRenderingContext2D);
+    vi.spyOn(HTMLCanvasElement.prototype, 'toBlob').mockImplementation(callback => callback(converted));
+    vi.stubGlobal('Image', class { src = ''; decode = async () => { throw new Error('unsupported format'); }; });
+    vi.stubGlobal('URL', { createObjectURL: () => 'blob:photo', revokeObjectURL: vi.fn() });
+    const transport = new AttachmentsTransport();
+    const runtime = await ready(transport);
+    try {
+      const prepared = await runtime.prepareAttachmentInputs!([
+        { id: 'photo', filename: 'photo.png', bytes: new Blob(['source'], { type: 'image/png' }) },
+      ], new AbortController().signal);
+      const changed = [...prepared, { id: 'added', filename: 'added.heic', bytes: new Blob(['source'], { type: 'image/heic' }) }];
+      runtime.sendAttachments!('', changed, context);
+      await vi.waitFor(() => expect(runtime.getSnapshot().sends[0]).toMatchObject({ status: 'failed',
+        attachmentFailure: { reason: 'image-unreadable', attachmentIndex: 1 } }));
+      expect(transport.uploads).toEqual([]);
+      expect(transport.submissions).toEqual([]);
+    } finally { runtime.dispose(); vi.restoreAllMocks(); vi.unstubAllGlobals(); }
+  });
+
   it('preflights the whole host selection and reports the unreadable item before any upload or post', async () => {
     vi.stubGlobal('createImageBitmap', vi.fn().mockRejectedValue(new Error('unsupported format')));
     vi.stubGlobal('Image', class { src = ''; decode = async () => { throw new Error('unsupported format'); }; });
@@ -2022,9 +2083,10 @@ describe('attachment submission recovery', () => {
     } finally { runtime.dispose(); vi.restoreAllMocks(); vi.unstubAllGlobals(); }
   });
 
-  it('reconciles new-lifetime image recovery against converted metadata without uploading', async () => {
+  it.each([false, true])('reconciles new-lifetime image recovery without uploading (prepared snapshot: %s)', async snapshot => {
     const converted = new Blob(['jpeg'], { type: 'image/jpeg' });
-    vi.stubGlobal('createImageBitmap', vi.fn().mockResolvedValue({ width: 120, height: 240, close: vi.fn() }));
+    const decode = vi.fn().mockResolvedValue({ width: 120, height: 240, close: vi.fn() });
+    vi.stubGlobal('createImageBitmap', decode);
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ drawImage: vi.fn() } as unknown as CanvasRenderingContext2D);
     vi.spyOn(HTMLCanvasElement.prototype, 'toBlob').mockImplementation(callback => callback(converted));
     const transport = new AttachmentsTransport();
@@ -2032,8 +2094,12 @@ describe('attachment submission recovery', () => {
       attachments: [{ assetId: 'retained', mimeType: 'image/jpeg', filename: 'portrait.jpg', size: 4 }] }));
     const runtime = await ready(transport);
     try {
-      await runtime.recoverAttachmentSend!('', [{ id: 'photo', filename: 'portrait.HEIC',
-        bytes: new Blob(['original camera bytes'], { type: 'image/heic' }) }], context);
+      const original = [{ id: 'photo', filename: 'portrait.HEIC',
+        bytes: new Blob(['original camera bytes'], { type: 'image/heic' }) }];
+      const inputs = snapshot ? await runtime.prepareAttachmentInputs!(original, new AbortController().signal) : original;
+      if (snapshot) Object.assign(transport, { attachmentCapabilities: () => ({ maxInlineImageTotalBytes: 1 }) });
+      await runtime.recoverAttachmentSend!('', inputs, context);
+      expect(decode).toHaveBeenCalledOnce();
       expect(runtime.getSnapshot().sends[0]).toMatchObject({ reconciled: true,
         attachments: [{ assetId: 'retained', filename: 'portrait.jpg', mimeType: 'image/jpeg', size: 4 }] });
       expect(transport.uploads).toEqual([]);

@@ -4,6 +4,12 @@ import { AttachmentPreparationError, type AttachmentInput, type AttachmentCapabi
 const longestEdge = 1536;
 const encodedTarget = 1024 * 1024;
 const converted = new WeakSet<Blob>();
+const preparedSelections = new WeakSet<readonly AttachmentInput[]>();
+
+/** Only a complete, immutable preparation result is a previewed submission snapshot. */
+export function isPreparedAttachmentSelection(inputs: readonly AttachmentInput[]): boolean {
+  return preparedSelections.has(inputs);
+}
 
 async function head(blob: Blob, signal: AbortSignal): Promise<Uint8Array> {
   signal.throwIfAborted();
@@ -143,5 +149,7 @@ export async function prepareAttachmentInputs(inputs: readonly AttachmentInput[]
         `Cannot read ${input.filename || 'image'} in its image format on this device.`);
     }
   }
-  return Object.freeze(result);
+  const prepared = Object.freeze(result);
+  preparedSelections.add(prepared);
+  return prepared;
 }

@@ -380,7 +380,7 @@ export interface ChatRuntime {
   setToolCallsEnabled?(enabled: boolean): void;
   retryToolCalls?(): void;
   send(content: string, clientMessageId?: string, hostSend?: HostSendContext): string | null;
-  /** Prepare the whole selection before enabling Send; use the returned bytes for previews. */
+  /** Prepare the whole selection before enabling Send; preview and submit the exact returned list. */
   prepareAttachmentInputs?(inputs: readonly AttachmentInput[], signal: AbortSignal): Promise<readonly AttachmentInput[]>;
   sendAttachments?(content: string, inputs: readonly AttachmentInput[], context?: AttachmentSubmissionContext): string | null;
   getAttachmentCapabilities?(): AttachmentCapabilities | undefined;

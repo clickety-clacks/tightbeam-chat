@@ -34,7 +34,7 @@ import {
   type TurnProvenance,
   SessionNotFoundError,
 } from './types';
-import { prepareAttachmentInputs } from './attachmentPreparation';
+import { isPreparedAttachmentSelection, prepareAttachmentInputs } from './attachmentPreparation';
 import { ToolHistoryUnavailableError } from './toolHistory';
 import { createTurnProvenance } from './provenance';
 import { getIndex, putIndex, trimIndexBelow } from './recordIndex';
@@ -1429,6 +1429,9 @@ class SessionRuntime implements ChatRuntime {
     const send: LocalSend = Object.freeze({ sessionKey: this.sessionKey, deviceId: this.identity.deviceId,
       clientMessageId, content, submittedAt: new Date().toISOString(), status: 'pending', reconciled: false,
       attachmentItems, attachmentPhase: 'preparing', postSubmitted: false,
+      // A previewed selection is already a frozen submission snapshot. Later
+      // targets may refuse its upload, but must never silently replace its bytes.
+      attachmentsPrepared: isPreparedAttachmentSelection(inputs),
       ...(context?.hostSend ? { hostSend: Object.freeze({ ...context.hostSend }) } : {}) });
     this.publish({ sends: Object.freeze([...this.state.sends, send]) });
     void this.prepareAttachments(clientMessageId);
@@ -1522,7 +1525,8 @@ class SessionRuntime implements ChatRuntime {
     const controller = new AbortController();
     this.sendControllers.set(id, controller);
     try {
-      const prepared = await this.prepareAttachmentInputs(attachmentItems, controller.signal);
+      const prepared = isPreparedAttachmentSelection(inputs) ? inputs
+        : await this.prepareAttachmentInputs(attachmentItems, controller.signal);
       if (controller.signal.aborted || this.disposed || !this.checkIdentity()) return;
       this.updateSend(id, send => ({ ...send, attachmentsPrepared: true,
         attachmentItems: Object.freeze(prepared.map(item => Object.freeze({ ...item, status: 'pending' as const }))),
