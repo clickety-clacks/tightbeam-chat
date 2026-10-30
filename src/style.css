@@ -774,7 +774,8 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
 .tb-chat-activity-tool > summary > .tb-chat-tool-terminal-icon { margin-inline-end: .45rem; }
 .tb-chat-activity-bullet { flex: 0 0 auto; margin-inline-end: .45rem; }
 .tb-chat-activity-gist { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tb-chat-activity-tool > .tb-chat-tool-detail-rail {
+.tb-chat-activity-tool > .tb-chat-tool-detail-rail,
+.tb-chat-activity-pill-disclosure > .tb-chat-tool-detail-rail {
   margin: .3rem 0 .2rem .5rem;
   padding-inline-start: .65rem;
   border-inline-start: 2px solid color-mix(in srgb, currentColor 78%, transparent);

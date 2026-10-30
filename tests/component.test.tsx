@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import type { ActivitySummaryTransport, SummaryAnswer, SummarySource } from '../src/activitySummaries';
 import { getIndex, putIndex } from '../src/recordIndex';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -12,6 +14,7 @@ import type {
 
 afterEach(() => {
   cleanup();
+  document.querySelectorAll('style[data-chat-component-test]').forEach(style => style.remove());
   vi.useRealTimers();
 });
 
@@ -657,6 +660,11 @@ describe('conversation surface', () => {
       records: [prompt, standalone, firstAgent, secondAgent, answer, ...laterMessages],
       provenanceAvailable: false, activityTurnStateAvailable: true, activeTurn: undefined,
     });
+    const componentStyles = document.createElement('style');
+    componentStyles.dataset.chatComponentTest = 'true';
+    componentStyles.textContent = readFileSync(resolve(process.cwd(), 'src/style.css'), 'utf8')
+      .replace("@import './theme.css';", '');
+    document.head.append(componentStyles);
     render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
     const viewport = screen.getByRole('log');
     const layout = installViewportLayout(viewport, 200, element =>
@@ -680,7 +688,8 @@ describe('conversation surface', () => {
       expect(standaloneToggle.getAttribute('aria-expanded')).toBe('true');
       const standaloneBody = standaloneRow.querySelector<HTMLElement>('[data-activity-message-content]')!;
       expect(standaloneBody.textContent).toBe(standaloneContent);
-      expect(standaloneBody.closest('.tb-chat-tool-detail-rail')).toBeTruthy();
+      const standaloneRail = standaloneBody.closest<HTMLElement>('.tb-chat-tool-detail-rail')!;
+      expect(getComputedStyle(standaloneRail).getPropertyValue('border-inline-start')).toContain('2px solid');
       expect(layout.offset(anchor)).toBeCloseTo(anchorBefore, 0);
 
       const selection = window.getSelection();
@@ -702,7 +711,10 @@ describe('conversation surface', () => {
       const groupedToggle = within(groupedRow).getByRole('button', { name: /Show full message/ });
       fireEvent.click(groupedToggle);
       expect(groupedToggle.getAttribute('aria-expanded')).toBe('true');
-      expect(groupedRow.querySelector('[data-activity-message-content]')?.textContent).toBe(firstAgentContent);
+      const groupedBody = groupedRow.querySelector<HTMLElement>('[data-activity-message-content]')!;
+      expect(groupedBody.textContent).toBe(firstAgentContent);
+      const groupedRail = groupedBody.closest<HTMLElement>('.tb-chat-tool-detail-rail')!;
+      expect(getComputedStyle(groupedRail).getPropertyValue('border-inline-start')).toContain('2px solid');
       expect(groupToggle.getAttribute('aria-expanded')).toBe('true');
       expect(layout.offset(anchor)).toBeCloseTo(anchorBefore, 0);
 
