@@ -11,6 +11,7 @@ import {
   type CanonicalTurn,
   type ChatTransport,
   type ConversationPage,
+  type HistoryRailDenial,
   type HostIdentity,
   type HumanSendResult,
   type HumanSubmission,
@@ -100,6 +101,45 @@ function optionalPositiveInteger(row: Record<string, unknown>, key: string): num
     throw new UnsupportedTargetError(`Invalid ${key} in Gateway wire response.`);
   }
   return value as number;
+}
+
+function nonnegativeInteger(row: Record<string, unknown>, key: string): number {
+  const value = row[key];
+  if (!Number.isSafeInteger(value) || (value as number) < 0) {
+    throw new UnsupportedTargetError(`Invalid ${key} in Gateway wire response.`);
+  }
+  return value as number;
+}
+
+function optionalNonnegativeInteger(row: Record<string, unknown>, key: string): number | undefined {
+  const value = row[key];
+  if (value === null || value === undefined) return undefined;
+  return nonnegativeInteger(row, key);
+}
+
+function decodeHistoryRailDenial(value: unknown, sessionKey: string): HistoryRailDenial {
+  const row = record(value);
+  if (requiredString(row, 'sessionKey') !== sessionKey) {
+    throw new UnsupportedTargetError('Refused action belongs to a different session.');
+  }
+  const principal = requiredString(row, 'principal');
+  if (principal !== `session:${sessionKey}`) {
+    throw new UnsupportedTargetError('Refused action belongs to a different principal.');
+  }
+  const payload = record(row.payload);
+  const verb = requiredString(row, 'verb').trim();
+  const rule = requiredString(row, 'rule').trim();
+  const origin = requiredString(row, 'origin');
+  if (!verb || !rule || !origin.trim()) {
+    throw new UnsupportedTargetError('Invalid refused-action details in Gateway wire response.');
+  }
+  const afterMessageSeq = optionalNonnegativeInteger(row, 'afterMessageSeq');
+  return Object.freeze({
+    id: requiredString(row, 'id'), sessionKey, principal,
+    verb, rule, origin, payload: Object.freeze({ ...payload }),
+    occurredAt: nonnegativeInteger(row, 'occurredAt'),
+    ...(afterMessageSeq === undefined ? {} : { afterMessageSeq }),
+  });
 }
 
 function messageTime(row: Record<string, unknown>): string {
@@ -232,19 +272,26 @@ export function decodePublic019Notice(value: unknown, sessionKey: string): Chang
     const payload = frame.payload && typeof frame.payload === 'object' && !Array.isArray(frame.payload)
       ? frame.payload as Record<string, unknown> : {};
     const principal = typeof refs.principal === 'string' ? refs.principal : undefined;
+    const referencedSession = refs.sessionKey === undefined ? sessionKey
+      : typeof refs.sessionKey === 'string' ? refs.sessionKey : undefined;
     const verb = typeof payload.verb === 'string' ? payload.verb.trim() : '';
     const rule = typeof payload.rule === 'string' ? payload.rule.trim() : '';
-    // Rule denials are a live-only exception until Gateway history is served
-    // and paired acceptance establishes that it can be read safely.
-    if (frame.op === 'observe' && frame.resource === undefined &&
+    if (frame.op === 'observe' && frame.resource === undefined && referencedSession === sessionKey &&
         principal === `session:${sessionKey}` && verb && rule) {
+      const publicPayload = frame.payload !== null && typeof frame.payload === 'object' && !Array.isArray(frame.payload)
+        ? Object.freeze({ ...(frame.payload as Record<string, unknown>) }) : undefined;
+      const origin = typeof refs.origin === 'string' ? refs.origin : undefined;
       const id = Number.isSafeInteger(refs.railDenialId) && (refs.railDenialId as number) > 0
         ? `rail:${refs.railDenialId}`
         : `notice:${JSON.stringify({ principal, verb, rule, occurredAt: frame.occurredAt,
-          origin: refs.origin, sessionKey: refs.sessionKey, payload })}`;
-      return { operation: 'rail-denial', id, principal, verb, rule,
+          origin, sessionKey: referencedSession, payload: publicPayload })}`;
+      return { operation: 'rail-denial', id, sessionKey: referencedSession, principal, verb, rule,
+        ...(origin === undefined ? {} : { origin }),
+        ...(publicPayload === undefined ? {} : { payload: publicPayload }),
         ...(Number.isSafeInteger(frame.occurredAt) && (frame.occurredAt as number) >= 0
-          ? { occurredAt: frame.occurredAt as number } : {}) };
+          ? { occurredAt: frame.occurredAt as number } : {}),
+        ...(Number.isSafeInteger(refs.afterMessageSeq) && (refs.afterMessageSeq as number) >= 0
+          ? { afterMessageSeq: refs.afterMessageSeq as number } : {}) };
     }
     return { operation: 'unknown', sessionKey, resource: frame.class };
   }
@@ -355,10 +402,17 @@ export function createPublic019Transport(config: Public019Config): { transport: 
         (page.hasMoreAfter && !newestCursor)) {
       throw new UnsupportedTargetError('Invalid transcript page metadata.');
     }
+    const railDenials = body.railDenials === undefined ? undefined : body.railDenials;
+    if (railDenials !== undefined && !Array.isArray(railDenials)) {
+      throw new UnsupportedTargetError('Invalid refused-action history in Gateway response.');
+    }
     return { records: body.items.map((item) => decodePublic019Message(item, sessionKey))
       .sort((a, b) => a.seq - b.seq), oldestCursor: emptyAfterWithoutBackwardCursor ? null : oldestCursor,
       hasOlder: emptyAfterWithoutBackwardCursor ? false : page.hasMoreBefore,
-      newestCursor, hasNewer: hasMoreAfter, coverage: sessionKey };
+      newestCursor, hasNewer: hasMoreAfter,
+      ...(railDenials === undefined ? {} : {
+        railDenials: Object.freeze(railDenials.map((denial) => decodeHistoryRailDenial(denial, sessionKey))),
+      }), coverage: sessionKey };
   }
 
   async function openChanges(sessionKey: string, callbacks: ChangeCallbacks, signal: AbortSignal, tools = false): Promise<ChangeConnection> {

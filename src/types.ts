@@ -110,6 +110,8 @@ export interface ConversationPage {
   readonly newestCursor?: string | null;
   /** Whether an `after` page has another page of newer records. */
   readonly hasNewer?: boolean;
+  /** Optional Gateway 0.1.14+ selected-session refusal history; absent on older Gateways. */
+  readonly railDenials?: readonly HistoryRailDenial[];
   /** Opaque coverage evidence interpreted only by the host's target implementation. */
   readonly coverage: unknown;
 }
@@ -128,8 +130,9 @@ export interface SessionRecord {
 export type ChangeNotice =
   | { readonly operation: 'tool'; readonly tool: ToolCallRecord }
   | { readonly operation: 'upsert'; readonly record: ConversationRecord }
-  | { readonly operation: 'rail-denial'; readonly id: string; readonly principal: string; readonly verb: string;
-      readonly rule: string; readonly occurredAt?: number; readonly afterMessageSeq?: number }
+  | { readonly operation: 'rail-denial'; readonly id: string; readonly sessionKey: string;
+      readonly principal: string; readonly verb: string; readonly rule: string; readonly origin?: string;
+      readonly payload?: Readonly<Record<string, unknown>>; readonly occurredAt?: number; readonly afterMessageSeq?: number }
   | { readonly operation: 'delete'; readonly sessionKey: string; readonly id: string; readonly rowVersion: number }
   | { readonly operation: 'session'; readonly session: SessionRecord }
   | { readonly operation: 'turn'; readonly turn: CanonicalTurn }
@@ -289,6 +292,8 @@ export interface RuntimeState {
   readonly liveActivityEligibleIds?: readonly string[];
   /** Ephemeral rail.denied observations; they are not transcript history. */
   readonly liveRailDenials?: readonly LiveRailDenial[];
+  /** Canonical refused-action history supplied by newer Gateway message pages. */
+  readonly historyRailDenials?: readonly HistoryRailDenial[];
   readonly targetGateway?: string;
   readonly agentDisplayName?: string;
   readonly hasOlder: boolean;
@@ -298,14 +303,27 @@ export interface RuntimeState {
   readonly targetLabel: string;
 }
 
-export interface LiveRailDenial {
+export interface RailDenialIdentity {
   readonly id: string;
+  readonly sessionKey: string;
   readonly principal: string;
   readonly verb: string;
   readonly rule: string;
+  readonly origin?: string;
+  readonly payload?: Readonly<Record<string, unknown>>;
+  readonly occurredAt?: number;
+  readonly afterMessageSeq?: number;
+}
+
+export interface HistoryRailDenial extends RailDenialIdentity {
+  readonly origin: string;
+  readonly payload: Readonly<Record<string, unknown>>;
+  readonly occurredAt: number;
+}
+
+export interface LiveRailDenial extends RailDenialIdentity {
   /** Whether this notice qualified for a live tail when it arrived. */
   readonly tailEligibleAtArrival: boolean;
-  readonly occurredAt?: number;
   /** Message sequence at receipt; its rendered position remains fixed for this runtime. */
   readonly afterMessageSeq: number;
   readonly arrivalOrder: number;

@@ -974,9 +974,13 @@ describe('conversation surface', () => {
     const runtime = new FakeRuntime(sessionKey, { records: [human, attest, assignment, child, wake, reminder,
       inactiveAssignment, decision, answeredDecision, expiredDecision, workItem, sessionNotice, turnFailure,
       remedy, unknownActivity, processActivity, sourceActivity, agent, agentFollowup, answer], provenanceAvailable: false,
-      liveRailDenials: [{ id: 'denial-1', principal: `session:${sessionKey}`, verb: 'attest',
-        rule: 'completion-requires-verification', tailEligibleAtArrival: true, occurredAt: 1,
-        afterMessageSeq: 1, arrivalOrder: 1 }] });
+      liveRailDenials: [{ id: 'denial-1', sessionKey, principal: `session:${sessionKey}`, verb: 'attest',
+        rule: 'completion-requires-verification', origin: 'chat', payload: { verb: 'attest',
+          rule: 'completion-requires-verification' }, tailEligibleAtArrival: true, occurredAt: 1,
+        afterMessageSeq: 1, arrivalOrder: 1 }],
+      historyRailDenials: [{ id: 'history-denial-1', sessionKey, principal: `session:${sessionKey}`,
+        verb: 'attest', rule: 'completion-requires-verification', origin: 'chat',
+        payload: { rule: 'completion-requires-verification', verb: 'attest' }, occurredAt: 1, afterMessageSeq: 1 }] });
     render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
 
     const log = screen.getByRole('log');
@@ -1037,6 +1041,8 @@ describe('conversation surface', () => {
 
     const refusedRow = pillFor('Refused: Completion needs a recorded verification first');
     expect(refusedRow.querySelector('.tb-chat-activity-pill-red')).toBeTruthy();
+    expect(within(log).getAllByRole('note', { name: 'Rail: attest refused by completion-requires-verification' }))
+      .toHaveLength(1);
 
     for (const pill of within(log).getAllByRole('note').filter(note =>
       note.classList.contains('tb-chat-activity-pill-row'))) {

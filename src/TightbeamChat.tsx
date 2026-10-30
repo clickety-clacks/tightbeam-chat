@@ -1017,10 +1017,11 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     activeOwnerTurnMessageId: state.activeTurn?.sourceKind === 'human' && state.activeTurn.turn.status === 'running'
       ? state.activeTurn.turn.messageId : undefined,
     railDenials: state.liveRailDenials ?? [],
+    historyRailDenials: state.historyRailDenials ?? [],
     shownRuns,
     expandedRuns,
   }), [activityRecords, bubbles, transitions, localSendTimes, expandedRuns, shownRuns, state.activityTurnStateAvailable, state.activeTurn,
-    state.liveRailDenials, state.sessionKey,
+    state.liveRailDenials, state.historyRailDenials, state.sessionKey,
     state.toolCallsEnabled, toolRecords]);
   const activityFoldIds = useMemo(() => new Set([
     ...activityPlan.messageItems.filter((item): item is ActivityFold => item.kind === 'fold').map(item => item.id),

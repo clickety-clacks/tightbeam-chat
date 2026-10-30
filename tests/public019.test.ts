@@ -40,7 +40,7 @@ class Channel implements Public019Channel {
 }
 
 function setup(heartbeatTimeoutMs?: number, observedVersion = version, historyItems: unknown[] = [item],
-  turnItems: unknown[] = [], turnStatus = 200) {
+  turnItems: unknown[] = [], turnStatus = 200, railDenials?: unknown) {
   const changes = new Channel();
   const human = new Channel();
   const paths: string[] = [];
@@ -58,10 +58,12 @@ function setup(heartbeatTimeoutMs?: number, observedVersion = version, historyIt
         schemaVersion: 1, resource: 'transcript messages', item,
       }), { status: 200 });
       const afterCurrentCursor = path.includes('/messages?') && new URL(path).searchParams.get('after') === 'newer-cursor';
-      const body = path.endsWith('/version') ? observedVersion : path.includes('/messages?')
-        ? { schemaVersion: 1, resource: 'transcript messages', items: afterCurrentCursor ? [] : historyItems,
+      const pageBody = { schemaVersion: 1, resource: 'transcript messages', items: afterCurrentCursor ? [] : historyItems,
           page: { oldestCursor: afterCurrentCursor ? null : 'older-cursor', newestCursor: 'newer-cursor',
-            hasMoreBefore: !afterCurrentCursor, hasMoreAfter: false } }
+            hasMoreBefore: !afterCurrentCursor, hasMoreAfter: false },
+          ...(railDenials === undefined ? {} : { railDenials }) };
+      const body = path.endsWith('/version') ? observedVersion : path.includes('/messages?')
+        ? pageBody
         : { schemaVersion: 1, resource: 'sessions', item: session };
       return new Response(JSON.stringify(body), { status: 200 });
     },
@@ -668,6 +670,30 @@ describe('Gateway wire mapping and behavior checks', () => {
     expect(transport.proveCoverage({ sessionKey, rowVersion: 4, displayName: 'Fixture agent', raw: {} }, page, [])).toBe(false);
   });
 
+  it('decodes additive refused-action history while keeping older Gateway pages compatible', async () => {
+    const denial = { id: 'rd_14', sessionKey, principal: `session:${sessionKey}`, verb: 'send',
+      rule: 'owner-policy', origin: 'chat', payload: { verb: 'send', rule: 'owner-policy', detail: 'Refused' },
+      occurredAt: Date.parse('2026-10-12T00:00:01Z'), afterMessageSeq: 9 };
+    const supported = setup(undefined, version, [item], [], 200, [denial]);
+    const page = await supported.transport.readTail(sessionKey, new AbortController().signal);
+    expect(page.railDenials).toEqual([denial]);
+    expect((await supported.transport.readOlder(sessionKey, 'older-cursor', new AbortController().signal)).railDenials)
+      .toEqual([denial]);
+
+    const olderGateway = setup(undefined, { ...version, version: '0.1.13' });
+    const oldPage = await olderGateway.transport.readTail(sessionKey, new AbortController().signal);
+    expect(oldPage.railDenials).toBeUndefined();
+
+    const crossSession = setup(undefined, version, [item], [], 200,
+      [{ ...denial, sessionKey: 'other', principal: 'session:other' }]);
+    await expect(crossSession.transport.readTail(sessionKey, new AbortController().signal))
+      .rejects.toThrow('Refused action belongs to a different session.');
+    const crossPrincipal = setup(undefined, version, [item], [], 200,
+      [{ ...denial, principal: 'session:other' }]);
+    await expect(crossPrincipal.transport.readTail(sessionKey, new AbortController().signal))
+      .rejects.toThrow('Refused action belongs to a different principal.');
+  });
+
   it('keeps transcript metadata complete and accepts an empty after page without a backward cursor', async () => {
     const invalidTail = setup();
     invalidTail.host.fetch = async () => new Response(JSON.stringify({
@@ -722,6 +748,18 @@ describe('Gateway wire mapping and behavior checks', () => {
     };
     expect(decodePublic019Notice(notice, sessionKey)).toMatchObject({ operation: 'upsert',
       record: { id: 'm_1', createdAt: '2026-10-12T00:00:00.000Z', raw: { at: item.at } } });
+    expect(decodePublic019Notice({ ...notice, class: 'rail.denied', resource: undefined, op: 'observe',
+      occurredAt: 1791763201000,
+      refs: { sessionKey, principal: `session:${sessionKey}`, railDenialId: 14, origin: 'chat' },
+      payload: { verb: 'send', rule: 'owner-policy', detail: 'Refused' } }, sessionKey)).toMatchObject({
+      operation: 'rail-denial', sessionKey, id: 'rail:14', principal: `session:${sessionKey}`,
+      origin: 'chat', verb: 'send', rule: 'owner-policy', occurredAt: 1791763201000,
+      payload: { verb: 'send', rule: 'owner-policy', detail: 'Refused' },
+    });
+    expect(decodePublic019Notice({ ...notice, class: 'rail.denied', resource: undefined, op: 'observe',
+      refs: { sessionKey: 'other', principal: `session:${sessionKey}`, railDenialId: 14, origin: 'chat' },
+      payload: { verb: 'send', rule: 'owner-policy' } }, sessionKey))
+      .toEqual({ operation: 'unknown', sessionKey, resource: 'rail.denied' });
     expect(decodePublic019Notice({ ...notice, class: 'transition.recorded', resource: 'transcript messages',
       payload: { ...item, messageType: 'marker' } }, sessionKey))
       .toMatchObject({ operation: 'upsert', record: { kind: 'transition', transition: 'unknown', content: item.content } });
