@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { SessionRecordEvents, uncoveredRecordEvents, recordEventPresentation } from '../src/sessionRecordEvents';
 import type { CanonicalMessage, RecordEventPage, RuntimeState, SessionRecordEvent } from '../src/types';
 
@@ -29,7 +29,111 @@ describe('session record-event history', () => {
     newest = page([event('w3', 30), event('w4', 40)], 'p3', true);
     await history.refresh(20);
     expect(state.recordEvents?.map(row => row.record.id)).toEqual(['w1', 'w2', 'w3', 'w4']);
-    expect(reads).toEqual([undefined, 'p3', 'p2', undefined, 'p3', 'p2']);
+    expect(reads).toEqual([undefined, 'p3', 'p2', undefined]);
+    history.stop();
+  });
+
+  it('loads 10,000 rows in one batch merge and catches up only the new interval, not retained history', async () => {
+    const all = Array.from({ length: 10_120 }, (_, i) => event(String(i + 1).padStart(5, '0'), i + 1));
+    let count = 10_000;
+    let state: Partial<RuntimeState> = {};
+    const reads: Array<string | undefined> = [];
+    const history = new SessionRecordEvents('selected', async (_session, before) => {
+      reads.push(before);
+      const end = before === undefined ? count : Number(before);
+      const start = Math.max(0, end - 50);
+      return page(all.slice(start, end), start ? String(start) : null, start > 0);
+    }, patch => { state = { ...state, ...patch }; });
+    // Count retained row references materialized in immutable snapshots, rather
+    // than using a timing limit. Per-event full-array copying is quadratic here.
+    let materializedRows = 0;
+    const freeze = Object.freeze;
+    const snapshots = vi.spyOn(Object, 'freeze').mockImplementation(value => {
+      if (Array.isArray(value) && value[0]?.eventId) materializedRows += value.length;
+      return freeze(value);
+    });
+    try {
+      await history.refresh(0);
+      expect(reads).toHaveLength(200);
+      expect(state.recordEvents).toEqual(all.slice(0, count));
+      expect(materializedRows).toBeLessThanOrEqual(10_000);
+      const retained = state.recordEvents!;
+      snapshots.mockRestore();
+
+      // A far-ahead live frame is not proof that the interval before it arrived.
+      count = all.length;
+      history.receive(all[count - 1]);
+      reads.length = 0;
+      await history.refresh(0);
+      expect(reads).toEqual([undefined, '10070', '10020']);
+      expect(state.recordEvents).toEqual(all);
+      expect(state.recordEvents?.[0]).toBe(retained[0]);
+      expect(state.recordEventsHasOlder).toBe(false);
+      const complete = state.recordEvents;
+      reads.length = 0;
+      await history.refresh(0);
+      expect(reads).toEqual([undefined]);
+      expect(state.recordEvents).toBe(complete);
+    } finally {
+      snapshots.mockRestore();
+      history.stop();
+    }
+  });
+
+  it('retains the older cursor across catch-up and extends history directly when the reading floor moves', async () => {
+    const all = Array.from({ length: 12 }, (_, i) => event(String(i + 1).padStart(2, '0'), i + 1));
+    let count = 10;
+    let state: Partial<RuntimeState> = {};
+    const reads: Array<string | undefined> = [];
+    const history = new SessionRecordEvents('selected', async (_session, before) => {
+      reads.push(before);
+      const end = before === undefined ? count : Number(before);
+      const start = Math.max(0, end - 2);
+      return page(all.slice(start, end), start ? String(start) : null, start > 0);
+    }, patch => { state = { ...state, ...patch }; });
+    await history.refresh(7);
+    expect(state.recordEvents).toEqual(all.slice(6, 10));
+    count = 12;
+    reads.length = 0;
+    await history.refresh(7);
+    expect(reads).toEqual([undefined, '10']);
+    reads.length = 0;
+    await history.older(5);
+    expect(reads).toEqual(['6']);
+    expect(state.recordEvents).toEqual(all.slice(4));
+    reads.length = 0;
+    await history.refresh(3);
+    expect(reads).toEqual([undefined, '4']);
+    expect(state.recordEvents).toEqual(all.slice(2));
+    expect(state.recordEventsHasOlder).toBe(true);
+    history.stop();
+  });
+
+  it('does not advance the history boundary past a failed catch-up interval', async () => {
+    const all = Array.from({ length: 8 }, (_, i) => event(String(i + 1), i + 1));
+    let count = 4;
+    let fail = false;
+    let state: Partial<RuntimeState> = {};
+    const reads: Array<string | undefined> = [];
+    const history = new SessionRecordEvents('selected', async (_session, before) => {
+      reads.push(before);
+      if (fail && before === '6') throw new Error('History unavailable');
+      const end = before === undefined ? count : Number(before);
+      const start = Math.max(0, end - 2);
+      return page(all.slice(start, end), start ? String(start) : null, start > 0);
+    }, patch => { state = { ...state, ...patch }; });
+    await history.refresh(0);
+    count = 8;
+    fail = true;
+    await history.refresh(0);
+    expect(state.recordEventsError).toBe('History unavailable');
+    expect(state.recordEvents?.map(row => row.at)).toEqual([1, 2, 3, 4, 7, 8]);
+    fail = false;
+    reads.length = 0;
+    await history.refresh(0);
+    expect(reads).toEqual([undefined, '6', '4']);
+    expect(state.recordEvents).toEqual(all);
+    expect(state.recordEventsError).toBeUndefined();
     history.stop();
   });
 

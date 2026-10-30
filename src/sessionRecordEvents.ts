@@ -13,43 +13,57 @@ export class SessionRecordEvents {
   private stopped = false;
   private requestedFloor = Infinity;
   private loadedFloor = Infinity;
+  // Only a completed R1 catch-up advances this boundary; a live frame can
+  // arrive beyond a missed interval and must never stand in for history.
+  private historyHead?: SessionRecordEvent;
 
   constructor(private readonly sessionKey: string,
     private readonly read: NonNullable<ChatTransport['readRecordEvents']>,
     private readonly publish: (patch: Partial<RuntimeState>) => void) {}
 
-  put(event: SessionRecordEvent): void {
-    if (this.stopped || event.sessionKey !== this.sessionKey) return;
-    const previous = this.byId.get(event.eventId);
-    if (previous) {
-      // Coverage can grow after the occurrence's first frame, without changing
-      // its immutable time/record identity. A stale history page cannot undo it.
-      const notices = [...new Set([...previous.noticeMessageIds, ...event.noticeMessageIds])];
-      if (notices.length === previous.noticeMessageIds.length) return;
-      event = Object.freeze({ ...previous, noticeMessageIds: Object.freeze(notices) });
-      this.rows = Object.freeze(this.rows.map(row => row === previous ? event : row));
-    } else {
-      let low = 0, high = this.rows.length;
-      while (low < high) {
-        const middle = (low + high) >>> 1;
-        if (compare(this.rows[middle], event) < 0) low = middle + 1;
-        else high = middle;
+  private merge(events: readonly SessionRecordEvent[]): void {
+    if (this.stopped) return;
+    const changed = new Map<string, SessionRecordEvent>();
+    const added: SessionRecordEvent[] = [];
+    for (let event of events) {
+      if (event.sessionKey !== this.sessionKey) continue;
+      const previous = changed.get(event.eventId) ?? this.byId.get(event.eventId);
+      if (previous) {
+        // Coverage can grow without changing immutable occurrence identity.
+        const notices = [...new Set([...previous.noticeMessageIds, ...event.noticeMessageIds])];
+        if (notices.length === previous.noticeMessageIds.length) continue;
+        event = Object.freeze({ ...previous, noticeMessageIds: Object.freeze(notices) });
       }
-      this.rows = Object.freeze([...this.rows.slice(0, low), event, ...this.rows.slice(low)]);
+      changed.set(event.eventId, event);
     }
-    this.byId.set(event.eventId, event);
+    if (!changed.size) return;
+    for (const [id, event] of changed) {
+      if (!this.byId.has(id)) added.push(event);
+      this.byId.set(id, event);
+    }
+    added.sort(compare);
+    // One linear merge for the whole read, not a full retained-array copy for
+    // each occurrence on each page. Unchanged row objects keep their identity.
+    const merged: SessionRecordEvent[] = [];
+    let next = 0;
+    for (const row of this.rows) {
+      while (next < added.length && compare(added[next], row) < 0) merged.push(added[next++]);
+      merged.push(changed.get(row.eventId) ?? row);
+    }
+    while (next < added.length) merged.push(added[next++]);
+    this.rows = Object.freeze(merged);
   }
 
   receive(event: SessionRecordEvent): void {
     const previous = this.rows;
-    this.put(event);
+    this.merge([event]);
     if (this.rows !== previous) this.publish({ recordEvents: this.rows });
   }
 
   refresh(floor: number): Promise<void> {
     // Restart after subscription readiness so a lossy disconnect is repaired by R1.
     this.controller?.abort();
-    return this.readPages(undefined, Math.min(floor, this.loadedFloor));
+    return this.readPages(undefined, floor);
   }
 
   older(floor: number): Promise<void> {
@@ -64,6 +78,19 @@ export class SessionRecordEvents {
     this.controller = controller;
     this.requestedFloor = floor;
     this.publish({ recordEventsLoading: true, recordEventsError: undefined });
+    const pending: SessionRecordEvent[] = [];
+    let overlap = before === undefined ? this.historyHead : undefined;
+    let head = this.historyHead;
+    let first = before === undefined;
+    let cursor = this.cursor;
+    let hasOlder = this.hasOlder;
+    let loadedFloor = this.loadedFloor;
+    const commit = () => {
+      this.merge(pending);
+      this.cursor = cursor;
+      this.hasOlder = hasOlder;
+      this.loadedFloor = loadedFloor;
+    };
     try {
       const cursors = new Set<string>();
       while (true) {
@@ -73,21 +100,44 @@ export class SessionRecordEvents {
             (page.hasOlder && (!page.oldestCursor || !page.items.length || page.oldestCursor === before || cursors.has(page.oldestCursor)))) {
           throw new Error('Record-event history did not advance in this conversation.');
         }
-        for (const row of page.items) this.put(row);
-        this.cursor = page.oldestCursor ?? undefined;
-        this.hasOlder = page.hasOlder;
-        const oldest = page.items[0]?.at ?? Infinity;
-        this.loadedFloor = Math.min(this.loadedFloor, oldest);
-        if (!page.hasOlder || oldest <= this.requestedFloor) break;
-        before = this.cursor;
+        for (const row of page.items) pending.push(row);
+        if (first) {
+          head = page.items[page.items.length - 1] ?? head;
+          first = false;
+        }
+        const oldest = page.items[0];
+        if (overlap) {
+          // R1 is append-only with fixed cutoffs. Once we reach the previous
+          // history head, the interval below it is already retained. Keep its
+          // oldest cursor instead of walking all those pages again.
+          if (!page.hasOlder || (oldest && compare(oldest, overlap) <= 0)) {
+            overlap = undefined;
+            if (!hasOlder || loadedFloor <= this.requestedFloor) break;
+            before = cursor;
+            continue;
+          }
+        } else {
+          cursor = page.oldestCursor ?? undefined;
+          hasOlder = page.hasOlder;
+          loadedFloor = Math.min(loadedFloor, oldest?.at ?? Infinity);
+          if (!hasOlder || loadedFloor <= this.requestedFloor) break;
+        }
+        before = page.oldestCursor ?? undefined;
         cursors.add(before!);
       }
+      commit();
+      this.historyHead = head;
       this.publish({ recordEvents: this.rows, recordEventsHasOlder: this.hasOlder,
         recordEventsLoading: false, recordEventsError: undefined });
     } catch (error) {
-      if (!controller.signal.aborted && !this.stopped) this.publish({ recordEvents: this.rows,
-        recordEventsHasOlder: this.hasOlder, recordEventsLoading: false,
-        recordEventsError: error instanceof Error ? error.message : String(error) });
+      if (!controller.signal.aborted && !this.stopped) {
+        // Retain successfully read rows, but do not advance the catch-up head:
+        // a retry must still fill the failed interval before it is complete.
+        commit();
+        this.publish({ recordEvents: this.rows,
+          recordEventsHasOlder: this.hasOlder, recordEventsLoading: false,
+          recordEventsError: error instanceof Error ? error.message : String(error) });
+      }
     } finally {
       if (this.controller === controller) this.controller = undefined;
     }
