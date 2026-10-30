@@ -2221,6 +2221,11 @@ describe('conversation surface', () => {
     } });
     for (const value of ['a', 'ab', 'abc', 'abcd']) fireEvent.change(composer, { target: { value } });
     expect(composer.value).toBe('abcd');
+    composer.focus();
+    composer.setSelectionRange(2, 2);
+    fireEvent.keyDown(composer, { key: 'Enter', ctrlKey: true });
+    expect(composer.value).toBe('ab\ncd');
+    expect(composer.selectionStart).toBe(3);
     expect(scrollHeightReads).toBe(0);
   });
 
