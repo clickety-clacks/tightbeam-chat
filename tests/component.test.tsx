@@ -120,7 +120,7 @@ function dispatchClipboardPaste(input: HTMLTextAreaElement, clipboardData: {
   Object.defineProperty(event, 'clipboardData', { value: {
     items: clipboardData.items ?? [], files: clipboardData.files ?? [], getData: clipboardData.getData,
   } });
-  input.dispatchEvent(event);
+  act(() => { input.dispatchEvent(event); });
   return event;
 }
 
