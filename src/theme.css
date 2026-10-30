@@ -7,6 +7,11 @@
   --tb-chat-agent-surface: #E6E1D8;
   --tb-chat-human-surface: #DCE3DA;
   --tb-chat-code: #E2DCD2;
+  --tb-chat-syntax-keyword: #693C8E;
+  --tb-chat-syntax-string: #28623B;
+  --tb-chat-syntax-number: #914A14;
+  --tb-chat-syntax-comment: #625C55;
+  --tb-chat-syntax-title: #175C80;
   --tb-chat-accent: #526657;
   --tb-chat-on-accent: #F3F0EA;
   --tb-chat-teak: #7A5540;
@@ -33,6 +38,11 @@
     --tb-chat-agent-surface: #24221F;
     --tb-chat-human-surface: #26302A;
     --tb-chat-code: #1C1B19;
+    --tb-chat-syntax-keyword: #C9A6EF;
+    --tb-chat-syntax-string: #9AD5A7;
+    --tb-chat-syntax-number: #F0B66E;
+    --tb-chat-syntax-comment: #B6ADA2;
+    --tb-chat-syntax-title: #8FCFF0;
     --tb-chat-accent: #A5BAA9;
     --tb-chat-on-accent: #19211B;
     --tb-chat-teak: #C9A891;

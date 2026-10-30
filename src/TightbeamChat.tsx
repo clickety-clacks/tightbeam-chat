@@ -3,6 +3,7 @@ import { forwardRef, memo, useCallback, useEffect, useId, useImperativeHandle, u
   type ReactNode, type RefObject, type TableHTMLAttributes } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { highlightRecognizedCode } from './markdownHighlight';
 import type { ChatRuntime, CanonicalMessage, CanonicalTransition, ToolCallRecord, ToolCallIndex, ConversationRecord, LocalSend, RuntimeState, TightbeamAdapter, TurnProvenance } from './types';
 import { projectMessages, type HumanMember } from './messageVisibility';
 import { buildActivityTrail, type ActivityFold, type ActivityLine, type ActivityOverflow, type MessageActivityItem } from './activityTrail';
@@ -276,6 +277,7 @@ const IndexedTimeline = memo(function IndexedTimelineBranch({ messages, tools, p
 });
 
 const markdownPlugins = [remarkGfm];
+const markdownRehypePlugins = [highlightRecognizedCode];
 const markdownComponents = {
   a: ({ href, children, ...props }: AnchorHTMLAttributes<HTMLAnchorElement>) =>
     <a {...props} href={href} target="_blank" rel="noreferrer noopener">{children}</a>,
@@ -289,7 +291,8 @@ const markdownComponents = {
 
 function markdownBody(content: string): ReactNode {
   return <div className="tb-chat-markdown">
-    <ReactMarkdown remarkPlugins={markdownPlugins} components={markdownComponents} skipHtml>{content}</ReactMarkdown>
+    <ReactMarkdown remarkPlugins={markdownPlugins} rehypePlugins={markdownRehypePlugins}
+      components={markdownComponents} skipHtml>{content}</ReactMarkdown>
   </div>;
 }
 
