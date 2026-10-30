@@ -53,7 +53,7 @@ describe('summary answer delivery', () => {
     viewer.subscribe(entry, () => {});
     await flush();
 
-    expect(calls[0].sources).toEqual([{ lineId: 'large', sourceText: body }]);
+    expect(calls[0].sources).toEqual([{ lineId: 'large', sourceText: body.trim() }]);
     const key = viewer.key(entry)!;
     expect(key).not.toContain(body);
     const cached = [...(viewer as unknown as { entries: Map<string, unknown> }).entries.values()][0] as Record<string, unknown>;
