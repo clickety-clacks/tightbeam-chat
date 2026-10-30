@@ -11,20 +11,46 @@ export interface ActivitySummaryTransport {
   readAttestNote?(id: string, signal: AbortSignal): Promise<string | undefined>;
 }
 export interface ActivitySummaryDisplay {
-  readonly original?: string;
   readonly text?: string;
   readonly state?: SummaryAnswer['state'];
 }
 const emptyDisplay: ActivitySummaryDisplay = Object.freeze({});
 const normalized = (text: string) => text.replace(/\r\n?/g, '\n').trim();
 
+// The page-local key must distinguish text revisions without retaining the
+// text in a Map key. The server remains authoritative for the durable SHA-256.
+function sourceFingerprint(text: string): string {
+  let a = 0x811c9dc5, b = 0x9e3779b9, c = 0x85ebca6b, d = 0xc2b2ae35;
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    a = Math.imul(a ^ code, 0x01000193);
+    b = Math.imul(b ^ (code + i), 0x5bd1e995);
+    c = Math.imul(c ^ (code + (i << 1)), 0x27d4eb2d);
+    d = Math.imul(d ^ (code + (i << 2)), 0x165667b1);
+  }
+  const finish = (value: number) => {
+    value ^= value >>> 16;
+    value = Math.imul(value, 0x7feb352d);
+    value ^= value >>> 15;
+    value = Math.imul(value, 0x846ca68b);
+    value ^= value >>> 16;
+    return (value >>> 0).toString(16).padStart(8, '0');
+  };
+  return [a, b, c, d].map(finish).join('');
+}
+
 /** Same-origin transport used by both the standalone and embedded served page. */
 export function createActivitySummaryTransport(fetcher: (url: string, init: RequestInit) => Promise<Response>,
   baseUrl: string): ActivitySummaryTransport {
   return {
     async stream(sources, receive, signal) {
-      const response = await fetcher(`${baseUrl}/summaries`, { method: 'POST', signal, cache: 'no-store',
-        headers: { 'content-type': 'application/json' }, body: JSON.stringify(sources) });
+      let body = JSON.stringify(sources);
+      sources = [];
+      let response: Response;
+      try {
+        response = await fetcher(`${baseUrl}/summaries`, { method: 'POST', signal, cache: 'no-store',
+          headers: { 'content-type': 'application/json' }, body });
+      } finally { body = ''; }
       if (!response.ok || !response.body) throw new Error('Summaries unavailable.');
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
@@ -63,11 +89,18 @@ export function activitySummaryDescriptor(entry: ActivityLine): {
 
 interface Entry {
   readonly key: string;
-  readonly descriptor: NonNullable<ReturnType<typeof activitySummaryDescriptor>>;
-  readonly listeners: Set<() => void>;
+  readonly lineId: string;
+  readonly prefix: string;
+  readonly attestId?: string;
+  line: WeakRef<ActivityLine>;
+  readonly listeners: Set<{
+    notify: () => void;
+    receiveOriginal?: (text: string) => void;
+    currentOriginal?: () => string | undefined;
+  }>;
   display: ActivitySummaryDisplay;
-  source?: SummarySource;
   requested?: boolean;
+  opening?: boolean;
 }
 interface Batch { entries: Entry[]; controller?: AbortController; waiting: boolean }
 
@@ -75,7 +108,6 @@ interface Batch { entries: Entry[]; controller?: AbortController; waiting: boole
 export class ActivitySummaryViewer {
   private readonly entries = new Map<string, Entry>();
   private readonly batches = new Set<Batch>();
-  private readonly controller = new AbortController();
   private readonly queuedEntries = new Set<Entry>();
   private queued = false;
   private disposed = false;
@@ -90,52 +122,76 @@ export class ActivitySummaryViewer {
       (document.visibilityState !== 'hidden' && navigator.onLine !== false)) {}
   key(entry: ActivityLine): string | undefined {
     const descriptor = activitySummaryDescriptor(entry);
-    return descriptor ? JSON.stringify([descriptor.lineId, normalized(descriptor.sourceText ?? '')]) : undefined;
+    if (!descriptor) return undefined;
+    const sourceText = normalized(descriptor.sourceText ?? '');
+    return JSON.stringify([descriptor.lineId, sourceText.length, sourceFingerprint(sourceText)]);
   }
   snapshot(key?: string): ActivitySummaryDisplay { return key ? this.entries.get(key)?.display ?? emptyDisplay : emptyDisplay; }
-  subscribe(entry: ActivityLine, listener: () => void): () => void {
+  subscribe(entry: ActivityLine, listener: () => void, receiveOriginal?: (text: string) => void,
+    currentOriginal?: () => string | undefined): () => void {
     const descriptor = activitySummaryDescriptor(entry);
     const key = this.key(entry);
     if (!descriptor || !key || this.disposed) return () => {};
     let held = this.entries.get(key);
     const redisplaying = !!held?.requested && held.listeners.size === 0;
     if (!held) {
-      held = { key, descriptor, listeners: new Set(), display: emptyDisplay };
+      held = { key, lineId: descriptor.lineId, prefix: descriptor.prefix, attestId: descriptor.attestId,
+        line: new WeakRef(entry), listeners: new Set(), display: emptyDisplay };
       this.entries.set(key, held);
-      if (descriptor.sourceText) held.source = { lineId: descriptor.lineId, sourceText: normalized(descriptor.sourceText) };
-      else if (descriptor.attestId && this.transport.readAttestNote) {
-        const target = held;
-        void this.transport.readAttestNote(descriptor.attestId, this.controller.signal).then(note => {
-          if (!note || this.disposed) return;
-          target.source = { lineId: descriptor.lineId, sourceText: normalized(note) };
-          this.update(target, { original: note, text: note });
-          this.queue(target);
-        }).catch(() => {}); // An unreadable note retains the fixed presentation.
-      }
-    }
-    held.listeners.add(listener);
+    } else held.line = new WeakRef(entry);
+    const subscriber = { notify: listener, receiveOriginal, currentOriginal };
+    held.listeners.add(subscriber);
     this.queue(held);
     if (redisplaying && this.available()) {
       for (const batch of this.batches) if (batch.waiting && batch.entries.includes(held)) void this.open(batch, true);
     }
-    return () => { held.listeners.delete(listener); };
+    return () => { held.listeners.delete(subscriber); };
   }
   private update(entry: Entry, display: ActivitySummaryDisplay) {
     if (this.disposed) return;
     entry.display = display;
-    for (const listener of entry.listeners) listener();
+    for (const listener of entry.listeners) listener.notify();
+  }
+  private publishOriginal(entry: Entry, text: string) {
+    for (const listener of entry.listeners) {
+      listener.receiveOriginal?.(text);
+      listener.notify();
+    }
+  }
+  private canResolve(entry: Entry) {
+    const line = entry.line.deref();
+    const descriptor = line && activitySummaryDescriptor(line);
+    return !!descriptor?.sourceText || (!!entry.attestId && !!this.transport.readAttestNote);
+  }
+  private async sourceFor(entry: Entry, signal: AbortSignal): Promise<SummarySource | undefined> {
+    if (signal.aborted) return undefined;
+    const line = entry.line.deref();
+    const descriptor = line && activitySummaryDescriptor(line);
+    if (descriptor?.sourceText) {
+      return { lineId: descriptor.lineId, sourceText: normalized(descriptor.sourceText) };
+    }
+    if (!entry.attestId || !this.transport.readAttestNote) return undefined;
+    try {
+      const cached = [...entry.listeners].map(listener => listener.currentOriginal?.())
+        .find((value): value is string => !!value?.trim());
+      const note = cached ?? await this.transport.readAttestNote(entry.attestId, signal);
+      if (!note || signal.aborted) return undefined;
+      if (!cached) this.publishOriginal(entry, note);
+      return { lineId: entry.lineId, sourceText: normalized(note) };
+    } catch { return undefined; } // An unreadable note retains the fixed presentation.
   }
   private queue(entry: Entry) {
-    if (!entry.requested) this.queuedEntries.add(entry);
+    if (!entry.requested && !entry.opening && this.canResolve(entry)) this.queuedEntries.add(entry);
     if (this.queued || this.disposed) return;
     this.queued = true;
     queueMicrotask(() => {
       this.queued = false;
       if (this.disposed) return;
-      const entries = [...this.queuedEntries].filter(entry => entry.source && !entry.requested && entry.listeners.size);
+      const entries = [...this.queuedEntries].filter(entry =>
+        !entry.requested && !entry.opening && entry.listeners.size && this.canResolve(entry));
       this.queuedEntries.clear();
       if (!entries.length) return;
-      for (const entry of entries) entry.requested = true;
+      for (const entry of entries) entry.opening = true;
       const batch: Batch = { entries, waiting: false };
       this.batches.add(batch);
       void this.open(batch, false);
@@ -148,16 +204,47 @@ export class ActivitySummaryViewer {
     batch.waiting = false;
     const controller = new AbortController();
     batch.controller = controller;
-    const entries = batch.entries.filter(entry => entry.listeners.size);
+    const entries = batch.entries.filter(entry => entry.listeners.size && this.canResolve(entry));
+    let prepared = await Promise.all(entries.map(async entry => {
+      const source = await this.sourceFor(entry, controller.signal);
+      return source ? { entry, source } : undefined;
+    }));
+    if (this.disposed || controller.signal.aborted) return;
+    const ready = prepared.filter((value): value is { entry: Entry; source: SummarySource } =>
+      !!value && value.entry.listeners.size > 0);
+    for (const entry of entries) if (!ready.some(value => value.entry === entry)) entry.opening = false;
+    if (!ready.length) {
+      batch.controller = undefined;
+      if (reopening) batch.waiting = true;
+      else this.batches.delete(batch);
+      return;
+    }
+    const requestEntries = ready.map(value => value.entry);
+    let sources = ready.map(value => value.source);
+    prepared.length = 0;
+    ready.length = 0;
+    batch.entries = requestEntries;
+    for (const entry of requestEntries) {
+      entry.opening = false;
+      if (!reopening) entry.requested = true;
+    }
     try {
-      await this.transport.stream(entries.map(entry => entry.source!), answer => {
-        const entry = entries[answer.index];
+      const stream = this.transport.stream(sources, answer => {
+        const entry = requestEntries[answer.index];
         if (!entry || controller.signal.aborted) return;
-        this.update(entry, { original: entry.display.original,
-          text: answer.state === 'summary' ? entry.descriptor.prefix + answer.summary : entry.display.original,
+        this.update(entry, {
+          text: answer.state === 'summary' ? entry.prefix + answer.summary : undefined,
           state: answer.state });
       }, controller.signal);
-    } catch { /* Originals remain readable; delivery resumes only on the rules below. */ }
+      // The request body is serialized synchronously by the transport. Drop the
+      // per-line strings from the page-local request array while the answer
+      // stream remains open; reopens resolve sources from mounted rows again.
+      sources.length = 0;
+      await stream;
+    } catch {
+      sources.length = 0;
+      // Originals remain readable; delivery resumes only on the rules below.
+    }
     if (this.disposed || controller.signal.aborted) return;
     batch.controller = undefined;
     batch.entries = this.unresolved(batch);
@@ -176,8 +263,9 @@ export class ActivitySummaryViewer {
   };
   dispose() {
     this.disposed = true;
-    this.controller.abort();
     for (const batch of this.batches) batch.controller?.abort();
     this.batches.clear();
+    this.queuedEntries.clear();
+    this.entries.clear();
   }
 }

@@ -17,7 +17,8 @@ function transportFixture() {
   const calls: { sources: readonly SummarySource[]; receive: (answer: SummaryAnswer) => void; end: () => void; fail: () => void }[] = [];
   const transport: ActivitySummaryTransport = {
     stream: vi.fn((sources, receive, signal) => new Promise<void>((resolve, reject) => {
-      calls.push({ sources, receive, end: resolve, fail: () => reject(new Error('Disconnected')) });
+      calls.push({ sources: sources.map(source => ({ ...source })), receive, end: resolve,
+        fail: () => reject(new Error('Disconnected')) });
       signal.addEventListener('abort', () => reject(new Error('Aborted')), { once: true });
     })),
   };
@@ -44,6 +45,29 @@ describe('activity summary sources', () => {
 });
 
 describe('summary answer delivery', () => {
+  it('keeps page cache entries source-free while retaining the weak source for delivery recovery', async () => {
+    const { calls, transport } = transportFixture();
+    const viewer = new ActivitySummaryViewer(transport);
+    const body = 'A long activity body that must not remain in viewer cache. '.repeat(200);
+    const entry = line('message:large', body);
+    viewer.subscribe(entry, () => {});
+    await flush();
+
+    expect(calls[0].sources).toEqual([{ lineId: 'large', sourceText: body }]);
+    const key = viewer.key(entry)!;
+    expect(key).not.toContain(body);
+    const cached = [...(viewer as unknown as { entries: Map<string, unknown> }).entries.values()][0] as Record<string, unknown>;
+    expect(cached).not.toHaveProperty('descriptor');
+    expect(cached).not.toHaveProperty('source');
+    expect(cached.line).toBeInstanceOf(WeakRef);
+
+    calls[0].receive({ index: 0, state: 'summary', summary: 'The activity completed.' });
+    expect(viewer.snapshot(key)).toEqual({ text: 'The activity completed.', state: 'summary' });
+    expect(JSON.stringify([...((viewer as unknown as { entries: Map<string, unknown> }).entries)]))
+      .not.toContain(body);
+    viewer.dispose();
+  });
+
   it('batches loaded lines once, targets listeners, keeps revisions separate and never polls', async () => {
     vi.useFakeTimers();
     const { calls, transport } = transportFixture();
@@ -78,6 +102,7 @@ describe('summary answer delivery', () => {
     await flush();
     calls[0].receive({ index: 0, state: 'pending' }); calls[0].fail(); await flush();
     expect(calls).toHaveLength(2);
+    expect(calls[1].sources).toEqual([{ lineId: 'a', sourceText: 'Original' }]);
     calls[1].fail(); await flush();
     await vi.advanceTimersByTimeAsync(600_000);
     expect(calls).toHaveLength(2);
@@ -96,13 +121,16 @@ describe('summary answer delivery', () => {
     transport.readAttestNote = vi.fn(async id => id === 'att_12345678' ? 'Seven review findings.\nFull original note.' : undefined);
     const viewer = new ActivitySummaryViewer(transport);
     const note = line('message:notice', 'Attest att_12345678 (verdict) was filed on assignment asg_12345678.', 'substrate');
-    viewer.subscribe(note, () => {}); viewer.subscribe({ ...note, id: 'member:another' }, () => {});
+    const originals: string[] = [];
+    viewer.subscribe(note, () => {}, value => originals.push(value));
+    viewer.subscribe({ ...note, id: 'member:another' }, () => {}, value => originals.push(value));
     viewer.subscribe(line('message:missing', 'Attest att_99999999 (verdict) was filed on assignment asg_12345678.', 'substrate'), () => {});
     await flush();
     expect(transport.readAttestNote).toHaveBeenCalledTimes(2);
     expect(calls).toHaveLength(1);
     expect(calls[0].sources).toEqual([{ lineId: 'att_12345678', sourceText: 'Seven review findings.\nFull original note.' }]);
-    expect(viewer.snapshot(viewer.key(note))).toMatchObject({ original: 'Seven review findings.\nFull original note.' });
+    expect(originals).toEqual(['Seven review findings.\nFull original note.', 'Seven review findings.\nFull original note.']);
+    expect(viewer.snapshot(viewer.key(note))).not.toHaveProperty('original');
     viewer.dispose();
   });
 
@@ -119,6 +147,7 @@ describe('summary answer delivery', () => {
     const receive = vi.fn();
     await transport.stream([{ lineId: 'event', sourceText: 'Whole source' }], receive, new AbortController().signal);
     expect(receive.mock.calls.map(([value]) => value.state)).toEqual(['pending', 'summary']);
+    expect(JSON.parse(fetcher.mock.calls[0][1].body as string)).toEqual([{ lineId: 'event', sourceText: 'Whole source' }]);
     expect(await transport.readAttestNote?.('att_note', new AbortController().signal)).toBe('Readable note');
     expect(fetcher.mock.calls[0][0]).toBe('https://chat.example/__chat/summaries');
   });
@@ -159,6 +188,26 @@ describe('row-local rendering', () => {
     function Row() { const result = useActivitySummary(line('message:a', 'Original')); return <div data-state={result.state}>{result.presentation?.text}</div>; }
     render(<ActivitySummaryProvider connected reconcile={() => {}}><Row /></ActivitySummaryProvider>);
     expect(screen.getByText('Original').dataset.state).toBeUndefined();
+  });
+
+  it('shows an attest note locally as the original and keeps it available on hover after summarizing', async () => {
+    const { calls, transport } = transportFixture();
+    transport.readAttestNote = vi.fn(async () => 'The full attest note remains readable.');
+    const note = { ...line('message:attest', 'Filed a review note.', 'substrate'),
+      presentation: { ...activityPillPresentation({ kind: 'substrate', gist: 'Filed a review note.', content: 'Filed a review note.' }),
+        attestId: 'note-reference' } };
+    function Row() {
+      const result = useActivitySummary(note);
+      return <div data-testid="attest" title={result.original} data-state={result.state}>{result.presentation?.text}</div>;
+    }
+    render(<ActivitySummaryProvider transport={transport} connected reconcile={() => {}}><Row /></ActivitySummaryProvider>);
+    await act(flush);
+    expect(screen.getByTestId('attest').textContent).toBe('The full attest note remains readable.');
+    expect(screen.getByTestId('attest').title).toBe('The full attest note remains readable.');
+    await act(async () => { calls[0].receive({ index: 0, state: 'summary', summary: 'Three findings were filed.' }); });
+    expect(screen.getByTestId('attest').textContent).toBe('Three findings were filed.');
+    expect(screen.getByTestId('attest').title).toBe('The full attest note remains readable.');
+    expect(transport.readAttestNote).toHaveBeenCalledTimes(1);
   });
 });
 
