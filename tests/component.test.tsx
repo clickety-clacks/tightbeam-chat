@@ -2211,3 +2211,30 @@ describe('tool-call and transition display', () => {
     expect(screen.getByText('Read the source file · done')).toBeTruthy();
   });
 });
+
+it('reopens waiting summary delivery on live-feed recovery while conversation status remains ready', async () => {
+  const sessionKey = 'summary-recovery';
+  const human = row(sessionKey, 'question', 'Question', { seq: 1, role: 'user', sender: 'user:person', turnSeq: 1 });
+  const activity = row(sessionKey, 'agent-note', 'Original activity', { seq: 2, role: 'user', sender: 'agent:helper', turnSeq: 1 });
+  const reply = row(sessionKey, 'reply', 'Reply', { seq: 3, sender: 'assistant-service', replyToMessageId: human.id, turnSeq: 1 });
+  const runtime = new FakeRuntime(sessionKey, { records: [human, activity, reply], liveConnectionState: 'connected' });
+  const calls: { receive: (answer: SummaryAnswer) => void; close: () => void }[] = [];
+  const activitySummaries: ActivitySummaryTransport = { stream: (_sources, receive, signal) => new Promise<void>(resolve => {
+    calls.push({ receive, close: resolve });
+    signal.addEventListener('abort', () => resolve(), { once: true });
+  }) };
+  render(<TightbeamChat sessionKey={sessionKey} adapter={{ ...adapterFor(runtime), activitySummaries }} />);
+  await act(async () => { await Promise.resolve(); });
+  await act(async () => { calls[0].receive({ index: 0, state: 'waiting' }); calls[0].close(); });
+  expect(calls).toHaveLength(2);
+  await act(async () => { calls[1].close(); });
+  act(() => runtime.update({}));
+  expect(calls).toHaveLength(2);
+  act(() => runtime.update({ liveConnectionState: 'reconnecting' }));
+  await act(async () => { runtime.update({ liveConnectionState: 'connected' }); });
+  expect(runtime.state.status).toBe('ready');
+  expect(calls).toHaveLength(3);
+  await act(async () => { calls[2].receive({ index: 0, state: 'summary', summary: 'Completed activity.' }); calls[2].close(); });
+  expect(screen.getByText('Completed activity.')).toBeTruthy();
+  expect(screen.queryByText('summarizing')).toBeNull();
+});
