@@ -14,6 +14,7 @@ export interface ActivitySummaryDisplay {
   readonly text?: string;
   readonly state?: SummaryAnswer['state'];
   readonly original?: string;
+  readonly originalLoading?: boolean;
 }
 const emptyDisplay: ActivitySummaryDisplay = Object.freeze({});
 const MAX_RETAINED_ATTEST_NOTES = 64;
@@ -178,7 +179,7 @@ export class ActivitySummaryViewer {
     this.originalNotes.delete(entry.key);
     this.originalNotes.set(entry.key, text);
     entry.originalEvicted = false;
-    this.update(entry, { original: text });
+    this.update(entry, { original: text, originalLoading: false });
     while (this.originalNotes.size > MAX_RETAINED_ATTEST_NOTES) {
       const oldestKey = this.originalNotes.keys().next().value as string | undefined;
       if (!oldestKey) break;
@@ -203,6 +204,7 @@ export class ActivitySummaryViewer {
     const controller = new AbortController();
     entry.originalReadController = controller;
     entry.originalAttempted = true;
+    this.update(entry, { originalLoading: true });
     let request: Promise<string | undefined>;
     request = Promise.resolve()
       .then(() => this.transport.readAttestNote!(entry.attestId!, controller.signal))
@@ -217,6 +219,7 @@ export class ActivitySummaryViewer {
         if (entry.originalRead !== request) return;
         entry.originalRead = undefined;
         entry.originalReadController = undefined;
+        if (entry.display.originalLoading) this.update(entry, { originalLoading: false });
       });
     entry.originalRead = request;
     return request;

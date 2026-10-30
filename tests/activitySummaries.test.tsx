@@ -255,9 +255,10 @@ describe('row-local rendering', () => {
     expect(transport.readAttestNote).toHaveBeenCalledTimes(2);
     const reconcileCallsAfterRemount = reconcile.mock.calls.length;
     expect(screen.getByTestId('attest').textContent).toBe('Three findings were filed.');
-    expect(screen.getByTestId('attest').title).toBe('Filed a review note.');
+    expect(screen.getByTestId('attest').title).toBe('Three findings were filed.');
     rendered.rerender(view({ ...note }));
     fireEvent.mouseEnter(screen.getByTestId('attest'));
+    expect(screen.getByTestId('attest').title).toBe('Three findings were filed.');
     fireEvent.mouseEnter(screen.getByTestId('attest'));
     expect(transport.readAttestNote).toHaveBeenCalledTimes(2);
     expect(reconcile.mock.calls.length).toBe(reconcileCallsAfterRemount);

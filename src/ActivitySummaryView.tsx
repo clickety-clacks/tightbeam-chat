@@ -42,7 +42,8 @@ export function useActivitySummary(entry: ActivityLine) {
   const display = useSyncExternalStore(viewer ? subscribe : noSubscribe, viewer ? snapshot : noSnapshot, noSnapshot);
   const fallback = entry.originalContent?.trim() ? entry.originalContent :
     entry.accessibleText.trim() ? entry.accessibleText : 'Original activity text is temporarily unavailable.';
-  const note = display?.original?.trim() ? display.original : fallback;
+  const note = display?.original?.trim() ? display.original :
+    display?.originalLoading && display.state === 'summary' && display.text?.trim() ? display.text : fallback;
   const restoreOriginal = useCallback(() => viewer?.restoreOriginal(entryRef.current), [viewer, key]);
   const text = display?.state === 'summary' ? display.text : note;
   useLayoutEffect(() => { viewer?.observe(entry); }, [viewer, entry]);
