@@ -27,6 +27,7 @@ export function useReadingPosition(
   shouldKeepInitialSettle: (box: HTMLElement) => boolean = () => false,
   arrivalEligible = false,
   arrivalScope?: string,
+  onManualScroll?: () => void,
 ) {
   const viewport = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
@@ -49,6 +50,9 @@ export function useReadingPosition(
   const arrivalEligibleRef = useRef(arrivalEligible);
   const userScrollIntent = useRef(false);
   const userScrollTimeout = useRef<number | undefined>(undefined);
+  const manualScrollReported = useRef(false);
+  const onManualScrollRef = useRef(onManualScroll);
+  onManualScrollRef.current = onManualScroll;
   const lastKnownScrollTop = useRef<number | undefined>(undefined);
   const lastKnownBottom = useRef<number | undefined>(undefined);
   const pendingLayoutRestoreOffsets = useRef<number[]>([]);
@@ -156,6 +160,7 @@ export function useReadingPosition(
   };
   const clearUserScrollIntent = () => {
     userScrollIntent.current = false;
+    manualScrollReported.current = false;
     window.clearTimeout(userScrollTimeout.current);
     userScrollTimeout.current = undefined;
   };
@@ -165,6 +170,7 @@ export function useReadingPosition(
   };
   const noteUserScroll = () => {
     if (arrivalStartTime.current !== undefined || arrivalAnimations.current.size > 0) cancelArrivalAnimations();
+    if (!userScrollIntent.current) manualScrollReported.current = false;
     userScrollIntent.current = true;
     initialSettlePending.current = false;
     pendingLayoutRestoreOffsets.current = [];
@@ -376,6 +382,11 @@ export function useReadingPosition(
     const box = viewport.current;
     if (!box) return;
     const readerInitiated = userScrollIntent.current;
+    if (readerInitiated && !manualScrollReported.current && lastKnownScrollTop.current !== undefined &&
+        Math.abs(box.scrollTop - lastKnownScrollTop.current) >= 1) {
+      manualScrollReported.current = true;
+      onManualScrollRef.current?.();
+    }
     if (readerInitiated && arrivalStartTime.current !== undefined) cancelArrivalAnimations();
     if (readerInitiated) deferUserScrollIntentExpiry();
     const resized = viewportResized(box);

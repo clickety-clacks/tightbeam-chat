@@ -31,8 +31,9 @@ import {
 } from './types';
 import { ToolHistoryUnavailableError } from './toolHistory';
 import { createTurnProvenance } from './provenance';
-import { getIndex, putIndex, trimIndexBelow } from './recordIndex';
+import { getIndex, putIndex, removeIndex, trimIndexBelow, type RecordIndex } from './recordIndex';
 import { sameRailDenial } from './railDenials';
+import { advanceReadMarkerForwardOnly } from './readMarker';
 
 const LIVE_RECONNECTING_AFTER_MS = 1_000;
 const LIVE_DISCONNECTED_AFTER_MS = 10_000;
@@ -121,6 +122,7 @@ class SessionRuntime implements ChatRuntime {
   private readonly listeners = new Set<() => void>();
   private readonly identity: HostIdentity;
   private readonly rows = new Map<string, ConversationRecord>();
+  private messageSeqIndex: RecordIndex<number> | undefined;
   private readonly tombstones = new Map<string, number>();
   private readonly liveRailDenials = new Map<string, LiveRailDenial>();
   private historyRailDenials: readonly HistoryRailDenial[] = Object.freeze([]);
@@ -194,6 +196,29 @@ class SessionRuntime implements ChatRuntime {
     });
     void this.rebuild();
   }
+
+  markReadPosition = async (): Promise<void> => {
+    const readReadMarker = this.transport.readReadMarker;
+    const writeReadMarker = this.transport.writeReadMarker;
+    if (!readReadMarker || !writeReadMarker || this.disposed || this.state.identityChanged ||
+        this.state.session?.sessionKey !== this.sessionKey || this.identity.principalKey !== 'mike' ||
+        !this.checkIdentity()) return;
+
+    const newestMessageSeq = this.messageSeqIndex?.max;
+    if (newestMessageSeq === undefined) return;
+
+    const candidate = {
+      userId: 'mike',
+      scopeKey: `${this.sessionKey}:session-read-position`,
+      sequence: newestMessageSeq.toString(10),
+    };
+    try {
+      await advanceReadMarkerForwardOnly({ readReadMarker, writeReadMarker }, candidate,
+        new AbortController().signal);
+    } catch {
+      // Marker persistence is optional to conversation availability.
+    }
+  };
 
   getSnapshot = (): RuntimeState => this.state;
 
@@ -444,6 +469,7 @@ class SessionRuntime implements ChatRuntime {
     for (const controller of this.sendControllers.values()) controller.abort();
     this.sendControllers.clear();
     this.rows.clear();
+    this.messageSeqIndex = undefined;
     this.tombstones.clear();
     this.liveRailDenials.clear();
     this.historyRailDenials = Object.freeze([]);
@@ -470,10 +496,28 @@ class SessionRuntime implements ChatRuntime {
     return false;
   }
 
+  private updateMessageSeqIndex(previous: ConversationRecord | undefined,
+    next: ConversationRecord | undefined): void {
+    const sameSequence = previous?.kind === 'message' && next?.kind === 'message' && previous.seq === next.seq;
+    if (sameSequence) return;
+    if (previous?.kind === 'message') {
+      const count = getIndex(this.messageSeqIndex, previous.seq) ?? 0;
+      this.messageSeqIndex = count <= 1
+        ? removeIndex(this.messageSeqIndex, previous.seq)
+        : putIndex(this.messageSeqIndex, previous.seq, count - 1);
+    }
+    if (next?.kind === 'message') {
+      const count = getIndex(this.messageSeqIndex, next.seq) ?? 0;
+      this.messageSeqIndex = putIndex(this.messageSeqIndex, next.seq, count + 1);
+    }
+  }
+
   private put(pageRecord: ConversationRecord): void {
     if (pageRecord.sessionKey !== this.sessionKey || pageRecord.seq <= this.clearBarrier) return;
     if ((this.tombstones.get(pageRecord.id) ?? -1) >= pageRecord.rowVersion) return;
-    const record = mergeRecord(this.rows.get(pageRecord.id), pageRecord);
+    const previous = this.rows.get(pageRecord.id);
+    const record = mergeRecord(previous, pageRecord);
+    this.updateMessageSeqIndex(previous, record);
     this.rows.set(record.id, record);
     if (record.kind === 'message' && record.clientMessageId && record.deviceId === this.identity.deviceId) {
       if (this.initializing) {
@@ -518,7 +562,10 @@ class SessionRuntime implements ChatRuntime {
         const prior = this.tombstones.get(notice.id) ?? -1;
         if (notice.rowVersion > prior) this.tombstones.set(notice.id, notice.rowVersion);
         const row = this.rows.get(notice.id);
-        if (row && notice.rowVersion >= row.rowVersion) this.rows.delete(notice.id);
+        if (row && notice.rowVersion >= row.rowVersion) {
+          this.updateMessageSeqIndex(row, undefined);
+          this.rows.delete(notice.id);
+        }
         return true;
       }
       case 'session':
@@ -559,6 +606,7 @@ class SessionRuntime implements ChatRuntime {
     let changed = false;
     for (const [id, record] of this.rows) {
       if (record.seq <= barrier) {
+        this.updateMessageSeqIndex(record, undefined);
         this.rows.delete(id);
         changed = true;
       }
@@ -861,6 +909,7 @@ class SessionRuntime implements ChatRuntime {
     for (const controller of this.sendControllers.values()) controller.abort();
     this.sendControllers.clear();
     this.rows.clear();
+    this.messageSeqIndex = undefined;
     this.tombstones.clear();
     this.liveRailDenials.clear();
     this.historyRailDenials = Object.freeze([]);
@@ -1131,6 +1180,7 @@ class SessionRuntime implements ChatRuntime {
         const preservingReconnectRows = this.preserveRowsOnReconnect;
         if (!restoreFailed && !preservingReconnectRows) {
           this.rows.clear();
+          this.messageSeqIndex = undefined;
           this.tombstones.clear();
         }
         // A successful but shorter tail can happen while the feed is being
@@ -1396,6 +1446,7 @@ class SessionRuntime implements ChatRuntime {
     const send: LocalSend = Object.freeze({ ...submission, submittedAt: new Date().toISOString(),
       status: 'pending', reconciled: false, ...(hostSend ? { hostSend: Object.freeze({ ...hostSend }) } : {}) });
     this.publish({ sends: Object.freeze([...this.state.sends, send]) });
+    void this.markReadPosition();
     void this.post(submission);
     return submission.clientMessageId;
   };
@@ -1502,6 +1553,7 @@ class SessionRuntime implements ChatRuntime {
     const send = this.state.sends.find((item) => item.clientMessageId === clientMessageId);
     if (!send || !['failed', 'uncertain'].includes(send.status) || send.reconciled ||
         !this.profile.capabilities.humanSendDedupe) return;
+    void this.markReadPosition();
     // Rebuild/query first. Absence from a bounded tail does not mean rejection.
     await this.rebuild();
     if (this.disposed || !this.checkIdentity() || (this.state.status as RuntimeState['status']) === 'unauthorized') return;
@@ -1558,6 +1610,7 @@ class SessionRuntime implements ChatRuntime {
     }
     const previous = this.state.sends.find((send) => send.clientMessageId === clientMessageId);
     if (previous && previous.content !== content) return;
+    void this.markReadPosition();
     const submission: HumanSubmission = Object.freeze({ sessionKey: this.sessionKey,
       deviceId: this.identity.deviceId, clientMessageId, content });
     const local: LocalSend = Object.freeze({ ...submission,
