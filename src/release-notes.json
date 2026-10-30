@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.60",
+    "items": [
+      {
+        "title": "Syntax colors in code blocks",
+        "description": "Fenced code blocks with a recognized language tag use syntax colors in light and dark themes. Untagged or unknown-language blocks stay plain, with text selection, copying and horizontal scrolling preserved."
+      }
+    ]
+  },
+  {
     "version": "v0.1.59",
     "items": [
       {
