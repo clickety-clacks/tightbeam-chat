@@ -610,7 +610,7 @@ function cameraFailureMessage(error: unknown): string {
 }
 
 interface ComposerHandle {
-  restore(content: string): void;
+  restore(content: string, items?: readonly ComposerAttachmentInput[]): void;
   contains(target: EventTarget | null): boolean;
   focusAtEnd(): boolean;
   closeStatusPopup(): void;
@@ -671,6 +671,21 @@ const Composer = forwardRef<ComposerHandle, {
     try { URL.revokeObjectURL(url); } catch { /* Preview cleanup cannot discard the source bytes. */ }
   };
 
+  const createDraftAttachment = (input: ComposerAttachmentInput): DraftAttachment => {
+    let previewUrl: string | undefined;
+    let previewError: string | undefined;
+    if (isImageAttachment(input)) {
+      try {
+        if (typeof URL.createObjectURL !== 'function') throw new Error('This browser cannot create a local image preview.');
+        previewUrl = URL.createObjectURL(input.bytes);
+        previewUrls.current.set(input.id, previewUrl);
+      } catch (error) {
+        previewError = `Preview unavailable: ${errorReason(error)}. The original image remains attached.`;
+      }
+    }
+    return Object.freeze({ input, previewUrl, previewError });
+  };
+
   const closeCamera = () => {
     cameraRequest.current++;
     stopCameraStream();
@@ -682,18 +697,20 @@ const Composer = forwardRef<ComposerHandle, {
 
   const addAttachment = (bytes: Blob, filename: string) => {
     const input: ComposerAttachmentInput = Object.freeze({ id: newAttachmentId(), filename: filename || 'Unnamed file', bytes });
-    let previewUrl: string | undefined;
-    let previewError: string | undefined;
-    if (isImageAttachment(input)) {
-      try {
-        if (typeof URL.createObjectURL !== 'function') throw new Error('This browser cannot create a local image preview.');
-        previewUrl = URL.createObjectURL(bytes);
-        previewUrls.current.set(input.id, previewUrl);
-      } catch (error) {
-        previewError = `Preview unavailable: ${errorReason(error)}. The original image remains attached.`;
-      }
-    }
-    setAttachments(current => [...current, Object.freeze({ input, previewUrl, previewError })]);
+    const attachment = createDraftAttachment(input);
+    setAttachments(current => [...current, attachment]);
+    setAcquisitionError(null);
+  };
+
+  const restoreDraft = (content: string, items: readonly ComposerAttachmentInput[] = []) => {
+    const restoredAttachments = items.map(item => {
+      // Restored items belong to a new editable draft, so give them fresh UI IDs
+      // while retaining the exact source Blob and filename from the failed send.
+      const input = Object.freeze({ id: newAttachmentId(), filename: item.filename, bytes: item.bytes });
+      return createDraftAttachment(input);
+    });
+    setDraft(content);
+    if (restoredAttachments.length) setAttachments(current => [...current, ...restoredAttachments]);
     setAcquisitionError(null);
   };
 
@@ -838,7 +855,7 @@ const Composer = forwardRef<ComposerHandle, {
   }, [cameraState]);
 
   useImperativeHandle(ref, () => ({
-    restore: setDraft,
+    restore: restoreDraft,
     contains: (target) => target instanceof Node && Boolean(shell.current?.contains(target)),
     focusAtEnd: () => {
       const element = input.current;
@@ -849,7 +866,7 @@ const Composer = forwardRef<ComposerHandle, {
       return document.activeElement === element;
     },
     closeStatusPopup: () => setStatusOpen(false),
-  }), []);
+  }), [restoreDraft]);
 
   const closeStatusPopup = () => {
     setStatusOpen(false);
@@ -1773,6 +1790,8 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
         const unreachable = send.reason === 'unreachable';
         const retryUnavailable = send.reason === 'retry-unavailable';
         const reconnectingSend = send.status === 'pending' && unreachable;
+        const attachmentItems = (send as AttachmentSendView).attachmentItems ?? [];
+        const restoreLabel = attachmentItems.length > 0 ? 'Restore draft to the composer' : 'Restore text to the composer';
         const retryAvailable = !hostManaged && !retryUnavailable &&
           ['failed', 'uncertain'].includes(send.status) && !send.reconciled;
         return <article ref={element => reading.registerRow(`local-${send.clientMessageId}`, element)} className="tb-chat-bubble tb-chat-bubble-human tb-chat-local" key={send.clientMessageId}
@@ -1798,7 +1817,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
             <button type="button" disabled={state.status === 'unauthorized'}
               onClick={() => void runtime.retrySend(send.clientMessageId)}>Retry message</button>
             {state.status === 'unauthorized' && <span>Access to this conversation is unavailable.</span>}
-            <button type="button" onClick={() => composer.current?.restore(send.content)}>Restore text to the composer</button>
+            <button type="button" onClick={() => composer.current?.restore(send.content, attachmentItems)}>{restoreLabel}</button>
           </div>}
           <time className="tb-chat-time" dateTime={time.dateTime}>{time.text}</time>
         </article>;

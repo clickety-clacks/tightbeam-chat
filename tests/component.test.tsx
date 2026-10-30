@@ -1771,6 +1771,35 @@ describe('conversation surface', () => {
     expect(runtime.retried).toEqual([clientMessageId]);
   });
 
+  it('restores a failed attachment send with its original Blob and filename', () => {
+    mockObjectUrls(() => 'blob:restored-failed-photo');
+    const sessionKey = 'restore-failed-attachment';
+    const source = new File(['original failed image bytes'], 'failed-photo.png', { type: 'image/png' });
+    const failedSend = {
+      sessionKey, deviceId: 'device', clientMessageId: 'failed-send-with-photo',
+      content: 'recover this photo', submittedAt: '2026-10-30T09:00:00.000Z',
+      status: 'failed', reconciled: false, reason: 'upload-failed', attachmentPhase: 'failed',
+      attachmentItems: [{ id: 'failed-photo-item', filename: 'failed-photo.png', bytes: source,
+        status: 'failed', error: 'HTTP 413: attachment exceeds the transport limit' }],
+    } as unknown as LocalSend;
+    const runtime = new FakeRuntime(sessionKey, { sends: [failedSend] });
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Restore draft to the composer' }));
+    const composer = screen.getByRole('textbox', { name: 'Message to Research assistant' }) as HTMLTextAreaElement;
+    expect(composer.value).toBe('recover this photo');
+    expect(screen.getByRole('img', { name: 'Preview of failed-photo.png' }).getAttribute('src'))
+      .toBe('blob:restored-failed-photo');
+    expect(screen.getByRole('button', { name: 'Remove failed-photo.png' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    expect(runtime.attachmentSubmissions).toHaveLength(1);
+    expect(runtime.attachmentSubmissions[0].content).toBe('recover this photo');
+    expect(runtime.attachmentSubmissions[0].inputs).toHaveLength(1);
+    expect(runtime.attachmentSubmissions[0].inputs[0].filename).toBe('failed-photo.png');
+    expect(runtime.attachmentSubmissions[0].inputs[0].bytes).toBe(source);
+  });
+
   it('pastes image bytes with clipboard text, leaves ordinary text paste native, and reports unreadable clipboard images', () => {
     mockObjectUrls(() => 'blob:pasted-image');
     const runtime = new FakeRuntime('paste-attachments');
