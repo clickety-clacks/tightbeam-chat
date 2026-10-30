@@ -170,6 +170,8 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
 .tb-chat-attachments { margin-top: .55rem; color: var(--tb-chat-muted); font-size: .9rem; }
 .tb-chat-attachments summary { cursor: pointer; }
 .tb-chat-attachments pre { max-width: 100%; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.tb-chat-fold-content { display: flow-root; min-width: 0; }
+.tb-chat-attachment-content { font-size: .9rem; }
 .tb-chat-image-alt { color: var(--tb-chat-muted); font-style: italic; }
 .tb-chat-time { display: block; margin-top: .32rem; color: var(--tb-chat-muted); font-size: .7rem; line-height: 1.2; text-align: end; }
 .tb-chat-send-state, .tb-chat-send-reason { margin: .35rem 0 0; font-size: .85rem; color: var(--tb-chat-muted); }
@@ -691,7 +693,12 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
 .tb-chat-activity-tool > summary > .tb-chat-tool-terminal-icon { margin-inline-end: .45rem; }
 .tb-chat-activity-bullet { flex: 0 0 auto; margin-inline-end: .45rem; }
 .tb-chat-activity-gist { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tb-chat-activity-tool > div { white-space: normal; }
+.tb-chat-activity-tool > .tb-chat-tool-detail-rail {
+  margin: .3rem 0 .2rem .5rem;
+  padding-inline-start: .65rem;
+  border-inline-start: 2px solid color-mix(in srgb, currentColor 78%, transparent);
+  white-space: normal;
+}
 .tb-chat-activity-tool section pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 20rem; overflow: auto; margin: .5rem 0; }
 .tb-chat-tool-heading { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .5rem; }
 .tb-chat-tool p { margin: .4rem 0; overflow-wrap: anywhere; }
