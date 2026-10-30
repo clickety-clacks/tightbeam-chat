@@ -16,3 +16,5 @@ export {
 } from './public019';
 export type { Public019Channel, Public019Config, Public019Host } from './public019';
 export * from './types';
+
+export { prepareAttachmentInputs } from './attachmentPreparation';

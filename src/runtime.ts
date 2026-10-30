@@ -1,6 +1,7 @@
 import {
   AuthorizationError,
   AttachmentUploadError,
+  AttachmentPreparationError,
   type AttachmentSubmissionContext,
   InvalidCursorError,
   UnsupportedTargetError,
@@ -33,6 +34,7 @@ import {
   type TurnProvenance,
   SessionNotFoundError,
 } from './types';
+import { prepareAttachmentInputs } from './attachmentPreparation';
 import { ToolHistoryUnavailableError } from './toolHistory';
 import { createTurnProvenance } from './provenance';
 import { getIndex, putIndex, trimIndexBelow } from './recordIndex';
@@ -93,6 +95,7 @@ function mergeRecord(previous: ConversationRecord | undefined, incoming: Convers
 
 function matchingAttachments(send: LocalSend, row: CanonicalMessage): boolean {
   if (!send.attachmentItems) return true;
+  if (!send.attachmentsPrepared) return false;
   const refs = row.attachments;
   if (!Array.isArray(refs) || refs.length !== send.attachmentItems.length) return false;
   return refs.every((value, index) => {
@@ -1432,27 +1435,43 @@ class SessionRuntime implements ChatRuntime {
     return clientMessageId;
   };
 
+  prepareAttachmentInputs = (inputs: readonly AttachmentInput[], signal: AbortSignal) =>
+    prepareAttachmentInputs(inputs, signal, this.transport.attachmentCapabilities?.(this.sessionKey));
+
   private captureAttachments(inputs: readonly AttachmentInput[]): readonly AttachmentItem[] | undefined {
-    const limits = this.getAttachmentCapabilities();
-    if (limits?.maxAttachments !== undefined && inputs.length > limits.maxAttachments) return undefined;
-    if (limits?.maxTotalBytes !== undefined && inputs.reduce((size, input) => size + input.bytes.size, 0) > limits.maxTotalBytes) return undefined;
-    if (inputs.some(input => !input.filename.trim() || input.bytes.size === 0 ||
-        (limits?.maxAttachmentBytes !== undefined && input.bytes.size > limits.maxAttachmentBytes) ||
-        (limits?.mediaTypes && !limits.mediaTypes.includes(input.bytes.type || 'application/octet-stream')))) return undefined;
+    if (inputs.some(input => input.bytes.size === 0)) return undefined;
     return Object.freeze(inputs.map(input => Object.freeze({
       id: input.id, filename: input.filename,
-      bytes: input.bytes.slice(0, input.bytes.size, input.bytes.type || 'application/octet-stream'),
+      // Blobs are immutable. Keep the prepared object so previews and uploads use identical bytes.
+      bytes: input.bytes.type ? input.bytes : input.bytes.slice(0, input.bytes.size, 'application/octet-stream'),
       status: 'pending' as const,
     })));
   }
 
-  private failAttachment(id: string, detail: string, reason: string, index?: number): void {
+  private validateAttachments(inputs: readonly AttachmentInput[]): void {
+    const limits = this.transport.attachmentCapabilities?.(this.sessionKey);
+    if (limits?.maxAttachments !== undefined && inputs.length > limits.maxAttachments)
+      throw new AttachmentUploadError('too-many-attachments', 'Too many attachments for this connection.');
+    if (limits?.maxTotalBytes !== undefined && inputs.reduce((size, input) => size + input.bytes.size, 0) > limits.maxTotalBytes)
+      throw new AttachmentUploadError('attachments-too-large', 'Attachments exceed this connection’s upload size limit.');
+    for (const [index, input] of inputs.entries()) {
+      if (!input.filename.trim()) throw new AttachmentUploadError('filename-required', 'A filename is required.', index);
+      if (limits?.maxAttachmentBytes !== undefined && input.bytes.size > limits.maxAttachmentBytes)
+        throw new AttachmentUploadError('attachment-too-large', `${input.filename} exceeds this connection’s upload size limit.`, index);
+      if (limits?.mediaTypes && !limits.mediaTypes.includes(input.bytes.type || 'application/octet-stream'))
+        throw new AttachmentUploadError('unsupported-media-type', `${input.filename} has an unsupported upload type.`, index);
+    }
+  }
+
+  private failAttachment(id: string, detail: string, reason: string, index?: number,
+    failure: 'upload-failed' | 'image-unreadable' = 'upload-failed'): void {
+    const attachmentIndex = index === undefined ? {} : { attachmentIndex: index };
     this.updateSend(id, send => ({ ...send, status: 'failed', reason, attachmentPhase: 'failed',
-      attachmentFailure: Object.freeze({ reason: 'upload-failed', detail }),
+      attachmentFailure: Object.freeze({ reason: failure, detail, ...attachmentIndex }),
       attachmentItems: Object.freeze(send.attachmentItems!.map((item, position) => position === index
         ? Object.freeze({ ...item, status: 'failed' as const, error: reason, errorCode: detail }) : item)),
     }));
-    this.notifyHostSend(id, { kind: 'failed', reason: 'upload-failed', detail });
+    this.notifyHostSend(id, { kind: 'failed', reason: failure, detail, ...attachmentIndex });
   }
 
   endAttachmentLifetime = (lifetimeId: string,
@@ -1481,7 +1500,7 @@ class SessionRuntime implements ChatRuntime {
     if (this.disposed || !this.checkIdentity() || this.sendControllers.has(id)) return;
     const prior = this.state.sends.find(send => send.clientMessageId === id);
     if (!prior?.attachmentItems || prior.reconciled || !['failed', 'uncertain'].includes(prior.status)) return;
-    // This entry retries retained original inputs, never caller-replaced text or files.
+    // This entry retries retained upload bytes, never caller-replaced text or files.
     if (context?.hostSend) this.updateSend(id, send => ({ ...send, hostSend: Object.freeze({ ...context.hostSend! }) }));
     await this.retrySend(id);
   };
@@ -1503,11 +1522,21 @@ class SessionRuntime implements ChatRuntime {
     const controller = new AbortController();
     this.sendControllers.set(id, controller);
     try {
+      const prepared = await this.prepareAttachmentInputs(attachmentItems, controller.signal);
+      if (controller.signal.aborted || this.disposed || !this.checkIdentity()) return;
+      this.updateSend(id, send => ({ ...send, attachmentsPrepared: true,
+        attachmentItems: Object.freeze(prepared.map(item => Object.freeze({ ...item, status: 'pending' as const }))),
+      }));
       const canonical = await this.refreshHostSend(id);
       if (controller.signal.aborted || this.disposed || !this.checkIdentity()) return;
       if (canonical === 'found') return;
       // No served attachment dedupe guarantee has been demonstrated for fresh references.
       this.updateSend(id, send => send.reconciled ? send : { ...send, status: 'uncertain', reason: 'retry-unavailable' });
+      this.notifyHostSend(id, { kind: 'uncertain', reason: 'retry-unavailable' });
+    } catch {
+      if (controller.signal.aborted || this.disposed) return;
+      // A new lifetime cannot prove absence or resend by regenerating image metadata.
+      this.updateSend(id, send => ({ ...send, status: 'uncertain', reason: 'retry-unavailable' }));
       this.notifyHostSend(id, { kind: 'uncertain', reason: 'retry-unavailable' });
     } finally {
       if (this.sendControllers.get(id) === controller) this.sendControllers.delete(id);
@@ -1534,6 +1563,15 @@ class SessionRuntime implements ChatRuntime {
       const original = current();
       if (!original?.attachmentItems || original.attachmentPhase === 'posted') return;
       this.updateSend(id, send => ({ ...send, status: 'pending', reason: undefined, attachmentPhase: 'preparing', attachmentFailure: undefined }));
+      if (!original.attachmentsPrepared) {
+        // Complete conversion of the entire selection before uploading even the first file.
+        const prepared = await this.prepareAttachmentInputs(original.attachmentItems, controller.signal);
+        if (controller.signal.aborted || !this.checkIdentity()) return;
+        this.updateSend(id, send => ({ ...send, attachmentsPrepared: true,
+          attachmentItems: Object.freeze(prepared.map(item => Object.freeze({ ...item, status: 'pending' as const }))),
+        }));
+      }
+      this.validateAttachments(current()!.attachmentItems!);
       for (let index = 0; index < original.attachmentItems.length; index++) {
         if (controller.signal.aborted || !this.checkIdentity()) return;
         const item = current()!.attachmentItems![index];
@@ -1560,8 +1598,10 @@ class SessionRuntime implements ChatRuntime {
     } catch (error) {
       if (controller.signal.aborted || !this.checkIdentity()) return;
       const reason = errorText(error);
-      this.failAttachment(id, error instanceof AttachmentUploadError ? error.code : 'interrupted', reason,
-        preparing >= 0 ? preparing : undefined);
+      this.failAttachment(id, error instanceof AttachmentPreparationError || error instanceof AttachmentUploadError ? error.code : 'interrupted', reason,
+        error instanceof AttachmentPreparationError ? error.attachmentIndex : error instanceof AttachmentUploadError && error.attachmentIndex !== undefined
+          ? error.attachmentIndex : preparing >= 0 ? preparing : undefined,
+        error instanceof AttachmentPreparationError ? 'image-unreadable' : 'upload-failed');
     } finally {
       if (this.sendControllers.get(id) === controller) this.sendControllers.delete(id);
     }

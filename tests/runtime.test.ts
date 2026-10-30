@@ -1720,6 +1720,7 @@ describe('attachment submission recovery', () => {
       const runtime = await ready(transport);
       runtime.sendAttachments!('held', [input('file')]);
       await runtime.rebuild();
+      await vi.waitFor(() => expect(transport.uploadSignals).toHaveLength(1));
       expect(runtime.getSnapshot().sends[0].attachmentItems?.[0].bytes.size).toBe(3);
       if (end === 'dispose') runtime.dispose();
       else transport.identity = { principalKey: 'person', deviceId: 'other-device' };
@@ -1768,7 +1769,7 @@ describe('attachment submission recovery', () => {
     const events: unknown[] = [];
     runtime.observeHostSend(correlation, event => events.push(event));
     runtime.sendAttachments!('', [input('first'), input('second')], context);
-    await vi.waitFor(() => expect(events).toEqual([{ kind: 'failed', reason: 'upload-failed', detail: 'payload_too_large' }]));
+    await vi.waitFor(() => expect(events).toEqual([{ kind: 'failed', reason: 'upload-failed', detail: 'payload_too_large', attachmentIndex: 1 }]));
     expect(runtime.getSnapshot().sends[0]).toMatchObject({ postSubmitted: false,
       attachmentFailure: { reason: 'upload-failed', detail: 'payload_too_large' },
       attachmentItems: [{ filename: 'first.bin' }, { filename: 'second.bin', errorCode: 'payload_too_large' }] });
@@ -1792,7 +1793,7 @@ describe('attachment submission recovery', () => {
       const events: unknown[] = [];
       runtime.observeHostSend(correlation, event => events.push(event));
       runtime.sendAttachments!('', [input('file')], context);
-      await vi.waitFor(() => expect(events).toEqual([{ kind: 'failed', reason: 'upload-failed', detail: 'reference-mismatch' }]));
+      await vi.waitFor(() => expect(events).toEqual([{ kind: 'failed', reason: 'upload-failed', detail: 'reference-mismatch', attachmentIndex: 0 }]));
       expect(transport.submissions).toEqual([]);
       expect(runtime.getSnapshot().sends[0].attachmentItems?.[0]).toMatchObject({
         filename: 'file.bin', errorCode: 'reference-mismatch', status: 'failed' });
@@ -1874,6 +1875,7 @@ describe('attachment submission recovery', () => {
       const events: unknown[] = [];
       runtime.observeHostSend(correlation, event => events.push(event));
       runtime.sendAttachments!('', [input('file')], context);
+      await vi.waitFor(() => expect(transport.uploadSignals).toHaveLength(1));
       runtime.endAttachmentLifetime!(context.hostSend.lifetimeId, reason);
       expect(transport.uploadSignals[0].aborted).toBe(true);
       expect(events).toEqual(reason === 'target-changed' || reason === 'identity-changed'
@@ -1926,13 +1928,15 @@ describe('attachment submission recovery', () => {
     Object.assign(transport, { attachmentCapabilities: () => limits });
     const runtime = await ready(transport);
     expect(runtime.getAttachmentCapabilities!()).toBe(limits);
-    expect(runtime.sendAttachments!('', [input('file')])).toBeNull();
+    expect(runtime.sendAttachments!('', [input('file')])).not.toBeNull();
+    await vi.waitFor(() => expect(runtime.getSnapshot().sends[0]).toMatchObject({ status: 'failed',
+      attachmentFailure: { reason: 'upload-failed', detail: 'attachment-too-large', attachmentIndex: 0 } }));
     expect(transport.uploads).toEqual([]);
     Object.assign(transport, { attachmentCapabilities: () => ({}) });
     const items = Array.from({ length: 12 }, (_, i) => input(String(i)));
     const id = runtime.sendAttachments!('', items);
     expect(id).not.toBeNull();
-    await vi.waitFor(() => expect(runtime.getSnapshot().sends[0].status).toBe('accepted'));
+    await vi.waitFor(() => expect(runtime.getSnapshot().sends.find(send => send.clientMessageId === id)?.status).toBe('accepted'));
     expect(transport.submissions[0].attachments).toHaveLength(12);
     runtime.dispose();
   });
@@ -1954,6 +1958,87 @@ describe('attachment submission recovery', () => {
       expect(transport.submissions).toEqual([]);
       runtime.dispose();
     }
+  });
+
+  it('uploads prepared preview bytes, retains them on failed preparation retry, and never uploads after posting', async () => {
+    const close = vi.fn();
+    const decode = vi.fn().mockResolvedValue({ width: 600, height: 900, close });
+    vi.stubGlobal('createImageBitmap', decode);
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ drawImage: vi.fn() } as unknown as CanvasRenderingContext2D);
+    const converted = new Blob([new Uint8Array([255, 216, 255, 224, 0])], { type: 'image/jpeg' });
+    const encode = vi.spyOn(HTMLCanvasElement.prototype, 'toBlob').mockImplementation(callback => callback(converted));
+    const transport = new AttachmentsTransport();
+    const uploaded: Blob[] = [];
+    let fail = true;
+    transport.uploadAttachment = async item => {
+      uploaded.push(item.bytes);
+      if (fail) throw new AttachmentUploadError('interrupted', 'Upload interrupted');
+      return { assetId: 'asset_photo', mimeType: item.bytes.type, filename: item.filename, size: item.bytes.size };
+    };
+    const runtime = await ready(transport);
+    try {
+      const inputs = [{ id: 'camera', filename: 'camera.HEIC', bytes: new Blob(['original'], { type: 'image/heic' }) }];
+      const preview = await runtime.prepareAttachmentInputs!(inputs, new AbortController().signal);
+      runtime.sendAttachments!('caption', preview, context);
+      await vi.waitFor(() => expect(runtime.getSnapshot().sends[0].status).toBe('failed'));
+      expect(uploaded[0]).toBe(preview[0].bytes);
+      expect(runtime.getSnapshot().sends[0].attachmentItems![0]).toMatchObject({ filename: 'camera.jpg', bytes: converted });
+      fail = false;
+      transport.nextSend = async () => ({ outcome: 'uncertain', reason: 'ack lost' });
+      await runtime.retryAttachmentSend!(correlation, context);
+      expect(uploaded).toHaveLength(2);
+      expect(uploaded[1]).toBe(uploaded[0]);
+      const manifest = transport.submissions[0].attachments;
+      transport.nextSend = async () => ({ outcome: 'accepted' });
+      await runtime.retryAttachmentSend!(correlation, context);
+      expect(uploaded).toHaveLength(2);
+      expect(transport.submissions[1].attachments).toBe(manifest);
+      expect(manifest).toEqual([{ assetId: 'asset_photo', mimeType: 'image/jpeg', filename: 'camera.jpg', size: 5 }]);
+      expect(decode).toHaveBeenCalledOnce();
+      expect(encode).toHaveBeenCalledOnce();
+      transport.emit(message(11, { role: 'user', deviceId: 'device', clientMessageId: correlation, attachments: manifest }));
+      expect(runtime.getSnapshot().sends[0].reconciled).toBe(true);
+    } finally { runtime.dispose(); vi.restoreAllMocks(); vi.unstubAllGlobals(); }
+  });
+
+  it('preflights the whole host selection and reports the unreadable item before any upload or post', async () => {
+    vi.stubGlobal('createImageBitmap', vi.fn().mockRejectedValue(new Error('unsupported format')));
+    vi.stubGlobal('Image', class { src = ''; decode = async () => { throw new Error('unsupported format'); }; });
+    vi.stubGlobal('URL', { createObjectURL: () => 'blob:photo', revokeObjectURL: vi.fn() });
+    const transport = new AttachmentsTransport();
+    const runtime = await ready(transport);
+    try {
+      const events: unknown[] = [];
+      runtime.observeHostSend(correlation, event => events.push(event));
+      runtime.sendAttachments!('caption', [input('document'),
+        { id: 'photo', filename: 'portrait.HEIC', bytes: new Blob(['original'], { type: 'image/heic' }) }], context);
+      await vi.waitFor(() => expect(events).toEqual([{ kind: 'failed', reason: 'image-unreadable',
+        detail: 'image-unreadable', attachmentIndex: 1 }]));
+      expect(runtime.getSnapshot().sends[0]).toMatchObject({ status: 'failed', postSubmitted: false,
+        reason: 'Cannot read portrait.HEIC in its image format on this device.' });
+      expect(transport.uploads).toEqual([]);
+      expect(transport.submissions).toEqual([]);
+      expect(runtime.getSnapshot().status).toBe('ready');
+    } finally { runtime.dispose(); vi.restoreAllMocks(); vi.unstubAllGlobals(); }
+  });
+
+  it('reconciles new-lifetime image recovery against converted metadata without uploading', async () => {
+    const converted = new Blob(['jpeg'], { type: 'image/jpeg' });
+    vi.stubGlobal('createImageBitmap', vi.fn().mockResolvedValue({ width: 120, height: 240, close: vi.fn() }));
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ drawImage: vi.fn() } as unknown as CanvasRenderingContext2D);
+    vi.spyOn(HTMLCanvasElement.prototype, 'toBlob').mockImplementation(callback => callback(converted));
+    const transport = new AttachmentsTransport();
+    transport.rows.push(message(12, { role: 'user', deviceId: 'device', clientMessageId: correlation,
+      attachments: [{ assetId: 'retained', mimeType: 'image/jpeg', filename: 'portrait.jpg', size: 4 }] }));
+    const runtime = await ready(transport);
+    try {
+      await runtime.recoverAttachmentSend!('', [{ id: 'photo', filename: 'portrait.HEIC',
+        bytes: new Blob(['original camera bytes'], { type: 'image/heic' }) }], context);
+      expect(runtime.getSnapshot().sends[0]).toMatchObject({ reconciled: true,
+        attachments: [{ assetId: 'retained', filename: 'portrait.jpg', mimeType: 'image/jpeg', size: 4 }] });
+      expect(transport.uploads).toEqual([]);
+      expect(transport.submissions).toEqual([]);
+    } finally { runtime.dispose(); vi.restoreAllMocks(); vi.unstubAllGlobals(); }
   });
 
 });

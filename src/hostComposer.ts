@@ -23,7 +23,7 @@ export type HostComposerEvent =
   | { readonly event: 'accepted'; readonly lifetimeId: string; readonly correlationId: string; readonly attempt: number }
   | { readonly event: 'delivered'; readonly lifetimeId: string; readonly correlationId: string; readonly attempt: number }
   | { readonly event: 'failed'; readonly lifetimeId: string; readonly correlationId: string; readonly attempt: number;
-      readonly reason: 'refused' | 'retry-unavailable' | 'upload-failed'; readonly detail?: string }
+      readonly reason: 'refused' | 'retry-unavailable' | 'upload-failed' | 'image-unreadable'; readonly detail?: string; readonly attachmentIndex?: number }
   | { readonly event: 'uncertain'; readonly lifetimeId: string; readonly correlationId: string; readonly attempt: number;
       readonly reason: 'ack-lost' | 'accepted-unreconciled' | 'lifetime-ended' | 'retry-unavailable' };
 

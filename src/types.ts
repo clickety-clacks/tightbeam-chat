@@ -172,7 +172,7 @@ export interface AttachmentReference {
   readonly size: number;
 }
 
-/** Original acquired bytes; previews are never substituted for this blob. */
+/** Acquired bytes, or the exact shared-preparer output used for both preview and upload. */
 export interface AttachmentInput {
   readonly id: string;
   readonly filename: string;
@@ -186,15 +186,25 @@ export interface AttachmentSubmissionContext {
 }
 
 /** Only restrictions actually supplied by the selected transport are advertised. */
-export interface AttachmentCapabilities {
+export interface AttachmentImageTargets {
+  /** Recorded agent-route byte budgets, not file-upload rejection limits. */
+  readonly maxInlineImageBytes?: number;
+  readonly maxInlineImageTotalBytes?: number;
+}
+
+export interface AttachmentCapabilities extends AttachmentImageTargets {
   readonly mediaTypes?: readonly string[];
   readonly maxAttachmentBytes?: number;
   readonly maxAttachments?: number;
   readonly maxTotalBytes?: number;
 }
 
+export class AttachmentPreparationError extends Error {
+  constructor(readonly attachmentIndex: number, readonly code: 'image-unreadable', message: string) { super(message); }
+}
+
 export class AttachmentUploadError extends Error {
-  constructor(readonly code: string, message: string) { super(message); }
+  constructor(readonly code: string, message: string, readonly attachmentIndex?: number) { super(message); }
 }
 
 export interface AttachmentItem extends AttachmentInput {
@@ -278,10 +288,12 @@ export type SendStatus = 'pending' | 'accepted' | 'failed' | 'uncertain';
 export interface LocalSend extends HumanSubmission {
   /** Ordered recovery inputs, retained separately from the frozen posted references. */
   readonly attachmentItems?: readonly AttachmentItem[];
+  /** Every item has completed image preparation before the first upload. */
+  readonly attachmentsPrepared?: boolean;
   readonly attachmentPhase?: 'preparing' | 'ready' | 'failed' | 'posted' | 'recovering';
   /** True only after the transport submitted a frame (or received its ack). */
   readonly postSubmitted?: boolean;
-  readonly attachmentFailure?: { readonly reason: 'upload-failed'; readonly detail: string };
+  readonly attachmentFailure?: { readonly reason: 'upload-failed' | 'image-unreadable'; readonly detail: string; readonly attachmentIndex?: number };
   readonly submittedAt: string;
   readonly status: SendStatus;
   readonly reason?: string;
@@ -293,7 +305,7 @@ export interface LocalSend extends HumanSubmission {
 export type HostSendSignal =
   | { readonly kind: 'accepted' }
   | { readonly kind: 'reconciled' }
-  | { readonly kind: 'failed'; readonly reason: 'refused' | 'retry-unavailable' | 'upload-failed'; readonly detail?: string }
+  | { readonly kind: 'failed'; readonly reason: 'refused' | 'retry-unavailable' | 'upload-failed' | 'image-unreadable'; readonly detail?: string; readonly attachmentIndex?: number }
   | { readonly kind: 'uncertain'; readonly reason: 'ack-lost' | 'accepted-unreconciled' | 'retry-unavailable' | 'lifetime-ended' };
 export type HostSendObserver = (signal: HostSendSignal) => void;
 
@@ -368,9 +380,11 @@ export interface ChatRuntime {
   setToolCallsEnabled?(enabled: boolean): void;
   retryToolCalls?(): void;
   send(content: string, clientMessageId?: string, hostSend?: HostSendContext): string | null;
+  /** Prepare the whole selection before enabling Send; use the returned bytes for previews. */
+  prepareAttachmentInputs?(inputs: readonly AttachmentInput[], signal: AbortSignal): Promise<readonly AttachmentInput[]>;
   sendAttachments?(content: string, inputs: readonly AttachmentInput[], context?: AttachmentSubmissionContext): string | null;
   getAttachmentCapabilities?(): AttachmentCapabilities | undefined;
-  /** Retry retained originals by ID; callers cannot replace the frozen manifest. */
+  /** Retry retained upload bytes by ID; callers cannot replace the frozen manifest. */
   retryAttachmentSend?(clientMessageId: string, context?: AttachmentSubmissionContext): Promise<void>;
   /** New-lifetime retries inspect history, and never upload without demonstrated attachment dedupe. */
   recoverAttachmentSend?(content: string, inputs: readonly AttachmentInput[], context: AttachmentSubmissionContext): Promise<void>;
