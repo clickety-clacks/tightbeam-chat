@@ -1,6 +1,7 @@
-import type { CanonicalMessage, CanonicalTransition, LiveRailDenial, ToolCallRecord } from './types';
+import type { CanonicalMessage, CanonicalTransition, HistoryRailDenial, LiveRailDenial, ToolCallRecord } from './types';
 import { parseBatchMembers, type HumanMember, type ParsedBatchMember } from './messageVisibility';
 import { activityPillPresentation, type ActivityPillPresentation } from './activityPresentation';
+import { sameRailDenial } from './railDenials';
 
 export type ActivityKind = 'tool' | 'agent' | 'substrate' | 'rail';
 
@@ -70,6 +71,8 @@ interface Candidate extends ActivityLine {
   readonly liveTailEligibleAtArrival?: boolean;
   /** Message activity is backed by the canonical conversation history. */
   readonly historyBacked: boolean;
+  /** Refused actions can also be persisted by the selected-session history endpoint. */
+  readonly persistedRailDenial?: boolean;
   /** Present only when the source text identifies a stable foldable notice kind. */
   readonly semanticFoldKind?: string;
 }
@@ -213,14 +216,30 @@ function toolCandidate(call: ToolCallRecord): Candidate {
     sortTime: call.startedAt, call, historyBacked: false };
 }
 
-function railCandidate(denial: LiveRailDenial): Candidate {
+function railCandidate(denial: LiveRailDenial | HistoryRailDenial, anchorSeq: number, order: number,
+  persisted: boolean): Candidate {
   const gist = `${denial.verb} refused by ${denial.rule}`;
   return { id: `rail:${denial.id}`, kind: 'rail', runKey: '',
-    anchorSeq: denial.afterMessageSeq,
-    position: { sequence: denial.afterMessageSeq, phase: 3, order: denial.arrivalOrder },
+    anchorSeq,
+    position: { sequence: anchorSeq, phase: 3, order },
     gist, accessibleText: `Rail: ${gist}`, originalContent: gist, sortTime: denial.occurredAt,
     presentation: activityPillPresentation({ kind: 'rail', gist, content: gist }),
-    liveTailEligibleAtArrival: denial.tailEligibleAtArrival, historyBacked: false };
+    ...('tailEligibleAtArrival' in denial ? { liveTailEligibleAtArrival: denial.tailEligibleAtArrival } : {}),
+    historyBacked: persisted, ...(persisted ? { persistedRailDenial: true } : {}) };
+}
+
+function historyDenialAnchor(denial: HistoryRailDenial, records: readonly {
+  readonly seq: number; readonly createdAt?: string;
+}[]): number {
+  if (denial.afterMessageSeq !== undefined) return denial.afterMessageSeq;
+  const timed = records.flatMap((record) => {
+    const time = record.createdAt ? Date.parse(record.createdAt) : Number.NaN;
+    return Number.isFinite(time) ? [{ seq: record.seq, time }] : [];
+  }).sort((left, right) => left.seq - right.seq);
+  const prior = timed.filter((record) => record.time <= denial.occurredAt);
+  if (prior.length) return prior[prior.length - 1].seq;
+  if (timed.length) return timed[0].seq;
+  return records.reduce((latest, record) => Math.max(latest, record.seq), 0);
 }
 
 const comparePosition = (left: Position, right: Position): number =>
@@ -318,6 +337,7 @@ export function buildActivityTrail(input: {
   readonly activeOwnerTurnSeq?: number;
   readonly activeOwnerTurnMessageId?: string;
   readonly railDenials: readonly LiveRailDenial[];
+  readonly historyRailDenials?: readonly HistoryRailDenial[];
   readonly shownRuns: ReadonlyMap<string, string>;
   readonly expandedRuns: ReadonlySet<string>;
 }): ActivityTrailPlan {
@@ -337,9 +357,26 @@ export function buildActivityTrail(input: {
     if (candidate) candidates.push(candidate);
     else if (message.role === 'assistant') continue;
   }
-  for (const denial of input.railDenials) {
-    if (denial.principal === `session:${input.sessionKey}`) candidates.push(railCandidate(denial));
+  const historyDenials: HistoryRailDenial[] = [];
+  const historyIds = new Set<string>();
+  for (const denial of input.historyRailDenials ?? []) {
+    if (denial.sessionKey === input.sessionKey && denial.principal === `session:${input.sessionKey}` &&
+        !historyIds.has(denial.id)) {
+      historyDenials.push(denial);
+      historyIds.add(denial.id);
+    }
   }
+  historyDenials.forEach((denial, index) => candidates.push(railCandidate(denial,
+    historyDenialAnchor(denial, input.records), index, true)));
+  const liveDenials: LiveRailDenial[] = [];
+  for (const denial of input.railDenials) {
+    if (denial.sessionKey === input.sessionKey && denial.principal === `session:${input.sessionKey}` &&
+        !historyDenials.some((history) => sameRailDenial(history, denial))) {
+      liveDenials.push(denial);
+    }
+  }
+  liveDenials.forEach((denial) => candidates.push(railCandidate(denial,
+    denial.afterMessageSeq, denial.arrivalOrder, false)));
   if (input.toolsEnabled) candidates.push(...input.tools.map(toolCandidate));
 
   const orderedBubbles = bubbleEvents(input.bubbles);
@@ -394,7 +431,8 @@ export function buildActivityTrail(input: {
     }
     if (closedByReply) {
       for (const event of pending) {
-        if (!event.candidate.historyBacked || historyInOwnerConversation(event.candidate, previousBubble, nextBubble)) {
+        if (!event.candidate.historyBacked || event.candidate.persistedRailDenial ||
+            historyInOwnerConversation(event.candidate, previousBubble, nextBubble)) {
           add(event.candidate, runKey);
         }
       }
@@ -404,7 +442,9 @@ export function buildActivityTrail(input: {
           ? (!input.turnStateAvailable || candidate.liveTailEligibleAtArrival === true)
           : (beforeOrAtTool.has(candidate.id) || (input.turnStateAvailable && input.activeTurnRunning));
         const historyAllowed = historyInOwnerConversation(candidate, previousBubble);
-        if (candidate.historyBacked ? historyAllowed : allowed || input.shownRuns.has(candidate.id)) add(candidate, runKey);
+        if (candidate.historyBacked
+          ? historyAllowed || candidate.persistedRailDenial
+          : allowed || input.shownRuns.has(candidate.id)) add(candidate, runKey);
       }
     } else {
       for (const candidate of tail) {
@@ -413,7 +453,7 @@ export function buildActivityTrail(input: {
           ? (!input.turnStateAvailable || candidate.liveTailEligibleAtArrival === true)
           : beforeOrAtTool.has(candidate.id);
         const historyAllowed = historyInOwnerConversation(candidate, previousBubble, nextBubble);
-        if (candidate.historyBacked ? historyAllowed : allowed || oldRun) {
+        if (candidate.historyBacked ? historyAllowed || candidate.persistedRailDenial : allowed || oldRun) {
           add(candidate, oldRun ?? runKey);
         }
       }
