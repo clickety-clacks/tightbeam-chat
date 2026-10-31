@@ -57,7 +57,7 @@ describe('activity pill presentation', () => {
 
   it('classifies the other frequent delivered notices without sending them to the generic pill', () => {
     const assignmentId = 'asg_12345678-1111-4111-8111-123456789abc';
-    const cases: Array<[string, { label: string; tone: string; icon: string; text: string }]> = [
+    const cases: Array<[string, { label: string; tone: string; icon: string; text: string; metadata?: string }]> = [
       [`[progress filed on ${assignmentId}: Updated the product summary]`,
         { label: 'Progress', tone: 'indigo', icon: 'activity', text: 'Updated the product summary' }],
       [`[cannot-proceed filed on ${assignmentId}: The review could not continue]`,
