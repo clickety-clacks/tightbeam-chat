@@ -645,6 +645,13 @@ export function useReadingPosition(
     moveToLatest(true);
   };
 
+  const scrollToLatestFromControl = () => {
+    // The floating control is local navigation. A pending wheel or key intent
+    // must not turn its programmatic scroll into a read-marker write.
+    clearUserScrollIntent();
+    scrollToLatest();
+  };
+
   const scrollToNextUnseen = (): boolean => {
     const box = viewport.current;
     if (!box) return false;
@@ -673,6 +680,7 @@ export function useReadingPosition(
     const bottom = Math.max(0, box.scrollHeight - box.clientHeight);
     destination = Math.max(0, Math.min(bottom, destination));
     if (arrivalStartTime.current !== undefined || arrivalAnimations.current.size > 0) cancelArrivalAnimations();
+    clearUserScrollIntent();
     if (animating.current) box.scrollTo({ top: box.scrollTop, behavior: 'instant' });
     animating.current = false;
     target.current = undefined;
@@ -726,6 +734,6 @@ export function useReadingPosition(
 
   return { viewport, content, registerRow, getRow, showLatest, unseenMessageCount, unseenButtonLabel,
     hasUnseenButtonCount: unseenMessageCount > 0 && !unseenControlPrimed, setMessageRows, onScroll, interrupt,
-    holdPosition, preserveVisiblePosition, scrollBy, scrollToLatest, scrollToNextUnseen, arriveOwnMessages,
+    holdPosition, preserveVisiblePosition, scrollBy, scrollToLatest, scrollToLatestFromControl, scrollToNextUnseen, arriveOwnMessages,
     noteUserScroll, reconcileViewportLayout };
 }

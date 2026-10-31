@@ -1984,7 +1984,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     {reading.showLatest && <button type="button" className="tb-chat-scroll-latest" data-scroll-latest="true"
       aria-label={reading.unseenButtonLabel} onMouseDown={(event) => event.preventDefault()} onClick={() => {
         if (reading.hasUnseenButtonCount && reading.scrollToNextUnseen()) return;
-        reading.scrollToLatest();
+        reading.scrollToLatestFromControl();
       }}>
       <span aria-hidden="true">↓</span> {reading.unseenButtonLabel}
     </button>}

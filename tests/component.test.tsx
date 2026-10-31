@@ -324,7 +324,7 @@ describe('conversation surface', () => {
     }
   });
 
-  it('marks reader scroll but keeps the unseen-message control local to the view', () => {
+  it('marks reader scroll but keeps both unseen-control steps local to the view', () => {
     const visibility = setDocumentVisibility('visible');
     const sessionKey = 'read-marker-reader-actions';
     const runtime = new FakeRuntime(sessionKey, { records: [
@@ -341,17 +341,33 @@ describe('conversation surface', () => {
       layout.setScrollTop(viewport.scrollHeight - viewport.clientHeight);
       fireEvent.scroll(viewport);
 
-      act(() => runtime.update({ records: [...runtime.state.records, row(sessionKey, 'reply', 'Reply', { seq: 4 })] }));
-      expect(mark).not.toHaveBeenCalled();
-
-      fireEvent.wheel(viewport, { deltaY: -140 });
-      layout.setScrollTop(layout.scrollTop - 140);
+      vi.useFakeTimers();
+      fireEvent.wheel(viewport, { deltaY: -1000 });
+      layout.setScrollTop(0);
       fireEvent.scroll(viewport);
       expect(mark).toHaveBeenCalledTimes(1);
 
       mark.mockClear();
-      fireEvent.click(screen.getByRole('button', { name: /^(?:\d+ unseen messages?|Scroll to bottom)$/ }));
+      vi.advanceTimersByTime(251);
+      act(() => runtime.update({ records: [...runtime.state.records, row(sessionKey, 'reply', 'Reply', { seq: 4 })] }));
       expect(mark).not.toHaveBeenCalled();
+
+      // Start a new reader-scroll intent without moving the viewport. Each
+      // control step must keep its own programmatic movement out of the marker.
+      fireEvent.wheel(viewport, { deltaY: -1 });
+      fireEvent.click(screen.getByRole('button', { name: /^\d+ unseen messages?$/ }));
+      expect(screen.getByRole('button', { name: 'Scroll to bottom' })).toBeTruthy();
+      expect(mark).not.toHaveBeenCalled();
+
+      fireEvent.wheel(viewport, { deltaY: -1 });
+      fireEvent.click(screen.getByRole('button', { name: 'Scroll to bottom' }));
+      expect(screen.queryByRole('button', { name: 'Scroll to bottom' })).toBeNull();
+      expect(mark).not.toHaveBeenCalled();
+
+      fireEvent.wheel(viewport, { deltaY: -100 });
+      layout.setScrollTop(layout.scrollTop - 100);
+      fireEvent.scroll(viewport);
+      expect(mark).toHaveBeenCalledTimes(1);
     } finally {
       view.unmount();
       layout.restore();
