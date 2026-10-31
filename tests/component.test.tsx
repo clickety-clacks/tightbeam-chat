@@ -7,6 +7,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { TightbeamChat, workingStateOpacity } from '../src/TightbeamChat';
 import type { RenderContext } from '../src/TightbeamChat';
 import { createTurnProvenance } from '../src/provenance';
+import { decodePublic019Message } from '../src/public019';
 import type {
   ToolCallIndex, ToolCallRecord, CanonicalMessage, CanonicalTurn, ChatRuntime, ConversationRecord, LocalSend, RuntimeState,
   TightbeamAdapter, TurnProvenance,
@@ -469,6 +470,54 @@ describe('conversation surface', () => {
 
     expect(renderedKeys()).toEqual(['first', 'middle', 'last']);
     expect(within(screen.getByRole('log')).getByText('First canonical message')).toBeTruthy();
+  });
+
+  it('renders the full body of a canonical user message after its attribution wrapper', () => {
+    const sessionKey = 'complete-message-body';
+    const content = [
+      '[from user:account]',
+      '',
+      '[assignment: task-123]',
+      '',
+      'Review the test results and summarize the failures.',
+    ].join('\n');
+    const canonical = decodePublic019Message({
+      id: 'complete-message', seq: 10, rowVersion: 10, sessionKey, role: 'user', sender: 'user:person',
+      messageType: 'chat', content, assignmentId: 'task-123', at: Date.parse('2026-10-30T00:00:00Z'), attachments: [],
+    }, sessionKey);
+    const runtime = new FakeRuntime(sessionKey, { records: [canonical] });
+
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+
+    const log = screen.getByRole('log');
+    const message = within(log).getByText('Review the test results and summarize the failures.')
+      .closest<HTMLElement>('.tb-chat-bubble');
+    expect(message?.getAttribute('aria-label')).toBe('Message from Assigned task');
+    expect(message?.querySelector('.tb-chat-bubble-sender')?.textContent).toBe('Assigned task');
+    expect(log.textContent).toContain('[from user:account]');
+    expect(log.textContent).toContain('[assignment: task-123]');
+    expect(log.textContent).toContain('Review the test results and summarize the failures.');
+  });
+
+  it('preserves the agent label when an agent reply carries assignment context', () => {
+    const sessionKey = 'assignment-agent-reply';
+    const humanMessage = decodePublic019Message({
+      id: 'assigned-prompt', seq: 10, rowVersion: 10, sessionKey, role: 'user', sender: 'user:person',
+      messageType: 'chat', content: 'Review the requested changes.', assignmentId: 'task-123', turnSeq: 7,
+      at: Date.parse('2026-10-30T00:00:00Z'), attachments: [],
+    }, sessionKey);
+    const agentReply = decodePublic019Message({
+      id: 'assigned-reply', seq: 11, rowVersion: 11, sessionKey, role: 'assistant', sender: 'assistant-service',
+      messageType: 'assistant', content: 'The changes are ready.', assignmentId: 'task-123', turnSeq: 7,
+      replyToMessageId: 'assigned-prompt', at: Date.parse('2026-10-30T00:01:00Z'), attachments: [],
+    }, sessionKey);
+    const runtime = new FakeRuntime(sessionKey, { records: [humanMessage, agentReply] });
+
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+
+    const reply = within(screen.getByRole('log')).getByText('The changes are ready.')
+      .closest<HTMLElement>('.tb-chat-bubble');
+    expect(reply?.getAttribute('aria-label')).toBe('Message from Research assistant');
   });
 
   it('does not rebuild the transcript on a foreground return', () => {

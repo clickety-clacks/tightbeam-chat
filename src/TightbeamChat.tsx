@@ -103,6 +103,11 @@ function latestUserPrompt(timeline: readonly TimelineItem[]): LatestUserPrompt |
   return undefined;
 }
 
+function messageSourceLabel(record: CanonicalMessage, defaultLabel: string): string {
+  const assignmentId = record.raw.assignmentId;
+  return typeof assignmentId === 'string' && assignmentId.trim() ? 'Assigned task' : defaultLabel;
+}
+
 function itemTime(item: TimelineItem): number | undefined {
   if (item.kind === 'tool') return item.call.startedAt;
   if (item.kind === 'activity' || item.kind === 'activity-fold' || item.kind === 'overflow') return undefined;
@@ -1319,7 +1324,10 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     .map((message) => ({
       key: message.key, record: message.source, side: message.side,
       ownerScoped: message.side === 'agent' || message.senderLabel === 'You',
-      sender: message.senderLabel ?? sourceLabel(message.side, agentName), derived: Boolean(message.member),
+      sender: message.side === 'human'
+        ? messageSourceLabel(message.source, message.senderLabel ?? sourceLabel(message.side, agentName))
+        : sourceLabel(message.side, agentName),
+      derived: Boolean(message.member),
       displayContent: message.member?.content, member: message.member,
     })), [projection, agentName]);
   const caption = state.activityTurnStateAvailable === true ? activeCaption(state.activeTurn) : undefined;
