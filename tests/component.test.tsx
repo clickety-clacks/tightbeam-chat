@@ -324,7 +324,7 @@ describe('conversation surface', () => {
     }
   });
 
-  it('marks reader scroll and jump-to-latest, not automatic reply growth', () => {
+  it('marks reader scroll but keeps the unseen-message control local to the view', () => {
     const visibility = setDocumentVisibility('visible');
     const sessionKey = 'read-marker-reader-actions';
     const runtime = new FakeRuntime(sessionKey, { records: [
@@ -350,8 +350,8 @@ describe('conversation surface', () => {
       expect(mark).toHaveBeenCalledTimes(1);
 
       mark.mockClear();
-      fireEvent.click(screen.getByRole('button', { name: 'Scroll to latest messages' }));
-      expect(mark).toHaveBeenCalledTimes(1);
+      fireEvent.click(screen.getByRole('button', { name: /^(?:\d+ unseen messages?|Scroll to bottom)$/ }));
+      expect(mark).not.toHaveBeenCalled();
     } finally {
       view.unmount();
       layout.restore();
@@ -2314,7 +2314,7 @@ describe('conversation surface', () => {
     layout.setScrollTop(0);
     fireEvent.wheel(log, { deltaY: -100 });
     fireEvent.scroll(log);
-    await screen.findByRole('button', { name: 'Scroll to latest messages' });
+    await screen.findByRole('button', { name: /^(?:\d+ unseen messages?|Scroll to bottom)$/ });
     const anchorBeforeDraft = layout.offset(anchor);
 
     try {
@@ -2329,7 +2329,7 @@ describe('conversation surface', () => {
       expect(prompt.classList.contains('tb-chat-bubble-human')).toBe(true);
       expect(layout.offset(prompt)).toBeGreaterThanOrEqual(0);
       expect(layout.offset(prompt)).toBeLessThan(180);
-      expect(screen.queryByRole('button', { name: 'Scroll to latest messages' })).toBeNull();
+      expect(screen.queryByRole('button', { name: /^(?:\d+ unseen messages?|Scroll to bottom)$/ })).toBeNull();
       expect(runtime.sent).toEqual(['New browser prompt']);
     } finally {
       layout.restore();
@@ -2712,7 +2712,7 @@ describe('tool-call and transition display', () => {
           fireEvent.wheel(viewport, { deltaY: 1 });
           layout.setScrollTop(200);
           fireEvent.scroll(viewport);
-          expect(screen.getByRole('button', { name: 'Scroll to latest messages' })).toBeTruthy();
+          expect(screen.getByRole('button', { name: /^(?:\d+ unseen messages?|Scroll to bottom)$/ })).toBeTruthy();
           const anchorBefore = layout.offset(anchor);
 
           const animationStart = animations.animations.length;

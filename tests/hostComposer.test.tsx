@@ -271,7 +271,7 @@ describe('versioned host composer seam on the real adapter and surface', () => {
       layout.setScrollTop(0);
       fireEvent.wheel(log, { deltaY: -100 });
       fireEvent.scroll(log);
-      await screen.findByRole('button', { name: 'Scroll to latest messages' });
+      await screen.findByRole('button', { name: /^(?:\d+ unseen messages?|Scroll to bottom)$/ });
       fireEvent(log, new Event('scrollend'));
 
       act(() => commandEntry()({ type: 'send', lifetimeId: ready.lifetimeId,
@@ -283,7 +283,7 @@ describe('versioned host composer seam on the real adapter and surface', () => {
       expect(layout.scrollTop).toBeGreaterThan(0);
       expect(layout.offset(prompt)).toBeGreaterThanOrEqual(0);
       expect(layout.offset(prompt)).toBeLessThan(180);
-      expect(screen.queryByRole('button', { name: 'Scroll to latest messages' })).toBeNull();
+      expect(screen.queryByRole('button', { name: /^(?:\d+ unseen messages?|Scroll to bottom)$/ })).toBeNull();
       expect(runtimes[0].getSnapshot().sends[0]).toMatchObject({
         clientMessageId: correlation, content: 'Native host prompt', reconciled: false,
       });

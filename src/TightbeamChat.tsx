@@ -1526,6 +1526,20 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   }, [expandedRuns, viewport]);
   const timeline = useMemo(() => composeTimeline(bubbles, localSends, canonicalSends, sendsByIdentity,
     transitions, activityPlan.messageItems), [activityPlan.messageItems, bubbles, canonicalSends, localSends, sendsByIdentity, transitions]);
+  const messageRows = useMemo(() => {
+    const rows = new Map<string, { key: string; scrollKey: string }>();
+    for (const item of timeline) {
+      if (item.kind === 'bubble') {
+        const scrollKey = item.scrollKey ?? (item.bubble.derived ? item.bubble.key : item.bubble.record.id);
+        rows.set(scrollKey, { key: scrollKey, scrollKey });
+      } else if (item.kind === 'local') {
+        const scrollKey = `local-${item.send.clientMessageId}`;
+        rows.set(scrollKey, { key: scrollKey, scrollKey });
+      }
+    }
+    return rows;
+  }, [timeline]);
+  reading.setMessageRows(messageRows);
   const promptCandidates = useMemo(() => userPrompts(timeline), [timeline]);
   const promptsByIdentity = useMemo(() => new Map(promptCandidates.map(prompt => [prompt.identity, prompt])), [promptCandidates]);
   const [stickyPromptIdentity, setStickyPromptIdentity] = useState<string | undefined>(undefined);
@@ -1976,11 +1990,11 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
         onClick={() => setLatestPromptDismissed(true)}>×</button>
     </div>}
     {reading.showLatest && <button type="button" className="tb-chat-scroll-latest" data-scroll-latest="true"
-      aria-label="Scroll to latest messages" onMouseDown={(event) => event.preventDefault()} onClick={() => {
-        markReadPosition();
+      aria-label={reading.unseenButtonLabel} onMouseDown={(event) => event.preventDefault()} onClick={() => {
+        if (reading.hasUnseenButtonCount && reading.scrollToNextUnseen()) return;
         reading.scrollToLatest();
       }}>
-      <span aria-hidden="true">↓</span> Latest messages
+      <span aria-hidden="true">↓</span> {reading.unseenButtonLabel}
     </button>}
     {!host.composerHidden && <Composer ref={composer} runtime={runtime} state={state} agentName={agentName}
       root={root} suppressStatus={host.optedIn} onSettings={openSettings} onSubmitted={reading.scrollToLatest} />}
