@@ -1589,46 +1589,62 @@ describe('conversation surface', () => {
     const human = row(sessionKey, 'prompt', 'Review these changes', {
       seq: 1, role: 'user', sender: 'user:person', messageType: 'chat', turnSeq: 1,
     });
-    const notice = (id: string, seq: number, content: string) => row(sessionKey, id, content, {
-      seq, role: 'user', sender: 'process:events', messageType: 'process', turnSeq: 1,
+    const notice = (id: string, seq: number, content: string) => row(sessionKey, id,
+      `[from process:tightbeam]\n\n${content}`, {
+      seq, role: 'assistant', sender: 'process:tightbeam', messageType: 'substrate', turnSeq: 1,
     });
     const reviewedClean = notice('reviewed-clean', 2,
       '[verdict filed: reviewed-clean on asg_12345678-1111-4111-8111-123456789abc: The change is ready]');
     const changesRequested = notice('changes-requested', 3,
       '[verdict filed: changes-requested on asg_23456789-1111-4111-8111-123456789abc: Correct the missing case]');
-    const completion = notice('completion', 4,
+    const verificationFailed = notice('verification-failed', 4,
+      '[verdict filed: verification-failed on asg_23456789-1111-4111-8111-123456789abc: The result did not verify]');
+    const waitChallenged = notice('wait-challenged', 5,
+      '[verdict filed: wait-challenged on asg_23456789-1111-4111-8111-123456789abc: The wait condition needs review]');
+    const completion = notice('completion', 6,
       '[completion filed on asg_34567890-1111-4111-8111-123456789abc: Completed after the focused review]');
-    const opened = notice('assignment-opened', 5,
+    const opened = notice('assignment-opened', 7,
       '[assignment opened: asg_456789ab-1111-4111-8111-123456789abc]');
-    const closed = notice('assignment-closed', 6,
+    const closed = notice('assignment-closed', 8,
       '[assignment closed: asg_56789abc-1111-4111-8111-123456789abc — completed]');
+    const reopened = notice('assignment-reopened', 9,
+      '[assignment reopened: asg_67890abc-1111-4111-8111-123456789abc by session:agent:helper — Another review was requested]');
     const answer = row(sessionKey, 'answer', 'The change is ready', {
       seq: 10, sender: 'assistant-service', messageType: 'assistant', replyToMessageId: human.id, turnSeq: 1,
     });
     const runtime = new FakeRuntime(sessionKey, {
-      records: [human, reviewedClean, changesRequested, completion, opened, closed, answer],
+      records: [human, reviewedClean, changesRequested, verificationFailed, waitChallenged,
+        completion, opened, closed, reopened, answer],
       provenanceAvailable: false,
     });
     render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
 
     const log = screen.getByRole('log');
+    fireEvent.click(within(log).getByRole('button', { name: 'Show earlier activity' }));
     const pillFor = (name: string) => within(log).getByRole('note', { name });
     const cleanPill = pillFor('Verdict: Reviewed clean · The change is ready, asg_1234');
     const adversePill = pillFor('Verdict: Changes requested · Correct the missing case, asg_2345');
+    const verificationFailedPill = pillFor('Verdict: Verification failed · The result did not verify, asg_2345');
+    const waitChallengedPill = pillFor('Verdict: Wait challenged · The wait condition needs review, asg_2345');
     const completionPill = pillFor('Completion: Completed after the focused review, asg_3456');
     const openedPill = pillFor('Assignment opened: Opened, asg_4567');
     const closedPill = pillFor('Assignment closed: Completed, asg_5678');
+    const reopenedPill = pillFor('Assignment reopened: Reopened · Another review was requested, asg_6789');
 
     expect(cleanPill.querySelector('.tb-chat-activity-pill-green')).toBeTruthy();
     expect(adversePill.querySelector('.tb-chat-activity-pill-red')).toBeTruthy();
+    expect(verificationFailedPill.querySelector('.tb-chat-activity-pill-red')).toBeTruthy();
+    expect(waitChallengedPill.querySelector('.tb-chat-activity-pill-red')).toBeTruthy();
     expect(completionPill.querySelector('.tb-chat-activity-pill-purple')).toBeTruthy();
     expect(openedPill.querySelector('.tb-chat-activity-pill-blue')).toBeTruthy();
     expect(closedPill.querySelector('.tb-chat-activity-pill-slate')).toBeTruthy();
-    const categoryIcons = [cleanPill, completionPill, openedPill, closedPill]
+    expect(reopenedPill.querySelector('.tb-chat-activity-pill-indigo')).toBeTruthy();
+    const categoryIcons = [cleanPill, completionPill, openedPill, closedPill, reopenedPill]
       .map(pill => pill.querySelector('.tb-chat-activity-pill svg')?.innerHTML);
     expect(new Set(categoryIcons).size).toBe(4);
-    expect(`${cleanPill.textContent} ${adversePill.textContent} ${completionPill.textContent} ` +
-      `${openedPill.textContent} ${closedPill.textContent}`).not.toMatch(/[\[\]]/);
+    expect(`${cleanPill.textContent} ${adversePill.textContent} ${verificationFailedPill.textContent} ` +
+      `${waitChallengedPill.textContent} ${completionPill.textContent} ${openedPill.textContent} ` +
+      `${closedPill.textContent} ${reopenedPill.textContent}`).not.toMatch(/[\[\]]/);
   });
 
   it('renders settled and released process notices as distinct blocker pills', () => {

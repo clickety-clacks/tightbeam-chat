@@ -250,7 +250,10 @@ function deliveredNoticePresentation(content: string): ActivityPillPresentation 
     const status = noticeStatusText(verdict);
     const detail = plainText(match[3]);
     const clean = new Set(['spirit-approved', 'reviewed-clean', 'verified', 'landed', 'approved']);
-    const adverse = new Set(['changes-requested', 'failed', 'blocked', 'refused', 'cannot-proceed']);
+    const adverse = new Set([
+      'changes-requested', 'verification-failed', 'wait-challenged',
+      'failed', 'blocked', 'refused', 'cannot-proceed',
+    ]);
     return { label: 'Verdict', tone: clean.has(verdict) ? 'green' : adverse.has(verdict) ? 'red' : 'indigo',
       icon: 'decision', text: detail ? `${status} · ${detail}` : status, metadata: shortId('asg', match[2]) };
   }
@@ -311,6 +314,14 @@ function commonNoticePresentation(content: string): ActivityPillPresentation | u
   match = /^\[assignment revoked:\s*(asg_[a-z0-9-]+)\s*\]$/i.exec(first);
   if (match) {
     return { label: 'Assignment revoked', tone: 'red', icon: 'flag', text: 'Revoked',
+      metadata: shortId('asg', match[1]) };
+  }
+
+  match = /^\[assignment reopened:\s*(asg_[a-z0-9-]+)(?:\s+by\b[^\]]*)?\]$/i.exec(first);
+  if (match) {
+    const reason = /^\[assignment reopened:\s*asg_[a-z0-9-]+\s+by\b.*?\s+[—–-]\s*(.*?)\s*\]$/i.exec(first)?.[1];
+    return { label: 'Assignment reopened', tone: 'indigo', icon: 'assignment',
+      text: reason ? `Reopened · ${plainText(reason)}` : 'Reopened',
       metadata: shortId('asg', match[1]) };
   }
 
