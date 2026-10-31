@@ -52,3 +52,17 @@ it('forwards attest detail under the selected principal without widening other r
   expect(parseServiceHttpTarget('/__chat/api/attests', runtime)).toBeUndefined();
   expect(parseServiceHttpTarget('/__chat/api/attests/att_example?asUser=someone-else', runtime)).toBeUndefined();
 });
+
+it('forwards selected-session record-event history and its opaque older cursor through existing authorization', () => {
+  const path = `/__chat/api/sessions/${encodeURIComponent(sessionKey)}/record-events`;
+  for (const before of [undefined, 'opaque + / older']) {
+    const query = new URLSearchParams({ limit: '50' });
+    if (before) query.set('before', before);
+    const target = parseServiceHttpTarget(`${path}?${query}`, runtime);
+    expect(target.kind).toBe('detail');
+    const url = new URL(target.path, runtime.gatewayOrigin);
+    expect(url.pathname).toBe(`/api/sessions/${encodeURIComponent(sessionKey)}/record-events`);
+    expect(url.searchParams.get('asUser')).toBe(runtime.principalKey);
+    expect(url.searchParams.get('before')).toBe(before ?? null);
+  }
+});

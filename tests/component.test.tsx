@@ -3102,3 +3102,58 @@ it('reopens waiting summary delivery on live-feed recovery while conversation st
   expect(screen.getByText('Completed activity.')).toBeTruthy();
   expect(screen.queryByText('summarizing')).toBeNull();
 });
+
+it('places durable pills at record time after a tied tool, and lets an exact notice replace only the pill without losing the draft', () => {
+  const sessionKey = 'record-events';
+  const human = row(sessionKey, 'question', 'Hello', { role: 'user', sender: 'user:person', seq: 1,
+    createdAt: new Date(100).toISOString() });
+  const answer = row(sessionKey, 'answer', 'Answer', { seq: 2, createdAt: new Date(300).toISOString() });
+  const call: ToolCallRecord = { id: 'tool-example', seq: 1, sessionKey, turnSeq: 1, afterMessageSeq: 1,
+    harnessToolCallId: 'h1', title: 'Create a work item', kind: 'command', toolName: 'create', status: 'completed',
+    rawInput: {}, rawOutput: {}, content: null, truncated: [], startedAt: 200, endedAt: 200, rowVersion: 1 };
+  const event = { eventId: 'work_item.filed:example', kind: 'work_item.filed', sessionKey, at: 200,
+    record: { type: 'work item', id: 'example', detail: '/api/work-items/example' },
+    actorSessionKey: sessionKey, tiedAs: ['creator'], cause: { turnSeq: 1, messageId: null }, noticeMessageIds: [] };
+  const runtime = new FakeRuntime(sessionKey, { records: [human, answer], toolCallsEnabled: true,
+    toolCalls: [call], recordEvents: [event] });
+  const view = render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+  const keys = () => [...view.container.querySelectorAll('[data-record-key]')].map(element => element.getAttribute('data-record-key'));
+  expect(keys().indexOf('record-event:' + event.eventId)).toBeGreaterThan(keys().indexOf('tool-tool-example'));
+  expect(keys().indexOf('record-event:' + event.eventId)).toBeLessThan(keys().indexOf('answer'));
+  const textbox = screen.getByRole('textbox') as HTMLTextAreaElement;
+  fireEvent.change(textbox, { target: { value: 'Unsent draft' } });
+  textbox.focus();
+  textbox.setSelectionRange(3, 7);
+  const notice = row(sessionKey, 'notice', '[assignment opened: assignment-example]', {
+    seq: 3, sender: 'process:events', messageType: 'substrate', recordEventIds: [event.eventId],
+    createdAt: new Date(400).toISOString(), turnSeq: 1 });
+  act(() => runtime.update({ records: [human, answer, notice] }));
+  expect(keys()).not.toContain('record-event:' + event.eventId);
+  expect(keys()).toContain('tool-tool-example');
+  expect(screen.getByText(/assignment opened: assignment-example/i)).toBeTruthy();
+  expect(document.activeElement).toBe(textbox);
+  expect(textbox.value).toBe('Unsent draft');
+  expect([textbox.selectionStart, textbox.selectionEnd]).toEqual([3, 7]);
+  // A notice's same text or resource reference alone must not hide another occurrence.
+  act(() => runtime.update({ recordEvents: [{ ...event, eventId: 'work_item.filed:other' }] }));
+  expect(keys()).toContain('record-event:work_item.filed:other');
+});
+
+it('keeps a covering notice visible without a human span, including notice-first arrival and multiple covered events', () => {
+  const sessionKey = 'notice-first';
+  const coverage = ['assignment.opened:first', 'attest.filed:second'];
+  const notice = row(sessionKey, 'notice-first-row', 'Both requested records are now available', {
+    role: 'user', sender: 'agent:another', seq: 1, recordEventIds: coverage,
+  });
+  const runtime = new FakeRuntime(sessionKey, { records: [notice] });
+  const view = render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+  const pill = screen.getByText('Both requested records are now available').closest('[role="note"]');
+  expect(pill).not.toBeNull();
+  expect(pill?.getAttribute('title')).toBe(notice.content);
+  const events = coverage.map((eventId, at) => ({ eventId, sessionKey, at, kind: eventId.split(':')[0],
+    record: { type: 'assignment', id: eventId, detail: '/api/assignments/example' },
+    actorSessionKey: 'another', tiedAs: ['holder'], cause: null, noticeMessageIds: [] }));
+  act(() => runtime.update({ recordEvents: events }));
+  expect(view.container.querySelectorAll('[data-record-key^="record-event:"]')).toHaveLength(0);
+  expect(view.container.querySelectorAll('[data-record-key="message:notice-first-row"]')).toHaveLength(1);
+});

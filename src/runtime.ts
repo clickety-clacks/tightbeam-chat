@@ -1,3 +1,4 @@
+import { SessionRecordEvents } from './sessionRecordEvents';
 import {
   AuthorizationError,
   InvalidCursorError,
@@ -117,6 +118,7 @@ export function createTightbeamAdapter(transport: ChatTransport, profile: Target
 
 class SessionRuntime implements ChatRuntime {
   private state: RuntimeState;
+  private recordEventHistory?: SessionRecordEvents;
   private recoveryRevision = 0;
   private readonly turns = new Map<number, CanonicalTurn>();
   private readonly listeners = new Set<() => void>();
@@ -194,8 +196,24 @@ class SessionRuntime implements ChatRuntime {
       activityTurnStateAvailable: false, liveRailDenials: Object.freeze([]),
       historyRailDenials: this.historyRailDenials,
     });
+    if (transport.readRecordEvents) this.recordEventHistory = new SessionRecordEvents(sessionKey,
+      transport.readRecordEvents.bind(transport), patch => {
+        if (!this.disposed && this.checkIdentity() && this.state.status !== 'unauthorized') this.publish(patch);
+      });
     void this.rebuild();
   }
+
+  private recordEventFloor(): number {
+    const first = this.state.records[0]?.createdAt;
+    const time = first ? Date.parse(first) : NaN;
+    return Number.isFinite(time) ? time : Infinity;
+  }
+
+  retryRecordEvents = (): void => {
+    if (!this.disposed && this.checkIdentity() && this.state.status !== 'unauthorized') {
+      void this.recordEventHistory?.refresh(this.recordEventFloor());
+    }
+  };
 
   markReadPosition = async (): Promise<void> => {
     const readReadMarker = this.transport.readReadMarker;
@@ -456,6 +474,7 @@ class SessionRuntime implements ChatRuntime {
     if (identityEquals(this.identity, this.transport.currentIdentity())) return true;
     this.generation++;
     this.stopTools();
+    this.recordEventHistory?.stop();
     this.controller?.abort();
     this.connectionController?.abort();
     this.connectionController = undefined;
@@ -487,6 +506,7 @@ class SessionRuntime implements ChatRuntime {
       identityChanged: true,
       statusDetail: 'Host principal or device changed. Open a new component lifetime.',
       toolCalls: Object.freeze([]), toolCallIndex: undefined, toolCallsLoading: false, toolCallsError: undefined,
+      recordEvents: Object.freeze([]), recordEventsHasOlder: false, recordEventsLoading: false, recordEventsError: undefined,
       records: Object.freeze([]), sends: Object.freeze([]), hasOlder: false,
       session: undefined, agentDisplayName: undefined, provenance: Object.freeze([]),
       activeTurn: undefined, historyError: undefined, loadingOlder: false,
@@ -538,6 +558,9 @@ class SessionRuntime implements ChatRuntime {
 
   private apply(notice: ChangeNotice): boolean {
     switch (notice.operation) {
+      case 'record-event':
+        this.recordEventHistory?.receive(notice.event);
+        return false;
       case 'upsert': {
         const record = notice.record;
         if (record.sessionKey !== this.sessionKey) return false;
@@ -704,6 +727,7 @@ class SessionRuntime implements ChatRuntime {
   private noteLiveFeedRecovered(): void {
     const connection = this.connection;
     if (this.disposed || !connection) return;
+    this.retryRecordEvents();
     this.liveRecoveryPending = true;
     if (this.liveRecoveryStatusTimer) clearTimeout(this.liveRecoveryStatusTimer);
     const connectedAt = Math.max(Date.now() + LIVE_STABLE_OPEN_MS,
@@ -899,6 +923,7 @@ class SessionRuntime implements ChatRuntime {
     this.reconnectTimer = undefined;
     this.clearLiveFeedStatusTimers();
     this.stopTools();
+    this.recordEventHistory?.stop();
     this.controller?.abort();
     this.connectionController?.abort();
     this.connectionController = undefined;
@@ -925,6 +950,7 @@ class SessionRuntime implements ChatRuntime {
       generation: this.generation, status: 'unauthorized', statusDetail: reason,
       liveConnectionState: 'disconnected',
       toolCalls: Object.freeze([]), toolCallIndex: undefined, toolCallsLoading: false, toolCallsError: undefined,
+      recordEvents: Object.freeze([]), recordEventsHasOlder: false, recordEventsLoading: false, recordEventsError: undefined,
       records: Object.freeze([]), sends: Object.freeze([]), session: undefined,
       agentDisplayName: undefined, provenance: noProvenance, provenanceAvailable: false, activeTurn: undefined,
       hasOlder: false, loadingOlder: false, historyError: undefined,
@@ -1304,6 +1330,7 @@ class SessionRuntime implements ChatRuntime {
       });
       if (this.connection && !liveError && !lateFeedNeedsCatchUp) this.noteLiveFeedRecovered();
       else if (!this.connection && liveError) this.noteLiveFeedUnavailable();
+      if (!this.connection || liveError || lateFeedNeedsCatchUp) this.retryRecordEvents();
       void this.startTools();
       for (const send of sends) {
         if (send.reconciled) this.notifyHostSend(send.clientMessageId, { kind: 'reconciled' });
@@ -1408,7 +1435,11 @@ class SessionRuntime implements ChatRuntime {
 
   loadOlder = async (): Promise<void> => {
     if (this.disposed || !this.checkIdentity() || this.state.status !== 'ready' ||
-      !this.state.hasOlder || !this.cursor || this.state.loadingOlder) return;
+      this.state.loadingOlder || this.state.recordEventsLoading) return;
+    if (!this.state.hasOlder || !this.cursor) {
+      await this.recordEventHistory?.older(Infinity);
+      return;
+    }
     const generation = this.generation;
     const cursor = this.cursor;
     const signal = this.controller?.signal;
@@ -1428,6 +1459,7 @@ class SessionRuntime implements ChatRuntime {
       this.publish({ records: recordsFrom(this.rows), hasOlder: page.hasOlder, loadingOlder: false,
         ...this.activityStatePatch() });
       this.publishTools();
+      await this.recordEventHistory?.older(this.recordEventFloor());
     } catch (error) {
       if (!this.isCurrent(generation) || signal.aborted) return;
       this.publish({ loadingOlder: false, historyError: errorText(error) });
@@ -1672,6 +1704,7 @@ class SessionRuntime implements ChatRuntime {
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.clearLiveFeedStatusTimers();
     this.stopTools();
+    this.recordEventHistory?.stop();
     this.controller?.abort();
     this.connectionController?.abort();
     this.connectionController = undefined;

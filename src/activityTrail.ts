@@ -76,6 +76,7 @@ interface Candidate extends ActivityLine {
   readonly historyBacked: boolean;
   /** Refused actions can also be persisted by the selected-session history endpoint. */
   readonly persistedRailDenial?: boolean;
+  readonly recordEventNotice?: boolean;
   /** Present only when the source text identifies a stable foldable notice kind. */
   readonly semanticFoldKind?: string;
 }
@@ -128,6 +129,14 @@ const rawSource = (message: CanonicalMessage): string | undefined =>
 
 function messageCandidate(message: CanonicalMessage): Candidate | undefined {
   const sender = message.sender ?? '';
+  if (message.recordEventIds?.length) {
+    const gist = bodyGist(message.content) || 'Record notice';
+    return { id: `message:${message.id}`, kind: 'substrate', runKey: '', anchorSeq: message.seq,
+      position: { sequence: message.seq, phase: 1, order: 0 }, gist,
+      accessibleText: `Notice: ${gist}`, originalContent: message.content,
+      presentation: activityPillPresentation({ kind: 'substrate', gist, content: message.content,
+        sender, messageType: 'substrate' }), historyBacked: true, recordEventNotice: true };
+  }
   if (message.isBatchCarrier || /^\[batched notices:/i.test(message.content)) return undefined;
   // An assistant-role reply from another session has no owner-visible parent
   // relation. Keep it out of activity pills just as the bubble projection does.
@@ -327,7 +336,7 @@ export function buildActivityTrail(input: {
   readonly sessionKey: string;
   readonly records: readonly { readonly kind: 'message'; readonly id: string; readonly seq: number;
     readonly sender?: string; readonly messageType?: string; readonly role: string; readonly content: string;
-    readonly isBatchCarrier?: boolean; readonly turnSeq?: number; readonly raw: Readonly<Record<string, unknown>> }[];
+    readonly isBatchCarrier?: boolean; readonly turnSeq?: number; readonly recordEventIds?: readonly string[]; readonly raw: Readonly<Record<string, unknown>> }[];
   readonly bubbles: readonly ActivityBubble[];
   readonly transitions: readonly CanonicalTransition[];
   /** Unmatched local sends use timestamps to find their place between tool rows. */
@@ -350,6 +359,10 @@ export function buildActivityTrail(input: {
   const candidates: Candidate[] = [];
   for (const message of input.records) {
     if (visibleIds.has(message.id)) continue;
+    if (message.recordEventIds?.length) {
+      candidates.push(messageCandidate(message as CanonicalMessage)!);
+      continue;
+    }
     const batchMembers = parseBatchMembers(message as CanonicalMessage);
     if (batchMembers) {
       for (const member of batchMembers) {
@@ -467,7 +480,12 @@ export function buildActivityTrail(input: {
   };
 
   for (const event of events) {
-    if (event.kind === 'candidate') pending.push(event);
+    if (event.kind === 'candidate') {
+      // A stamped notice is the durable event's visible representation even
+      // outside a human reply span. Keep the complete canonical notice once.
+      if (event.candidate.recordEventNotice) add(event.candidate, `notice:${event.candidate.id}`);
+      else pending.push(event);
+    }
     else {
       closeGap(event);
       previousBubble = event;
