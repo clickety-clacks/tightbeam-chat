@@ -1,6 +1,6 @@
 # Third-party inventory and notices
 
-No T3 Code or production T3 Chat source, assets or dependencies were copied into this repository. All authored source and synthetic fixture text were created here. The built library externalizes React; the separate Chat server browser assets include the React runtime listed below.
+The built library externalizes React; the separate Chat server browser assets include the React runtime listed below.
 
 The checked-in `package-lock.json` identifies direct packages and the full transitive development tree. Relevant runtime and direct package metadata read from that lock during this revision:
 

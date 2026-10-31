@@ -490,6 +490,8 @@ describe('conversation reading position', () => {
 
   it('animates an own message while following and a new activity fold, but leaves a growing fold in place', () => {
     const own = setup();
+    const startedAt = 1000;
+    const clock = vi.spyOn(performance, 'now').mockReturnValue(startedAt);
     const send = { sessionKey: 'reading', clientMessageId: 'c_arrival', deviceId: 'browser', content: 'My new message',
       status: 'accepted' as const, submittedAt: '2026-10-23T00:00:00Z', reconciled: false,
       hostSend: { lifetimeId: 'host-bridge', attempt: 1 } };
@@ -499,12 +501,21 @@ describe('conversation reading position', () => {
     expect(ownRow).toBeTruthy();
     expect(animate.mock.contexts[0]).toBe(ownRow);
     expect(own.box.scrollTop).toBe(ownStartingBottom);
-    advanceNextFrame(performance.now() + 300);
-    expect(own.box.scrollTop).toBe(own.box.scrollHeight - own.box.clientHeight);
+    clock.mockReturnValue(startedAt + 44.5);
     act(() => own.runtime.publish({ records: [...initialRows, { ...message(20), content: send.content,
       deviceId: send.deviceId, clientMessageId: send.clientMessageId }] }));
-    expect(animate).toHaveBeenCalledTimes(1);
+    const canonicalRow = document.querySelector('[data-scroll-key="local-c_arrival"]');
+    expect(canonicalRow).toBeTruthy();
+    expect(canonicalRow).not.toBe(ownRow);
+    expect(animate).toHaveBeenCalledTimes(2);
+    expect(animate.mock.contexts[1]).toBe(canonicalRow);
+    expect(animate.mock.results[0].value.cancel).toHaveBeenCalledTimes(1);
+    expect(animate.mock.results[1].value.currentTime).toBe(44.5);
+    advanceNextFrame(startedAt + 300);
+    expect(own.box.scrollTop).toBe(own.box.scrollHeight - own.box.clientHeight);
+    clock.mockRestore();
     cleanup();
+    animate.mockClear();
 
     const activity = setup();
     const activeOwnerTurn = createTurnProvenance({
@@ -520,14 +531,14 @@ describe('conversation reading position', () => {
     const fold = document.querySelector('[data-activity-fold="true"]');
     expect(fold).toBeTruthy();
     expect(animate.mock.contexts.at(-1)).toBe(fold);
-    expect(animate).toHaveBeenCalledTimes(2);
+    expect(animate).toHaveBeenCalledTimes(1);
 
     const third = { ...message(22), id: 'activity-3', sender: 'process:events', messageType: 'substrate',
       content: 'Quiet for 5 h · Assignment Gamma' };
     act(() => activity.runtime.publish({ records: [...initialRows, first, second, third] }));
     expect(document.querySelector<HTMLElement>('[data-activity-fold="true"]')?.dataset.scrollKey)
       .toBe((fold as HTMLElement).dataset.scrollKey);
-    expect(animate).toHaveBeenCalledTimes(2);
+    expect(animate).toHaveBeenCalledTimes(1);
   });
 
   it('stops bottom-follow while scrolling up and resumes it after a page reaches the bottom', () => {

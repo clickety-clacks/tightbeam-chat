@@ -57,6 +57,7 @@ export function useReadingPosition(
     arrivalScopeRef.current = arrivalScope;
   }
   const arrivalAnimations = useRef(new Map<HTMLElement, Animation>());
+  const arrivalAnimationStarts = useRef(new Map<HTMLElement, number>());
   const arrivalEligibleRef = useRef(arrivalEligible);
   const userScrollIntent = useRef(false);
   const userScrollTimeout = useRef<number | undefined>(undefined);
@@ -161,19 +162,28 @@ export function useReadingPosition(
     }
     for (const animation of arrivalAnimations.current.values()) animation.cancel();
     arrivalAnimations.current.clear();
+    arrivalAnimationStarts.current.clear();
+  };
+  const animateArrivalRow = (row: HTMLElement, startedAt: number, elapsed = 0) => {
+    const animation = row.animate?.([
+      { opacity: 0, transform: 'translateY(18px)' },
+      { opacity: 1, transform: 'translateY(0)' },
+    ], { duration: arrivalDuration, easing: arrivalEasing });
+    if (!animation) return;
+    if (elapsed > 0) animation.currentTime = elapsed;
+    arrivalAnimations.current.set(row, animation);
+    arrivalAnimationStarts.current.set(row, startedAt);
+    animation.onfinish = () => {
+      if (arrivalAnimations.current.get(row) !== animation) return;
+      arrivalAnimations.current.delete(row);
+      arrivalAnimationStarts.current.delete(row);
+    };
   };
   const animateArrivalRows = (rows: readonly HTMLElement[]) => {
+    const startedAt = performance.now();
     for (const row of rows) {
       if (arrivalAnimations.current.has(row)) continue;
-      const animation = row.animate?.([
-        { opacity: 0, transform: 'translateY(18px)' },
-        { opacity: 1, transform: 'translateY(0)' },
-      ], { duration: arrivalDuration, easing: arrivalEasing });
-      if (!animation) continue;
-      arrivalAnimations.current.set(row, animation);
-      animation.onfinish = () => {
-        if (arrivalAnimations.current.get(row) === animation) arrivalAnimations.current.delete(row);
-      };
+      animateArrivalRow(row, startedAt);
     }
   };
   const startArrivalMotion = (rows: readonly HTMLElement[]) => {
@@ -353,10 +363,23 @@ export function useReadingPosition(
     }
     addAppendedMessageRows(appendedScrollKeys);
     previousTailRow.current = currentTail;
-    for (const [row, animation] of arrivalAnimations.current) {
+    for (const [row, animation] of [...arrivalAnimations.current]) {
       if (row.parentElement === content.current) continue;
+      const scrollKey = row.dataset.scrollKey;
+      const replacement = scrollKey?.startsWith('local-') ? registeredRows.current.get(scrollKey) : undefined;
+      const startedAt = arrivalAnimationStarts.current.get(row);
+      const elapsed = startedAt === undefined ? arrivalDuration : performance.now() - startedAt;
+      if (replacement && replacement !== row && replacement.parentElement === content.current &&
+        startedAt !== undefined && elapsed >= 0 && elapsed < arrivalDuration) {
+        animation.cancel();
+        arrivalAnimations.current.delete(row);
+        arrivalAnimationStarts.current.delete(row);
+        animateArrivalRow(replacement, startedAt, elapsed);
+        continue;
+      }
       animation.cancel();
       arrivalAnimations.current.delete(row);
+      arrivalAnimationStarts.current.delete(row);
     }
 
     if (arrivalStartTime.current !== undefined &&
