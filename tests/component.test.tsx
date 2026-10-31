@@ -520,6 +520,35 @@ describe('conversation surface', () => {
     expect(reply?.getAttribute('aria-label')).toBe('Message from Research assistant');
   });
 
+  it('preserves assignment attribution while hiding provenance only in displayed bodies', () => {
+    const sessionKey = 'assigned-provenance-display';
+    const marker = '<engram-src id="123e4567-e89b-12d3-a456-426614174000"/>';
+    const humanContent = `[from user:account]\n\n${marker}\n\nReview this assigned message.`;
+    const replyContent = `${marker}\n\nThe assigned reply is ready.`;
+    const human = decodePublic019Message({
+      id: 'assigned-marked-prompt', seq: 10, rowVersion: 10, sessionKey, role: 'user', sender: 'user:person',
+      messageType: 'chat', content: humanContent, assignmentId: 'task-123', turnSeq: 7,
+      at: Date.parse('2026-10-30T00:00:00Z'), attachments: [],
+    }, sessionKey);
+    const reply = decodePublic019Message({
+      id: 'assigned-marked-reply', seq: 11, rowVersion: 11, sessionKey, role: 'assistant', sender: 'assistant-service',
+      messageType: 'assistant', content: replyContent, assignmentId: 'task-123', turnSeq: 7,
+      replyToMessageId: human.id, at: Date.parse('2026-10-30T00:01:00Z'), attachments: [],
+    }, sessionKey);
+    const runtime = new FakeRuntime(sessionKey, { records: [human, reply] });
+
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+
+    const log = screen.getByRole('log');
+    expect(within(log).getByText('Review this assigned message.').closest('.tb-chat-bubble')
+      ?.getAttribute('aria-label')).toBe('Message from Assigned task');
+    expect(within(log).getByText('The assigned reply is ready.').closest('.tb-chat-bubble')
+      ?.getAttribute('aria-label')).toBe('Message from Research assistant');
+    expect(log.textContent).not.toContain('<engram-src');
+    expect(human.content).toBe(humanContent);
+    expect(reply.content).toBe(replyContent);
+  });
+
   it('does not rebuild the transcript on a foreground return', () => {
     const sessionKey = 'background-resume-session';
     const runtime = new FakeRuntime(sessionKey);
