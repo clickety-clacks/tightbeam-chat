@@ -8,7 +8,7 @@
       },
       {
         "title": "Follow the prompt above your reading position",
-        "description": "The floating preview follows the nearest prompt above the visible conversation as you scroll in either direction. Select it to return to that exact prompt. The three-line limit, dismissal, reduced-motion behavior and safe-area placement are preserved."
+        "description": "The floating preview follows the nearest prompt above the visible conversation as you scroll in either direction. Select it to return to that exact prompt. The preview is now positioned below the device's top safe area. The three-line limit, dismissal and reduced-motion behavior are preserved."
       },
       {
         "title": "Clearer activity outcomes",
