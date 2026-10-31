@@ -33,6 +33,10 @@
       {
         "title": "Know when activity history starts",
         "description": "New kinds of activity appear starting when a server begins recording them; older events are not added later. Conversations remain usable when a server does not provide activity history."
+      },
+      {
+        "title": "Catch up when you return to Chat",
+        "description": "When you return to Chat after switching away, it checks whether conversation updates went stale. If they have, Chat starts its usual process to reconnect and catch up in the same conversation, preserving your place where supported."
       }
     ]
   },
