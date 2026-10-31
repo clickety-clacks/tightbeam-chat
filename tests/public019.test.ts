@@ -493,6 +493,7 @@ describe('Gateway wire mapping and behavior checks', () => {
     const fetch = candidate.host.fetch;
     candidate.host.fetch = async (input, init) => {
       if (new URL(input).pathname === `/api/sessions/${sessionKey}/record-events`) {
+        candidate.paths.push(input);
         return new Response('Not Found', { status: 404 });
       }
       return fetch(input, init);
