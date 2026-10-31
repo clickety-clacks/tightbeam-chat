@@ -514,6 +514,7 @@ describe('conversation reading position', () => {
     expect(own.box.scrollTop).toBe(own.box.scrollHeight - own.box.clientHeight);
     clock.mockRestore();
     cleanup();
+    animate.mockClear();
 
     const activity = setup();
     const activeOwnerTurn = createTurnProvenance({
