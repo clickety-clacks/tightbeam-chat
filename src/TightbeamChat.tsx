@@ -575,7 +575,7 @@ function sourceLabel(side: Bubble['side'], agentName: string): string {
 function statusText(state: RuntimeState): string {
   if (state.status === 'error') return 'Disconnected';
   if (state.status === 'loading') return 'Connecting';
-  if (state.status === 'unauthorized') return 'Access to this conversation is unavailable';
+  if (state.status === 'unauthorized') return 'Chat is no longer authorized. The message was not sent';
   if (state.status === 'ready' && state.liveConnectionState === 'disconnected') return 'Disconnected';
   if (state.status === 'stale' || (state.status === 'ready' &&
       (state.liveConnectionState === 'connecting' || state.liveConnectionState === 'reconnecting' ||
