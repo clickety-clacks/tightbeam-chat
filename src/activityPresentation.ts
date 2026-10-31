@@ -282,6 +282,39 @@ function deliveredNoticePresentation(content: string): ActivityPillPresentation 
   return undefined;
 }
 
+function commonNoticePresentation(content: string): ActivityPillPresentation | undefined {
+  const first = semanticLines(content)[0] ?? '';
+  let match = /^\[progress filed on\s+(asg_[a-z0-9-]+)\s*:\s*(.*?)\s*\]$/i.exec(first);
+  if (match) {
+    return { label: 'Progress', tone: 'indigo', icon: 'activity',
+      text: plainText(match[2]) || 'Progress recorded', metadata: shortId('asg', match[1]) };
+  }
+
+  match = /^\[cannot-proceed filed on\s+(asg_[a-z0-9-]+)\s*:\s*(.*?)\s*\]$/i.exec(first);
+  if (match) {
+    const reason = plainText(match[2]);
+    return { label: 'Action blocked', tone: 'orange', icon: 'refused',
+      text: reason ? `Could not proceed · ${reason}` : 'Could not proceed', metadata: shortId('asg', match[1]) };
+  }
+
+  match = /^\[assignment revoked:\s*(asg_[a-z0-9-]+)\s*\]$/i.exec(first);
+  if (match) {
+    return { label: 'Assignment revoked', tone: 'red', icon: 'flag', text: 'Revoked',
+      metadata: shortId('asg', match[1]) };
+  }
+
+  if (/^\[context compacted\]$/i.test(first)) {
+    return { label: 'Conversation', tone: 'slate', icon: 'notice', text: 'Context shortened' };
+  }
+  if (/^\[adapter down\]$/i.test(first)) {
+    return { label: 'Connection', tone: 'amber', icon: 'alarm', text: 'Connection unavailable' };
+  }
+  if (/^\[engine swap\]$/i.test(first)) {
+    return { label: 'Model', tone: 'purple', icon: 'process', text: 'Model changed' };
+  }
+  return undefined;
+}
+
 function sessionPresentation(content: string): ActivityPillPresentation | undefined {
   const first = semanticLines(content)[0] ?? '';
   const id = shortId('s', first);
@@ -352,7 +385,8 @@ export function activityPillPresentation(source: ActivityPillSource): ActivityPi
   } else {
     presentation = wakePresentation(source.content) ?? reminderPresentation(source.content) ??
       childFinished(source.content) ?? turnFailure(source.content, source.turnSeq) ??
-      deliveredNoticePresentation(source.content) ?? attestPresentation(source.content) ?? assignmentPresentation(source.content) ??
+      deliveredNoticePresentation(source.content) ?? commonNoticePresentation(source.content) ??
+      attestPresentation(source.content) ?? assignmentPresentation(source.content) ??
       decisionPresentation(source.content) ?? workItemPresentation(source.content) ??
       sessionPresentation(source.content) ?? remedyPresentation(source.gist, source.content) ??
       substrateTypePresentation(source) ?? genericActivity(source);

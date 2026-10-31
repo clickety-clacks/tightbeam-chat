@@ -46,6 +46,33 @@ describe('activity pill presentation', () => {
     }
   });
 
+  it('classifies the other frequent delivered notices without sending them to the generic pill', () => {
+    const assignmentId = 'asg_12345678-1111-4111-8111-123456789abc';
+    const cases: Array<[string, { label: string; tone: string; icon: string; text: string }]> = [
+      [`[progress filed on ${assignmentId}: Updated the product summary]`,
+        { label: 'Progress', tone: 'indigo', icon: 'activity', text: 'Updated the product summary' }],
+      [`[cannot-proceed filed on ${assignmentId}: The review could not continue]`,
+        { label: 'Action blocked', tone: 'orange', icon: 'refused', text: 'Could not proceed · The review could not continue' }],
+      [`[assignment revoked: ${assignmentId}]`,
+        { label: 'Assignment revoked', tone: 'red', icon: 'flag', text: 'Revoked' }],
+      ['[context compacted]',
+        { label: 'Conversation', tone: 'slate', icon: 'notice', text: 'Context shortened' }],
+      ['[adapter down]',
+        { label: 'Connection', tone: 'amber', icon: 'alarm', text: 'Connection unavailable' }],
+      ['[engine swap]',
+        { label: 'Model', tone: 'purple', icon: 'process', text: 'Model changed' }],
+    ];
+
+    for (const [content, expected] of cases) {
+      const presentation = activityPillPresentation(source('substrate', content, content, {
+        sender: 'process:events', messageType: 'process',
+      }));
+      expect(presentation, content).toMatchObject(expected);
+      expect(`${presentation?.label} ${presentation?.text} ${presentation?.metadata ?? ''}`).not.toMatch(/[\[\]]/);
+    }
+    expect(new Set(cases.map(([, expected]) => expected.icon)).size).toBe(cases.length);
+  });
+
   it('uses stable delivered notice shapes and shortens their primary identifiers', () => {
     const cases: Array<[ActivityPillSource, string, string, string | undefined]> = [
       [source('substrate', 'Attest att_12345678-1111-4111-8111-123456789abc (completion) was filed on assignment asg_abcdef12-1111-4111-8111-123456789abc.'),
