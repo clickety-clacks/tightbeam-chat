@@ -4,7 +4,7 @@
     "items": [
       {
         "title": "Keep your draft while a message is sent",
-        "description": "Your text stays available while a message waits for confirmation. If it fails or you are not allowed to send it, Chat clearly says it was not sent. When retry is available, you can try again without losing newer text. Screen readers announce send-state changes."
+        "description": "Your text stays available while a message waits for confirmation. The sent message appears as sending in the conversation until the server accepts it. If it fails or you are not allowed to send it, Chat clearly says it was not sent. When retry is available, you can try again without losing newer text. Screen readers announce send-state changes."
       },
       {
         "title": "Keep your place when your message arrives",
@@ -12,7 +12,7 @@
       },
       {
         "title": "Step through unseen messages",
-        "description": "The scroll control moves through unseen messages one at a time before taking you to the latest message."
+        "description": "Press the scroll control once to bring the next unseen message into view. The same control then says “Scroll to bottom”; press it again to go to the latest message."
       },
       {
         "title": "Follow the latest prompt while you read",
