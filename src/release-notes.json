@@ -1,30 +1,38 @@
 [
   {
-    "version": "v0.1.66",
+    "version": "v0.1.67",
     "items": [
       {
-        "title": "Keep drafts until messages are accepted",
-        "description": "Sending keeps your draft until the message is accepted, so a failed attempt leaves it available. Composer typing stays responsive."
+        "title": "Keep your draft while a message is sent",
+        "description": "Your text stays available while a message waits for confirmation. If it fails or you are not allowed to send it, Chat clearly says it was not sent. When retry is available, you can try again without losing newer text. Screen readers announce send-state changes."
       },
       {
-        "title": "Follow the prompt above your reading position",
-        "description": "The floating preview follows the nearest prompt above the visible conversation as you scroll in either direction. Select it to return to that exact prompt. The preview is now positioned below the device's top safe area. The three-line limit, dismissal and reduced-motion behavior are preserved."
+        "title": "Keep your place when your message arrives",
+        "description": "When the conversation updates after you send, your message stays where it first appeared instead of shifting as the server confirms it."
       },
       {
-        "title": "Clearer activity outcomes",
-        "description": "Verdicts, completions, assignments and common progress or blocked-action notices use specific pills with readable status text, colors, icons and shortened identifiers."
+        "title": "Step through unseen messages",
+        "description": "The scroll control moves through unseen messages one at a time before taking you to the latest message."
       },
       {
-        "title": "Cleaner message text and attribution",
-        "description": "Displayed messages, prompt previews and activity details hide well-formed provenance markup while stored, copied and sent content stays unchanged. Tool input and results remain verbatim. Assignment prompts retain their context label, and agent replies retain the agent name."
+        "title": "Follow the latest prompt while you read",
+        "description": "An up-to-three-line preview keeps the nearest prompt above your reading position in reach. Select it to return to that prompt or dismiss it; it stays below the device's top safe area and respects reduced-motion settings."
       },
       {
-        "title": "Record-event pills on compatible servers",
-        "description": "Compatible servers can supply separate activity pills for filed work items and opened assignments, ordered with the conversation and tool calls. A loaded notice for the same event takes precedence over a duplicate event pill."
+        "title": "See clearer activity outcomes",
+        "description": "Assignments, completions, progress, blocked actions and refusals use distinct, readable labels, colors and icons, so it is easier to tell what happened."
       },
       {
-        "title": "Understand record-event history limits",
-        "description": "Each event kind begins with the server release that activates it; earlier events remain omitted permanently, with no backfill. Servers without the optional event-history route keep messaging available without an activity-history warning."
+        "title": "Read cleaner messages and activity",
+        "description": "Technical source markers no longer appear in messages, prompt previews or activity details. Sender names and assignment context stay clear; copied and sent text, tool inputs and results remain unchanged."
+      },
+      {
+        "title": "See new activity in the conversation",
+        "description": "On servers that support it, new work items and assignments appear in order with messages and tool activity. A notice for the same event does not create a duplicate entry."
+      },
+      {
+        "title": "Know when activity history starts",
+        "description": "New kinds of activity appear starting when a server begins recording them; older events are not added later. Conversations remain usable when a server does not provide activity history."
       }
     ]
   },
