@@ -1,5 +1,34 @@
 [
   {
+    "version": "v0.1.66",
+    "items": [
+      {
+        "title": "Keep drafts until messages are accepted",
+        "description": "Sending keeps your draft until the message is accepted, so a failed attempt leaves it available. Composer typing stays responsive."
+      },
+      {
+        "title": "Follow the prompt above your reading position",
+        "description": "The floating preview follows the nearest prompt above the visible conversation as you scroll in either direction. Select it to return to that exact prompt. The three-line limit, dismissal, reduced-motion behavior and safe-area placement are preserved."
+      },
+      {
+        "title": "Clearer activity outcomes",
+        "description": "Verdicts, completions, assignments and common progress or blocked-action notices use specific pills with readable status text, colors, icons and shortened identifiers."
+      },
+      {
+        "title": "Cleaner message text and attribution",
+        "description": "Displayed messages, prompt previews and activity details hide well-formed provenance markup while stored, copied and sent content stays unchanged. Tool input and results remain verbatim. Assignment prompts retain their context label, and agent replies retain the agent name."
+      },
+      {
+        "title": "Record-event pills on compatible servers",
+        "description": "Compatible servers can supply separate activity pills for filed work items and opened assignments, ordered with the conversation and tool calls. A loaded notice for the same event takes precedence over a duplicate event pill."
+      },
+      {
+        "title": "Understand record-event history limits",
+        "description": "Each event kind begins with the server release that activates it; earlier events remain omitted permanently, with no backfill. Servers without the optional event-history route keep messaging available without an activity-history warning."
+      }
+    ]
+  },
+  {
     "version": "v0.1.65",
     "items": [
       {
