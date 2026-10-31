@@ -7,6 +7,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { TightbeamChat, workingStateOpacity } from '../src/TightbeamChat';
 import type { RenderContext } from '../src/TightbeamChat';
 import { createTurnProvenance } from '../src/provenance';
+import { decodePublic019Message } from '../src/public019';
 import type {
   ToolCallIndex, ToolCallRecord, CanonicalMessage, CanonicalTurn, ChatRuntime, ConversationRecord, LocalSend, RuntimeState,
   TightbeamAdapter, TurnProvenance,
@@ -471,6 +472,83 @@ describe('conversation surface', () => {
     expect(within(screen.getByRole('log')).getByText('First canonical message')).toBeTruthy();
   });
 
+  it('renders the full body of a canonical user message after its attribution wrapper', () => {
+    const sessionKey = 'complete-message-body';
+    const content = [
+      '[from user:account]',
+      '',
+      '[assignment: task-123]',
+      '',
+      'Review the test results and summarize the failures.',
+    ].join('\n');
+    const canonical = decodePublic019Message({
+      id: 'complete-message', seq: 10, rowVersion: 10, sessionKey, role: 'user', sender: 'user:person',
+      messageType: 'chat', content, assignmentId: 'task-123', at: Date.parse('2026-10-30T00:00:00Z'), attachments: [],
+    }, sessionKey);
+    const runtime = new FakeRuntime(sessionKey, { records: [canonical] });
+
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+
+    const log = screen.getByRole('log');
+    const message = within(log).getByText('Review the test results and summarize the failures.')
+      .closest<HTMLElement>('.tb-chat-bubble');
+    expect(message?.getAttribute('aria-label')).toBe('Message from Assigned task');
+    expect(message?.querySelector('.tb-chat-bubble-sender')?.textContent).toBe('Assigned task');
+    expect(log.textContent).toContain('[from user:account]');
+    expect(log.textContent).toContain('[assignment: task-123]');
+    expect(log.textContent).toContain('Review the test results and summarize the failures.');
+  });
+
+  it('preserves the agent label when an agent reply carries assignment context', () => {
+    const sessionKey = 'assignment-agent-reply';
+    const humanMessage = decodePublic019Message({
+      id: 'assigned-prompt', seq: 10, rowVersion: 10, sessionKey, role: 'user', sender: 'user:person',
+      messageType: 'chat', content: 'Review the requested changes.', assignmentId: 'task-123', turnSeq: 7,
+      at: Date.parse('2026-10-30T00:00:00Z'), attachments: [],
+    }, sessionKey);
+    const agentReply = decodePublic019Message({
+      id: 'assigned-reply', seq: 11, rowVersion: 11, sessionKey, role: 'assistant', sender: 'assistant-service',
+      messageType: 'assistant', content: 'The changes are ready.', assignmentId: 'task-123', turnSeq: 7,
+      replyToMessageId: 'assigned-prompt', at: Date.parse('2026-10-30T00:01:00Z'), attachments: [],
+    }, sessionKey);
+    const runtime = new FakeRuntime(sessionKey, { records: [humanMessage, agentReply] });
+
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+
+    const reply = within(screen.getByRole('log')).getByText('The changes are ready.')
+      .closest<HTMLElement>('.tb-chat-bubble');
+    expect(reply?.getAttribute('aria-label')).toBe('Message from Research assistant');
+  });
+
+  it('preserves assignment attribution while hiding provenance only in displayed bodies', () => {
+    const sessionKey = 'assigned-provenance-display';
+    const marker = '<engram-src id="123e4567-e89b-12d3-a456-426614174000"/>';
+    const humanContent = `[from user:account]\n\n${marker}\n\nReview this assigned message.`;
+    const replyContent = `${marker}\n\nThe assigned reply is ready.`;
+    const human = decodePublic019Message({
+      id: 'assigned-marked-prompt', seq: 10, rowVersion: 10, sessionKey, role: 'user', sender: 'user:person',
+      messageType: 'chat', content: humanContent, assignmentId: 'task-123', turnSeq: 7,
+      at: Date.parse('2026-10-30T00:00:00Z'), attachments: [],
+    }, sessionKey);
+    const reply = decodePublic019Message({
+      id: 'assigned-marked-reply', seq: 11, rowVersion: 11, sessionKey, role: 'assistant', sender: 'assistant-service',
+      messageType: 'assistant', content: replyContent, assignmentId: 'task-123', turnSeq: 7,
+      replyToMessageId: human.id, at: Date.parse('2026-10-30T00:01:00Z'), attachments: [],
+    }, sessionKey);
+    const runtime = new FakeRuntime(sessionKey, { records: [human, reply] });
+
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+
+    const log = screen.getByRole('log');
+    expect(within(log).getByText('[from user:account] Review this assigned message.').closest('.tb-chat-bubble')
+      ?.getAttribute('aria-label')).toBe('Message from Assigned task');
+    expect(within(log).getByText('The assigned reply is ready.').closest('.tb-chat-bubble')
+      ?.getAttribute('aria-label')).toBe('Message from Research assistant');
+    expect(log.textContent).not.toContain('<engram-src');
+    expect(human.content).toBe(humanContent);
+    expect(reply.content).toBe(replyContent);
+  });
+
   it('does not rebuild the transcript on a foreground return', () => {
     const sessionKey = 'background-resume-session';
     const runtime = new FakeRuntime(sessionKey);
@@ -729,6 +807,81 @@ describe('conversation surface', () => {
     } finally {
       layout.restore();
     }
+  });
+
+  it('hides provenance markup in message and pill display without changing source text', () => {
+    const sessionKey = 'provenance-display';
+    const tag = '<engram-src id="123e4567-e89b-42d3-a456-426614174000"/>';
+    const promptContent = `${tag}\n\nA normal message.`;
+    const onBehalfContent = `${tag}\n\nA message shown on your behalf.`;
+    const agentContent = `${tag}\n\nAn agent update with useful detail.`;
+    const prompt = row(sessionKey, 'prompt', promptContent, {
+      seq: 1, role: 'user', sender: 'user:person', messageType: 'chat', turnSeq: 1,
+    });
+    const carrierContent = [
+      '[batched notices: 2]',
+      '[1] source=process:notifications sender=user:person cause=notice class=fyi',
+      onBehalfContent,
+      '',
+      '[2] source=agent:helper sender=agent:helper cause=notice class=fyi',
+      agentContent,
+      '',
+      'coalesced by notices',
+    ].join('\n');
+    const carrier = row(sessionKey, 'carrier', carrierContent, {
+      seq: 2, role: 'user', sender: 'process:notifications', messageType: 'substrate', turnSeq: 1,
+    });
+    const answer = row(sessionKey, 'answer', 'Answer', {
+      seq: 3, sender: 'assistant-service', messageType: 'assistant', replyToMessageId: prompt.id, turnSeq: 1,
+      turnIncludesHuman: true,
+    });
+    const toolInput = `${tag} tool input remains verbatim`;
+    const toolResult = `${tag} tool result remains verbatim`;
+    const toolCall: ToolCallRecord = { id: 'tc-provenance', seq: 40, sessionKey, turnSeq: 1, afterMessageSeq: 3,
+      harnessToolCallId: 'call-provenance', title: 'Read marked content', kind: 'read', toolName: 'read_file',
+      status: 'completed', rawInput: toolInput, rawOutput: toolResult, content: null,
+      truncated: [], startedAt: 1000, endedAt: 1100, rowVersion: 1 };
+    const runtime = new FakeRuntime(sessionKey, { records: [prompt, carrier, answer], toolCallsEnabled: true,
+      toolCalls: [toolCall], provenanceAvailable: false, activityTurnStateAvailable: true, activeTurn: undefined });
+    const receivedRecords: ConversationRecord[] = [];
+    const renderMessage = vi.fn((record: ConversationRecord) => {
+      receivedRecords.push(record);
+      return undefined;
+    });
+    const view = render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} renderMessage={renderMessage} />);
+
+    const promptBubble = view.container.querySelector<HTMLElement>('[data-record-key="prompt"]')!;
+    expect(promptBubble.querySelector('.tb-chat-bubble-body')?.textContent).toBe('A normal message.');
+    const onBehalfBubble = view.container.querySelector<HTMLElement>('[data-record-key="carrier:member:1"]')!;
+    expect(onBehalfBubble.querySelector('.tb-chat-bubble-body')?.textContent).toBe('A message shown on your behalf.');
+    expect(receivedRecords.find(record => record.id === prompt.id)?.content).toBe(promptContent);
+    expect(receivedRecords.find(record => record.id === 'carrier:member:1')?.content).toBe(onBehalfContent);
+
+    const pillRow = view.container.querySelector<HTMLElement>('.tb-chat-activity-pill-row')!;
+    expect(pillRow.textContent).toContain('An agent update with useful detail.');
+    expect(pillRow.textContent).not.toContain(tag);
+    expect(pillRow.title).not.toContain(tag);
+    const pillToggle = within(pillRow).getByRole('button', { name: /Show full message/ });
+    fireEvent.click(pillToggle);
+    expect(pillRow.querySelector('[data-activity-message-content]')?.textContent)
+      .toBe('An agent update with useful detail.');
+
+    const toolRow = view.container.querySelector<HTMLElement>('[data-record-key="tool-tc-provenance"]')!;
+    fireEvent.click(toolRow.querySelector('summary')!);
+    expect(toolRow.textContent).toContain(toolInput);
+    expect(toolRow.textContent).toContain(toolResult);
+
+    expect(runtime.getSnapshot().records.find(record => record.id === prompt.id)?.content).toBe(promptContent);
+    expect(runtime.getSnapshot().records.find(record => record.id === carrier.id)?.content).toBe(carrierContent);
+    const sendContent = `${tag}\n\nSend the original bytes.`;
+    fireEvent.change(screen.getByRole('textbox', { name: 'Message to Research assistant' }), { target: { value: sendContent } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    expect(runtime.sent).toEqual([sendContent]);
+    act(() => runtime.update({ sends: [{ sessionKey, deviceId: 'device', clientMessageId: 'fixture-send',
+      content: sendContent, submittedAt: new Date().toISOString(), status: 'accepted', reconciled: false }] }));
+    const localBubble = view.container.querySelector<HTMLElement>('.tb-chat-local')!;
+    expect(localBubble.querySelector('.tb-chat-bubble-body')?.textContent).toBe('Send the original bytes.');
+    expect(localBubble.textContent).not.toContain(tag);
   });
 
   it('keeps owner-scoped activity while preserving human exchanges across pages, live updates, and reconnects', async () => {

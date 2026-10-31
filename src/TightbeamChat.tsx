@@ -16,6 +16,7 @@ import { getHostComposerSnapshot, HostComposerBridge, subscribeHostComposer } fr
 import { ReleaseNotesDialog, type ChatOverlay } from './ReleaseNotesDialog';
 import { CHAT_RELEASE_VERSION, RELEASE_NOTES, recordSeenReleaseVersion, releaseNotesForBuild, unseenReleaseNotes } from './releaseNotes';
 import { isSettingsCommand } from './settingsCommand';
+import { stripProvenanceMarkup } from './displayText';
 import './style.css';
 
 export interface RenderContext {
@@ -91,15 +92,20 @@ function latestUserPrompt(timeline: readonly TimelineItem[]): LatestUserPrompt |
     const item = timeline[index];
     if (item.kind === 'bubble' && item.bubble.side === 'human' && item.bubble.ownerScoped) {
       return { identity: bubblePromptIdentity(item.bubble),
-        content: item.bubble.displayContent ?? item.bubble.record.content, targetKey: item.bubble.key,
+        content: stripProvenanceMarkup(item.bubble.displayContent ?? item.bubble.record.content), targetKey: item.bubble.key,
         scrollKey: item.scrollKey ?? (item.bubble.derived ? item.bubble.key : item.bubble.record.id) };
     }
     if (item.kind === 'local') {
-      return { identity: `send:${sendIdentity(item.send)}`, content: item.send.content,
+      return { identity: `send:${sendIdentity(item.send)}`, content: stripProvenanceMarkup(item.send.content),
         targetKey: `local-${item.send.clientMessageId}`, scrollKey: `local-${item.send.clientMessageId}` };
     }
   }
   return undefined;
+}
+
+function messageSourceLabel(record: CanonicalMessage, defaultLabel: string): string {
+  const assignmentId = record.raw.assignmentId;
+  return typeof assignmentId === 'string' && assignmentId.trim() ? 'Assigned task' : defaultLabel;
 }
 
 function itemTime(item: TimelineItem): number | undefined {
@@ -650,6 +656,7 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, re
     registerRow(scrollKey, element);
   }, [registerRow, scrollKey]);
   const time = localTimestamp(record.createdAt);
+  const displayContent = stripProvenanceMarkup(bubble.displayContent ?? record.content);
   const context: RenderContext = {
     sessionKey: record.sessionKey,
     recordKey: bubble.key,
@@ -657,8 +664,8 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, re
       id: record.id, sessionKey: record.sessionKey, seq: record.seq, rowVersion: record.rowVersion,
       sender: record.sender, messageType: record.messageType, turnSeq: record.turnSeq, createdAt: record.createdAt,
     }), member: Object.freeze({ ...bubble.member }) } : {}),
-    defaultRender: () => bubble.derived ? markdownBody(bubble.displayContent ?? '')
-      : defaultBody(record, preservePosition, reconcileLayout),
+    defaultRender: () => bubble.derived ? markdownBody(displayContent)
+      : defaultBody(record, preservePosition, reconcileLayout, displayContent),
     copyText: () => navigator.clipboard.writeText(bubble.displayContent ?? record.content),
   };
   // Existing renderers consume record.content. Give them only the member view;
@@ -941,6 +948,13 @@ function ActivityPillContents({ presentation, summaryState }: { readonly present
   </>;
 }
 
+function displayPillPresentation(presentation: ActivityPillPresentation): ActivityPillPresentation {
+  return { ...presentation,
+    label: stripProvenanceMarkup(presentation.label),
+    text: stripProvenanceMarkup(presentation.text),
+    metadata: presentation.metadata ? stripProvenanceMarkup(presentation.metadata) || undefined : undefined };
+}
+
 function sameActivityPresentation(left: ActivityPillPresentation | undefined,
   right: ActivityPillPresentation | undefined): boolean {
   return left === right || Boolean(left && right && left.label === right.label && left.tone === right.tone &&
@@ -969,11 +983,12 @@ const ActivityMessageRow = memo(function ActivityMessageRow({ entry, registerRow
   const summary = useActivitySummary(entry);
   const [expanded, setExpanded] = useState(false);
   const [detailContentPresent, setDetailContentPresent] = useState(false);
-  const presentation = summary.presentation;
+  const presentation = summary.presentation ? displayPillPresentation(summary.presentation) : undefined;
   const accessibleText = presentation
     ? `${presentation.label}: ${presentation.text}${presentation.metadata ? `, ${presentation.metadata}` : ''}`
     : entry.accessibleText;
-  const fullMessage = entry.originalContent ?? entry.accessibleText;
+  const fullMessage = stripProvenanceMarkup(entry.originalContent ?? entry.accessibleText);
+  const displayOriginal = stripProvenanceMarkup(summary.original);
   const registerElement = useCallback((element: HTMLDivElement | null) => {
     registerRow(scrollKey, element);
     revealElement.current = element;
@@ -983,10 +998,10 @@ const ActivityMessageRow = memo(function ActivityMessageRow({ entry, registerRow
       className={`tb-chat-activity-line tb-chat-activity-${entry.kind} tb-chat-activity-pill-row`}
       onMouseEnter={summary.restoreOriginal}
       ref={registerElement} data-record-key={entry.id} data-scroll-key={scrollKey}
-      data-activity-run={entry.runKey} title={summary.original}>
+      data-activity-run={entry.runKey} title={displayOriginal}>
       <details className="tb-chat-activity-pill-disclosure" open={expanded || detailContentPresent}>
         <summary role="button" aria-label={`${accessibleText}. Show full message`} aria-expanded={expanded}
-          title={summary.original} onClick={event => {
+          title={displayOriginal} onClick={event => {
             event.preventDefault();
             preservePosition();
             setExpanded(value => !value);
@@ -1098,7 +1113,7 @@ const ActivityRunRow = memo(function ActivityRunRow({ entry, expanded, toggle, r
   const toolRun = entry.activityKind === 'tool';
   const detailLines = entry.lines;
   const summary = useActivitySummary(entry.summary);
-  const presentation = summary.presentation;
+  const presentation = summary.presentation ? displayPillPresentation(summary.presentation) : undefined;
   const latestDescription = presentation
     ? `${presentation.label}: ${presentation.text}${presentation.metadata ? `, ${presentation.metadata}` : ''}`
     : entry.summary.gist;
@@ -1109,7 +1124,7 @@ const ActivityRunRow = memo(function ActivityRunRow({ entry, expanded, toggle, r
     <button type="button" className={`tb-chat-activity-run-toggle tb-chat-activity-${entry.activityKind}${toolRun ? ' tb-chat-activity-tool-run-toggle' : ''}${presentation ? ' tb-chat-activity-pill-toggle' : ''}`}
       aria-expanded={expanded}
       aria-label={`${expanded ? 'Collapse' : 'Expand'} ${entry.activityKind} activity run, ${entry.lines.length} entries. Latest: ${latestDescription}`}
-      title={presentation ? summary.original : undefined}
+      title={presentation ? stripProvenanceMarkup(summary.original) : undefined}
       onClick={() => { preservePosition(); toggle(entry.id); }}>
       {toolRun
         ? <ToolCallTerminalIcon className="tb-chat-tool-terminal-icon" />
@@ -1309,7 +1324,10 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     .map((message) => ({
       key: message.key, record: message.source, side: message.side,
       ownerScoped: message.side === 'agent' || message.senderLabel === 'You',
-      sender: message.senderLabel ?? sourceLabel(message.side, agentName), derived: Boolean(message.member),
+      sender: message.side === 'human'
+        ? messageSourceLabel(message.source, message.senderLabel ?? sourceLabel(message.side, agentName))
+        : sourceLabel(message.side, agentName),
+      derived: Boolean(message.member),
       displayContent: message.member?.content, member: message.member,
     })), [projection, agentName]);
   const caption = state.activityTurnStateAvailable === true ? activeCaption(state.activeTurn) : undefined;
@@ -1814,7 +1832,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
           id={`${promptTargetPrefix}-${encodeURIComponent(`local-${send.clientMessageId}`)}`}
           className="tb-chat-bubble tb-chat-bubble-human tb-chat-local" key={send.clientMessageId}
           data-record-key={targetKey} data-scroll-key={targetKey} aria-label={`Your message, ${send.status}`}>
-          <div className="tb-chat-bubble-body">{markdownBody(send.content)}</div>
+          <div className="tb-chat-bubble-body">{markdownBody(stripProvenanceMarkup(send.content))}</div>
           <p className="tb-chat-send-state" data-send-status={send.status} role={send.status === 'pending' ? 'status' : undefined}>{send.status === 'uncertain' ? 'Delivery is uncertain'
             : send.status === 'failed' ? 'Message could not be sent'
               : send.status === 'pending' ? 'Sending…'
