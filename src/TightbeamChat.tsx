@@ -1,3 +1,5 @@
+import { uncoveredRecordEvents, recordEventPresentation } from './sessionRecordEvents';
+import type { SessionRecordEvent } from './types';
 import { forwardRef, memo, useCallback, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore,
   type AnchorHTMLAttributes, type FormEvent, type HTMLAttributes, type ImgHTMLAttributes,
   type ReactNode, type RefObject, type TableHTMLAttributes } from 'react';
@@ -56,6 +58,7 @@ const olderHistoryPrefetchDistance = (viewport: HTMLElement) => Math.max(80, vie
 const toolHistoryErrorGraceMs = 1000;
 
 type TimelineItem =
+  | { readonly kind: 'record-event'; readonly event: SessionRecordEvent }
   | { readonly kind: 'tool'; readonly call: ToolCallRecord }
   | { readonly kind: 'transition'; readonly record: CanonicalTransition }
   | { readonly kind: 'activity'; readonly entry: ActivityLine }
@@ -110,6 +113,7 @@ function messageSourceLabel(record: CanonicalMessage, defaultLabel: string): str
 
 function itemTime(item: TimelineItem): number | undefined {
   if (item.kind === 'tool') return item.call.startedAt;
+  if (item.kind === 'record-event') return item.event.at;
   if (item.kind === 'activity' || item.kind === 'activity-fold' || item.kind === 'overflow') return undefined;
   const value = item.kind === 'transition' ? item.record.createdAt
     : item.kind === 'bubble' ? item.bubble.record.createdAt
@@ -244,7 +248,7 @@ function transcriptIndex(timeline: readonly TimelineItem[]) {
   const placements: PendingPlacement[] = [];
   let pending: TimelineItem[] = [];
   for (const item of timeline) {
-    if (item.kind === 'local' && !item.canonical) { pending.push(item); continue; }
+    if (item.kind === 'record-event' || (item.kind === 'local' && !item.canonical)) { pending.push(item); continue; }
     const anchor = item.kind === 'bubble' ? item.bubble.record.seq : item.kind === 'transition'
       ? item.record.seq : item.kind === 'activity' || item.kind === 'overflow' ? item.entry.anchorSeq
         : item.kind === 'activity-fold' ? item.entry.anchorSeq
@@ -257,7 +261,27 @@ function transcriptIndex(timeline: readonly TimelineItem[]) {
   return { index, placements };
 }
 
-// Only unmatched sends need timestamp placement. Search the timestamp aggregate
+// Record events have their own timestamp/id domain, never a transcript sequence.
+// Position them before the next later message and then among the anchored tools.
+function eventPlacements(events: readonly SessionRecordEvent[], records: readonly ConversationRecord[]): PendingPlacement[] {
+  const times = records.flatMap(row => {
+    const at = row.createdAt ? Date.parse(row.createdAt) : NaN;
+    return Number.isFinite(at) ? [{ at, seq: row.seq }] : [];
+  }).sort((a, b) => a.at - b.at || a.seq - b.seq);
+  const suffix: number[] = [];
+  for (let i = times.length - 1; i >= 0; i--) suffix[i] = Math.min(times[i].seq, suffix[i + 1] ?? Infinity);
+  return events.map(event => {
+    let low = 0, high = times.length;
+    while (low < high) {
+      const mid = (low + high) >>> 1;
+      if (times[mid].at <= event.at) low = mid + 1;
+      else high = mid;
+    }
+    return { item: { kind: 'record-event', event }, beforeAnchor: suffix[low] };
+  });
+}
+
+// Unmatched sends and record events use timestamp placement. Search the timestamp aggregate
 // along fixed index paths, never scan the accumulated tool history.
 function placePending(placements: readonly PendingPlacement[], tools: ToolCallIndex | undefined) {
   let index: RecordIndex<PendingAtAnchor> | undefined;
@@ -1246,7 +1270,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     priorArrivalContext.sessionKey === state.sessionKey && priorArrivalContext.generation === state.generation &&
     priorArrivalContext.recoveryRevision === recoveryRevision;
   const reading = useReadingPosition(state.status === 'ready', readingRevision, box =>
-    state.loadingOlder || (!state.historyError && state.hasOlder && box.scrollTop < olderHistoryPrefetchDistance(box)),
+    Boolean(state.loadingOlder || state.recordEventsLoading || (!state.historyError && (state.hasOlder || state.recordEventsHasOlder) && box.scrollTop < olderHistoryPrefetchDistance(box))),
     arrivalEligible, state.sessionKey, markReadPosition);
   const preserveReadingPositionRef = useRef(reading.preserveVisiblePosition);
   preserveReadingPositionRef.current = reading.preserveVisiblePosition;
@@ -1321,6 +1345,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   const projection = useMemo(() => projectMessages(state.records, state.principalKey, state.session?.raw.ownerUserId),
     [state.records, state.principalKey, state.session?.raw.ownerUserId]);
   const bubbles: Bubble[] = useMemo(() => projection.messages
+    .filter(message => message.member || !message.source.recordEventIds?.length)
     .map((message) => ({
       key: message.key, record: message.source, side: message.side,
       ownerScoped: message.side === 'agent' || message.senderLabel === 'You',
@@ -1500,7 +1525,12 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     readonly offscreen: boolean;
   } | undefined>(undefined);
   const transcript = useMemo(() => transcriptIndex(timeline), [timeline]);
-  const pending = useMemo(() => placePending(transcript.placements, tools), [transcript, tools]);
+  const eventPositions = useMemo(() => eventPlacements(
+    uncoveredRecordEvents(state.recordEvents ?? [], state.records), state.records), [state.recordEvents, state.records]);
+  const pending = useMemo(() => placePending([...transcript.placements, ...eventPositions].sort((a, b) =>
+    (itemTime(a.item) ?? Infinity) - (itemTime(b.item) ?? Infinity) ||
+    (a.item.kind === 'record-event' && b.item.kind === 'record-event' ? a.item.event.eventId.localeCompare(b.item.event.eventId) : 0)), tools),
+    [transcript, tools, eventPositions]);
   const updateLatestPromptVisibility = useCallback(() => {
     const element = root.current;
     const notice = runtimeNotice.current;
@@ -1668,6 +1698,8 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     };
   }, []);
 
+  const hasOlder = state.hasOlder || state.recordEventsHasOlder;
+  const loadingOlder = state.loadingOlder || state.recordEventsLoading;
   const loadOlder = () => {
     reading.holdPosition();
     void runtime.loadOlder();
@@ -1681,11 +1713,11 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
 
   useLayoutEffect(() => {
     const box = viewport.current;
-    if (!box || state.status !== 'ready' || !state.hasOlder || state.loadingOlder || state.historyError
+    if (!box || state.status !== 'ready' || !hasOlder || loadingOlder || state.historyError || state.recordEventsError
       || box.scrollTop < 0 || box.scrollTop >= olderHistoryPrefetchDistance(box)) return;
     const frame = requestAnimationFrame(() => loadOlder());
     return () => cancelAnimationFrame(frame);
-  }, [state.status, state.hasOlder, state.loadingOlder, state.historyError, state.records, state.provenance]);
+  }, [state.status, hasOlder, loadingOlder, state.historyError, state.recordEventsError, state.records, state.provenance]);
 
   const handleScroll = () => {
     const box = viewport.current;
@@ -1696,7 +1728,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     reading.onScroll();
     updateLatestPromptVisibility();
     const movedUp = previous !== undefined && current < previous;
-    if (!movedUp || current < 0 || state.status !== 'ready' || !state.hasOlder || state.loadingOlder) return;
+    if (!movedUp || current < 0 || state.status !== 'ready' || !hasOlder || loadingOlder) return;
     if (state.historyError || current < olderHistoryPrefetchDistance(box)) loadOlder();
   };
 
@@ -1770,6 +1802,17 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   </div>;
 
   const renderItem = useCallback((item: TimelineItem) => {
+        if (item.kind === 'record-event') {
+          const key = 'record-event:' + item.event.eventId;
+          const presentation = recordEventPresentation(item.event);
+          return <div key={key} role="note" tabIndex={-1}
+            ref={element => reading.registerRow(key, element)} data-record-key={key} data-scroll-key={key}
+            className="tb-chat-activity-line tb-chat-activity-substrate tb-chat-activity-pill-row"
+            aria-label={`${presentation.label}: ${presentation.text}, ${item.event.record.id}`}
+            title={`${presentation.text} · ${item.event.record.id}`}>
+            <ActivityPillContents presentation={presentation} />
+          </div>;
+        }
         if (item.kind === 'tool') {
           const entry = activityPlan.toolItems.get(item.call.id);
           // The earlier-activity control is indexed once in messageItems. Tool
@@ -1898,6 +1941,9 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
       {hasToolHistoryStatus && renderToolHistoryStatus(showToolHistoryStatusInNotice)}
       {projection.issues.length > 0 && <div className="tb-chat-history-error tb-chat-caption tb-chat-caption-danger" role="alert">
         Some message sources could not be interpreted. Conversation filtering is incomplete.
+      </div>}
+      {state.recordEventsError && <div role="status" className="tb-chat-caption">
+        Activity history is unavailable. <button type="button" onClick={() => runtime.retryRecordEvents?.()}>Retry activity history</button>
       </div>}
       <IndexedTimeline messages={transcript.index} tools={tools} pending={pending.index} render={renderItem} />
       {pending.tail.map(renderItem)}

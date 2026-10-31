@@ -1,3 +1,4 @@
+import type { SessionRecordEvent, RecordEventPage } from './types';
 import {
   AuthorizationError,
   InvalidCursorError,
@@ -176,6 +177,7 @@ export function decodePublic019Message(value: unknown, sessionKey: string): Conv
       content: typeof row.content === 'string' ? row.content : requiredString(row, 'content'),
       from: typeof marker.from === 'string' ? marker.from : undefined,
       to: typeof marker.to === 'string' ? marker.to : undefined,
+      recordEventIds: stringList(row.recordEventIds ?? []),
       createdAt: messageTime(row), raw: Object.freeze({ ...row }),
     });
   }
@@ -197,6 +199,7 @@ export function decodePublic019Message(value: unknown, sessionKey: string): Conv
     isBatchCarrier: typeof row.isBatchCarrier === 'boolean' ? row.isBatchCarrier : undefined,
     messageType: optionalString(row, 'messageType'),
     createdAt: messageTime(row),
+    recordEventIds: stringList(row.recordEventIds ?? []),
     attachments: Object.freeze([...attachments]),
     clientMessageId: optionalString(row, 'clientMessageId'),
     deviceId: optionalString(row, 'deviceId'),
@@ -235,6 +238,29 @@ export function decodePublic019Session(value: unknown, sessionKey: string): Sess
     harness: optionalString(row, 'harness'),
     activity: optionalString(row, 'mechanicalStatus') ?? optionalString(row, 'state'),
     raw: Object.freeze({ ...row }),
+  });
+}
+
+function stringList(value: unknown): readonly string[] {
+  if (!Array.isArray(value) || value.some(item => typeof item !== 'string')) {
+    throw new UnsupportedTargetError('Invalid record-event identity list.');
+  }
+  return Object.freeze([...value]);
+}
+
+/** History supplies the session through its route; live frames supply refs.sessionKey. */
+export function decodeRecordEvent(value: unknown, sessionKey: string): SessionRecordEvent {
+  const row = record(value);
+  const source = record(row.record);
+  const cause = row.cause == null ? null : record(row.cause);
+  return Object.freeze({ eventId: requiredString(row, 'eventId'), sessionKey,
+    kind: requiredString(row, 'kind'), at: nonnegativeInteger(row, 'at'),
+    record: Object.freeze({ type: requiredString(source, 'type'), id: requiredString(source, 'id'),
+      detail: requiredString(source, 'detail'), workItemId: optionalString(source, 'workItemId') }),
+    actorSessionKey: optionalString(row, 'actorSessionKey') ?? null,
+    tiedAs: stringList(row.tiedAs), noticeMessageIds: stringList(row.noticeMessageIds),
+    cause: cause ? Object.freeze({ turnSeq: optionalPositiveInteger(cause, 'turnSeq') ?? null,
+      messageId: optionalString(cause, 'messageId') ?? null }) : null,
   });
 }
 
@@ -302,6 +328,9 @@ export function decodePublic019Notice(value: unknown, sessionKey: string): Chang
   }
   const refs = record(frame.refs);
   if (refs.sessionKey !== sessionKey) throw new UnsupportedTargetError('Change frame has a different session reference.');
+  if (frame.class === 'session_record_event.created') {
+    return { operation: 'record-event', event: decodeRecordEvent(frame.payload, sessionKey) };
+  }
   if ((frame.class === 'message.created' || frame.class === 'transition.recorded') &&
       ['messages', 'transcript messages'].includes(String(frame.resource)) && frame.op === 'upsert') {
     return { operation: 'upsert', record: decodePublic019Message(frame.payload, sessionKey) };
@@ -584,7 +613,7 @@ export function createPublic019Transport(config: Public019Config): { transport: 
         }, timeoutMs);
         try {
           channel.send({ type: 'subscribe', protocolVersion: 2, subscriptionId, filters: { sessionKey, classes: tools ? ['tool_call.']
-              : ['message.created', 'transition.recorded', 'session.', 'turn.started', 'turn.ended'] } });
+              : ['message.created', 'transition.recorded', 'session.', 'turn.started', 'turn.ended', 'session_record_event.created'] } });
         } catch (error) { close(); rejectReady(error); }
         if (hasRailSubscription && !closed) {
           railSubscriptionPending = true;
@@ -686,6 +715,21 @@ export function createPublic019Transport(config: Public019Config): { transport: 
       page.coverage === session.sessionKey,
     openChanges,
     openToolChanges: (sessionKey, callbacks, signal) => openChanges(sessionKey, callbacks, signal, true),
+    async readRecordEvents(sessionKey, before, signal): Promise<RecordEventPage> {
+      const query = new URLSearchParams({ limit: '50' });
+      if (before) query.set('before', before);
+      const body = await get('/api/sessions/' + encodeURIComponent(sessionKey) + '/record-events?' + query, signal);
+      if (body.schemaVersion !== 1 || body.resource !== 'record events' || !Array.isArray(body.items)) {
+        throw new Error('Unexpected record-event collection envelope.');
+      }
+      const page = record(body.page);
+      const oldestCursor = optionalString(page, 'oldestCursor') ?? null;
+      if (typeof page.hasMoreBefore !== 'boolean' || (page.hasMoreBefore && !oldestCursor)) {
+        throw new Error('Invalid record-event page cursor.');
+      }
+      return Object.freeze({ items: Object.freeze(body.items.map(item => decodeRecordEvent(item, sessionKey))),
+        oldestCursor, hasOlder: page.hasMoreBefore });
+    },
     async readToolCalls(sessionKey, range, signal) {
       const filters = new URLSearchParams({ limit: '50', afterMessageSeqFromInclusive: String(range.fromInclusive) });
       if (range.toExclusive !== undefined) filters.set('afterMessageSeqToExclusive', String(range.toExclusive));

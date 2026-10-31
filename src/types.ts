@@ -3,6 +3,8 @@ import type { RecordIndex } from './recordIndex';
 /** The host decodes the elected backend's wire schema into these canonical records. */
 export interface CanonicalMessage {
   readonly kind: 'message';
+  /** Exact notice coverage supplied by the Gateway, never inferred from text. */
+  readonly recordEventIds?: readonly string[];
   readonly id: string;
   readonly sessionKey: string;
   readonly seq: number;
@@ -60,6 +62,7 @@ export interface TurnProvenance {
 /** A target-verified projection of an actual stored switch, never inferred from text. */
 export interface CanonicalTransition {
   readonly kind: 'transition';
+  readonly recordEventIds?: readonly string[];
   readonly id: string;
   readonly sessionKey: string;
   readonly seq: number;
@@ -91,6 +94,24 @@ export interface ToolCallRecord {
   readonly startedAt: number;
   readonly endedAt: number | null;
   readonly rowVersion: number;
+}
+
+/** A durable occurrence from the selected session's record-event feed. */
+export interface SessionRecordEvent {
+  readonly eventId: string;
+  readonly sessionKey: string;
+  readonly kind: string;
+  readonly at: number;
+  readonly record: { readonly type: string; readonly id: string; readonly workItemId?: string; readonly detail: string };
+  readonly actorSessionKey: string | null;
+  readonly tiedAs: readonly string[];
+  readonly cause: { readonly turnSeq: number | null; readonly messageId: string | null } | null;
+  readonly noticeMessageIds: readonly string[];
+}
+export interface RecordEventPage {
+  readonly items: readonly SessionRecordEvent[];
+  readonly oldestCursor: string | null;
+  readonly hasOlder: boolean;
 }
 
 export type ToolCallIndex = RecordIndex<RecordIndex<ToolCallRecord>>;
@@ -129,6 +150,7 @@ export interface SessionRecord {
 }
 
 export type ChangeNotice =
+  | { readonly operation: 'record-event'; readonly event: SessionRecordEvent }
   | { readonly operation: 'tool'; readonly tool: ToolCallRecord }
   | { readonly operation: 'upsert'; readonly record: ConversationRecord }
   | { readonly operation: 'rail-denial'; readonly id: string; readonly sessionKey: string;
@@ -236,6 +258,8 @@ export interface ChatTransport {
   openToolChanges?(sessionKey: string, callbacks: ChangeCallbacks, signal: AbortSignal): Promise<ChangeConnection>;
   /** Exhaust the page chain for this fixed message-anchor range. */
   readToolCalls?(sessionKey: string, range: ToolCallRange, signal: AbortSignal): Promise<readonly ToolCallRecord[]>;
+  /** Newest page by default; older pages use the opaque R1 cursor. */
+  readRecordEvents?(sessionKey: string, before: string | undefined, signal: AbortSignal): Promise<RecordEventPage>;
   readTail(sessionKey: string, signal: AbortSignal): Promise<ConversationPage>;
   readOlder(sessionKey: string, before: string, signal: AbortSignal): Promise<ConversationPage>;
   /** Read only rows newer than a held Gateway transcript cursor. */
@@ -297,6 +321,10 @@ export interface RuntimeState {
   /** Set only when the host principal/device no longer matches this runtime's identity. */
   readonly identityChanged?: boolean;
   readonly records: readonly ConversationRecord[];
+  readonly recordEvents?: readonly SessionRecordEvent[];
+  readonly recordEventsHasOlder?: boolean;
+  readonly recordEventsLoading?: boolean;
+  readonly recordEventsError?: string;
   readonly toolCallsEnabled?: boolean;
   /** Optional array for custom hosts; the live runtime uses the persistent index. */
   readonly toolCalls?: readonly ToolCallRecord[];
@@ -360,6 +388,7 @@ export interface ChatRuntime {
   loadOlder(): Promise<void>;
   setToolCallsEnabled?(enabled: boolean): void;
   retryToolCalls?(): void;
+  retryRecordEvents?(): void;
   send(content: string, clientMessageId?: string, hostSend?: HostSendContext): string | null;
   retrySend(clientMessageId: string): Promise<void>;
   /** Subscribe before a host-correlated send so ack and reconciliation order is preserved. */
