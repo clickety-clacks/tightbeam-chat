@@ -185,6 +185,7 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
 .tb-chat-bubble-sender { display: block; margin-bottom: .25rem; color: var(--tb-chat-muted); font-size: .72rem; font-weight: 600; line-height: 1.2; }
 .tb-chat-bubble-agent { align-self: flex-start; }
 .tb-chat-local { border-color: var(--tb-chat-border); }
+.tb-chat-local[data-send-state="ghosted"] { opacity: .68; }
 .tb-chat-bubble-body { min-width: 0; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
 .tb-chat-markdown { min-width: 0; overflow-wrap: anywhere; }
 .tb-chat-markdown > :first-child { margin-top: 0; }
@@ -228,10 +229,32 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
 .tb-chat-attachment-content { font-size: .9rem; }
 .tb-chat-image-alt { color: var(--tb-chat-muted); font-style: italic; }
 .tb-chat-time { display: block; margin-top: .32rem; color: var(--tb-chat-muted); font-size: .7rem; line-height: 1.2; text-align: end; }
-.tb-chat-send-state, .tb-chat-send-reason { margin: .35rem 0 0; font-size: .85rem; color: var(--tb-chat-muted); }
-.tb-chat-send-state[data-send-status="uncertain"] { color: var(--tb-chat-caution); }
-.tb-chat-send-state[data-send-status="failed"] { color: var(--tb-chat-danger); }
-.tb-chat-send-reason { color: inherit; }
+.tb-chat-send-indicator { display: flex; align-items: center; min-height: .9rem; margin: .35rem 0 0; }
+.tb-chat-send-spinner {
+  display: inline-block;
+  width: .78rem;
+  height: .78rem;
+  border: .12rem solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: tb-chat-send-spin .8s linear infinite;
+}
+.tb-chat-send-error {
+  display: grid;
+  width: .82rem;
+  height: .82rem;
+  place-items: center;
+  border: 1.5px solid var(--tb-chat-danger);
+  border-radius: 50%;
+  color: var(--tb-chat-danger);
+  font-size: .65rem;
+  font-weight: 700;
+  line-height: 1;
+}
+@keyframes tb-chat-send-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .tb-chat-send-spinner { animation: none; border-top-color: transparent; border-right-color: currentColor; }
+}
 .tb-chat-send-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .45rem; margin-top: .55rem; font-size: .85rem; }
 .tb-chat-send-actions button, .tb-chat-status-popup > button {
   border: 1px solid var(--tb-chat-border);
