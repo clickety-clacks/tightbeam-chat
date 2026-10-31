@@ -929,10 +929,13 @@ describe('conversation reading position', () => {
     act(() => runtime.publish({ records: [...initialRows, message(20), message(21), message(22), message(23)] }));
     const tallBubble = box.querySelector<HTMLElement>('[data-scroll-key="message-20"]')!;
     const startTop = box.scrollTop;
+    const viewportBounds = box.getBoundingClientRect();
+    const offscreenTop = viewportBounds.bottom + 50;
     vi.spyOn(tallBubble, 'getBoundingClientRect').mockImplementation(() =>
-      rect(startTop + 350 - box.scrollTop, 400));
+      rect(offscreenTop - (box.scrollTop - startTop), 400));
+    expect(tallBubble.getBoundingClientRect().top).toBeGreaterThan(viewportBounds.bottom);
     reducedMotion = true;
-    const expectedTop = startTop + 350;
+    const expectedTop = startTop + offscreenTop - viewportBounds.top;
 
     fireEvent.click(screen.getByRole('button', { name: '4 unseen messages' }));
 

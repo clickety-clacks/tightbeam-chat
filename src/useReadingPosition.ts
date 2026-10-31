@@ -137,7 +137,6 @@ export function useReadingPosition(
       // Appended message bubbles stay unseen until they intersect the viewport.
       unseenMessages.current.set(row.key, row.scrollKey);
     }
-    refreshUnseenMessages();
   };
   const isAtLatest = (box: HTMLElement, scrollTop = box.scrollTop) => {
     const bottom = Math.max(0, box.scrollHeight - box.clientHeight);
