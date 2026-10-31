@@ -81,6 +81,8 @@ let scrollTop = 0;
 let clampScrollTopOnRead = false;
 let viewportHeight = 300;
 let lateLayoutGrowth = 0;
+// Model the stylesheet's tail padding (composer 60px, 16px/rem, no safe-area inset).
+let extraBottomSpace = 0;
 let scrollTo: ReturnType<typeof vi.fn>;
 let reducedMotion = false;
 let animate: ReturnType<typeof vi.fn>;
@@ -100,7 +102,7 @@ let keyboardViewportSimulation = false;
 const renderedViewportHeight = () => {
   return Math.max(0, viewportHeight - (keyboardViewportSimulation && followsKeyboardInset ? keyboardInset() : 0));
 };
-const scrollHeight = () => 32 + rows().length * 92 + lateLayoutGrowth + Number.parseFloat(document.querySelector<HTMLElement>('.tb-chat-viewport')?.style.getPropertyValue('--tb-chat-anchor-space') || '0') +
+const scrollHeight = () => 32 + rows().length * 92 + extraBottomSpace + lateLayoutGrowth + Number.parseFloat(document.querySelector<HTMLElement>('.tb-chat-viewport')?.style.getPropertyValue('--tb-chat-anchor-space') || '0') +
   (modelActiveCaptionSlot && (hasStableActiveCaptionSlot || document.querySelector('.tb-chat-active-caption')) ? 26 : 0);
 const rect = (top: number, height: number) => ({ top, bottom: top + height, left: 0, right: 400, width: 400, height, x: 0, y: top, toJSON() {} });
 class TestVisualViewport extends EventTarget {
@@ -130,6 +132,7 @@ beforeEach(() => {
   clampScrollTopOnRead = false;
   viewportHeight = 300;
   lateLayoutGrowth = 0;
+  extraBottomSpace = 0;
   reducedMotion = false;
   modelActiveCaptionSlot = false;
   animationFrames.clear();
@@ -153,6 +156,11 @@ beforeEach(() => {
     };
     if (this.classList.contains('tb-chat')) return rect(0, keyboardViewportSimulation ? viewportHeight : 50);
     if (this.classList.contains('tb-chat-viewport')) return rect(0, renderedViewportHeight());
+    if (this.classList.contains('tb-chat-scroll-latest')) {
+      const composerHidden = this.parentElement?.classList.contains('tb-chat-host-composer-hidden');
+      return rect(renderedViewportHeight() - (composerHidden ? 60 : 120), 40);
+    }
+    if (this.classList.contains('tb-chat-composer')) return rect(renderedViewportHeight() - 60, 60);
     const index = this.dataset.testPosition === undefined ? rows().indexOf(this) : Number(this.dataset.testPosition);
     if (index >= 0) return rect(16 + Number.parseFloat(document.querySelector<HTMLElement>('.tb-chat-viewport')?.style.getPropertyValue('--tb-chat-anchor-space') || '0') + index * 92 - readScrollTop(), 80);
     return rect(0, 50);
@@ -867,6 +875,7 @@ describe('conversation reading position', () => {
   });
 
   it('counts unseen bubbles, reveals the next one with minimal scroll, then scrolls to the bottom', () => {
+    extraBottomSpace = 132;
     const { runtime, box } = setup();
     readAt(box, 500);
     act(() => runtime.publish({ records: [...initialRows, message(20), message(21)] }));
@@ -875,7 +884,7 @@ describe('conversation reading position', () => {
     expect(revealButton.textContent).toContain(revealButton.getAttribute('aria-label'));
     revealButton.focus();
     const firstBubble = box.querySelector<HTMLElement>('[data-scroll-key="message-20"]')!;
-    const revealTop = box.scrollTop + firstBubble.getBoundingClientRect().bottom - box.getBoundingClientRect().bottom;
+    const revealTop = box.scrollTop + firstBubble.getBoundingClientRect().bottom - revealButton.getBoundingClientRect().top;
     fireEvent.click(revealButton);
 
     expect(scrollTo).toHaveBeenLastCalledWith({ top: revealTop, behavior: 'smooth' });
@@ -897,16 +906,44 @@ describe('conversation reading position', () => {
     expect(screen.queryByRole('button', { name: latestButtonName })).toBeNull();
   });
 
-  it('clears each bubble from the unseen count as soon as any part is visible', () => {
+  it.each([false, true])('reveals a short unseen bubble above the floating control when composer hidden=%s', composerHidden => {
+    extraBottomSpace = composerHidden ? 96 : 132;
+    const { runtime, box } = setup();
+    if (composerHidden) box.parentElement!.classList.add('tb-chat-host-composer-hidden');
+    readAt(box, 500);
+    act(() => runtime.publish({ records: [...initialRows, message(20), message(21)] }));
+
+    const revealButton = screen.getByRole('button', { name: '2 unseen messages' });
+    const visibleBottom = revealButton.getBoundingClientRect().top;
+    const firstBubble = box.querySelector<HTMLElement>('[data-scroll-key="message-20"]')!;
+    expect(firstBubble.getBoundingClientRect().height).toBeLessThan(box.clientHeight);
+    const revealTop = box.scrollTop + firstBubble.getBoundingClientRect().bottom - visibleBottom;
+    expect(revealTop).toBeLessThan(box.scrollHeight - box.clientHeight);
+
+    fireEvent.click(revealButton);
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: revealTop, behavior: 'smooth' });
+    box.scrollTop = revealTop;
+    fireEvent.scroll(box);
+
+    expect(firstBubble.getBoundingClientRect().bottom).toBeCloseTo(visibleBottom);
+    expect(screen.getByRole('button', { name: 'Scroll to bottom' })).toBeTruthy();
+  });
+
+  it('keeps an obscured bubble unseen until one pixel enters the unobscured area', () => {
     const { runtime, box } = setup();
     readAt(box, 500);
     act(() => runtime.publish({ records: [...initialRows, message(20), message(21)] }));
-    expect(screen.getByRole('button', { name: '2 unseen messages' })).toBeTruthy();
+    const button = screen.getByRole('button', { name: '2 unseen messages' });
+    const firstBubble = box.querySelector<HTMLElement>('[data-scroll-key="message-20"]')!;
+    const visibleBottom = button.getBoundingClientRect().top;
 
     fireEvent.wheel(box, { deltaY: 1000 });
-    box.scrollTop = 1590;
+    box.scrollTop += firstBubble.getBoundingClientRect().top - (visibleBottom + 1);
     fireEvent.scroll(box);
+    expect(screen.getByRole('button', { name: '2 unseen messages' })).toBe(button);
 
+    box.scrollTop += 2;
+    fireEvent.scroll(box);
     expect(screen.getByRole('button', { name: '1 unseen message' })).toBeTruthy();
   });
 
@@ -915,6 +952,23 @@ describe('conversation reading position', () => {
     readAt(box, 600);
 
     expect(screen.getByRole('button', { name: 'Scroll to bottom' })).toBeTruthy();
+  });
+
+  it('uses a consistent one-pixel tolerance at the bottom', () => {
+    const { box } = setup();
+    const bottom = box.scrollHeight - box.clientHeight;
+    readAt(box, bottom - 2);
+    expect(screen.getByRole('button', { name: 'Scroll to bottom' })).toBeTruthy();
+
+    box.scrollTop = bottom - .75;
+    fireEvent.scroll(box);
+    expect(screen.queryByRole('button', { name: latestButtonName })).toBeNull();
+
+    readAt(box, bottom - 1.25);
+    const button = screen.getByRole('button', { name: 'Scroll to bottom' });
+    scrollTo.mockClear();
+    fireEvent.click(button);
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: bottom, behavior: 'smooth' });
   });
 
   it('does not count activity folds as unseen message bubbles', () => {
@@ -934,17 +988,22 @@ describe('conversation reading position', () => {
     expect(screen.getByRole('button', { name: 'Scroll to bottom' })).toBeTruthy();
   });
 
-  it('top-aligns a too-tall unseen bubble and honors reduced motion', () => {
+  it.each([false, true])('top-aligns a bubble taller than the unobscured area with composer hidden=%s', composerHidden => {
     const { runtime, box } = setup();
+    if (composerHidden) box.parentElement!.classList.add('tb-chat-host-composer-hidden');
     readAt(box, 500);
     act(() => runtime.publish({ records: [...initialRows, message(20), message(21), message(22), message(23)] }));
     const tallBubble = box.querySelector<HTMLElement>('[data-scroll-key="message-20"]')!;
     const startTop = box.scrollTop;
     const viewportBounds = box.getBoundingClientRect();
-    const offscreenTop = viewportBounds.bottom + 50;
+    const visibleBottom = screen.getByRole('button', { name: '4 unseen messages' }).getBoundingClientRect().top;
+    const visibleHeight = visibleBottom - viewportBounds.top;
+    const offscreenTop = visibleBottom + 50;
     Object.defineProperty(tallBubble, 'getBoundingClientRect', { configurable: true,
-      value: () => rect(offscreenTop - (box.scrollTop - startTop), 400) });
-    expect(tallBubble.getBoundingClientRect().top).toBeGreaterThan(viewportBounds.bottom);
+      value: () => rect(offscreenTop - (box.scrollTop - startTop), 260) });
+    expect(260).toBeLessThan(box.clientHeight);
+    expect(260).toBeGreaterThan(visibleHeight);
+    expect(tallBubble.getBoundingClientRect().top).toBeGreaterThan(visibleBottom);
     reducedMotion = true;
     const expectedTop = startTop + offscreenTop - viewportBounds.top;
 
@@ -996,6 +1055,7 @@ describe('conversation reading position', () => {
   });
 
   it('lets the reader interrupt following, reveal an unseen bubble, then return to the bottom', () => {
+    extraBottomSpace = 132;
     const { runtime, box } = setup();
     act(() => runtime.publish({ records: [...initialRows, message(20)] }));
     readAt(box, 500);
@@ -1006,7 +1066,7 @@ describe('conversation reading position', () => {
     const button = screen.getByRole('button', { name: /\d+ unseen messages?/ });
     button.focus();
     const nextBubble = box.querySelector<HTMLElement>('[data-scroll-key="message-21"]')!;
-    const revealTop = box.scrollTop + nextBubble.getBoundingClientRect().bottom - box.getBoundingClientRect().bottom;
+    const revealTop = box.scrollTop + nextBubble.getBoundingClientRect().bottom - button.getBoundingClientRect().top;
     fireEvent.click(button);
     expect(scrollTo).toHaveBeenLastCalledWith({ top: revealTop, behavior: 'smooth' });
     expect(screen.getByRole('button', { name: 'Scroll to bottom' })).toBeTruthy();

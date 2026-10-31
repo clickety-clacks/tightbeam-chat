@@ -2,6 +2,7 @@ import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 
 // About two lines of conversation text. Measure intent before content grows.
 const bottomThreshold = 64;
+const bottomTolerance = 1;
 const arrivalDuration = 240;
 const arrivalEasing = 'cubic-bezier(0.2, 0, 0, 1)';
 type Anchor = { key: string; top: number };
@@ -85,7 +86,7 @@ export function useReadingPosition(
 
   const distance = (box: HTMLElement) => Math.max(0, box.scrollHeight - box.clientHeight - box.scrollTop);
   const updateLatestControl = (box: HTMLElement) => {
-    const atBottom = distance(box) <= .5;
+    const atBottom = distance(box) <= bottomTolerance;
     setShowLatest(!atBottom);
     if (atBottom) {
       setUnseenControlPrimed(false);
@@ -94,11 +95,26 @@ export function useReadingPosition(
       }
     }
   };
-  const refreshUnseenMessages = (viewportBounds?: DOMRect, measuredRows?: Map<HTMLElement, DOMRect>) => {
+  const unobscuredBounds = (box: HTMLElement, viewportBounds?: Pick<DOMRect, 'top' | 'bottom'>): Pick<DOMRect, 'top' | 'bottom'> => {
+    const bounds = viewportBounds ?? box.getBoundingClientRect();
+    const root = box.parentElement;
+    const button = root?.querySelector<HTMLElement>('.tb-chat-scroll-latest');
+    const composer = !button && !root?.classList.contains('tb-chat-host-composer-hidden')
+      ? root?.querySelector<HTMLElement>('.tb-chat-composer') : undefined;
+    const occluder = button ?? composer;
+    if (!occluder) return bounds;
+    const overlay = occluder.getBoundingClientRect();
+    if (!Number.isFinite(overlay.top) || !Number.isFinite(overlay.bottom) ||
+      overlay.bottom <= bounds.top || overlay.top >= bounds.bottom) return bounds;
+    return { top: bounds.top, bottom: Math.max(bounds.top, Math.min(bounds.bottom, overlay.top)) };
+  };
+  const refreshUnseenMessages = (viewportBounds?: Pick<DOMRect, 'top' | 'bottom'>, measuredRows?: Map<HTMLElement, DOMRect>,
+    measureOverlayOnIntersection = false) => {
     const box = viewport.current;
     if (!box || unseenMessages.current.size === 0) return;
-    const bounds = viewportBounds ?? box.getBoundingClientRect();
+    let bounds = viewportBounds ?? unobscuredBounds(box);
     if (!Number.isFinite(bounds.top) || !Number.isFinite(bounds.bottom) || bounds.bottom <= bounds.top) return;
+    let overlayMeasured = !measureOverlayOnIntersection;
     for (const [key, scrollKey] of unseenMessages.current) {
       if (!messageRows.current.has(key)) {
         unseenMessages.current.delete(key);
@@ -107,9 +123,13 @@ export function useReadingPosition(
       }
       const row = registeredRows.current.get(scrollKey);
       if (!row) continue;
-      const rect = row.getBoundingClientRect();
+      const rect = measuredRows?.get(row) ?? row.getBoundingClientRect();
       measuredRows?.set(row, rect);
       if (!Number.isFinite(rect.top) || !Number.isFinite(rect.bottom)) continue;
+      if (!overlayMeasured && rect.bottom > bounds.top && rect.top < bounds.bottom) {
+        bounds = unobscuredBounds(box, bounds);
+        overlayMeasured = true;
+      }
       // Seeing any part of a bubble settles it as seen, including a partially
       // visible bubble at the edge of the viewport.
       if (rect.bottom > bounds.top && rect.top < bounds.bottom) {
@@ -143,7 +163,7 @@ export function useReadingPosition(
   const isAtLatest = (box: HTMLElement, scrollTop = box.scrollTop) => {
     const bottom = Math.max(0, box.scrollHeight - box.clientHeight);
     // A short transcript can fit entirely inside the usual following tolerance.
-    const threshold = bottom <= bottomThreshold ? .5 : bottomThreshold;
+    const threshold = bottom <= bottomThreshold ? bottomTolerance : bottomThreshold;
     return Math.max(0, bottom - scrollTop) <= threshold;
   };
   const viewportResized = (box: HTMLElement) => viewportHeight.current !== undefined && viewportHeight.current !== box.clientHeight;
@@ -271,7 +291,8 @@ export function useReadingPosition(
     lastKnownScrollTop.current = box.scrollTop;
     lastKnownBottom.current = Math.max(0, box.scrollHeight - box.clientHeight);
     const measuredRows = new Map<HTMLElement, DOMRect>();
-    refreshUnseenMessages(bounds, measuredRows);
+    const unseenBounds = unseenMessages.current.size > 0 ? bounds ?? box.getBoundingClientRect() : bounds;
+    refreshUnseenMessages(unseenBounds, measuredRows, true);
     anchors.current = [];
     if (following.current) return;
     const anchorBounds = bounds ?? box.getBoundingClientRect();
@@ -324,7 +345,7 @@ export function useReadingPosition(
     if (!box) return false;
     const bottom = Math.max(0, box.scrollHeight - box.clientHeight);
     following.current = true;
-    if (Math.abs(box.scrollTop - bottom) < 1) {
+    if (Math.abs(box.scrollTop - bottom) <= bottomTolerance) {
       animating.current = false;
       target.current = undefined;
       updateLatestControl(box);
@@ -627,20 +648,21 @@ export function useReadingPosition(
   const scrollToNextUnseen = (): boolean => {
     const box = viewport.current;
     if (!box) return false;
-    refreshUnseenMessages();
+    const bounds = unobscuredBounds(box);
+    const measuredRows = new Map<HTMLElement, DOMRect>();
+    refreshUnseenMessages(bounds, measuredRows);
+    const rowBounds = (row: HTMLElement) => measuredRows.get(row) ?? row.getBoundingClientRect();
     const next = [...unseenMessages.current.entries()].find(([key, scrollKey]) => {
       if (!messageRows.current.has(key)) return false;
       const row = registeredRows.current.get(scrollKey);
       if (!row) return false;
-      const rect = row.getBoundingClientRect();
-      const bounds = box.getBoundingClientRect();
+      const rect = rowBounds(row);
       return !(rect.bottom > bounds.top && rect.top < bounds.bottom);
     });
     if (!next) return false;
     const row = registeredRows.current.get(next[1]);
     if (!row) return false;
-    const bounds = box.getBoundingClientRect();
-    const rect = row.getBoundingClientRect();
+    const rect = rowBounds(row);
     const visibleHeight = Math.max(0, bounds.bottom - bounds.top);
     let destination = box.scrollTop;
     if (rect.height > visibleHeight || rect.top < bounds.top) {
