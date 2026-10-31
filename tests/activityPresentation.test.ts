@@ -73,6 +73,24 @@ describe('activity pill presentation', () => {
     expect(new Set(cases.map(([, expected]) => expected.icon)).size).toBe(cases.length);
   });
 
+  it('classifies the delivered blocker settlement and release envelope', () => {
+    const assignmentId = 'asg_12345678-1111-4111-8111-123456789abc';
+    const processNotice = (line: string) => source('substrate', `[from process:tightbeam]\n\n${line}`, line, {
+      sender: 'process:tightbeam', messageType: 'substrate',
+    });
+    const settled = activityPillPresentation(processNotice('[cannot-proceed settled by opener answer]'));
+    const released = activityPillPresentation(processNotice(
+      `[cannot-proceed released: ${assignmentId} by example-kind/example-scope]`));
+
+    expect(settled).toMatchObject({ label: 'Blocker cleared', tone: 'green', icon: 'decision-answered',
+      text: 'Cleared by the opener’s answer' });
+    expect(settled?.metadata).toBeUndefined();
+    expect(released).toMatchObject({ label: 'Blocker released', tone: 'green', icon: 'decision-answered',
+      text: 'Released', metadata: 'asg_1234' });
+    expect(`${settled?.label} ${settled?.text} ${released?.label} ${released?.text} ${released?.metadata}`)
+      .not.toMatch(/[\[\]]/);
+  });
+
   it('uses stable delivered notice shapes and shortens their primary identifiers', () => {
     const cases: Array<[ActivityPillSource, string, string, string | undefined]> = [
       [source('substrate', 'Attest att_12345678-1111-4111-8111-123456789abc (completion) was filed on assignment asg_abcdef12-1111-4111-8111-123456789abc.'),

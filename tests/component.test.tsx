@@ -1631,6 +1631,39 @@ describe('conversation surface', () => {
       `${openedPill.textContent} ${closedPill.textContent}`).not.toMatch(/[\[\]]/);
   });
 
+  it('renders settled and released process notices as distinct blocker pills', () => {
+    const sessionKey = 'blocker-outcome-notices';
+    const human = row(sessionKey, 'prompt', 'Please review this action', {
+      seq: 1, role: 'user', sender: 'user:person', messageType: 'chat', turnSeq: 1,
+    });
+    const notice = (id: string, seq: number, line: string) => row(sessionKey, id,
+      `[from process:tightbeam]\n\n${line}`, {
+        seq, role: 'assistant', sender: 'process:tightbeam', messageType: 'substrate', turnSeq: 1,
+      });
+    const settled = notice('blocker-settled', 2, '[cannot-proceed settled by opener answer]');
+    const released = notice('blocker-released', 3,
+      '[cannot-proceed released: asg_67890abc-1111-4111-8111-123456789abc by example-kind/example-scope]');
+    const answer = row(sessionKey, 'answer', 'The action is ready', {
+      seq: 4, sender: 'assistant-service', messageType: 'assistant', replyToMessageId: human.id, turnSeq: 1,
+    });
+    const runtime = new FakeRuntime(sessionKey, {
+      records: [human, settled, released, answer],
+      provenanceAvailable: false,
+    });
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+
+    const log = screen.getByRole('log');
+    const settledPill = within(log).getByRole('note', {
+      name: 'Blocker cleared: Cleared by the opener’s answer',
+    });
+    const releasedPill = within(log).getByRole('note', {
+      name: 'Blocker released: Released, asg_6789',
+    });
+    expect(settledPill.querySelector('.tb-chat-activity-pill-green')).toBeTruthy();
+    expect(releasedPill.querySelector('.tb-chat-activity-pill-green')).toBeTruthy();
+    expect(`${settledPill.textContent} ${releasedPill.textContent}`).not.toMatch(/[\[\]]/);
+  });
+
   it('updates only a growing activity fold and preserves an away reader', () => {
     const sessionKey = 'activity-fold-row-local-update';
     const question = row(sessionKey, 'question', 'Question', {
