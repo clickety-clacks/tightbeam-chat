@@ -518,7 +518,7 @@ describe('Gateway wire mapping and behavior checks', () => {
 
   it('keeps non-404 record-event failures visible to the optional-history reader', async () => {
     const candidate = setup();
-    candidate.host.fetch = async (input, init) => {
+    candidate.host.fetch = async input => {
       if (new URL(input).pathname === `/api/sessions/${sessionKey}/record-events`) {
         return new Response('Unavailable', { status: 503 });
       }
