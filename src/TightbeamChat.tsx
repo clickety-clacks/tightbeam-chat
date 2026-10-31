@@ -1748,7 +1748,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   };
 
   const localNotice = state.sessionNotFound ? 'This conversation no longer exists.'
-    : state.status === 'unauthorized' ? 'Access to this conversation is unavailable.'
+    : state.status === 'unauthorized' ? 'Chat is no longer authorized. The message was not sent.'
       : state.status === 'unsupported' ? 'This conversation is not supported.'
     : state.conversationError ? `Conversation history could not be loaded: ${state.conversationError}`
       : state.sessionError ? `Some conversation details are unavailable: ${state.sessionError}`

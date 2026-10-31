@@ -1329,12 +1329,13 @@ describe('conversation surface', () => {
     const runtime = new FakeRuntime('unauthorized-status', { status: 'unauthorized' });
     render(<TightbeamChat sessionKey="unauthorized-status" adapter={adapterFor(runtime)} />);
 
-    expect(screen.getByRole('alert').textContent).toContain('Access to this conversation is unavailable.');
+    expect(screen.getByRole('alert').textContent).toContain('Chat is no longer authorized. The message was not sent.');
     const disconnectedButton = screen.getByRole('button', {
-      name: 'Connection status: Access to this conversation is unavailable. Show details',
+      name: 'Connection status: Chat is no longer authorized. The message was not sent. Show details',
     });
     expect(disconnectedButton.querySelector('.tb-chat-status-dot')?.classList.contains('tb-chat-status-unauthorized')).toBe(true);
     expect(screen.queryByText(/^Disconnected$/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Retry message' })).toBeNull();
   });
 
   it('renders only typed live activity with principal proof and clears captions at turn end', () => {
