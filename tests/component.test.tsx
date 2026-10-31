@@ -1620,6 +1620,7 @@ describe('conversation surface', () => {
     render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
 
     const log = screen.getByRole('log');
+    fireEvent.click(within(log).getByRole('button', { name: 'Show earlier activity' }));
     const pillFor = (name: string) => within(log).getByRole('note', { name });
     const cleanPill = pillFor('Verdict: Reviewed clean · The change is ready, asg_1234');
     const adversePill = pillFor('Verdict: Changes requested · Correct the missing case, asg_2345');
