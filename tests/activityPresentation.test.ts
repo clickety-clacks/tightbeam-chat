@@ -3,6 +3,9 @@ import { activityPillPresentation, type ActivityPillSource } from '../src/activi
 
 const source = (kind: ActivityPillSource['kind'], content: string, gist = content.split('\n')[0] ?? '',
   extra: Partial<ActivityPillSource> = {}) => ({ kind, content, gist, ...extra } satisfies ActivityPillSource);
+const deliveredNotice = (line: string) => source('substrate', `[from process:tightbeam]\n\n${line}`, line, {
+  sender: 'process:tightbeam', messageType: 'substrate',
+});
 
 describe('activity pill presentation', () => {
   it('gives delivered verdict, completion, opened and closed notices distinct plain presentations', () => {
@@ -12,24 +15,29 @@ describe('activity pill presentation', () => {
       'asg_34567890-1111-4111-8111-123456789abc',
       'asg_456789ab-1111-4111-8111-123456789abc',
     ];
-    const delivered = (line: string) => source('substrate', line, line, {
-      sender: 'system', messageType: 'process',
-    });
-    const reviewedClean = activityPillPresentation(delivered(
+    const reviewedClean = activityPillPresentation(deliveredNotice(
       `[verdict filed: reviewed-clean on ${assignmentIds[0]}: The change is ready]`));
-    const spiritApproved = activityPillPresentation(delivered(
+    const spiritApproved = activityPillPresentation(deliveredNotice(
       `[verdict filed: spirit-approved on ${assignmentIds[0]}: Retain the change]`));
-    const changesRequested = activityPillPresentation(delivered(
+    const verificationFailed = activityPillPresentation(deliveredNotice(
+      `[verdict filed: verification-failed on ${assignmentIds[0]}: The result did not verify]`));
+    const waitChallenged = activityPillPresentation(deliveredNotice(
+      `[verdict filed: wait-challenged on ${assignmentIds[0]}: The wait condition needs review]`));
+    const changesRequested = activityPillPresentation(deliveredNotice(
       `[verdict filed: changes-requested on ${assignmentIds[0]}: Correct the missing case]`));
-    const completion = activityPillPresentation(delivered(
+    const completion = activityPillPresentation(deliveredNotice(
       `[completion filed on ${assignmentIds[1]}: Completed after the focused review]`));
-    const opened = activityPillPresentation(delivered(`[assignment opened: ${assignmentIds[2]}]`));
-    const closed = activityPillPresentation(delivered(`[assignment closed: ${assignmentIds[3]} — completed]`));
+    const opened = activityPillPresentation(deliveredNotice(`[assignment opened: ${assignmentIds[2]}]`));
+    const closed = activityPillPresentation(deliveredNotice(`[assignment closed: ${assignmentIds[3]} — completed]`));
 
     expect(reviewedClean).toMatchObject({ label: 'Verdict', tone: 'green', icon: 'decision',
       text: 'Reviewed clean · The change is ready', metadata: 'asg_1234' });
     expect(spiritApproved).toMatchObject({ label: 'Verdict', tone: 'green', icon: 'decision',
       text: 'Spirit approved · Retain the change', metadata: 'asg_1234' });
+    expect(verificationFailed).toMatchObject({ label: 'Verdict', tone: 'red', icon: 'decision',
+      text: 'Verification failed · The result did not verify', metadata: 'asg_1234' });
+    expect(waitChallenged).toMatchObject({ label: 'Verdict', tone: 'red', icon: 'decision',
+      text: 'Wait challenged · The wait condition needs review', metadata: 'asg_1234' });
     expect(changesRequested).toMatchObject({ label: 'Verdict', tone: 'red', icon: 'decision',
       text: 'Changes requested · Correct the missing case', metadata: 'asg_1234' });
     expect(completion).toMatchObject({ label: 'Completion', tone: 'purple', icon: 'attest',
@@ -39,7 +47,8 @@ describe('activity pill presentation', () => {
     expect(closed).toMatchObject({ label: 'Assignment closed', tone: 'slate', icon: 'flag',
       text: 'Completed', metadata: 'asg_4567' });
 
-    for (const presentation of [reviewedClean, spiritApproved, changesRequested, completion, opened, closed]) {
+    for (const presentation of [reviewedClean, spiritApproved, verificationFailed, waitChallenged,
+      changesRequested, completion, opened, closed]) {
       const copy = `${presentation?.label} ${presentation?.text} ${presentation?.metadata}`;
       expect(copy).not.toMatch(/[\[\]]/);
       expect(copy).not.toMatch(/asg_[a-f0-9]{8}-/i);
@@ -55,6 +64,9 @@ describe('activity pill presentation', () => {
         { label: 'Action blocked', tone: 'orange', icon: 'refused', text: 'Could not proceed · The review could not continue' }],
       [`[assignment revoked: ${assignmentId}]`,
         { label: 'Assignment revoked', tone: 'red', icon: 'flag', text: 'Revoked' }],
+      [`[assignment reopened: ${assignmentId} by session:participant — another review was requested]`,
+        { label: 'Assignment reopened', tone: 'indigo', icon: 'assignment',
+          text: 'Reopened · another review was requested', metadata: 'asg_1234' }],
       ['[context compacted]',
         { label: 'Conversation', tone: 'slate', icon: 'notice', text: 'Context shortened' }],
       ['[adapter down]',
@@ -64,9 +76,7 @@ describe('activity pill presentation', () => {
     ];
 
     for (const [content, expected] of cases) {
-      const presentation = activityPillPresentation(source('substrate', content, content, {
-        sender: 'process:events', messageType: 'process',
-      }));
+      const presentation = activityPillPresentation(deliveredNotice(content));
       expect(presentation, content).toMatchObject(expected);
       expect(`${presentation?.label} ${presentation?.text} ${presentation?.metadata ?? ''}`).not.toMatch(/[\[\]]/);
     }
