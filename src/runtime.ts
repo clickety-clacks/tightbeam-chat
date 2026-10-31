@@ -1541,16 +1541,11 @@ class SessionRuntime implements ChatRuntime {
           ? { ...send, status: 'accepted', reason: undefined }
           : result.outcome === 'refused'
             ? { ...send, status: 'failed', reason: result.reason }
-            : result.outcome === 'unreachable'
-              ? { ...send, status: 'failed', reason: 'unreachable' }
-              : { ...send, status: 'uncertain', reason: result.reason };
+            : { ...send, status: 'uncertain', reason: result.reason };
       });
       if (result.outcome === 'accepted') this.notifyHostSend(submission.clientMessageId, { kind: 'accepted' });
       else if (result.outcome === 'refused') this.notifyHostSend(submission.clientMessageId, {
         kind: 'failed', reason: 'refused', detail: result.reason,
-      });
-      else if (result.outcome === 'unreachable') this.notifyHostSend(submission.clientMessageId, {
-        kind: 'failed', reason: 'retry-unavailable', detail: 'Not connected to the server.',
       });
       else this.notifyHostSend(submission.clientMessageId, { kind: 'uncertain', reason: 'ack-lost' });
     } catch (error) {
@@ -1583,14 +1578,14 @@ class SessionRuntime implements ChatRuntime {
     if (this.disposed || !this.checkIdentity()) return;
     if (this.state.status === 'unauthorized') return;
     const send = this.state.sends.find((item) => item.clientMessageId === clientMessageId);
-    if (!send || !['failed', 'uncertain'].includes(send.status) || send.reconciled ||
+    if (!send || send.status !== 'failed' || send.reconciled ||
         !this.profile.capabilities.humanSendDedupe) return;
     void this.markReadPosition();
     // Rebuild/query first. Absence from a bounded tail does not mean rejection.
     await this.rebuild();
     if (this.disposed || !this.checkIdentity() || (this.state.status as RuntimeState['status']) === 'unauthorized') return;
     const current = this.state.sends.find((item) => item.clientMessageId === clientMessageId);
-    if (!current || current.reconciled || !['failed', 'uncertain'].includes(current.status)) return;
+    if (!current || current.reconciled || current.status !== 'failed') return;
     this.updateSend(clientMessageId, (item) => ({ ...item, status: 'pending', reason: undefined }));
     await this.post({
       sessionKey: send.sessionKey, deviceId: send.deviceId,
@@ -1664,7 +1659,7 @@ class SessionRuntime implements ChatRuntime {
         return;
       }
       if (!this.profile.capabilities.humanSendDedupe) {
-        this.updateSend(clientMessageId, (send) => ({ ...send, status: 'failed', reason: 'Retry is unavailable for this target.' }));
+        this.updateSend(clientMessageId, (send) => ({ ...send, status: 'uncertain', reason: 'retry-unavailable' }));
         this.notifyHostSend(clientMessageId, { kind: 'failed', reason: 'retry-unavailable' });
         return;
       }
