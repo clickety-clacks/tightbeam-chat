@@ -2,9 +2,11 @@ import { useCallback, useLayoutEffect, useRef, useState } from 'react';
 
 // About two lines of conversation text. Measure intent before content grows.
 const bottomThreshold = 64;
+const bottomTolerance = 1;
 const arrivalDuration = 240;
 const arrivalEasing = 'cubic-bezier(0.2, 0, 0, 1)';
 type Anchor = { key: string; top: number };
+type MessageRow = { key: string; scrollKey: string };
 
 function easeArrival(progress: number): number {
   // Match cubic-bezier(0.2, 0, 0, 1) for the scroll and row entrance.
@@ -41,9 +43,18 @@ export function useReadingPosition(
   const previousTailRow = useRef<HTMLElement | undefined>(undefined);
   const seenArrivalRows = useRef(new Set<string>());
   const arrivalScopeRef = useRef(arrivalScope);
+  const messageRows = useRef<ReadonlyMap<string, MessageRow>>(new Map());
+  const knownMessages = useRef(new Set<string>());
+  const unseenMessages = useRef(new Map<string, string>());
+  const messageBaselineReady = useRef(false);
+  const [unseenMessageCount, setUnseenMessageCount] = useState(0);
+  const [unseenControlPrimed, setUnseenControlPrimed] = useState(false);
   if (arrivalScopeRef.current !== arrivalScope) {
     seenArrivalRows.current.clear();
     previousTailRow.current = undefined;
+    knownMessages.current.clear();
+    unseenMessages.current.clear();
+    messageBaselineReady.current = false;
     arrivalScopeRef.current = arrivalScope;
   }
   const arrivalAnimations = useRef(new Map<HTMLElement, Animation>());
@@ -74,10 +85,85 @@ export function useReadingPosition(
   arrivalEligibleRef.current = arrivalEligible;
 
   const distance = (box: HTMLElement) => Math.max(0, box.scrollHeight - box.clientHeight - box.scrollTop);
+  const updateLatestControl = (box: HTMLElement) => {
+    const atBottom = distance(box) <= bottomTolerance;
+    setShowLatest(!atBottom);
+    if (atBottom) {
+      setUnseenControlPrimed(false);
+      if (document.activeElement?.getAttribute('data-scroll-latest') === 'true') {
+        box.focus({ preventScroll: true });
+      }
+    }
+  };
+  const unobscuredBounds = (box: HTMLElement, viewportBounds?: Pick<DOMRect, 'top' | 'bottom'>): Pick<DOMRect, 'top' | 'bottom'> => {
+    const bounds = viewportBounds ?? box.getBoundingClientRect();
+    const root = box.parentElement;
+    const button = root?.querySelector<HTMLElement>('.tb-chat-scroll-latest');
+    const composer = !button && !root?.classList.contains('tb-chat-host-composer-hidden')
+      ? root?.querySelector<HTMLElement>('.tb-chat-composer') : undefined;
+    const occluder = button ?? composer;
+    if (!occluder) return bounds;
+    const overlay = occluder.getBoundingClientRect();
+    if (!Number.isFinite(overlay.top) || !Number.isFinite(overlay.bottom) ||
+      overlay.bottom <= bounds.top || overlay.top >= bounds.bottom) return bounds;
+    return { top: bounds.top, bottom: Math.max(bounds.top, Math.min(bounds.bottom, overlay.top)) };
+  };
+  const refreshUnseenMessages = (viewportBounds?: Pick<DOMRect, 'top' | 'bottom'>, measuredRows?: Map<HTMLElement, DOMRect>,
+    measureOverlayOnIntersection = false) => {
+    const box = viewport.current;
+    if (!box || unseenMessages.current.size === 0) return;
+    let bounds = viewportBounds ?? unobscuredBounds(box);
+    if (!Number.isFinite(bounds.top) || !Number.isFinite(bounds.bottom) || bounds.bottom <= bounds.top) return;
+    let overlayMeasured = !measureOverlayOnIntersection;
+    for (const [key, scrollKey] of unseenMessages.current) {
+      if (!messageRows.current.has(key)) {
+        unseenMessages.current.delete(key);
+        knownMessages.current.add(key);
+        continue;
+      }
+      const row = registeredRows.current.get(scrollKey);
+      if (!row) continue;
+      const rect = measuredRows?.get(row) ?? row.getBoundingClientRect();
+      measuredRows?.set(row, rect);
+      if (!Number.isFinite(rect.top) || !Number.isFinite(rect.bottom)) continue;
+      if (!overlayMeasured && rect.bottom > bounds.top && rect.top < bounds.bottom) {
+        bounds = unobscuredBounds(box, bounds);
+        overlayMeasured = true;
+      }
+      // Seeing any part of a bubble settles it as seen, including a partially
+      // visible bubble at the edge of the viewport.
+      if (rect.bottom > bounds.top && rect.top < bounds.bottom) {
+        unseenMessages.current.delete(key);
+        knownMessages.current.add(key);
+      }
+    }
+    setUnseenMessageCount(prior => prior === unseenMessages.current.size ? prior : unseenMessages.current.size);
+  };
+  const setMessageRows = useCallback((rows: ReadonlyMap<string, MessageRow>) => {
+    messageRows.current = rows;
+  }, []);
+  const addAppendedMessageRows = (appendedScrollKeys: ReadonlySet<string>) => {
+    if (!messageBaselineReady.current) {
+      for (const row of messageRows.current.values()) knownMessages.current.add(row.key);
+      messageBaselineReady.current = true;
+      unseenMessages.current.clear();
+      setUnseenMessageCount(0);
+      setUnseenControlPrimed(false);
+      return;
+    }
+    for (const scrollKey of appendedScrollKeys) {
+      const row = messageRows.current.get(scrollKey);
+      if (!row || knownMessages.current.has(row.key)) continue;
+      knownMessages.current.add(row.key);
+      // Initial and prepended history never appears after the previous tail.
+      // Appended message bubbles stay unseen until they intersect the viewport.
+      unseenMessages.current.set(row.key, row.scrollKey);
+    }
+  };
   const isAtLatest = (box: HTMLElement, scrollTop = box.scrollTop) => {
     const bottom = Math.max(0, box.scrollHeight - box.clientHeight);
     // A short transcript can fit entirely inside the usual following tolerance.
-    const threshold = bottom <= bottomThreshold ? .5 : bottomThreshold;
+    const threshold = bottom <= bottomThreshold ? bottomTolerance : bottomThreshold;
     return Math.max(0, bottom - scrollTop) <= threshold;
   };
   const viewportResized = (box: HTMLElement) => viewportHeight.current !== undefined && viewportHeight.current !== box.clientHeight;
@@ -200,12 +286,23 @@ export function useReadingPosition(
     const box = viewport.current;
     const children = content.current?.children;
     if (!box || !children) return;
+    const bounds = following.current ? undefined : box.getBoundingClientRect();
     if (box.clientHeight > 0) viewportHeight.current = box.clientHeight;
     lastKnownScrollTop.current = box.scrollTop;
     lastKnownBottom.current = Math.max(0, box.scrollHeight - box.clientHeight);
+    const measuredRows = new Map<HTMLElement, DOMRect>();
+    const unseenBounds = unseenMessages.current.size > 0 ? bounds ?? box.getBoundingClientRect() : bounds;
+    refreshUnseenMessages(unseenBounds, measuredRows, true);
     anchors.current = [];
     if (following.current) return;
-    const bounds = box.getBoundingClientRect();
+    const anchorBounds = bounds ?? box.getBoundingClientRect();
+    const measureRow = (row: HTMLElement) => {
+      const measured = measuredRows.get(row);
+      if (measured) return measured;
+      const rect = row.getBoundingClientRect();
+      measuredRows.set(row, rect);
+      return rect;
+    };
     const remembered = new Set<string>();
     // Direct children are vertically ordered. Locate the viewport without
     // enumerating history, then retain visible rows and one neighbor each side.
@@ -213,32 +310,32 @@ export function useReadingPosition(
     let high = children.length;
     while (low < high) {
       const middle = Math.floor((low + high) / 2);
-      if (children[middle].getBoundingClientRect().bottom <= bounds.top) low = middle + 1;
+      if (measureRow(children[middle] as HTMLElement).bottom <= anchorBounds.top) low = middle + 1;
       else high = middle;
     }
     const remember = (row: HTMLElement, top: number) => {
       const key = row.dataset.scrollKey;
       if (key !== undefined && !remembered.has(key)) {
         remembered.add(key);
-        anchors.current.push({ key, top: top - bounds.top + box.scrollTop });
+        anchors.current.push({ key, top: top - anchorBounds.top + box.scrollTop });
       }
     };
     for (let i = low; i < children.length; i++) {
       const row = children[i] as HTMLElement;
-      const rect = row.getBoundingClientRect();
+      const rect = measureRow(row);
       remember(row, rect.top);
-      if (rect.top >= bounds.bottom) break;
+      if (rect.top >= anchorBounds.bottom) break;
     }
     if (low > 0) {
       const previous = children[low - 1] as HTMLElement;
-      remember(previous, previous.getBoundingClientRect().top);
+      remember(previous, measureRow(previous).top);
     }
     // If filtering removes every row around the reader, retain a distant
     // survivor so its old position can keep the transcript from collapsing.
     for (let i = children.length - 1; i >= 0; i--) {
       const lastRow = children[i] as HTMLElement;
       if (lastRow.dataset.scrollKey === undefined) continue;
-      remember(lastRow, lastRow.getBoundingClientRect().top);
+      remember(lastRow, measureRow(lastRow).top);
       break;
     }
   };
@@ -248,10 +345,10 @@ export function useReadingPosition(
     if (!box) return false;
     const bottom = Math.max(0, box.scrollHeight - box.clientHeight);
     following.current = true;
-    setShowLatest(false);
-    if (Math.abs(box.scrollTop - bottom) < 1) {
+    if (Math.abs(box.scrollTop - bottom) <= bottomTolerance) {
       animating.current = false;
       target.current = undefined;
+      updateLatestControl(box);
       return false;
     }
     if (animating.current && target.current === bottom) return true;
@@ -259,6 +356,7 @@ export function useReadingPosition(
     animating.current = smooth && !reduceMotion;
     target.current = bottom;
     box.scrollTo({ top: bottom, behavior: animating.current ? 'smooth' : 'instant' });
+    updateLatestControl(box);
     return true;
   };
 
@@ -270,6 +368,7 @@ export function useReadingPosition(
     const canAnimateArrival = arrivalEligibleRef.current && following.current && !userScrollIntent.current &&
       !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
     const appendedRows: HTMLElement[] = [];
+    const appendedScrollKeys = new Set<string>();
     const contentElement = content.current;
     if (initialized.current && contentElement) {
       const retainedTail = previousTail && registeredRows.current.get(previousTail.dataset.scrollKey ?? '');
@@ -277,9 +376,11 @@ export function useReadingPosition(
         ? retainedTail.nextElementSibling
         : previousTail ? null : contentElement.firstElementChild;
       for (let row = afterPreviousTail; row; row = row.nextElementSibling) {
-        if (!(row instanceof HTMLElement) || row.dataset.scrollKey === undefined ||
-          seenArrivalRows.current.has(row.dataset.scrollKey)) continue;
-        seenArrivalRows.current.add(row.dataset.scrollKey);
+        if (!(row instanceof HTMLElement) || row.dataset.scrollKey === undefined) continue;
+        const scrollKey = row.dataset.scrollKey;
+        if (seenArrivalRows.current.has(scrollKey)) continue;
+        seenArrivalRows.current.add(scrollKey);
+        appendedScrollKeys.add(scrollKey);
         if (canAnimateArrival) appendedRows.push(row);
       }
     } else if (contentElement) {
@@ -291,6 +392,7 @@ export function useReadingPosition(
         }
       }
     }
+    addAppendedMessageRows(appendedScrollKeys);
     previousTailRow.current = currentTail;
     for (const [row, animation] of [...arrivalAnimations.current]) {
       if (row.parentElement === content.current) continue;
@@ -377,7 +479,7 @@ export function useReadingPosition(
         if (wanted < 0) box.style.setProperty('--tb-chat-anchor-space', `${-wanted}px`);
         if (Math.abs(box.scrollTop - Math.max(0, wanted)) > .5) box.scrollTop = Math.max(0, wanted);
       }
-      setShowLatest(!following.current);
+      updateLatestControl(box);
     }
     capture();
   };
@@ -460,7 +562,7 @@ export function useReadingPosition(
         }
       }
     }
-    setShowLatest(!following.current);
+    updateLatestControl(box);
     capture();
   };
 
@@ -500,7 +602,7 @@ export function useReadingPosition(
       target.current = undefined;
     }
     // Expanding an activity run is not reader intent to leave the latest edge.
-    setShowLatest(!following.current);
+    updateLatestControl(box);
     capture();
   };
   const scrollBy = (amount: number) => {
@@ -516,7 +618,7 @@ export function useReadingPosition(
     if (Math.abs(destination - origin) < 1) {
       if (!animating.current) {
         following.current = isAtLatest(box);
-        setShowLatest(!following.current);
+        updateLatestControl(box);
         capture();
       }
       return;
@@ -525,11 +627,11 @@ export function useReadingPosition(
     animating.current = !reduceMotion;
     target.current = animating.current ? destination : undefined;
     following.current = isAtLatest(box, destination);
-    setShowLatest(!following.current);
+    updateLatestControl(box);
     box.scrollTo({ top: destination, behavior: animating.current ? 'smooth' : 'instant' });
     if (!animating.current) {
       following.current = isAtLatest(box);
-      setShowLatest(!following.current);
+      updateLatestControl(box);
     }
     capture();
   };
@@ -543,10 +645,67 @@ export function useReadingPosition(
     moveToLatest(true);
   };
 
+  const scrollToLatestFromControl = () => {
+    // The floating control is local navigation. A pending wheel or key intent
+    // must not turn its programmatic scroll into a read-marker write.
+    clearUserScrollIntent();
+    scrollToLatest();
+  };
+
+  const scrollToNextUnseen = (): boolean => {
+    const box = viewport.current;
+    if (!box) return false;
+    const bounds = unobscuredBounds(box);
+    const measuredRows = new Map<HTMLElement, DOMRect>();
+    refreshUnseenMessages(bounds, measuredRows);
+    const rowBounds = (row: HTMLElement) => measuredRows.get(row) ?? row.getBoundingClientRect();
+    const next = [...unseenMessages.current.entries()].find(([key, scrollKey]) => {
+      if (!messageRows.current.has(key)) return false;
+      const row = registeredRows.current.get(scrollKey);
+      if (!row) return false;
+      const rect = rowBounds(row);
+      return !(rect.bottom > bounds.top && rect.top < bounds.bottom);
+    });
+    if (!next) return false;
+    const row = registeredRows.current.get(next[1]);
+    if (!row) return false;
+    const rect = rowBounds(row);
+    const visibleHeight = Math.max(0, bounds.bottom - bounds.top);
+    let destination = box.scrollTop;
+    if (rect.height > visibleHeight || rect.top < bounds.top) {
+      destination += rect.top - bounds.top;
+    } else if (rect.bottom > bounds.bottom) {
+      destination += rect.bottom - bounds.bottom;
+    }
+    const bottom = Math.max(0, box.scrollHeight - box.clientHeight);
+    destination = Math.max(0, Math.min(bottom, destination));
+    if (arrivalStartTime.current !== undefined || arrivalAnimations.current.size > 0) cancelArrivalAnimations();
+    clearUserScrollIntent();
+    if (animating.current) box.scrollTo({ top: box.scrollTop, behavior: 'instant' });
+    animating.current = false;
+    target.current = undefined;
+    initialSettlePending.current = false;
+    setUnseenControlPrimed(true);
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    animating.current = !reduceMotion && Math.abs(destination - box.scrollTop) >= 1;
+    target.current = animating.current ? destination : undefined;
+    following.current = isAtLatest(box, destination);
+    box.scrollTo({ top: destination, behavior: animating.current ? 'smooth' : 'instant' });
+    updateLatestControl(box);
+    capture();
+    return true;
+  };
+
   const arriveOwnMessages = (scrollKeys: readonly string[]) => {
     const box = viewport.current;
     if (!box) return;
     initialSettlePending.current = false;
+    for (const key of scrollKeys) {
+      unseenMessages.current.delete(key);
+      knownMessages.current.add(key);
+    }
+    setUnseenMessageCount(unseenMessages.current.size);
+    setUnseenControlPrimed(false);
     // A deliberate send from older history keeps the existing behavior of
     // bringing that prompt into view. Arrival motion itself belongs to rows
     // appended while the reader was already following the bottom.
@@ -569,6 +728,12 @@ export function useReadingPosition(
     capture();
   };
 
-  return { viewport, content, registerRow, getRow, showLatest, onScroll, interrupt, holdPosition,
-    preserveVisiblePosition, scrollBy, scrollToLatest, arriveOwnMessages, noteUserScroll, reconcileViewportLayout };
+  const unseenButtonLabel = unseenMessageCount > 0 && !unseenControlPrimed
+    ? `${unseenMessageCount} unseen message${unseenMessageCount === 1 ? '' : 's'}`
+    : 'Scroll to bottom';
+
+  return { viewport, content, registerRow, getRow, showLatest, unseenMessageCount, unseenButtonLabel,
+    hasUnseenButtonCount: unseenMessageCount > 0 && !unseenControlPrimed, setMessageRows, onScroll, interrupt,
+    holdPosition, preserveVisiblePosition, scrollBy, scrollToLatest, scrollToLatestFromControl, scrollToNextUnseen, arriveOwnMessages,
+    noteUserScroll, reconcileViewportLayout };
 }

@@ -38,6 +38,7 @@ function deferred<T>() {
 const message = (id: number): CanonicalMessage => ({ kind: 'message', id: `message-${id}`, sessionKey: 'reading',
   seq: id, rowVersion: 1, role: 'user', sender: 'user:person', content: `Message ${id}`, raw: {} });
 const initialRows = Array.from({ length: 20 }, (_, i) => message(i));
+const latestButtonName = /^(?:\d+ unseen messages?|Scroll to bottom)$/;
 function createReconnectFixture() {
   const profile: TargetProfile = { identity: 'fixture:arrival-recovery', label: 'Recovery', capabilities: {
     newestTail: true, stableOlderCursor: true, retainedHistoryAcrossResets: true,
@@ -80,6 +81,8 @@ let scrollTop = 0;
 let clampScrollTopOnRead = false;
 let viewportHeight = 300;
 let lateLayoutGrowth = 0;
+// Model the stylesheet's tail padding (composer 60px, 16px/rem, no safe-area inset).
+let extraBottomSpace = 0;
 let scrollTo: ReturnType<typeof vi.fn>;
 let reducedMotion = false;
 let animate: ReturnType<typeof vi.fn>;
@@ -99,7 +102,7 @@ let keyboardViewportSimulation = false;
 const renderedViewportHeight = () => {
   return Math.max(0, viewportHeight - (keyboardViewportSimulation && followsKeyboardInset ? keyboardInset() : 0));
 };
-const scrollHeight = () => 32 + rows().length * 92 + lateLayoutGrowth + Number.parseFloat(document.querySelector<HTMLElement>('.tb-chat-viewport')?.style.getPropertyValue('--tb-chat-anchor-space') || '0') +
+const scrollHeight = () => 32 + rows().length * 92 + extraBottomSpace + lateLayoutGrowth + Number.parseFloat(document.querySelector<HTMLElement>('.tb-chat-viewport')?.style.getPropertyValue('--tb-chat-anchor-space') || '0') +
   (modelActiveCaptionSlot && (hasStableActiveCaptionSlot || document.querySelector('.tb-chat-active-caption')) ? 26 : 0);
 const rect = (top: number, height: number) => ({ top, bottom: top + height, left: 0, right: 400, width: 400, height, x: 0, y: top, toJSON() {} });
 class TestVisualViewport extends EventTarget {
@@ -129,6 +132,7 @@ beforeEach(() => {
   clampScrollTopOnRead = false;
   viewportHeight = 300;
   lateLayoutGrowth = 0;
+  extraBottomSpace = 0;
   reducedMotion = false;
   modelActiveCaptionSlot = false;
   animationFrames.clear();
@@ -152,6 +156,11 @@ beforeEach(() => {
     };
     if (this.classList.contains('tb-chat')) return rect(0, keyboardViewportSimulation ? viewportHeight : 50);
     if (this.classList.contains('tb-chat-viewport')) return rect(0, renderedViewportHeight());
+    if (this.classList.contains('tb-chat-scroll-latest')) {
+      const composerHidden = this.parentElement?.classList.contains('tb-chat-host-composer-hidden');
+      return rect(renderedViewportHeight() - (composerHidden ? 60 : 120), 40);
+    }
+    if (this.classList.contains('tb-chat-composer')) return rect(renderedViewportHeight() - 60, 60);
     const index = this.dataset.testPosition === undefined ? rows().indexOf(this) : Number(this.dataset.testPosition);
     if (index >= 0) return rect(16 + Number.parseFloat(document.querySelector<HTMLElement>('.tb-chat-viewport')?.style.getPropertyValue('--tb-chat-anchor-space') || '0') + index * 92 - readScrollTop(), 80);
     return rect(0, 50);
@@ -547,7 +556,7 @@ describe('conversation reading position', () => {
     expect(scrollTo).toHaveBeenLastCalledWith({ top: bottom - 72, behavior: 'smooth' });
     box.scrollTop = bottom - 72;
     fireEvent.scroll(box);
-    expect(screen.getByRole('button', { name: 'Scroll to latest messages' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^(?:\d+ unseen messages?|Scroll to bottom)$/ })).toBeTruthy();
 
     scrollTo.mockClear();
     act(() => runtime.publish({ records: [...initialRows, message(20)] }));
@@ -561,7 +570,7 @@ describe('conversation reading position', () => {
     expect(scrollTo).toHaveBeenLastCalledWith({ top: newBottom, behavior: 'smooth' });
     box.scrollTop = newBottom;
     fireEvent.scroll(box);
-    expect(screen.queryByRole('button', { name: 'Scroll to latest messages' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^(?:\d+ unseen messages?|Scroll to bottom)$/ })).toBeNull();
     expect(input.value).toBe('paging leaves the draft alone');
 
     scrollTo.mockClear();
@@ -584,7 +593,7 @@ describe('conversation reading position', () => {
     act(() => runtime.publish({ liveError: undefined, liveConnectionState: 'connected' }));
 
     expect(box.scrollTop).toBe(0);
-    expect(screen.getByRole('button', { name: 'Scroll to latest messages' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^(?:\d+ unseen messages?|Scroll to bottom)$/ })).toBeTruthy();
     expect(scrollTo).not.toHaveBeenCalled();
   });
 
@@ -602,7 +611,7 @@ describe('conversation reading position', () => {
     act(() => runtime.publish({ liveError: 'Firehose disconnected (close code 1002).', liveConnectionState: 'connected' }));
 
     expect(box.scrollTop).toBe(0);
-    expect(screen.getByRole('button', { name: 'Scroll to latest messages' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^(?:\d+ unseen messages?|Scroll to bottom)$/ })).toBeTruthy();
     expect(scrollTo).not.toHaveBeenCalled();
   });
 
@@ -859,10 +868,151 @@ describe('conversation reading position', () => {
     expect(box.scrollTop).toBe(600);
     expect(anchor.getBoundingClientRect().top).toBe(offset);
     expect(scrollTo).not.toHaveBeenCalled();
-    expect(screen.getByRole('button', { name: 'Scroll to latest messages' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^(?:\d+ unseen messages?|Scroll to bottom)$/ })).toBeTruthy();
     expect(input.value).toBe('Draft stays here');
     expect(document.activeElement).toBe(input);
     expect(input.selectionStart).toBe(5);
+  });
+
+  it('counts unseen bubbles, reveals the next one with minimal scroll, then scrolls to the bottom', () => {
+    extraBottomSpace = 132;
+    const { runtime, box } = setup();
+    readAt(box, 500);
+    act(() => runtime.publish({ records: [...initialRows, message(20), message(21)] }));
+
+    const revealButton = screen.getByRole('button', { name: '2 unseen messages' });
+    expect(revealButton.textContent).toContain(revealButton.getAttribute('aria-label'));
+    revealButton.focus();
+    const firstBubble = box.querySelector<HTMLElement>('[data-scroll-key="message-20"]')!;
+    const revealTop = box.scrollTop + firstBubble.getBoundingClientRect().bottom - revealButton.getBoundingClientRect().top;
+    fireEvent.click(revealButton);
+
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: revealTop, behavior: 'smooth' });
+    const bottomButton = screen.getByRole('button', { name: 'Scroll to bottom' });
+    expect(bottomButton.textContent).toContain(bottomButton.getAttribute('aria-label'));
+    expect(bottomButton).toBe(revealButton);
+    expect(document.activeElement).toBe(revealButton);
+
+    box.scrollTop = revealTop;
+    fireEvent.scroll(box);
+    expect(screen.getByRole('button', { name: 'Scroll to bottom' })).toBeTruthy();
+
+    scrollTo.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'Scroll to bottom' }));
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: box.scrollHeight - box.clientHeight, behavior: 'smooth' });
+    expect(document.activeElement).toBe(box);
+    box.scrollTop = box.scrollHeight - box.clientHeight;
+    fireEvent.scroll(box);
+    expect(screen.queryByRole('button', { name: latestButtonName })).toBeNull();
+  });
+
+  it.each([false, true])('reveals a short unseen bubble above the floating control when composer hidden=%s', composerHidden => {
+    extraBottomSpace = composerHidden ? 96 : 132;
+    const { runtime, box } = setup();
+    if (composerHidden) box.parentElement!.classList.add('tb-chat-host-composer-hidden');
+    readAt(box, 500);
+    act(() => runtime.publish({ records: [...initialRows, message(20), message(21)] }));
+
+    const revealButton = screen.getByRole('button', { name: '2 unseen messages' });
+    const visibleBottom = revealButton.getBoundingClientRect().top;
+    const firstBubble = box.querySelector<HTMLElement>('[data-scroll-key="message-20"]')!;
+    expect(firstBubble.getBoundingClientRect().height).toBeLessThan(box.clientHeight);
+    const revealTop = box.scrollTop + firstBubble.getBoundingClientRect().bottom - visibleBottom;
+    expect(revealTop).toBeLessThan(box.scrollHeight - box.clientHeight);
+
+    fireEvent.click(revealButton);
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: revealTop, behavior: 'smooth' });
+    box.scrollTop = revealTop;
+    fireEvent.scroll(box);
+
+    expect(firstBubble.getBoundingClientRect().bottom).toBeCloseTo(visibleBottom);
+    expect(screen.getByRole('button', { name: 'Scroll to bottom' })).toBeTruthy();
+  });
+
+  it('keeps an obscured bubble unseen until one pixel enters the unobscured area', () => {
+    const { runtime, box } = setup();
+    readAt(box, 500);
+    act(() => runtime.publish({ records: [...initialRows, message(20), message(21)] }));
+    const button = screen.getByRole('button', { name: '2 unseen messages' });
+    const firstBubble = box.querySelector<HTMLElement>('[data-scroll-key="message-20"]')!;
+    const visibleBottom = button.getBoundingClientRect().top;
+
+    fireEvent.wheel(box, { deltaY: 1000 });
+    box.scrollTop += firstBubble.getBoundingClientRect().top - (visibleBottom + 1);
+    fireEvent.scroll(box);
+    expect(screen.getByRole('button', { name: '2 unseen messages' })).toBe(button);
+
+    box.scrollTop += 2;
+    fireEvent.scroll(box);
+    expect(screen.getByRole('button', { name: '1 unseen message' })).toBeTruthy();
+  });
+
+  it('shows Scroll to bottom above the bottom when no unseen bubbles remain', () => {
+    const { box } = setup();
+    readAt(box, 600);
+
+    expect(screen.getByRole('button', { name: 'Scroll to bottom' })).toBeTruthy();
+  });
+
+  it('uses a consistent one-pixel tolerance at the bottom', () => {
+    const { box } = setup();
+    const bottom = box.scrollHeight - box.clientHeight;
+    readAt(box, bottom - 2);
+    expect(screen.getByRole('button', { name: 'Scroll to bottom' })).toBeTruthy();
+
+    box.scrollTop = bottom - .75;
+    fireEvent.scroll(box);
+    expect(screen.queryByRole('button', { name: latestButtonName })).toBeNull();
+
+    readAt(box, bottom - 1.25);
+    const button = screen.getByRole('button', { name: 'Scroll to bottom' });
+    scrollTo.mockClear();
+    fireEvent.click(button);
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: bottom, behavior: 'smooth' });
+  });
+
+  it('does not count activity folds as unseen message bubbles', () => {
+    const { runtime, box } = setup();
+    readAt(box, 500);
+    const activeOwnerTurn = createTurnProvenance({
+      seq: 20, sessionKey: 'reading', messageId: initialRows.at(-1)!.id, origin: 'user:person',
+      status: 'running', triggerSource: 'mike', raw: { seq: 20, origin: 'user:person' },
+    }, [initialRows.at(-1)!], 'person', 'person');
+    const activityRows = [
+      { ...message(20), id: 'activity-1', sender: 'process:events', messageType: 'substrate', content: 'Quiet for 3 h' },
+      { ...message(21), id: 'activity-2', sender: 'process:events', messageType: 'substrate', content: 'Quiet for 4 h' },
+    ];
+    act(() => runtime.publish({ activityTurnStateAvailable: true, activeTurn: activeOwnerTurn,
+      records: [...initialRows, ...activityRows] }));
+
+    expect(screen.getByRole('button', { name: 'Scroll to bottom' })).toBeTruthy();
+  });
+
+  it.each([false, true])('top-aligns a bubble taller than the unobscured area with composer hidden=%s', composerHidden => {
+    const { runtime, box } = setup();
+    if (composerHidden) box.parentElement!.classList.add('tb-chat-host-composer-hidden');
+    readAt(box, 500);
+    act(() => runtime.publish({ records: [...initialRows, message(20), message(21), message(22), message(23)] }));
+    const tallBubble = box.querySelector<HTMLElement>('[data-scroll-key="message-20"]')!;
+    const startTop = box.scrollTop;
+    const viewportBounds = box.getBoundingClientRect();
+    const visibleBottom = screen.getByRole('button', { name: '4 unseen messages' }).getBoundingClientRect().top;
+    const visibleHeight = visibleBottom - viewportBounds.top;
+    const offscreenTop = visibleBottom + 50;
+    Object.defineProperty(tallBubble, 'getBoundingClientRect', { configurable: true,
+      value: () => rect(offscreenTop - (box.scrollTop - startTop), 260) });
+    expect(260).toBeLessThan(box.clientHeight);
+    expect(260).toBeGreaterThan(visibleHeight);
+    expect(tallBubble.getBoundingClientRect().top).toBeGreaterThan(visibleBottom);
+    reducedMotion = true;
+    const expectedTop = startTop + offscreenTop - viewportBounds.top;
+
+    fireEvent.click(screen.getByRole('button', { name: '4 unseen messages' }));
+
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: expectedTop, behavior: 'instant' });
+    expect(box.scrollTop).toBe(expectedTop);
+    expect(tallBubble.getBoundingClientRect().top).toBe(box.getBoundingClientRect().top);
+    expect(screen.getByRole('button', { name: 'Scroll to bottom' })).toBeTruthy();
   });
 
   it.each([0, 40])('keeps the latest content in the same frame when previously %i pixels from bottom', gap => {
@@ -881,7 +1031,7 @@ describe('conversation reading position', () => {
     advanceNextFrame(performance.now() + 300);
     expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight);
     expect(scrollTo).not.toHaveBeenCalled();
-    expect(screen.queryByRole('button', { name: 'Scroll to latest messages' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^(?:\d+ unseen messages?|Scroll to bottom)$/ })).toBeNull();
   });
 
   it('keeps the newest bubble still while the active-activity caption appears and clears', () => {
@@ -904,7 +1054,8 @@ describe('conversation reading position', () => {
     expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight);
   });
 
-  it('lets the reader interrupt following, then uses the button to return to the latest content', () => {
+  it('lets the reader interrupt following, reveal an unseen bubble, then return to the bottom', () => {
+    extraBottomSpace = 132;
     const { runtime, box } = setup();
     act(() => runtime.publish({ records: [...initialRows, message(20)] }));
     readAt(box, 500);
@@ -912,20 +1063,29 @@ describe('conversation reading position', () => {
     act(() => runtime.publish({ records: [...runtime.state.records, message(21)] }));
     expect(box.scrollTop).toBe(500);
     expect(scrollTo).not.toHaveBeenCalled();
-    const button = screen.getByRole('button', { name: 'Scroll to latest messages' });
+    const button = screen.getByRole('button', { name: /\d+ unseen messages?/ });
     button.focus();
+    const nextBubble = box.querySelector<HTMLElement>('[data-scroll-key="message-21"]')!;
+    const revealTop = box.scrollTop + nextBubble.getBoundingClientRect().bottom - button.getBoundingClientRect().top;
     fireEvent.click(button);
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: revealTop, behavior: 'smooth' });
+    expect(screen.getByRole('button', { name: 'Scroll to bottom' })).toBeTruthy();
+    expect(document.activeElement).toBe(button);
+
+    box.scrollTop = revealTop;
+    fireEvent.scroll(box);
+    fireEvent.click(screen.getByRole('button', { name: 'Scroll to bottom' }));
     expect(scrollTo).toHaveBeenLastCalledWith({ top: box.scrollHeight - box.clientHeight, behavior: 'smooth' });
     expect(document.activeElement).toBe(box);
     box.scrollTop = box.scrollHeight;
     fireEvent.scroll(box);
-    expect(screen.queryByRole('button', { name: 'Scroll to latest messages' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^(?:\d+ unseen messages?|Scroll to bottom)$/ })).toBeNull();
   });
 
   it('keeps the latest message above the composer when the viewport shrinks after Latest messages', () => {
     const { box } = setup();
     readAt(box, 0);
-    const button = screen.getByRole('button', { name: 'Scroll to latest messages' });
+    const button = screen.getByRole('button', { name: /^(?:\d+ unseen messages?|Scroll to bottom)$/ });
     fireEvent.click(button);
     const oldBottom = box.scrollHeight - box.clientHeight;
 
@@ -935,25 +1095,25 @@ describe('conversation reading position', () => {
     fireEvent.scroll(box);
 
     expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight);
-    expect(screen.queryByRole('button', { name: 'Scroll to latest messages' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^(?:\d+ unseen messages?|Scroll to bottom)$/ })).toBeNull();
   });
 
   it('keeps following after a hand-scroll to the bottom when the viewport shrinks', () => {
     const { box } = setup();
     readAt(box, box.scrollHeight - box.clientHeight);
-    expect(screen.queryByRole('button', { name: 'Scroll to latest messages' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^(?:\d+ unseen messages?|Scroll to bottom)$/ })).toBeNull();
 
     viewportHeight = 220;
     fireEvent.scroll(box);
 
     expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight);
-    expect(screen.queryByRole('button', { name: 'Scroll to latest messages' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^(?:\d+ unseen messages?|Scroll to bottom)$/ })).toBeNull();
   });
 
   it('keeps following through a viewport resize observed before scroll events', () => {
     const { box } = setup();
     readAt(box, 0);
-    fireEvent.click(screen.getByRole('button', { name: 'Scroll to latest messages' }));
+    fireEvent.click(screen.getByRole('button', { name: /^(?:\d+ unseen messages?|Scroll to bottom)$/ }));
     box.scrollTop = box.scrollHeight - box.clientHeight;
     fireEvent.scroll(box);
 
@@ -962,7 +1122,7 @@ describe('conversation reading position', () => {
 
     expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight);
     expect(scrollTo).toHaveBeenLastCalledWith({ top: box.scrollHeight - box.clientHeight, behavior: 'instant' });
-    expect(screen.queryByRole('button', { name: 'Scroll to latest messages' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^(?:\d+ unseen messages?|Scroll to bottom)$/ })).toBeNull();
   });
 
   it('tracks the visible viewport through keyboard motion while following the latest message', () => {
@@ -978,14 +1138,14 @@ describe('conversation reading position', () => {
       expect(box.clientHeight).toBe(height);
       expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight);
       expect(scrollTo).toHaveBeenLastCalledWith({ top: box.scrollHeight - box.clientHeight, behavior: 'instant' });
-      expect(screen.queryByRole('button', { name: 'Scroll to latest messages' })).toBeNull();
+      expect(screen.queryByRole('button', { name: /^(?:\d+ unseen messages?|Scroll to bottom)$/ })).toBeNull();
     }
 
     act(() => visualViewport.resizeTo(300));
     notifyResizeObservers();
     expect(box.clientHeight).toBe(300);
     expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight);
-    expect(screen.queryByRole('button', { name: 'Scroll to latest messages' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^(?:\d+ unseen messages?|Scroll to bottom)$/ })).toBeNull();
   });
 
   it('keeps the latest message aligned in the frame that applies a keyboard inset', () => {
@@ -1000,7 +1160,7 @@ describe('conversation reading position', () => {
     expect(box.clientHeight).toBe(529);
     expect(newBottom - oldBottom).toBe(345);
     expect(box.scrollTop).toBe(newBottom);
-    expect(screen.queryByRole('button', { name: 'Scroll to latest messages' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^(?:\d+ unseen messages?|Scroll to bottom)$/ })).toBeNull();
   });
 
   it('keeps the latest message aligned in the frame the Chat container resizes', () => {
@@ -1019,7 +1179,7 @@ describe('conversation reading position', () => {
     expect(box.clientHeight).toBe(529);
     expect(newBottom - oldBottom).toBe(345);
     expect(box.scrollTop).toBe(newBottom);
-    expect(screen.queryByRole('button', { name: 'Scroll to latest messages' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^(?:\d+ unseen messages?|Scroll to bottom)$/ })).toBeNull();
   });
 
   it('preserves an away reader in the frame the Chat container resizes', () => {
@@ -1037,7 +1197,7 @@ describe('conversation reading position', () => {
 
     expect(box.scrollTop).toBe(scrollTopBefore);
     expect(anchor.getBoundingClientRect().top).toBe(anchorTopBefore);
-    expect(screen.getByRole('button', { name: 'Scroll to latest messages' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^(?:\d+ unseen messages?|Scroll to bottom)$/ })).toBeTruthy();
   });
 
   it('keeps an away reader anchored while the keyboard moves the visible viewport', () => {
@@ -1054,7 +1214,7 @@ describe('conversation reading position', () => {
 
       expect(box.clientHeight).toBe(height);
       expect(anchor.getBoundingClientRect().top).toBe(before);
-      expect(screen.getByRole('button', { name: 'Scroll to latest messages' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: /^(?:\d+ unseen messages?|Scroll to bottom)$/ })).toBeTruthy();
     }
   });
 
@@ -1078,7 +1238,7 @@ describe('conversation reading position', () => {
     fireEvent.scroll(box);
 
     expect(box.scrollTop).toBe(insetBottom);
-    expect(screen.queryByRole('button', { name: 'Scroll to latest messages' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^(?:\d+ unseen messages?|Scroll to bottom)$/ })).toBeNull();
   });
 
   it('keeps a short touch flick away from latest through post-lift momentum', () => {
@@ -1089,14 +1249,14 @@ describe('conversation reading position', () => {
     fireEvent.touchMove(box);
     box.scrollTop = bottom - 40;
     fireEvent.scroll(box);
-    expect(screen.queryByRole('button', { name: 'Scroll to latest messages' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Scroll to bottom' })).toBeTruthy();
 
     fireEvent.touchEnd(box);
     box.scrollTop = bottom - 160;
     fireEvent.scroll(box);
 
     expect(box.scrollTop).toBe(bottom - 160);
-    expect(screen.getByRole('button', { name: 'Scroll to latest messages' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^(?:\d+ unseen messages?|Scroll to bottom)$/ })).toBeTruthy();
 
     fireEvent(box, new Event('scrollend'));
   });
@@ -1112,7 +1272,7 @@ describe('conversation reading position', () => {
     fireEvent.scroll(box);
 
     expect(box.scrollTop).toBe(bottom - 180);
-    expect(screen.getByRole('button', { name: 'Scroll to latest messages' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^(?:\d+ unseen messages?|Scroll to bottom)$/ })).toBeTruthy();
   });
 
   it('preserves an away reader position when the viewport resizes', () => {
@@ -1123,20 +1283,20 @@ describe('conversation reading position', () => {
     notifyResizeObservers();
 
     expect(box.scrollTop).toBe(600);
-    expect(screen.getByRole('button', { name: 'Scroll to latest messages' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^(?:\d+ unseen messages?|Scroll to bottom)$/ })).toBeTruthy();
   });
 
   it('opens and reloads a ready conversation at the newest message', () => {
     const first = setup();
     expect(first.box.scrollTop).toBe(first.box.scrollHeight - first.box.clientHeight);
     readAt(first.box, 600);
-    expect(screen.getByRole('button', { name: 'Scroll to latest messages' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^(?:\d+ unseen messages?|Scroll to bottom)$/ })).toBeTruthy();
 
     cleanup();
     const { box } = setup();
 
     expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight);
-    expect(screen.queryByRole('button', { name: 'Scroll to latest messages' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^(?:\d+ unseen messages?|Scroll to bottom)$/ })).toBeNull();
   });
 
   it('stays at the latest message when initial content grows before its scroll event arrives', () => {
@@ -1158,7 +1318,7 @@ describe('conversation reading position', () => {
     const settledBottom = box.scrollHeight - box.clientHeight;
     expect(scrollTo).toHaveBeenLastCalledWith({ top: settledBottom, behavior: 'instant' });
     expect(box.scrollTop).toBe(settledBottom);
-    expect(screen.queryByRole('button', { name: 'Scroll to latest messages' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^(?:\d+ unseen messages?|Scroll to bottom)$/ })).toBeNull();
   });
 
   it('keeps following through cold-launch history loading and later layout growth', async () => {
@@ -1188,7 +1348,7 @@ describe('conversation reading position', () => {
     notifyResizeObservers();
 
     expect(box.scrollTop).toBe(bottom());
-    expect(screen.queryByRole('button', { name: 'Scroll to latest messages' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^(?:\d+ unseen messages?|Scroll to bottom)$/ })).toBeNull();
   });
 
   it('keeps initial bottom-follow when an unsolicited scroll restoration races automatic history prefetch', async () => {
@@ -1221,7 +1381,7 @@ describe('conversation reading position', () => {
     expect(box.scrollTop).toBe(bottom());
     expect(scrollTo.mock.calls.length).toBeGreaterThan(0);
     expect(scrollTo.mock.calls.every(([options]) => options.behavior === 'instant')).toBe(true);
-    expect(screen.queryByRole('button', { name: 'Scroll to latest messages' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^(?:\d+ unseen messages?|Scroll to bottom)$/ })).toBeNull();
   });
 
   it('preserves an away reader anchor through older history loading and layout growth', async () => {
@@ -1247,11 +1407,11 @@ describe('conversation reading position', () => {
     await act(async () => { releaseOlder(); await olderPage; });
 
     expect(anchor.getBoundingClientRect().top).toBe(anchorTop);
-    expect(screen.getByRole('button', { name: 'Scroll to latest messages' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^(?:\d+ unseen messages?|Scroll to bottom)$/ })).toBeTruthy();
     lateLayoutGrowth = 960;
     notifyResizeObservers();
     expect(anchor.getBoundingClientRect().top).toBe(anchorTop);
-    expect(screen.getByRole('button', { name: 'Scroll to latest messages' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^(?:\d+ unseen messages?|Scroll to bottom)$/ })).toBeTruthy();
   });
 
   it('returns to the newest message after submission, clears on acceptance, and leaves a rejected draft alone', () => {
@@ -1311,7 +1471,7 @@ describe('conversation reading position', () => {
     expect(animate).not.toHaveBeenCalled();
     expect(scrollTo).toHaveBeenLastCalledWith({ top: box.scrollHeight - box.clientHeight, behavior: 'instant' });
     readAt(box, 600);
-    fireEvent.click(screen.getByRole('button', { name: 'Scroll to latest messages' }));
+    fireEvent.click(screen.getByRole('button', { name: /^(?:\d+ unseen messages?|Scroll to bottom)$/ }));
     expect(scrollTo).toHaveBeenLastCalledWith({ top: box.scrollHeight - box.clientHeight, behavior: 'instant' });
   });
 

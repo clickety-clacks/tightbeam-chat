@@ -324,7 +324,7 @@ describe('conversation surface', () => {
     }
   });
 
-  it('marks reader scroll and jump-to-latest, not automatic reply growth', () => {
+  it('marks reader scroll but keeps both unseen-control steps local to the view', () => {
     const visibility = setDocumentVisibility('visible');
     const sessionKey = 'read-marker-reader-actions';
     const runtime = new FakeRuntime(sessionKey, { records: [
@@ -341,16 +341,32 @@ describe('conversation surface', () => {
       layout.setScrollTop(viewport.scrollHeight - viewport.clientHeight);
       fireEvent.scroll(viewport);
 
-      act(() => runtime.update({ records: [...runtime.state.records, row(sessionKey, 'reply', 'Reply', { seq: 4 })] }));
-      expect(mark).not.toHaveBeenCalled();
-
-      fireEvent.wheel(viewport, { deltaY: -140 });
-      layout.setScrollTop(layout.scrollTop - 140);
+      vi.useFakeTimers();
+      fireEvent.wheel(viewport, { deltaY: -1000 });
+      layout.setScrollTop(0);
       fireEvent.scroll(viewport);
       expect(mark).toHaveBeenCalledTimes(1);
 
       mark.mockClear();
-      fireEvent.click(screen.getByRole('button', { name: 'Scroll to latest messages' }));
+      vi.advanceTimersByTime(251);
+      act(() => runtime.update({ records: [...runtime.state.records, row(sessionKey, 'reply', 'Reply', { seq: 4 })] }));
+      expect(mark).not.toHaveBeenCalled();
+
+      // Start a new reader-scroll intent without moving the viewport. Each
+      // control step must keep its own programmatic movement out of the marker.
+      fireEvent.wheel(viewport, { deltaY: -1 });
+      fireEvent.click(screen.getByRole('button', { name: /^\d+ unseen messages?$/ }));
+      expect(screen.getByRole('button', { name: 'Scroll to bottom' })).toBeTruthy();
+      expect(mark).not.toHaveBeenCalled();
+
+      fireEvent.wheel(viewport, { deltaY: -1 });
+      fireEvent.click(screen.getByRole('button', { name: 'Scroll to bottom' }));
+      expect(screen.queryByRole('button', { name: 'Scroll to bottom' })).toBeNull();
+      expect(mark).not.toHaveBeenCalled();
+
+      fireEvent.wheel(viewport, { deltaY: -100 });
+      layout.setScrollTop(layout.scrollTop - 100);
+      fireEvent.scroll(viewport);
       expect(mark).toHaveBeenCalledTimes(1);
     } finally {
       view.unmount();
@@ -2315,7 +2331,7 @@ describe('conversation surface', () => {
     layout.setScrollTop(0);
     fireEvent.wheel(log, { deltaY: -100 });
     fireEvent.scroll(log);
-    await screen.findByRole('button', { name: 'Scroll to latest messages' });
+    await screen.findByRole('button', { name: /^(?:\d+ unseen messages?|Scroll to bottom)$/ });
     const anchorBeforeDraft = layout.offset(anchor);
 
     try {
@@ -2330,7 +2346,7 @@ describe('conversation surface', () => {
       expect(prompt.classList.contains('tb-chat-bubble-human')).toBe(true);
       expect(layout.offset(prompt)).toBeGreaterThanOrEqual(0);
       expect(layout.offset(prompt)).toBeLessThan(180);
-      expect(screen.queryByRole('button', { name: 'Scroll to latest messages' })).toBeNull();
+      expect(screen.queryByRole('button', { name: /^(?:\d+ unseen messages?|Scroll to bottom)$/ })).toBeNull();
       expect(runtime.sent).toEqual(['New browser prompt']);
     } finally {
       layout.restore();
@@ -2734,7 +2750,7 @@ describe('tool-call and transition display', () => {
           fireEvent.wheel(viewport, { deltaY: 1 });
           layout.setScrollTop(200);
           fireEvent.scroll(viewport);
-          expect(screen.getByRole('button', { name: 'Scroll to latest messages' })).toBeTruthy();
+          expect(screen.getByRole('button', { name: /^(?:\d+ unseen messages?|Scroll to bottom)$/ })).toBeTruthy();
           const anchorBefore = layout.offset(anchor);
 
           const animationStart = animations.animations.length;
