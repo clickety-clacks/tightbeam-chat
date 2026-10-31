@@ -237,6 +237,51 @@ function assignmentPresentation(content: string): ActivityPillPresentation | und
     text: subject ? `New · ${subject}` : 'New assignment', metadata: shortId('asg', match[1]) };
 }
 
+function noticeStatusText(value: string): string {
+  const words = normalize(value.replace(/[-_]+/g, ' ')).toLowerCase();
+  return words ? `${words[0].toUpperCase()}${words.slice(1)}` : 'Recorded';
+}
+
+function deliveredNoticePresentation(content: string): ActivityPillPresentation | undefined {
+  const first = semanticLines(content)[0] ?? '';
+  let match = /^\[verdict filed:\s*([a-z][a-z0-9-]*)\s+on\s+(asg_[a-z0-9-]+)\s*:\s*(.*?)\s*\]$/i.exec(first);
+  if (match) {
+    const verdict = match[1].toLowerCase();
+    const status = noticeStatusText(verdict);
+    const detail = plainText(match[3]);
+    const clean = new Set(['spirit-approved', 'reviewed-clean', 'verified', 'landed', 'approved']);
+    const adverse = new Set(['changes-requested', 'failed', 'blocked', 'refused', 'cannot-proceed']);
+    return { label: 'Verdict', tone: clean.has(verdict) ? 'green' : adverse.has(verdict) ? 'red' : 'indigo',
+      icon: 'decision', text: detail ? `${status} · ${detail}` : status, metadata: shortId('asg', match[2]) };
+  }
+
+  match = /^\[completion filed on\s+(asg_[a-z0-9-]+)\s*:\s*(.*?)\s*\]$/i.exec(first);
+  if (match) {
+    const detail = plainText(match[2]);
+    const text = !detail || /^(?:completed|finished)\b/i.test(detail) ? detail || 'Completed' : `Completed · ${detail}`;
+    return { label: 'Completion', tone: 'purple', icon: 'attest', text, metadata: shortId('asg', match[1]) };
+  }
+
+  match = /^\[assignment opened:\s*(asg_[a-z0-9-]+)\s*\]$/i.exec(first);
+  if (match) {
+    return { label: 'Assignment opened', tone: 'blue', icon: 'assignment', text: 'Opened',
+      metadata: shortId('asg', match[1]) };
+  }
+
+  match = /^\[assignment closed:\s*(asg_[a-z0-9-]+)\s*[—–-]\s*(.*?)\s*\]$/i.exec(first);
+  if (match) {
+    const rawOutcome = plainText(match[2]);
+    const statusLike = /^[a-z][a-z0-9-]*$/i.test(rawOutcome);
+    const outcome = statusLike ? noticeStatusText(rawOutcome) : rawOutcome;
+    const normalizedOutcome = rawOutcome.toLowerCase().replace(/[-_]+/g, ' ');
+    const tone = ['failed', 'revoked', 'refused', 'cannot proceed'].includes(normalizedOutcome) ? 'red'
+      : normalizedOutcome === 'surrendered' ? 'amber' : 'slate';
+    return { label: 'Assignment closed', tone, icon: 'flag', text: outcome || 'Closed',
+      metadata: shortId('asg', match[1]) };
+  }
+  return undefined;
+}
+
 function sessionPresentation(content: string): ActivityPillPresentation | undefined {
   const first = semanticLines(content)[0] ?? '';
   const id = shortId('s', first);
@@ -307,7 +352,7 @@ export function activityPillPresentation(source: ActivityPillSource): ActivityPi
   } else {
     presentation = wakePresentation(source.content) ?? reminderPresentation(source.content) ??
       childFinished(source.content) ?? turnFailure(source.content, source.turnSeq) ??
-      attestPresentation(source.content) ?? assignmentPresentation(source.content) ??
+      deliveredNoticePresentation(source.content) ?? attestPresentation(source.content) ?? assignmentPresentation(source.content) ??
       decisionPresentation(source.content) ?? workItemPresentation(source.content) ??
       sessionPresentation(source.content) ?? remedyPresentation(source.gist, source.content) ??
       substrateTypePresentation(source) ?? genericActivity(source);

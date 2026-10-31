@@ -1584,6 +1584,53 @@ describe('conversation surface', () => {
     }
   });
 
+  it('renders delivered outcome notices with distinct icons, tones and short wording', () => {
+    const sessionKey = 'delivered-outcome-notices';
+    const human = row(sessionKey, 'prompt', 'Review these changes', {
+      seq: 1, role: 'user', sender: 'user:person', messageType: 'chat', turnSeq: 1,
+    });
+    const notice = (id: string, seq: number, content: string) => row(sessionKey, id, content, {
+      seq, role: 'user', sender: 'process:events', messageType: 'process', turnSeq: 1,
+    });
+    const reviewedClean = notice('reviewed-clean', 2,
+      '[verdict filed: reviewed-clean on asg_12345678-1111-4111-8111-123456789abc: The change is ready]');
+    const changesRequested = notice('changes-requested', 3,
+      '[verdict filed: changes-requested on asg_23456789-1111-4111-8111-123456789abc: Correct the missing case]');
+    const completion = notice('completion', 4,
+      '[completion filed on asg_34567890-1111-4111-8111-123456789abc: Completed after the focused review]');
+    const opened = notice('assignment-opened', 5,
+      '[assignment opened: asg_456789ab-1111-4111-8111-123456789abc]');
+    const closed = notice('assignment-closed', 6,
+      '[assignment closed: asg_56789abc-1111-4111-8111-123456789abc — completed]');
+    const answer = row(sessionKey, 'answer', 'The change is ready', {
+      seq: 10, sender: 'assistant-service', messageType: 'assistant', replyToMessageId: human.id, turnSeq: 1,
+    });
+    const runtime = new FakeRuntime(sessionKey, {
+      records: [human, reviewedClean, changesRequested, completion, opened, closed, answer],
+      provenanceAvailable: false,
+    });
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+
+    const log = screen.getByRole('log');
+    const pillFor = (name: string) => within(log).getByRole('note', { name });
+    const cleanPill = pillFor('Verdict: Reviewed clean · The change is ready, asg_1234');
+    const adversePill = pillFor('Verdict: Changes requested · Correct the missing case, asg_2345');
+    const completionPill = pillFor('Completion: Completed after the focused review, asg_3456');
+    const openedPill = pillFor('Assignment opened: Opened, asg_4567');
+    const closedPill = pillFor('Assignment closed: Completed, asg_5678');
+
+    expect(cleanPill.querySelector('.tb-chat-activity-pill-green')).toBeTruthy();
+    expect(adversePill.querySelector('.tb-chat-activity-pill-red')).toBeTruthy();
+    expect(completionPill.querySelector('.tb-chat-activity-pill-purple')).toBeTruthy();
+    expect(openedPill.querySelector('.tb-chat-activity-pill-blue')).toBeTruthy();
+    expect(closedPill.querySelector('.tb-chat-activity-pill-slate')).toBeTruthy();
+    const categoryIcons = [cleanPill, completionPill, openedPill, closedPill]
+      .map(pill => pill.querySelector('.tb-chat-activity-pill svg')?.innerHTML);
+    expect(new Set(categoryIcons).size).toBe(4);
+    expect(`${cleanPill.textContent} ${adversePill.textContent} ${completionPill.textContent} ` +
+      `${openedPill.textContent} ${closedPill.textContent}`).not.toMatch(/[\[\]]/);
+  });
+
   it('updates only a growing activity fold and preserves an away reader', () => {
     const sessionKey = 'activity-fold-row-local-update';
     const question = row(sessionKey, 'question', 'Question', {
