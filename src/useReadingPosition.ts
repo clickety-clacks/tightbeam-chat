@@ -95,7 +95,7 @@ export function useReadingPosition(
   };
   const refreshUnseenMessages = () => {
     const box = viewport.current;
-    if (!box) return;
+    if (!box || unseenMessages.current.size === 0) return;
     const bounds = box.getBoundingClientRect();
     if (!Number.isFinite(bounds.top) || !Number.isFinite(bounds.bottom) || bounds.bottom <= bounds.top) return;
     for (const [key, scrollKey] of unseenMessages.current) {

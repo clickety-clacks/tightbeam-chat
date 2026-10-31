@@ -928,15 +928,17 @@ describe('conversation reading position', () => {
     readAt(box, 500);
     act(() => runtime.publish({ records: [...initialRows, message(20), message(21), message(22), message(23)] }));
     const tallBubble = box.querySelector<HTMLElement>('[data-scroll-key="message-20"]')!;
+    const startTop = box.scrollTop;
     vi.spyOn(tallBubble, 'getBoundingClientRect').mockImplementation(() =>
-      rect(16 + 20 * 92 - box.scrollTop, 400));
+      rect(startTop + 350 - box.scrollTop, 400));
     reducedMotion = true;
-    const expectedTop = box.scrollTop + tallBubble.getBoundingClientRect().top - box.getBoundingClientRect().top;
+    const expectedTop = startTop + 350;
 
     fireEvent.click(screen.getByRole('button', { name: '4 unseen messages' }));
 
     expect(scrollTo).toHaveBeenLastCalledWith({ top: expectedTop, behavior: 'instant' });
     expect(box.scrollTop).toBe(expectedTop);
+    expect(tallBubble.getBoundingClientRect().top).toBe(box.getBoundingClientRect().top);
     expect(screen.getByRole('button', { name: 'Scroll to bottom' })).toBeTruthy();
   });
 
@@ -1173,7 +1175,7 @@ describe('conversation reading position', () => {
     fireEvent.touchMove(box);
     box.scrollTop = bottom - 40;
     fireEvent.scroll(box);
-    expect(screen.queryByRole('button', { name: /^(?:\d+ unseen messages?|Scroll to bottom)$/ })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Scroll to bottom' })).toBeTruthy();
 
     fireEvent.touchEnd(box);
     box.scrollTop = bottom - 160;
