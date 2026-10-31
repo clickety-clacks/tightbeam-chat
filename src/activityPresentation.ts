@@ -297,6 +297,17 @@ function commonNoticePresentation(content: string): ActivityPillPresentation | u
       text: reason ? `Could not proceed · ${reason}` : 'Could not proceed', metadata: shortId('asg', match[1]) };
   }
 
+  if (/^\[cannot-proceed settled by opener answer\]$/i.test(first)) {
+    return { label: 'Blocker cleared', tone: 'green', icon: 'decision-answered',
+      text: 'Cleared by the opener’s answer' };
+  }
+
+  match = /^\[cannot-proceed released:\s*(asg_[a-z0-9-]+)\s+by\s+([^/\]]+)\/([^\]]+)\]$/i.exec(first);
+  if (match) {
+    return { label: 'Blocker released', tone: 'green', icon: 'decision-answered', text: 'Released',
+      metadata: shortId('asg', match[1]) };
+  }
+
   match = /^\[assignment revoked:\s*(asg_[a-z0-9-]+)\s*\]$/i.exec(first);
   if (match) {
     return { label: 'Assignment revoked', tone: 'red', icon: 'flag', text: 'Revoked',
