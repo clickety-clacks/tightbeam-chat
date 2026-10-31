@@ -5,6 +5,74 @@ const source = (kind: ActivityPillSource['kind'], content: string, gist = conten
   extra: Partial<ActivityPillSource> = {}) => ({ kind, content, gist, ...extra } satisfies ActivityPillSource);
 
 describe('activity pill presentation', () => {
+  it('gives delivered verdict, completion, opened and closed notices distinct plain presentations', () => {
+    const assignmentIds = [
+      'asg_12345678-1111-4111-8111-123456789abc',
+      'asg_23456789-1111-4111-8111-123456789abc',
+      'asg_34567890-1111-4111-8111-123456789abc',
+      'asg_456789ab-1111-4111-8111-123456789abc',
+    ];
+    const delivered = (line: string) => source('substrate', line, line, {
+      sender: 'system', messageType: 'process',
+    });
+    const reviewedClean = activityPillPresentation(delivered(
+      `[verdict filed: reviewed-clean on ${assignmentIds[0]}: The change is ready]`));
+    const spiritApproved = activityPillPresentation(delivered(
+      `[verdict filed: spirit-approved on ${assignmentIds[0]}: Retain the change]`));
+    const changesRequested = activityPillPresentation(delivered(
+      `[verdict filed: changes-requested on ${assignmentIds[0]}: Correct the missing case]`));
+    const completion = activityPillPresentation(delivered(
+      `[completion filed on ${assignmentIds[1]}: Completed after the focused review]`));
+    const opened = activityPillPresentation(delivered(`[assignment opened: ${assignmentIds[2]}]`));
+    const closed = activityPillPresentation(delivered(`[assignment closed: ${assignmentIds[3]} — completed]`));
+
+    expect(reviewedClean).toMatchObject({ label: 'Verdict', tone: 'green', icon: 'decision',
+      text: 'Reviewed clean · The change is ready', metadata: 'asg_1234' });
+    expect(spiritApproved).toMatchObject({ label: 'Verdict', tone: 'green', icon: 'decision',
+      text: 'Spirit approved · Retain the change', metadata: 'asg_1234' });
+    expect(changesRequested).toMatchObject({ label: 'Verdict', tone: 'red', icon: 'decision',
+      text: 'Changes requested · Correct the missing case', metadata: 'asg_1234' });
+    expect(completion).toMatchObject({ label: 'Completion', tone: 'purple', icon: 'attest',
+      text: 'Completed after the focused review', metadata: 'asg_2345' });
+    expect(opened).toMatchObject({ label: 'Assignment opened', tone: 'blue', icon: 'assignment',
+      text: 'Opened', metadata: 'asg_3456' });
+    expect(closed).toMatchObject({ label: 'Assignment closed', tone: 'slate', icon: 'flag',
+      text: 'Completed', metadata: 'asg_4567' });
+
+    for (const presentation of [reviewedClean, spiritApproved, changesRequested, completion, opened, closed]) {
+      const copy = `${presentation?.label} ${presentation?.text} ${presentation?.metadata}`;
+      expect(copy).not.toMatch(/[\[\]]/);
+      expect(copy).not.toMatch(/asg_[a-f0-9]{8}-/i);
+    }
+  });
+
+  it('classifies the other frequent delivered notices without sending them to the generic pill', () => {
+    const assignmentId = 'asg_12345678-1111-4111-8111-123456789abc';
+    const cases: Array<[string, { label: string; tone: string; icon: string; text: string }]> = [
+      [`[progress filed on ${assignmentId}: Updated the product summary]`,
+        { label: 'Progress', tone: 'indigo', icon: 'activity', text: 'Updated the product summary' }],
+      [`[cannot-proceed filed on ${assignmentId}: The review could not continue]`,
+        { label: 'Action blocked', tone: 'orange', icon: 'refused', text: 'Could not proceed · The review could not continue' }],
+      [`[assignment revoked: ${assignmentId}]`,
+        { label: 'Assignment revoked', tone: 'red', icon: 'flag', text: 'Revoked' }],
+      ['[context compacted]',
+        { label: 'Conversation', tone: 'slate', icon: 'notice', text: 'Context shortened' }],
+      ['[adapter down]',
+        { label: 'Connection', tone: 'amber', icon: 'alarm', text: 'Connection unavailable' }],
+      ['[engine swap]',
+        { label: 'Model', tone: 'purple', icon: 'process', text: 'Model changed' }],
+    ];
+
+    for (const [content, expected] of cases) {
+      const presentation = activityPillPresentation(source('substrate', content, content, {
+        sender: 'process:events', messageType: 'process',
+      }));
+      expect(presentation, content).toMatchObject(expected);
+      expect(`${presentation?.label} ${presentation?.text} ${presentation?.metadata ?? ''}`).not.toMatch(/[\[\]]/);
+    }
+    expect(new Set(cases.map(([, expected]) => expected.icon)).size).toBe(cases.length);
+  });
+
   it('uses stable delivered notice shapes and shortens their primary identifiers', () => {
     const cases: Array<[ActivityPillSource, string, string, string | undefined]> = [
       [source('substrate', 'Attest att_12345678-1111-4111-8111-123456789abc (completion) was filed on assignment asg_abcdef12-1111-4111-8111-123456789abc.'),
