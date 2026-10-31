@@ -390,6 +390,11 @@ function isToolHistoryCollectionPath(path: string): boolean {
   catch { return false; }
 }
 
+function isRecordEventsCollectionPath(path: string): boolean {
+  try { return /^\/api\/sessions\/[^/]+\/record-events$/.test(new URL(path, 'https://gateway.invalid').pathname); }
+  catch { return false; }
+}
+
 function authorizationFailureCode(value: unknown): boolean {
   if (typeof value !== 'string') return false;
   return ['unauthorized', 'forbidden', 'not_authorized', 'not_authenticated',
@@ -431,6 +436,12 @@ export function createPublic019Transport(config: Public019Config): { transport: 
       }
       if (code === 'chat_gateway_unavailable') {
         throw new Error('No Gateway access is provisioned for the selected conversation. The selected target was not changed.');
+      }
+      if (response.status === 404 && isRecordEventsCollectionPath(path)) {
+        // Older Gateways do not expose this optional collection. Keep transcript
+        // history usable and report no record events until the route is present.
+        return { schemaVersion: 1, resource: 'record events', items: [],
+          page: { oldestCursor: null, hasMoreBefore: false } };
       }
       if (response.status === 404 && isToolHistoryCollectionPath(path)) {
         throw new ToolHistoryUnavailableError('Tool history is unavailable.');

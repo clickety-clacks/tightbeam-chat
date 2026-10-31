@@ -488,6 +488,47 @@ describe('Gateway wire mapping and behavior checks', () => {
     runtime.dispose();
   });
 
+  it('treats a missing optional record-event route as empty without disrupting transcript or sending', async () => {
+    const candidate = setup();
+    const fetch = candidate.host.fetch;
+    candidate.host.fetch = async (input, init) => {
+      if (new URL(input).pathname === `/api/sessions/${sessionKey}/record-events`) {
+        return new Response('Not Found', { status: 404 });
+      }
+      return fetch(input, init);
+    };
+    const runtime = createTightbeamAdapter(candidate.transport, candidate.profile).open(sessionKey);
+
+    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+    await vi.waitFor(() => expect(runtime.getSnapshot().recordEventsLoading).toBe(false));
+    expect(runtime.getSnapshot().records.map(row => row.id)).toEqual(['m_1']);
+    expect(runtime.getSnapshot().recordEvents).toEqual([]);
+    expect(runtime.getSnapshot().recordEventsError).toBeUndefined();
+    expect(candidate.paths).toContain(`https://host.example/api/sessions/${sessionKey}/record-events?limit=50`);
+
+    const clientMessageId = runtime.send('Chat remains available without the optional event feed');
+    expect(clientMessageId).toBeTruthy();
+    await vi.waitFor(() => expect(candidate.human.sent).toHaveLength(1));
+    candidate.human.emit({ type: 'ack', id: clientMessageId });
+    await vi.waitFor(() => expect(runtime.getSnapshot().sends[0]?.status).toBe('accepted'));
+    expect(runtime.getSnapshot().status).toBe('ready');
+    runtime.dispose();
+  });
+
+  it('keeps non-404 record-event failures visible to the optional-history reader', async () => {
+    const candidate = setup();
+    candidate.host.fetch = async (input, init) => {
+      if (new URL(input).pathname === `/api/sessions/${sessionKey}/record-events`) {
+        return new Response('Unavailable', { status: 503 });
+      }
+      return new Response(JSON.stringify({ schemaVersion: 1, resource: 'record events', items: [],
+        page: { hasMoreBefore: false } }), { status: 200 });
+    };
+
+    await expect(candidate.transport.readRecordEvents!(sessionKey, undefined, new AbortController().signal))
+      .rejects.toThrow('Tightbeam REST request failed with HTTP 503');
+  });
+
   it('does not call exact-turn or trigger-message detail routes while loading a transcript', async () => {
     const messages = [
       { ...item, id: 'human-message', seq: 9, role: 'user', sender: 'user:person-1', messageType: 'chat',
