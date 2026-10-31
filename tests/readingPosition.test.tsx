@@ -530,14 +530,14 @@ describe('conversation reading position', () => {
     const fold = document.querySelector('[data-activity-fold="true"]');
     expect(fold).toBeTruthy();
     expect(animate.mock.contexts.at(-1)).toBe(fold);
-    expect(animate).toHaveBeenCalledTimes(2);
+    expect(animate).toHaveBeenCalledTimes(1);
 
     const third = { ...message(22), id: 'activity-3', sender: 'process:events', messageType: 'substrate',
       content: 'Quiet for 5 h · Assignment Gamma' };
     act(() => activity.runtime.publish({ records: [...initialRows, first, second, third] }));
     expect(document.querySelector<HTMLElement>('[data-activity-fold="true"]')?.dataset.scrollKey)
       .toBe((fold as HTMLElement).dataset.scrollKey);
-    expect(animate).toHaveBeenCalledTimes(2);
+    expect(animate).toHaveBeenCalledTimes(1);
   });
 
   it('stops bottom-follow while scrolling up and resumes it after a page reaches the bottom', () => {
