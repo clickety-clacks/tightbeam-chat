@@ -1333,6 +1333,25 @@ describe('conversation reading position', () => {
     expect(screen.getByRole('button', { name: 'Jump to latest user prompt' }).textContent).toBe('Message 20');
   });
 
+  it('keeps the floating prompt below the system inset and in-chat status on orientation changes', () => {
+    const { runtime, box } = setup();
+    readAt(box, 0);
+    const chat = box.closest<HTMLElement>('.tb-chat')!;
+    const anchor = rows()[3];
+    const anchorTop = anchor.getBoundingClientRect().top;
+    chat.style.setProperty('--tb-chat-safe-area-top', '42px');
+
+    fireEvent(window, new Event('orientationchange'));
+    expect(chat.style.getPropertyValue('--tb-chat-floating-prompt-top')).toBe('52px');
+
+    act(() => runtime.publish({ loadingOlder: true }));
+    expect(chat.querySelector('.tb-chat-runtime-notice')).not.toBeNull();
+    expect(chat.style.getPropertyValue('--tb-chat-floating-prompt-top')).toBe('58px');
+    expect(anchor.getBoundingClientRect().top).toBe(anchorTop);
+    expect(box.scrollTop).toBe(0);
+    expect(screen.getByRole('button', { name: 'Jump to latest user prompt' }).textContent).toBe('Message 19');
+  });
+
   it('updates prompt visibility from retained elements without querying the transcript on scroll', () => {
     const { box } = setup();
     readAt(box, 0);

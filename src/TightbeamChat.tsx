@@ -1536,11 +1536,13 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     const notice = runtimeNotice.current;
     if (element) {
       const rootTop = element.getBoundingClientRect().top;
+      const safeAreaTop = Number.parseFloat(getComputedStyle(element).getPropertyValue('--tb-chat-safe-area-top')) || 0;
+      const safeTop = Math.max(10, safeAreaTop - rootTop + 10);
       const noticeBottom = notice?.getBoundingClientRect().bottom;
       const toolStatusBottom = toolHistoryStatus.current?.getBoundingClientRect().bottom;
       const blockingBottom = Math.max(noticeBottom ?? Number.NEGATIVE_INFINITY,
         toolStatusBottom ?? Number.NEGATIVE_INFINITY);
-      const top = Number.isFinite(blockingBottom) ? Math.max(10, blockingBottom - rootTop + 8) : 10;
+      const top = Number.isFinite(blockingBottom) ? Math.max(safeTop, blockingBottom - rootTop + 8) : safeTop;
       const topValue = `${top}px`;
       if (element.style.getPropertyValue('--tb-chat-floating-prompt-top') !== topValue) {
         element.style.setProperty('--tb-chat-floating-prompt-top', topValue);
@@ -1756,12 +1758,14 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
       ? undefined : new ResizeObserver(updateLatestPromptVisibility);
     for (const element of [root.current, box, content, target, notice, toolStatus]) if (element) observer?.observe(element);
     window.addEventListener('resize', updateLatestPromptVisibility);
+    window.addEventListener('orientationchange', updateLatestPromptVisibility);
     window.visualViewport?.addEventListener('resize', updateLatestPromptVisibility);
     window.visualViewport?.addEventListener('scroll', updateLatestPromptVisibility);
     updateLatestPromptVisibility();
     return () => {
       observer?.disconnect();
       window.removeEventListener('resize', updateLatestPromptVisibility);
+      window.removeEventListener('orientationchange', updateLatestPromptVisibility);
       window.visualViewport?.removeEventListener('resize', updateLatestPromptVisibility);
       window.visualViewport?.removeEventListener('scroll', updateLatestPromptVisibility);
     };
