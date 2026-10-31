@@ -540,7 +540,7 @@ describe('conversation surface', () => {
     render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
 
     const log = screen.getByRole('log');
-    expect(within(log).getByText('Review this assigned message.').closest('.tb-chat-bubble')
+    expect(within(log).getByText('[from user:account] Review this assigned message.').closest('.tb-chat-bubble')
       ?.getAttribute('aria-label')).toBe('Message from Assigned task');
     expect(within(log).getByText('The assigned reply is ready.').closest('.tb-chat-bubble')
       ?.getAttribute('aria-label')).toBe('Message from Research assistant');
