@@ -2521,12 +2521,14 @@ describe('conversation surface', () => {
     expect(composer).toHaveProperty('value', 'keep this draft');
   });
 
-  it('shows Sending while a message remains pending during a connection retry', () => {
+  it('keeps unconfirmed messages ghosted without status prose and retries only refusals', () => {
     const sessionKey = 'send-recovery';
     const runtime = new FakeRuntime(sessionKey, { sends: [
       { sessionKey, deviceId: 'device', clientMessageId: 'failed-id', content: 'Failed text',
         submittedAt: '2026-10-20T09:05:00.000Z', status: 'failed', reconciled: false,
         reason: 'private target detail' },
+      { sessionKey, deviceId: 'device', clientMessageId: 'accepted-id', content: 'Accepted text',
+        submittedAt: '2026-10-20T09:05:30.000Z', status: 'accepted', reconciled: false },
       { sessionKey, deviceId: 'device', clientMessageId: 'uncertain-id', content: 'Uncertain text',
         submittedAt: '2026-10-20T09:06:00.000Z', status: 'uncertain', reconciled: false,
         reason: 'private session detail' },
@@ -2536,21 +2538,27 @@ describe('conversation surface', () => {
     ] });
     render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
     expect(screen.getByText('Failed text')).toBeTruthy();
+    expect(screen.getByText('Accepted text')).toBeTruthy();
     expect(screen.getByText('Uncertain text')).toBeTruthy();
     expect(within(screen.getByRole('log')).getByText('Offline text')).toBeTruthy();
-    const sendStatus = screen.getByText('Sending…');
-    expect(sendStatus.getAttribute('role')).toBe('status');
+    expect(document.querySelectorAll('.tb-chat-send-spinner')).toHaveLength(3);
+    expect(screen.getByText('Failed text').closest('[data-send-state]')?.getAttribute('data-send-state')).toBe('refused');
+    expect(screen.getByText('Accepted text').closest('[data-send-state]')?.getAttribute('data-send-state')).toBe('ghosted');
     expect(screen.queryByText(/Not connected to the server|retrying…/)).toBeNull();
-    expect(screen.queryByText('Reconnect, then check the conversation before retrying this message.')).toBeNull();
-    expect(screen.getAllByRole('alert').every((alert) => !alert.textContent?.includes('private'))).toBe(true);
+    expect(screen.queryByText(/Sending…|Sent|Delivery is uncertain|Accepted; checking conversation history/)).toBeNull();
+    expect(screen.getByRole('alert').textContent).toContain('Message refused');
     expect(screen.queryByText(/private target detail|private session detail/)).toBeNull();
-    fireEvent.click(screen.getAllByRole('button', { name: 'Retry message' })[0]);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry message' }));
     expect(runtime.retried).toEqual(['failed-id']);
-    fireEvent.click(screen.getAllByRole('button', { name: 'Restore text to the composer' })[1]);
-    expect(screen.getByRole('textbox', { name: 'Message to Research assistant' })).toHaveProperty('value', 'Uncertain text');
+    expect(screen.getAllByRole('button', { name: 'Restore text to the composer' })).toHaveLength(1);
+    act(() => runtime.update({ sends: runtime.state.sends.map((send) => send.clientMessageId === 'accepted-id'
+      ? { ...send, reconciled: true } : send) }));
+    const accepted = screen.getByText('Accepted text').closest('[data-send-state]');
+    expect(accepted?.getAttribute('data-send-state')).toBe('solid');
+    expect(accepted?.querySelector('.tb-chat-send-spinner')).toBeNull();
   });
 
-  it('explains an unconfirmed send when safe retry is unavailable', () => {
+  it('keeps an unconfirmed send ghosted when safe re-asking is unavailable', () => {
     const sessionKey = 'unsupported-send-recovery';
     const runtime = new FakeRuntime(sessionKey, { status: 'ready', sends: [{
       sessionKey, deviceId: 'device', clientMessageId: 'unsupported-retry-id',
@@ -2559,8 +2567,11 @@ describe('conversation surface', () => {
     }] });
     render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
 
-    expect(screen.getByText('This target stopped supporting safe retries. Delivery could not be confirmed; check the conversation before retrying.')).toBeTruthy();
+    expect(screen.getByText('Check this message before retrying').closest('[data-send-state]')?.getAttribute('data-send-state')).toBe('ghosted');
+    expect(document.querySelector('.tb-chat-send-spinner')).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Retry message' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Restore text to the composer' })).toBeNull();
     fireEvent.change(screen.getByRole('textbox', { name: 'Message to Research assistant' }), { target: { value: 'new message' } });
     expect(screen.getByRole('button', { name: 'Send message' })).toHaveProperty('disabled', false);
   });

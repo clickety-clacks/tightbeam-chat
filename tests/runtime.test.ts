@@ -1307,14 +1307,38 @@ describe('framework-independent runtime', () => {
     transport.nextSend = async () => ({ outcome: 'refused', reason: 'not allowed' });
     const refused = runtime.send('refused')!;
     await vi.waitFor(() => expect(runtime.getSnapshot().sends.find((send) => send.clientMessageId === refused)?.status).toBe('failed'));
+    transport.nextSend = async () => ({ outcome: 'accepted' });
+    await runtime.retrySend(refused);
+    await vi.waitFor(() => expect(runtime.getSnapshot().sends.find((send) => send.clientMessageId === refused)?.status).toBe('accepted'));
+    const refusalAttempts = transport.submissions.filter((submission) => submission.clientMessageId === refused);
+    expect(refusalAttempts).toHaveLength(2);
+    expect(refusalAttempts[1]).toEqual(refusalAttempts[0]);
+
     transport.nextSend = async () => ({ outcome: 'uncertain', reason: 'ack lost' });
     const uncertain = runtime.send('retry unchanged')!;
     await vi.waitFor(() => expect(runtime.getSnapshot().sends.find((send) => send.clientMessageId === uncertain)?.status).toBe('uncertain'));
     transport.nextSend = async () => ({ outcome: 'accepted' });
     await runtime.retrySend(uncertain);
     const attempts = transport.submissions.filter((submission) => submission.clientMessageId === uncertain);
-    expect(attempts).toHaveLength(2);
-    expect(attempts[1]).toEqual(attempts[0]);
+    expect(attempts).toHaveLength(1);
+    runtime.dispose();
+  });
+
+  it('keeps an unconfirmed connection failure ghosted instead of treating it as a refusal', async () => {
+    const transport = new ControlledTransport();
+    transport.nextSend = async () => { throw new Error('connection timed out'); };
+    const noReaskProfile = { ...profile, capabilities: { ...capabilities, humanSendDedupe: false } };
+    const runtime = createTightbeamAdapter(transport, noReaskProfile).open(sessionKey);
+    await runtime.rebuild();
+    const signals: unknown[] = [];
+    const id = runtime.send('uncertain connection')!;
+    runtime.observeHostSend(id, (signal) => signals.push(signal));
+
+    await vi.waitFor(() => expect(runtime.getSnapshot().sends.find((send) => send.clientMessageId === id))
+      .toMatchObject({ status: 'uncertain' }));
+    expect(runtime.getSnapshot().sends.find((send) => send.clientMessageId === id)?.status).not.toBe('failed');
+    expect(signals).toEqual([{ kind: 'uncertain', reason: 'ack-lost' }]);
+    expect(transport.submissions.filter((submission) => submission.clientMessageId === id)).toHaveLength(1);
     runtime.dispose();
   });
 

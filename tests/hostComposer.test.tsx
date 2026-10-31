@@ -504,10 +504,11 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     expect(events.find((event) => event.event === 'unavailable')).toMatchObject({
       event: 'unavailable', reason: 'send-refused', lifetimeId: ready.lifetimeId,
     });
-    expect(screen.getByText('Message could not be sent')).toBeTruthy();
-    expect(screen.getByText('Delivery is uncertain')).toBeTruthy();
-    expect(screen.getByText('This message was refused. Any retry or text editing belongs in the host composer.')).toBeTruthy();
-    expect(screen.getByText('Delivery could not be confirmed. Use the host composer to decide whether to retry.')).toBeTruthy();
+    expect(screen.getByRole('alert').textContent).toContain('Message refused');
+    expect(screen.queryByText('Delivery is uncertain')).toBeNull();
+    expect(screen.getByText('refuse').closest('[data-send-state]')?.getAttribute('data-send-state')).toBe('refused');
+    expect(screen.getByText('uncertain').closest('[data-send-state]')?.getAttribute('data-send-state')).toBe('ghosted');
+    expect(screen.queryByText(/Message could not be sent|Delivery could not be confirmed|This message was refused/)).toBeNull();
     expect(screen.queryByRole('button', { name: 'Retry message' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Restore text to the composer' })).toBeNull();
     expect(transport.submissions).toHaveLength(2);

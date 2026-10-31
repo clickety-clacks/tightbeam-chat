@@ -164,10 +164,10 @@ describe('Nordic theme', () => {
     expect(rule(componentCss, '.tb-chat-markdown th')).toContain('color: var(--tb-chat-text)');
 
     expect(componentSource).toContain('data-send-status={send.status}');
-    expect(rule(componentCss, '.tb-chat-send-state[data-send-status="uncertain"]')).toContain('color: var(--tb-chat-caution)');
-    expect(rule(componentCss, '.tb-chat-send-state[data-send-status="failed"]')).toContain('color: var(--tb-chat-danger)');
-    expect(rule(componentCss, '.tb-chat-send-state')).toContain('color: var(--tb-chat-muted)');
-    expect(rule(componentCss, '.tb-chat-send-reason')).toContain('color: inherit');
+    expect(componentCss).toContain('.tb-chat-local[data-send-state="ghosted"]');
+    expect(rule(componentCss, '.tb-chat-local[data-send-state="ghosted"]')).toContain('opacity: .68');
+    expect(rule(componentCss, '.tb-chat-send-spinner')).toContain('animation: tb-chat-send-spin .8s linear infinite');
+    expect(rule(componentCss, '.tb-chat-send-error')).toContain('color: var(--tb-chat-danger)');
     expect(rule(componentCss, '.tb-chat-send-actions span')).toContain('color: var(--tb-chat-muted)');
   });
 

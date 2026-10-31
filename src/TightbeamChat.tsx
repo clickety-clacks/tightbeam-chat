@@ -1879,33 +1879,21 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
         const { send } = item;
         const time = localTimestamp(send.submittedAt);
         const hostManaged = send.hostSend !== undefined;
-        const unreachable = send.reason === 'unreachable';
-        const retryUnavailable = send.reason === 'retry-unavailable';
-        const reconnectingSend = send.status === 'pending' && unreachable;
-        const retryAvailable = !hostManaged && !retryUnavailable &&
-          ['failed', 'uncertain'].includes(send.status) && !send.reconciled;
+        const refused = send.status === 'failed' && !send.reconciled;
+        const retryAvailable = !hostManaged && refused;
         const targetKey = `local-${send.clientMessageId}`;
         return <article ref={element => reading.registerRow(targetKey, element)}
           id={`${promptTargetPrefix}-${encodeURIComponent(`local-${send.clientMessageId}`)}`}
           className="tb-chat-bubble tb-chat-bubble-human tb-chat-local" key={send.clientMessageId}
-          data-record-key={targetKey} data-scroll-key={targetKey} aria-label={`Your message, ${send.status}`}>
+          data-record-key={targetKey} data-scroll-key={targetKey}
+          data-send-state={send.reconciled ? 'solid' : refused ? 'refused' : 'ghosted'}>
           <div className="tb-chat-bubble-body">{markdownBody(stripProvenanceMarkup(send.content))}</div>
-          <p className="tb-chat-send-state" data-send-status={send.status} role={send.status === 'pending' ? 'status' : undefined}>{send.status === 'uncertain' ? 'Delivery is uncertain'
-            : send.status === 'failed' ? 'Message could not be sent'
-              : send.status === 'pending' ? 'Sending…'
-                : hostManaged && !send.reconciled ? 'Accepted; checking conversation history' : 'Sent'}</p>
-          {send.reason && !reconnectingSend && <p className="tb-chat-send-reason" role="alert">
-            {send.status === 'uncertain'
-              ? hostManaged
-                ? 'Delivery could not be confirmed. Use the host composer to decide whether to retry.'
-                : retryUnavailable
-                  ? 'This target stopped supporting safe retries. Delivery could not be confirmed; check the conversation before retrying.'
-                : 'Delivery could not be confirmed. Retry after the connection is current.'
-              : unreachable ? 'Delivery could not be confirmed. Check the conversation before retrying this message.'
-              : hostManaged
-                ? 'This message was refused. Any retry or text editing belongs in the host composer.'
-                : 'The message could not be sent. Retry it or restore the text to the composer.'}
-          </p>}
+          {!send.reconciled && <div className="tb-chat-send-indicator" data-send-status={send.status}
+            role={refused ? 'alert' : undefined}>
+            {refused ? <><span className="tb-chat-send-error" aria-hidden="true">!</span>
+              <span className="tb-chat-sr-only">Message refused</span></>
+              : <span className="tb-chat-send-spinner" aria-hidden="true" />}
+          </div>}
           {retryAvailable && <div className="tb-chat-send-actions">
             <button type="button" disabled={state.status === 'unauthorized'}
               onClick={() => void runtime.retrySend(send.clientMessageId)}>Retry message</button>
