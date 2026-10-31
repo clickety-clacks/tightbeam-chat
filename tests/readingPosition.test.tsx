@@ -39,7 +39,10 @@ const message = (id: number): CanonicalMessage => ({ kind: 'message', id: `messa
   seq: id, rowVersion: 1, role: 'user', sender: 'user:person', content: `Message ${id}`, raw: {} });
 const initialRows = Array.from({ length: 20 }, (_, i) => message(i));
 const latestButtonName = /^(?:\d+ unseen messages?|Scroll to bottom)$/;
-function createReconnectFixture() {
+function createReconnectFixture(options: {
+  failOpenAttempts?: readonly number[];
+  resolveCatchUpImmediately?: boolean;
+} = {}) {
   const profile: TargetProfile = { identity: 'fixture:arrival-recovery', label: 'Recovery', capabilities: {
     newestTail: true, stableOlderCursor: true, retainedHistoryAcrossResets: true,
     orderedTransitions: true, snapshotCoverage: true, versionedNotices: true,
@@ -50,13 +53,23 @@ function createReconnectFixture() {
   const recoveryRows = Array.from({ length: 20 }, (_, index) => message(index + 1));
   let callbacks: ChangeCallbacks | undefined;
   let connectionCount = 0;
+  let closedConnectionCount = 0;
   const transport: ChatTransport = {
     currentIdentity: () => ({ principalKey: 'person', deviceId: 'browser' }),
     inspectTarget: async () => profile,
     openChanges: async (_key, nextCallbacks) => {
       connectionCount++;
+      if (options.failOpenAttempts?.includes(connectionCount)) {
+        throw new Error(`Connection unavailable on attempt ${connectionCount}`);
+      }
       callbacks = nextCallbacks;
-      return { close: () => { if (callbacks === nextCallbacks) callbacks = undefined; } };
+      let closed = false;
+      return { close: () => {
+        if (closed) return;
+        closed = true;
+        closedConnectionCount++;
+        if (callbacks === nextCallbacks) callbacks = undefined;
+      } };
     },
     readSession: async (sessionKey) => ({ sessionKey, rowVersion: 1, displayName: 'Assistant', raw: {} }),
     readTail: async () => ({ records: recoveryRows, oldestCursor: recoveryRows[0].id,
@@ -64,6 +77,10 @@ function createReconnectFixture() {
     readAfter: async (_key, after) => {
       expect(after).toBe('after:20');
       catchUpStarted.resolve();
+      if (options.resolveCatchUpImmediately) {
+        return { records: [], oldestCursor: recoveryRows[0].id, newestCursor: 'after:20',
+          hasOlder: false, hasNewer: false, coverage: 'reading' };
+      }
       return catchUpResponse.promise;
     },
     readOlder: async (sessionKey) => ({ records: [], oldestCursor: null, hasOlder: false, coverage: sessionKey }),
@@ -75,6 +92,7 @@ function createReconnectFixture() {
     runtime, catchUpStarted, catchUpResponse, recoveryRows,
     get callbacks() { return callbacks; },
     get connectionCount() { return connectionCount; },
+    get closedConnectionCount() { return closedConnectionCount; },
   };
 }
 let scrollTop = 0;
@@ -678,7 +696,7 @@ describe('conversation reading position', () => {
     act(() => runtime.publish({ records: [...initialRows, { ...carrier, rowVersion: 2 }, { ...message(21), content: 'A new human message' }] }));
     expect(animate).toHaveBeenCalledTimes(1);
   });
-  it('preserves the reader and draft through reconnect without rebuilding on a foreground return', async () => {
+  it('preserves the reader and draft through reconnect on a foreground return', async () => {
     const profile: TargetProfile = { identity: 'fixture:recovery', label: 'Recovery', capabilities: {
       newestTail: true, stableOlderCursor: true, retainedHistoryAcrossResets: true,
       orderedTransitions: true, snapshotCoverage: true, versionedNotices: true,
@@ -727,7 +745,7 @@ describe('conversation reading position', () => {
       historyGate = new Promise<void>(resolve => { releaseHistory = resolve; });
       visibility = 'visible';
       await act(async () => { fireEvent(document, new Event('visibilitychange')); });
-      expect(connect).toHaveBeenCalledTimes(2);
+      expect(connect).toHaveBeenCalledTimes(3);
       expect(runtime.getSnapshot().status).toBe('ready');
       expect(screen.queryByText('Message 20')).toBeNull();
       const reconnect = runtime.rebuild();
@@ -746,6 +764,103 @@ describe('conversation reading position', () => {
       else Reflect.deleteProperty(document, 'visibilityState');
     }
   });
+
+  it.each(['visibilitychange', 'pageshow'] as const)(
+    'immediately supersedes closed-feed backoff after a %s foreground return and keeps exponential retries',
+    async (trigger) => {
+      vi.useFakeTimers();
+      const fixture = createReconnectFixture({
+        failOpenAttempts: [2, 3, 4, 5],
+        resolveCatchUpImmediately: true,
+      });
+      const { runtime } = fixture;
+      const original = Object.getOwnPropertyDescriptor(document, 'visibilityState');
+      let visibility: DocumentVisibilityState = 'visible';
+      Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => visibility });
+      const waitForLiveError = (expected: string) => {
+        if (runtime.getSnapshot().liveError === expected) return Promise.resolve();
+        return new Promise<void>(resolve => {
+          const unsubscribe = runtime.subscribe(() => {
+            if (runtime.getSnapshot().liveError !== expected) return;
+            unsubscribe();
+            resolve();
+          });
+        });
+      };
+
+      try {
+        render(<TightbeamChat sessionKey="reading" adapter={{ open: () => runtime }} />);
+        await act(async () => { await runtime.rebuild(); });
+        expect(runtime.getSnapshot().status).toBe('ready');
+        expect(runtime.getSnapshot().records.map(record => record.id)).toEqual(
+          fixture.recoveryRows.map(record => record.id));
+
+        const firstFeed = fixture.callbacks!;
+        act(() => firstFeed.onDoubt('The live feed disconnected.'));
+        expect(fixture.closedConnectionCount).toBe(1);
+
+        const secondFailure = waitForLiveError('Connection unavailable on attempt 2');
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(250);
+          await secondFailure;
+        });
+        expect(fixture.connectionCount).toBe(2);
+        expect(runtime.getSnapshot().records.map(record => record.id)).toEqual(
+          fixture.recoveryRows.map(record => record.id));
+
+        if (trigger === 'visibilitychange') {
+          visibility = 'hidden';
+          act(() => document.dispatchEvent(new Event('visibilitychange')));
+          visibility = 'visible';
+          const immediateFailure = waitForLiveError('Connection unavailable on attempt 3');
+          await act(async () => {
+            document.dispatchEvent(new Event('visibilitychange'));
+            await immediateFailure;
+          });
+        } else {
+          visibility = 'hidden';
+          act(() => window.dispatchEvent(new Event('pagehide')));
+          visibility = 'visible';
+          const immediateFailure = waitForLiveError('Connection unavailable on attempt 3');
+          await act(async () => {
+            window.dispatchEvent(new Event('pageshow'));
+            await immediateFailure;
+          });
+        }
+        expect(fixture.connectionCount).toBe(3);
+        expect(runtime.getSnapshot().records.map(record => record.id)).toEqual(
+          fixture.recoveryRows.map(record => record.id));
+
+        // The superseded 500 ms timer must not fire; the immediate failure
+        // retains the existing next delay, then later failures keep doubling.
+        await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+        expect(fixture.connectionCount).toBe(3);
+        await act(async () => { await vi.advanceTimersByTimeAsync(499); });
+        expect(fixture.connectionCount).toBe(3);
+        const fourthFailure = waitForLiveError('Connection unavailable on attempt 4');
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(1);
+          await fourthFailure;
+        });
+        expect(fixture.connectionCount).toBe(4);
+
+        await act(async () => { await vi.advanceTimersByTimeAsync(1999); });
+        expect(fixture.connectionCount).toBe(4);
+        const fifthFailure = waitForLiveError('Connection unavailable on attempt 5');
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(1);
+          await fifthFailure;
+        });
+        expect(fixture.connectionCount).toBe(5);
+        expect(runtime.getSnapshot().records.map(record => record.id)).toEqual(
+          fixture.recoveryRows.map(record => record.id));
+      } finally {
+        runtime.dispose();
+        if (original) Object.defineProperty(document, 'visibilityState', original);
+        else Reflect.deleteProperty(document, 'visibilityState');
+      }
+    },
+  );
 
   it('bounds scroll measurements to the viewport neighborhood in a long history and preserves position when older rows arrive', () => {
     function History({ ids }: { ids: number[] }) {

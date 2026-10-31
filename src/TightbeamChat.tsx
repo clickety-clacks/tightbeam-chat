@@ -1265,6 +1265,52 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     document.addEventListener('visibilitychange', onVisibilityChange);
     return () => document.removeEventListener('visibilitychange', onVisibilityChange);
   }, [markReadPosition, state.session, state.sessionKey]);
+  useEffect(() => {
+    let wasNotVisible = document.visibilityState !== 'visible';
+    let returnCheckScheduled = false;
+    let mounted = true;
+    const checkForegroundReturn = () => {
+      if (returnCheckScheduled) return;
+      returnCheckScheduled = true;
+      // Let transport-level foreground checks mark a stale feed before reading
+      // the runtime snapshot. This listener remains mounted after that feed closes.
+      void Promise.resolve().then(() => {
+        if (!mounted) return;
+        const current = runtime.getSnapshot();
+        if (current.status !== 'ready' || current.identityChanged || !current.liveError) return;
+        // Plain rebuild supersedes the pending retry without resetting its backoff.
+        void runtime.rebuild();
+      });
+    };
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') {
+        wasNotVisible = true;
+        returnCheckScheduled = false;
+        return;
+      }
+      if (!wasNotVisible) return;
+      wasNotVisible = false;
+      checkForegroundReturn();
+    };
+    const onPageHide = () => {
+      wasNotVisible = true;
+      returnCheckScheduled = false;
+    };
+    const onPageShow = () => {
+      if (document.visibilityState !== 'visible') return;
+      wasNotVisible = false;
+      checkForegroundReturn();
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    window.addEventListener('pagehide', onPageHide);
+    window.addEventListener('pageshow', onPageShow);
+    return () => {
+      mounted = false;
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.removeEventListener('pagehide', onPageHide);
+      window.removeEventListener('pageshow', onPageShow);
+    };
+  }, [runtime]);
   const [toolCallsErrorAfterGrace, setToolCallsErrorAfterGrace] = useState<string | undefined>(undefined);
   useEffect(() => {
     const error = state.toolCallsError;
