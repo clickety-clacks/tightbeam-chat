@@ -504,7 +504,8 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     expect(events.find((event) => event.event === 'unavailable')).toMatchObject({
       event: 'unavailable', reason: 'send-refused', lifetimeId: ready.lifetimeId,
     });
-    expect(screen.getByRole('alert').textContent).toContain('Message refused');
+    expect(screen.getByRole('alert').textContent).toContain('Your message was not sent.');
+    expect(screen.getByRole('alert').textContent).toContain('client_message_id_conflict');
     expect(screen.queryByText('Delivery is uncertain')).toBeNull();
     expect(screen.getByText('refuse').closest('[data-send-state]')?.getAttribute('data-send-state')).toBe('refused');
     expect(screen.getByText('uncertain').closest('[data-send-state]')?.getAttribute('data-send-state')).toBe('ghosted');

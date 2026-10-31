@@ -2542,12 +2542,21 @@ describe('conversation surface', () => {
     expect(screen.getByText('Uncertain text')).toBeTruthy();
     expect(within(screen.getByRole('log')).getByText('Offline text')).toBeTruthy();
     expect(document.querySelectorAll('.tb-chat-send-spinner')).toHaveLength(3);
-    expect(screen.getByText('Failed text').closest('[data-send-state]')?.getAttribute('data-send-state')).toBe('refused');
-    expect(screen.getByText('Accepted text').closest('[data-send-state]')?.getAttribute('data-send-state')).toBe('ghosted');
+    const failed = screen.getByText('Failed text').closest('article');
+    expect(failed?.getAttribute('data-send-state')).toBe('refused');
+    expect(failed).toHaveAttribute('aria-label', 'Your message was not sent. Reason: private target detail');
+    const refusalAnnouncement = within(failed!).getByRole('alert');
+    expect(refusalAnnouncement).toHaveTextContent('Your message was not sent. Reason: private target detail');
+    expect(refusalAnnouncement).toHaveClass('tb-chat-sr-only');
+    const acceptedInitially = screen.getByText('Accepted text').closest('article');
+    expect(acceptedInitially?.getAttribute('data-send-state')).toBe('ghosted');
+    expect(acceptedInitially).toHaveAttribute('aria-label', 'Your message is sending.');
+    const sendingAnnouncement = within(acceptedInitially!).getByRole('status');
+    expect(sendingAnnouncement).toHaveTextContent('Your message is sending.');
+    expect(sendingAnnouncement).toHaveClass('tb-chat-sr-only');
     expect(screen.queryByText(/Not connected to the server|retrying…/)).toBeNull();
     expect(screen.queryByText(/Sending…|Sent|Delivery is uncertain|Accepted; checking conversation history/)).toBeNull();
-    expect(screen.getByRole('alert').textContent).toContain('Message refused');
-    expect(screen.queryByText(/private target detail|private session detail/)).toBeNull();
+    expect(screen.getAllByRole('status')).toHaveLength(3);
     fireEvent.click(screen.getByRole('button', { name: 'Retry message' }));
     expect(runtime.retried).toEqual(['failed-id']);
     expect(screen.getAllByRole('button', { name: 'Restore text to the composer' })).toHaveLength(1);
@@ -2555,6 +2564,8 @@ describe('conversation surface', () => {
       ? { ...send, reconciled: true } : send) }));
     const accepted = screen.getByText('Accepted text').closest('[data-send-state]');
     expect(accepted?.getAttribute('data-send-state')).toBe('solid');
+    expect(accepted).toHaveAttribute('aria-label', 'Your message is in the conversation.');
+    expect(within(accepted!).getByRole('status')).toHaveTextContent('Your message is in the conversation.');
     expect(accepted?.querySelector('.tb-chat-send-spinner')).toBeNull();
   });
 

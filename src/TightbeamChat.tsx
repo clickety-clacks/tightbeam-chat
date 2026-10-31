@@ -1881,19 +1881,23 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
         const hostManaged = send.hostSend !== undefined;
         const refused = send.status === 'failed' && !send.reconciled;
         const retryAvailable = !hostManaged && refused;
+        const announcement = send.reconciled
+          ? 'Your message is in the conversation.'
+          : refused
+            ? `Your message was not sent. Reason: ${send.reason || 'The message was refused.'}`
+            : 'Your message is sending.';
         const targetKey = `local-${send.clientMessageId}`;
         return <article ref={element => reading.registerRow(targetKey, element)}
           id={`${promptTargetPrefix}-${encodeURIComponent(`local-${send.clientMessageId}`)}`}
           className="tb-chat-bubble tb-chat-bubble-human tb-chat-local" key={send.clientMessageId}
           data-record-key={targetKey} data-scroll-key={targetKey}
+          aria-label={announcement}
           data-send-state={send.reconciled ? 'solid' : refused ? 'refused' : 'ghosted'}>
           <div className="tb-chat-bubble-body">{markdownBody(stripProvenanceMarkup(send.content))}</div>
-          {!send.reconciled && <div className="tb-chat-send-indicator" data-send-status={send.status}
-            role={refused ? 'alert' : undefined}>
-            {refused ? <><span className="tb-chat-send-error" aria-hidden="true">!</span>
-              <span className="tb-chat-sr-only">Message refused</span></>
-              : <span className="tb-chat-send-spinner" aria-hidden="true" />}
+          {!send.reconciled && <div className="tb-chat-send-indicator" data-send-status={send.status} aria-hidden="true">
+            {refused ? <span className="tb-chat-send-error">!</span> : <span className="tb-chat-send-spinner" />}
           </div>}
+          <span className="tb-chat-sr-only" role={refused ? 'alert' : 'status'} aria-atomic="true">{announcement}</span>
           {retryAvailable && <div className="tb-chat-send-actions">
             <button type="button" disabled={state.status === 'unauthorized'}
               onClick={() => void runtime.retrySend(send.clientMessageId)}>Retry message</button>
