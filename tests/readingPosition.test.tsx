@@ -223,7 +223,7 @@ function readAt(box: HTMLElement, position: number) {
   fireEvent(box, new Event('scrollend'));
 }
 function targetForPreview(): HTMLElement | null {
-  const targetId = screen.getByRole('button', { name: 'Jump to latest user prompt' }).getAttribute('aria-controls');
+  const targetId = screen.getByRole('button', { name: 'Jump to user prompt' }).getAttribute('aria-controls');
   return targetId ? document.getElementById(targetId) : null;
 }
 function notifyResizeObservers() {
@@ -1304,38 +1304,38 @@ describe('conversation reading position', () => {
     expect(scrollTo).toHaveBeenLastCalledWith({ top: box.scrollHeight - box.clientHeight, behavior: 'instant' });
   });
 
-  it('tracks the newest owner prompt while preserving an away reader and hides its preview when the original is visible', () => {
-    const { runtime, box } = setup();
+  it('tracks the nearest owner prompt above the visible transcript in both directions without moving the reader', () => {
+    const { box } = setup();
     readAt(box, 0);
+    expect(screen.queryByRole('button', { name: 'Jump to user prompt' })).toBeNull();
+
+    box.scrollTop = 600;
     const anchor = rows()[3];
     const originalOffset = anchor.getBoundingClientRect().top;
-    let target = targetForPreview();
-    expect(target?.dataset.recordKey).toBe('message-19');
-    let preview = screen.getByRole('button', { name: 'Jump to latest user prompt' });
-    expect(preview.textContent).toBe('Message 19');
-
-    act(() => runtime.publish({ records: [...runtime.state.records, message(20)] }));
-
-    target = targetForPreview();
-    expect(target?.dataset.recordKey).toBe('message-20');
-    preview = screen.getByRole('button', { name: 'Jump to latest user prompt' });
-    expect(preview.textContent).toBe('Message 20');
-    expect(box.scrollTop).toBe(0);
+    fireEvent.scroll(box);
+    expect(screen.getByRole('button', { name: 'Jump to user prompt' }).textContent).toBe('Message 5');
+    expect(targetForPreview()?.dataset.recordKey).toBe('message-5');
+    expect(targetForPreview()!.getBoundingClientRect().bottom).toBeLessThanOrEqual(box.getBoundingClientRect().top);
+    expect(box.scrollTop).toBe(600);
     expect(anchor.getBoundingClientRect().top).toBe(originalOffset);
 
-    box.scrollTop = box.scrollHeight - box.clientHeight;
+    box.scrollTop = 950;
     fireEvent.scroll(box);
-    expect(screen.queryByRole('button', { name: 'Jump to latest user prompt' })).toBeNull();
-    expect(target!.getBoundingClientRect().top).toBeGreaterThanOrEqual(box.getBoundingClientRect().top);
-    expect(target!.getBoundingClientRect().bottom).toBeLessThanOrEqual(box.getBoundingClientRect().bottom);
+    expect(screen.getByRole('button', { name: 'Jump to user prompt' }).textContent).toBe('Message 9');
+    expect(targetForPreview()?.dataset.recordKey).toBe('message-9');
+
+    box.scrollTop = 300;
+    fireEvent.scroll(box);
+    expect(screen.getByRole('button', { name: 'Jump to user prompt' }).textContent).toBe('Message 2');
+    expect(targetForPreview()?.dataset.recordKey).toBe('message-2');
 
     readAt(box, 0);
-    expect(screen.getByRole('button', { name: 'Jump to latest user prompt' }).textContent).toBe('Message 20');
+    expect(screen.queryByRole('button', { name: 'Jump to user prompt' })).toBeNull();
   });
 
   it('keeps the floating prompt below the system inset and in-chat status on orientation changes', () => {
     const { runtime, box } = setup();
-    readAt(box, 0);
+    readAt(box, 600);
     const chat = box.closest<HTMLElement>('.tb-chat')!;
     const anchor = rows()[3];
     const anchorTop = anchor.getBoundingClientRect().top;
@@ -1348,11 +1348,11 @@ describe('conversation reading position', () => {
     expect(chat.querySelector('.tb-chat-runtime-notice')).not.toBeNull();
     expect(chat.style.getPropertyValue('--tb-chat-floating-prompt-top')).toBe('58px');
     expect(anchor.getBoundingClientRect().top).toBe(anchorTop);
-    expect(box.scrollTop).toBe(0);
-    expect(screen.getByRole('button', { name: 'Jump to latest user prompt' }).textContent).toBe('Message 19');
+    expect(box.scrollTop).toBe(600);
+    expect(screen.getByRole('button', { name: 'Jump to user prompt' }).textContent).toBe('Message 5');
   });
 
-  it('updates prompt visibility from retained elements without querying the transcript on scroll', () => {
+  it('updates the sticky prompt from registered rows without querying the transcript on scroll', () => {
     const { box } = setup();
     readAt(box, 0);
     const chat = box.closest<HTMLElement>('.tb-chat')!;
@@ -1364,7 +1364,7 @@ describe('conversation reading position', () => {
 
     expect(viewportQuery).not.toHaveBeenCalled();
     expect(chatQuery).not.toHaveBeenCalled();
-    expect(screen.queryByRole('button', { name: 'Jump to latest user prompt' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Jump to user prompt' }).textContent).toBe('Message 16');
   });
 
   it('waits for measurable bounds before showing the prompt miniature', () => {
@@ -1379,77 +1379,92 @@ describe('conversation reading position', () => {
     });
     const { box } = setup();
 
-    expect(screen.queryByRole('button', { name: 'Jump to latest user prompt' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Jump to user prompt' })).toBeNull();
 
     layoutAvailable = true;
-    readAt(box, 0);
-    expect(screen.getByRole('button', { name: 'Jump to latest user prompt' }).textContent).toBe('Message 19');
+    readAt(box, 600);
+    expect(screen.getByRole('button', { name: 'Jump to user prompt' }).textContent).toBe('Message 5');
     const target = targetForPreview()!;
-    expect(target.getBoundingClientRect().top).toBeGreaterThan(box.getBoundingClientRect().bottom);
+    expect(target.getBoundingClientRect().bottom).toBeLessThanOrEqual(box.getBoundingClientRect().top);
 
     box.scrollTop = 1724;
     fireEvent.scroll(box);
-    expect(target.getBoundingClientRect().top).toBeGreaterThanOrEqual(box.getBoundingClientRect().top);
-    expect(target.getBoundingClientRect().bottom).toBeLessThanOrEqual(box.getBoundingClientRect().bottom);
-    expect(screen.queryByRole('button', { name: 'Jump to latest user prompt' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Jump to user prompt' }).textContent).toBe('Message 16');
+    expect(targetForPreview()?.dataset.recordKey).toBe('message-16');
+    expect(targetForPreview()!.getBoundingClientRect().bottom).toBeLessThanOrEqual(box.getBoundingClientRect().top);
   });
 
-  it('keeps a dismissed preview hidden through history changes and restores it only after a new submission', () => {
+  it('keeps a dismissed preview hidden while selection changes and restores it only after a new submission', () => {
     const { runtime, box } = setup();
-    readAt(box, 0);
-    const original = targetForPreview();
-    expect(original?.dataset.recordKey).toBe('message-19');
+    readAt(box, 600);
+    expect(targetForPreview()?.dataset.recordKey).toBe('message-5');
     scrollTo.mockClear();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Dismiss latest user prompt preview' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss user prompt preview' }));
 
-    expect(box.scrollTop).toBe(0);
+    expect(box.scrollTop).toBe(600);
     expect(scrollTo).not.toHaveBeenCalled();
-    expect(box.querySelector('[data-record-key="message-19"]')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Jump to latest user prompt' })).toBeNull();
+    expect(box.querySelector('[data-record-key="message-5"]')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Jump to user prompt' })).toBeNull();
     act(() => runtime.publish({ agentDisplayName: 'Updated assistant' }));
-    expect(screen.queryByRole('button', { name: 'Jump to latest user prompt' })).toBeNull();
-    box.scrollTop = box.scrollHeight - box.clientHeight;
+    expect(screen.queryByRole('button', { name: 'Jump to user prompt' })).toBeNull();
+    box.scrollTop = 950;
     fireEvent.scroll(box);
+    expect(screen.queryByRole('button', { name: 'Jump to user prompt' })).toBeNull();
     readAt(box, 0);
-    expect(screen.queryByRole('button', { name: 'Jump to latest user prompt' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Jump to user prompt' })).toBeNull();
 
     act(() => runtime.publish({ records: [...runtime.state.records, message(20)] }));
     expect(box.querySelector('[data-record-key="message-20"]')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Jump to latest user prompt' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Jump to user prompt' })).toBeNull();
 
     const send = { sessionKey: 'reading', clientMessageId: 'c_new', deviceId: 'browser', content: 'Message 21',
       status: 'accepted' as const, submittedAt: '2026-10-23T00:00:00Z', reconciled: false };
     act(() => runtime.publish({ sends: [send] }));
-    let preview = screen.getByRole('button', { name: 'Jump to latest user prompt' });
-    expect(preview.textContent).toBe('Message 21');
-    expect(targetForPreview()?.dataset.recordKey).toBe('local-c_new');
+    expect(screen.queryByRole('button', { name: 'Jump to user prompt' })).toBeNull();
+
+    readAt(box, 600);
+    let preview = screen.getByRole('button', { name: 'Jump to user prompt' });
+    expect(preview.textContent).toBe('Message 5');
+    expect(targetForPreview()?.dataset.recordKey).toBe('message-5');
 
     box.scrollTop = box.scrollHeight - box.clientHeight;
     fireEvent.scroll(box);
-    expect(screen.queryByRole('button', { name: 'Jump to latest user prompt' })).toBeNull();
-    readAt(box, 0);
-    preview = screen.getByRole('button', { name: 'Jump to latest user prompt' });
-    expect(preview.textContent).toBe('Message 21');
+    preview = screen.getByRole('button', { name: 'Jump to user prompt' });
+    expect(preview.textContent).toBe('Message 18');
+    expect(targetForPreview()?.dataset.recordKey).toBe('message-18');
+    expect(targetForPreview()!.getBoundingClientRect().bottom).toBeLessThanOrEqual(box.getBoundingClientRect().top);
+    expect(box.querySelector('[data-record-key="local-c_new"]')?.getBoundingClientRect().top)
+      .toBeGreaterThanOrEqual(box.getBoundingClientRect().top);
   });
 
-  it('jumps to and focuses the exact original prompt when it is outside the viewport', () => {
+  it('jumps to and focuses the exact older prompt represented by the sticky preview', () => {
     reducedMotion = true;
     const { box } = setup();
-    readAt(box, 0);
-    const targetId = screen.getByRole('button', { name: 'Jump to latest user prompt' }).getAttribute('aria-controls');
+    readAt(box, 600);
+    const button = screen.getByRole('button', { name: 'Jump to user prompt' });
+    const targetId = button.getAttribute('aria-controls');
     const target = targetId ? document.getElementById(targetId) : null;
-    expect(target?.dataset.recordKey).toBe('message-19');
-    expect(target?.getBoundingClientRect().top).toBeGreaterThan(box.getBoundingClientRect().bottom);
+    expect(target?.dataset.recordKey).toBe('message-5');
+    expect(target?.dataset.recordKey).not.toBe('message-19');
+    expect(target?.getBoundingClientRect().bottom).toBeLessThanOrEqual(box.getBoundingClientRect().top);
     scrollTo.mockClear();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Jump to latest user prompt' }));
+    fireEvent.click(button);
 
     expect(scrollTo).toHaveBeenCalledTimes(1);
     expect(scrollTo).toHaveBeenLastCalledWith(expect.objectContaining({ behavior: 'instant' }));
     expect(document.activeElement).toBe(target);
     expect(target!.getBoundingClientRect().top).toBeGreaterThanOrEqual(box.getBoundingClientRect().top);
     expect(target!.getBoundingClientRect().bottom).toBeLessThanOrEqual(box.getBoundingClientRect().bottom);
-    expect(screen.queryByRole('button', { name: 'Jump to latest user prompt' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Jump to user prompt' }).textContent).toBe('Message 2');
+    expect(targetForPreview()?.dataset.recordKey).toBe('message-2');
+
+    reducedMotion = false;
+    const previousPrompt = targetForPreview();
+    scrollTo.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'Jump to user prompt' }));
+    expect(scrollTo).toHaveBeenLastCalledWith(expect.objectContaining({ behavior: 'smooth' }));
+    expect(document.activeElement).toBe(previousPrompt);
   });
 });

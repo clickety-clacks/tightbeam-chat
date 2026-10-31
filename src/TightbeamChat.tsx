@@ -83,27 +83,55 @@ function bubblePromptIdentity(bubble: Bubble): string {
   return identity ? `send:${identity}` : `record:${JSON.stringify([bubble.record.sessionKey, bubble.key])}`;
 }
 
-interface LatestUserPrompt {
+interface UserPrompt {
   readonly identity: string;
   readonly content: string;
   readonly targetKey: string;
   readonly scrollKey: string;
 }
 
-function latestUserPrompt(timeline: readonly TimelineItem[]): LatestUserPrompt | undefined {
-  for (let index = timeline.length - 1; index >= 0; index--) {
-    const item = timeline[index];
+function userPrompts(timeline: readonly TimelineItem[]): UserPrompt[] {
+  const prompts: UserPrompt[] = [];
+  const seen = new Set<string>();
+  for (const item of timeline) {
+    let prompt: UserPrompt | undefined;
     if (item.kind === 'bubble' && item.bubble.side === 'human' && item.bubble.ownerScoped) {
-      return { identity: bubblePromptIdentity(item.bubble),
+      prompt = { identity: bubblePromptIdentity(item.bubble),
         content: stripProvenanceMarkup(item.bubble.displayContent ?? item.bubble.record.content), targetKey: item.bubble.key,
         scrollKey: item.scrollKey ?? (item.bubble.derived ? item.bubble.key : item.bubble.record.id) };
-    }
-    if (item.kind === 'local') {
-      return { identity: `send:${sendIdentity(item.send)}`, content: stripProvenanceMarkup(item.send.content),
+    } else if (item.kind === 'local') {
+      prompt = { identity: `send:${sendIdentity(item.send)}`, content: stripProvenanceMarkup(item.send.content),
         targetKey: `local-${item.send.clientMessageId}`, scrollKey: `local-${item.send.clientMessageId}` };
     }
+    if (!prompt || seen.has(prompt.identity)) continue;
+    seen.add(prompt.identity);
+    prompts.push(prompt);
   }
-  return undefined;
+  return prompts;
+}
+
+function nearestPromptAboveVisibleTop(prompts: readonly UserPrompt[], viewport: HTMLElement,
+  getRow: (key: string) => HTMLElement | undefined): UserPrompt | undefined {
+  const viewportRect = viewport.getBoundingClientRect();
+  if (!Number.isFinite(viewportRect.top) || !Number.isFinite(viewportRect.bottom) ||
+    viewportRect.bottom <= viewportRect.top) return undefined;
+
+  // User prompts retain timeline order in the rendered transcript. Binary
+  // search keeps per-scroll geometry work bounded as history grows.
+  let low = 0;
+  let high = prompts.length;
+  while (low < high) {
+    const middle = low + Math.floor((high - low) / 2);
+    const row = getRow(prompts[middle].scrollKey);
+    if (!row) return undefined;
+    const rowRect = row.getBoundingClientRect();
+    if (!Number.isFinite(rowRect.top) || !Number.isFinite(rowRect.bottom) || rowRect.bottom <= rowRect.top) {
+      return undefined;
+    }
+    if (rowRect.bottom <= viewportRect.top) low = middle + 1;
+    else high = middle;
+  }
+  return low > 0 ? prompts[low - 1] : undefined;
 }
 
 function messageSourceLabel(record: CanonicalMessage, defaultLabel: string): string {
@@ -1498,9 +1526,12 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   }, [expandedRuns, viewport]);
   const timeline = useMemo(() => composeTimeline(bubbles, localSends, canonicalSends, sendsByIdentity,
     transitions, activityPlan.messageItems), [activityPlan.messageItems, bubbles, canonicalSends, localSends, sendsByIdentity, transitions]);
-  const latestPrompt = useMemo(() => latestUserPrompt(timeline), [timeline]);
-  const latestPromptTargetId = latestPrompt
-    ? `${promptTargetPrefix}-${encodeURIComponent(latestPrompt.targetKey)}` : undefined;
+  const promptCandidates = useMemo(() => userPrompts(timeline), [timeline]);
+  const promptsByIdentity = useMemo(() => new Map(promptCandidates.map(prompt => [prompt.identity, prompt])), [promptCandidates]);
+  const [stickyPromptIdentity, setStickyPromptIdentity] = useState<string | undefined>(undefined);
+  const stickyPrompt = stickyPromptIdentity ? promptsByIdentity.get(stickyPromptIdentity) : undefined;
+  const stickyPromptTargetId = stickyPrompt
+    ? `${promptTargetPrefix}-${encodeURIComponent(stickyPrompt.targetKey)}` : undefined;
   const [latestPromptDismissed, setLatestPromptDismissed] = useState(false);
   // Transcript refreshes can change the latest row; only a new submission clears dismissal.
   const observedPromptSubmissions = useRef<Set<string> | null>(null);
@@ -1520,10 +1551,6 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     }
     if (newSubmission) setLatestPromptDismissed(false);
   }, [state.sends, state.sessionKey]);
-  const [latestPromptVisibility, setLatestPromptVisibility] = useState<{
-    readonly identity: string;
-    readonly offscreen: boolean;
-  } | undefined>(undefined);
   const transcript = useMemo(() => transcriptIndex(timeline), [timeline]);
   const eventPositions = useMemo(() => eventPlacements(
     uncoveredRecordEvents(state.recordEvents ?? [], state.records), state.records), [state.recordEvents, state.records]);
@@ -1531,7 +1558,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     (itemTime(a.item) ?? Infinity) - (itemTime(b.item) ?? Infinity) ||
     (a.item.kind === 'record-event' && b.item.kind === 'record-event' ? a.item.event.eventId.localeCompare(b.item.event.eventId) : 0)), tools),
     [transcript, tools, eventPositions]);
-  const updateLatestPromptVisibility = useCallback(() => {
+  const updateStickyPrompt = useCallback(() => {
     const element = root.current;
     const notice = runtimeNotice.current;
     if (element) {
@@ -1550,24 +1577,10 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     }
 
     const box = viewport.current;
-    if (!box || !latestPrompt) {
-      setLatestPromptVisibility(prior => prior === undefined ? prior : undefined);
-      return;
-    }
-    const target = latestPrompt ? reading.getRow(latestPrompt.scrollKey) : undefined;
-    const targetRect = target?.getBoundingClientRect();
-    const viewportRect = box.getBoundingClientRect();
-    // A zero-sized layout (for example, before the surface is laid out) does
-    // not prove the original is outside the viewport. Keep the miniature
-    // hidden until both vertical bounds can be measured.
-    const hasMeasuredBounds = !!targetRect &&
-      Number.isFinite(targetRect.top) && Number.isFinite(targetRect.bottom) && targetRect.bottom > targetRect.top &&
-      Number.isFinite(viewportRect.top) && Number.isFinite(viewportRect.bottom) && viewportRect.bottom > viewportRect.top;
-    const offscreen = hasMeasuredBounds &&
-      (targetRect.bottom <= viewportRect.top || targetRect.top >= viewportRect.bottom);
-    setLatestPromptVisibility(prior => prior?.identity === latestPrompt.identity && prior.offscreen === offscreen
-      ? prior : { identity: latestPrompt.identity, offscreen });
-  }, [latestPrompt?.identity, latestPrompt?.scrollKey, reading.getRow]);
+    const prompt = box ? nearestPromptAboveVisibleTop(promptCandidates, box, reading.getRow) : undefined;
+    const identity = prompt?.identity;
+    setStickyPromptIdentity(prior => prior === identity ? prior : identity);
+  }, [promptCandidates, reading.getRow]);
   useEffect(() => {
     if (host.settingsRequestRevision <= handledSettingsRevision.current) return;
     handledSettingsRevision.current = host.settingsRequestRevision;
@@ -1728,7 +1741,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     const current = box.scrollTop;
     previousScrollTop.current = current;
     reading.onScroll();
-    updateLatestPromptVisibility();
+    updateStickyPrompt();
     const movedUp = previous !== undefined && current < previous;
     if (!movedUp || current < 0 || state.status !== 'ready' || !hasOlder || loadingOlder) return;
     if (state.historyError || current < olderHistoryPrefetchDistance(box)) loadOlder();
@@ -1751,33 +1764,30 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   useLayoutEffect(() => {
     const box = viewport.current;
     const content = reading.content.current;
-    const target = latestPrompt ? reading.getRow(latestPrompt.scrollKey) : undefined;
     const notice = runtimeNotice.current;
     const toolStatus = toolHistoryStatus.current;
     const observer = typeof ResizeObserver === 'undefined'
-      ? undefined : new ResizeObserver(updateLatestPromptVisibility);
-    for (const element of [root.current, box, content, target, notice, toolStatus]) if (element) observer?.observe(element);
-    window.addEventListener('resize', updateLatestPromptVisibility);
-    window.addEventListener('orientationchange', updateLatestPromptVisibility);
-    window.visualViewport?.addEventListener('resize', updateLatestPromptVisibility);
-    window.visualViewport?.addEventListener('scroll', updateLatestPromptVisibility);
-    updateLatestPromptVisibility();
+      ? undefined : new ResizeObserver(updateStickyPrompt);
+    for (const element of [root.current, box, content, notice, toolStatus]) if (element) observer?.observe(element);
+    window.addEventListener('resize', updateStickyPrompt);
+    window.addEventListener('orientationchange', updateStickyPrompt);
+    window.visualViewport?.addEventListener('resize', updateStickyPrompt);
+    window.visualViewport?.addEventListener('scroll', updateStickyPrompt);
+    updateStickyPrompt();
     return () => {
       observer?.disconnect();
-      window.removeEventListener('resize', updateLatestPromptVisibility);
-      window.removeEventListener('orientationchange', updateLatestPromptVisibility);
-      window.visualViewport?.removeEventListener('resize', updateLatestPromptVisibility);
-      window.visualViewport?.removeEventListener('scroll', updateLatestPromptVisibility);
+      window.removeEventListener('resize', updateStickyPrompt);
+      window.removeEventListener('orientationchange', updateStickyPrompt);
+      window.visualViewport?.removeEventListener('resize', updateStickyPrompt);
+      window.visualViewport?.removeEventListener('scroll', updateStickyPrompt);
     };
-  }, [latestPrompt?.identity, latestPrompt?.content, latestPrompt?.targetKey, latestPrompt?.scrollKey, latestPromptTargetId,
-    showRuntimeNotice, showToolHistoryStatusInNotice, state.loadingOlder, state.historyError, localNotice,
-    updateLatestPromptVisibility, reading.content, reading.getRow]);
-  const showLatestPrompt = !!latestPrompt && latestPromptVisibility?.identity === latestPrompt.identity &&
-    latestPromptVisibility.offscreen && !latestPromptDismissed;
-  const jumpToLatestPrompt = () => {
+  }, [promptCandidates, showRuntimeNotice, showToolHistoryStatusInNotice, state.loadingOlder, state.historyError, localNotice,
+    updateStickyPrompt, reading.content]);
+  const showStickyPrompt = !!stickyPrompt && !latestPromptDismissed;
+  const jumpToStickyPrompt = () => {
     const box = viewport.current;
-    if (!box || !latestPrompt || !latestPromptTargetId) return;
-    const target = reading.getRow(latestPrompt.scrollKey);
+    if (!box || !stickyPrompt || !stickyPromptTargetId) return;
+    const target = reading.getRow(stickyPrompt.scrollKey);
     if (!target) return;
     const viewportRect = box.getBoundingClientRect();
     const targetRect = target.getBoundingClientRect();
@@ -1789,7 +1799,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     target.focus({ preventScroll: true });
     const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
     box.scrollTo({ top: destination, behavior: reducedMotion ? 'instant' : 'smooth' });
-    updateLatestPromptVisibility();
+    updateStickyPrompt();
   };
   const renderToolHistoryStatus = (placeholder = false) => <div
     ref={placeholder ? undefined : toolHistoryStatus}
@@ -1957,12 +1967,12 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
         <p className="tb-chat-empty">No messages yet.</p>}
       </div>
     </div>
-    {showLatestPrompt && latestPrompt && <div className="tb-chat-latest-user-prompt">
-      <button type="button" className="tb-chat-latest-user-prompt-jump" aria-controls={latestPromptTargetId}
-        aria-label="Jump to latest user prompt" onClick={jumpToLatestPrompt}>
-        <span className="tb-chat-latest-user-prompt-text">{latestPrompt.content}</span>
+    {showStickyPrompt && stickyPrompt && <div className="tb-chat-latest-user-prompt">
+      <button type="button" className="tb-chat-latest-user-prompt-jump" aria-controls={stickyPromptTargetId}
+        aria-label="Jump to user prompt" onClick={jumpToStickyPrompt}>
+        <span className="tb-chat-latest-user-prompt-text">{stickyPrompt.content}</span>
       </button>
-      <button type="button" className="tb-chat-latest-user-prompt-dismiss" aria-label="Dismiss latest user prompt preview"
+      <button type="button" className="tb-chat-latest-user-prompt-dismiss" aria-label="Dismiss user prompt preview"
         onClick={() => setLatestPromptDismissed(true)}>×</button>
     </div>}
     {reading.showLatest && <button type="button" className="tb-chat-scroll-latest" data-scroll-latest="true"
