@@ -942,8 +942,8 @@ describe('conversation reading position', () => {
     const startTop = box.scrollTop;
     const viewportBounds = box.getBoundingClientRect();
     const offscreenTop = viewportBounds.bottom + 50;
-    vi.spyOn(tallBubble, 'getBoundingClientRect').mockImplementation(() =>
-      rect(offscreenTop - (box.scrollTop - startTop), 400));
+    Object.defineProperty(tallBubble, 'getBoundingClientRect', { configurable: true,
+      value: () => rect(offscreenTop - (box.scrollTop - startTop), 400) });
     expect(tallBubble.getBoundingClientRect().top).toBeGreaterThan(viewportBounds.bottom);
     reducedMotion = true;
     const expectedTop = startTop + offscreenTop - viewportBounds.top;

@@ -94,10 +94,10 @@ export function useReadingPosition(
       }
     }
   };
-  const refreshUnseenMessages = () => {
+  const refreshUnseenMessages = (viewportBounds?: DOMRect, measuredRows?: Map<HTMLElement, DOMRect>) => {
     const box = viewport.current;
     if (!box || unseenMessages.current.size === 0) return;
-    const bounds = box.getBoundingClientRect();
+    const bounds = viewportBounds ?? box.getBoundingClientRect();
     if (!Number.isFinite(bounds.top) || !Number.isFinite(bounds.bottom) || bounds.bottom <= bounds.top) return;
     for (const [key, scrollKey] of unseenMessages.current) {
       if (!messageRows.current.has(key)) {
@@ -108,6 +108,7 @@ export function useReadingPosition(
       const row = registeredRows.current.get(scrollKey);
       if (!row) continue;
       const rect = row.getBoundingClientRect();
+      measuredRows?.set(row, rect);
       if (!Number.isFinite(rect.top) || !Number.isFinite(rect.bottom)) continue;
       // Seeing any part of a bubble settles it as seen, including a partially
       // visible bubble at the edge of the viewport.
@@ -265,13 +266,22 @@ export function useReadingPosition(
     const box = viewport.current;
     const children = content.current?.children;
     if (!box || !children) return;
+    const bounds = following.current ? undefined : box.getBoundingClientRect();
     if (box.clientHeight > 0) viewportHeight.current = box.clientHeight;
     lastKnownScrollTop.current = box.scrollTop;
     lastKnownBottom.current = Math.max(0, box.scrollHeight - box.clientHeight);
-    refreshUnseenMessages();
+    const measuredRows = new Map<HTMLElement, DOMRect>();
+    refreshUnseenMessages(bounds, measuredRows);
     anchors.current = [];
     if (following.current) return;
-    const bounds = box.getBoundingClientRect();
+    const anchorBounds = bounds ?? box.getBoundingClientRect();
+    const measureRow = (row: HTMLElement) => {
+      const measured = measuredRows.get(row);
+      if (measured) return measured;
+      const rect = row.getBoundingClientRect();
+      measuredRows.set(row, rect);
+      return rect;
+    };
     const remembered = new Set<string>();
     // Direct children are vertically ordered. Locate the viewport without
     // enumerating history, then retain visible rows and one neighbor each side.
@@ -279,32 +289,32 @@ export function useReadingPosition(
     let high = children.length;
     while (low < high) {
       const middle = Math.floor((low + high) / 2);
-      if (children[middle].getBoundingClientRect().bottom <= bounds.top) low = middle + 1;
+      if (measureRow(children[middle] as HTMLElement).bottom <= anchorBounds.top) low = middle + 1;
       else high = middle;
     }
     const remember = (row: HTMLElement, top: number) => {
       const key = row.dataset.scrollKey;
       if (key !== undefined && !remembered.has(key)) {
         remembered.add(key);
-        anchors.current.push({ key, top: top - bounds.top + box.scrollTop });
+        anchors.current.push({ key, top: top - anchorBounds.top + box.scrollTop });
       }
     };
     for (let i = low; i < children.length; i++) {
       const row = children[i] as HTMLElement;
-      const rect = row.getBoundingClientRect();
+      const rect = measureRow(row);
       remember(row, rect.top);
-      if (rect.top >= bounds.bottom) break;
+      if (rect.top >= anchorBounds.bottom) break;
     }
     if (low > 0) {
       const previous = children[low - 1] as HTMLElement;
-      remember(previous, previous.getBoundingClientRect().top);
+      remember(previous, measureRow(previous).top);
     }
     // If filtering removes every row around the reader, retain a distant
     // survivor so its old position can keep the transcript from collapsing.
     for (let i = children.length - 1; i >= 0; i--) {
       const lastRow = children[i] as HTMLElement;
       if (lastRow.dataset.scrollKey === undefined) continue;
-      remember(lastRow, lastRow.getBoundingClientRect().top);
+      remember(lastRow, measureRow(lastRow).top);
       break;
     }
   };
