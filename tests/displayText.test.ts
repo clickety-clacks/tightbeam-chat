@@ -19,4 +19,11 @@ describe('provenance display cleanup', () => {
     expect(stripProvenanceMarkup(nearMatch)).toBe(nearMatch);
     expect(stripProvenanceMarkup(plain)).toBe(plain);
   });
+
+  it('preserves long whitespace and malformed-tag input', () => {
+    const whitespace = ' '.repeat(30_000);
+    const malformed = `${whitespace}<engram-src id="not-a-uuid"/>`;
+    expect(stripProvenanceMarkup(whitespace)).toBe(whitespace);
+    expect(stripProvenanceMarkup(malformed)).toBe(malformed);
+  });
 });
