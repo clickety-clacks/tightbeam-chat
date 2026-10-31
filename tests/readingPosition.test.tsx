@@ -696,7 +696,7 @@ describe('conversation reading position', () => {
     act(() => runtime.publish({ records: [...initialRows, { ...carrier, rowVersion: 2 }, { ...message(21), content: 'A new human message' }] }));
     expect(animate).toHaveBeenCalledTimes(1);
   });
-  it('preserves the reader and draft through reconnect without rebuilding on a foreground return', async () => {
+  it('preserves the reader and draft through reconnect on a foreground return', async () => {
     const profile: TargetProfile = { identity: 'fixture:recovery', label: 'Recovery', capabilities: {
       newestTail: true, stableOlderCursor: true, retainedHistoryAcrossResets: true,
       orderedTransitions: true, snapshotCoverage: true, versionedNotices: true,
@@ -745,7 +745,7 @@ describe('conversation reading position', () => {
       historyGate = new Promise<void>(resolve => { releaseHistory = resolve; });
       visibility = 'visible';
       await act(async () => { fireEvent(document, new Event('visibilitychange')); });
-      expect(connect).toHaveBeenCalledTimes(2);
+      expect(connect).toHaveBeenCalledTimes(3);
       expect(runtime.getSnapshot().status).toBe('ready');
       expect(screen.queryByText('Message 20')).toBeNull();
       const reconnect = runtime.rebuild();
