@@ -1098,6 +1098,57 @@ describe('Gateway wire mapping and behavior checks', () => {
     } finally { vi.useRealTimers(); }
   });
 
+  it('checks the existing heartbeat deadline on browser foreground return', async () => {
+    vi.useFakeTimers();
+    const originalVisibility = Object.getOwnPropertyDescriptor(document, 'visibilityState');
+    let visibility: DocumentVisibilityState = 'hidden';
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => visibility });
+    try {
+      for (const trigger of ['visibilitychange', 'pageshow'] as const) {
+        const candidate = setup(50);
+        const doubts: string[] = [];
+        const pending = candidate.transport.openChanges(sessionKey, {
+          onNotice: () => {}, onDoubt: (reason) => doubts.push(reason),
+        }, new AbortController().signal);
+        await Promise.resolve();
+        candidate.changes.emit({ type: 'subscription_ready', subscriptionId: `chat:${sessionKey}` });
+        const connection = await pending;
+
+        // Move the clock past the timeout without running its timer, as when a
+        // browser suspends page timers while the app is in the background.
+        vi.setSystemTime(Date.now() + 51);
+        visibility = 'visible';
+        if (trigger === 'visibilitychange') document.dispatchEvent(new Event(trigger));
+        else window.dispatchEvent(new Event(trigger));
+
+        expect(doubts).toEqual(['Firehose heartbeat or change timed out.']);
+        expect(candidate.changes.closed).toBe(true);
+        connection.close();
+      }
+
+      const healthy = setup(50);
+      const healthyDoubts: string[] = [];
+      const healthyPending = healthy.transport.openChanges(sessionKey, {
+        onNotice: () => {}, onDoubt: (reason) => healthyDoubts.push(reason),
+      }, new AbortController().signal);
+      await Promise.resolve();
+      healthy.changes.emit({ type: 'subscription_ready', subscriptionId: `chat:${sessionKey}` });
+      const healthyConnection = await healthyPending;
+      vi.setSystemTime(Date.now() + 40);
+      healthy.changes.emit({ type: 'heartbeat', seq: 0 });
+      vi.setSystemTime(Date.now() + 40);
+      visibility = 'visible';
+      document.dispatchEvent(new Event('visibilitychange'));
+      expect(healthyDoubts).toEqual([]);
+      expect(healthy.changes.closed).toBe(false);
+      healthyConnection.close();
+    } finally {
+      if (originalVisibility) Object.defineProperty(document, 'visibilityState', originalVisibility);
+      else Reflect.deleteProperty(document, 'visibilityState');
+      vi.useRealTimers();
+    }
+  });
+
   it('sends human /ws frames with the same client ID and distinguishes ack, refusal and dropped sockets', async () => {
     const accepted = setup();
     const submission = { sessionKey, deviceId: 'device-1', clientMessageId: 'c_1', content: 'hello' };

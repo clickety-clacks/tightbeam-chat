@@ -488,6 +488,7 @@ export function createPublic019Transport(config: Public019Config): { transport: 
       let railSubscriptionPending = false;
       let railRefusalBeforeReady = false;
       let lastSeq = 0;
+      let lastFeedActivityAt = Date.now();
       let stopListening = () => {};
       let readyTimer: ReturnType<typeof setTimeout> | undefined;
       let heartbeatTimer: ReturnType<typeof setTimeout> | undefined;
@@ -502,6 +503,8 @@ export function createPublic019Transport(config: Public019Config): { transport: 
         if (heartbeatTimer) clearTimeout(heartbeatTimer);
         stopListening();
         signal.removeEventListener('abort', onAbort);
+        if (!tools && typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisibilityChange);
+        if (!tools && typeof window !== 'undefined') window.removeEventListener('pageshow', onPageShow);
         channel.close();
       };
       let rejectReady: (reason: unknown) => void = () => {};
@@ -515,10 +518,21 @@ export function createPublic019Transport(config: Public019Config): { transport: 
       };
       const watchHeartbeat = () => {
         if (closed) return;
+        lastFeedActivityAt = Date.now();
         if (heartbeatTimer) clearTimeout(heartbeatTimer);
         heartbeatTimer = setTimeout(() => doubt('Firehose heartbeat or change timed out.'), heartbeatTimeoutMs);
       };
+      const checkForegroundLiveness = () => {
+        if (closed || !ready || Date.now() - lastFeedActivityAt < heartbeatTimeoutMs) return;
+        doubt('Firehose heartbeat or change timed out.');
+      };
+      const onVisibilityChange = () => {
+        if (typeof document !== 'undefined' && document.visibilityState === 'visible') checkForegroundLiveness();
+      };
+      const onPageShow = () => checkForegroundLiveness();
       signal.addEventListener('abort', onAbort, { once: true });
+      if (!tools && typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisibilityChange);
+      if (!tools && typeof window !== 'undefined') window.addEventListener('pageshow', onPageShow);
       stopListening = channel.listen((raw) => {
         if (closed) return;
         try {
