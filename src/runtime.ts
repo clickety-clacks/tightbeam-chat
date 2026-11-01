@@ -41,6 +41,7 @@ const LIVE_RECONNECTING_AFTER_MS = 1_000;
 const LIVE_DISCONNECTED_AFTER_MS = 10_000;
 const LIVE_STATUS_MIN_INTERVAL_MS = 1_000;
 const LIVE_STABLE_OPEN_MS = 1_000;
+const BROWSER_RECOVERY_DEBOUNCE_MS = 1_000;
 
 function identityEquals(a: HostIdentity, b: HostIdentity): boolean {
   return a.principalKey === b.principalKey && a.deviceId === b.deviceId;
@@ -178,6 +179,8 @@ class SessionRuntime implements ChatRuntime {
   private catchUpAfterCursor: string | null | undefined;
   private generation = 0;
   private disposed = false;
+  private wasBackgrounded = typeof document !== 'undefined' && document.visibilityState !== 'visible';
+  private lastBrowserRecoveryAt: number | undefined;
   private initializing = false;
   private restoreDepth = 0;
   private preserveRowsOnReconnect = false;
@@ -215,7 +218,49 @@ class SessionRuntime implements ChatRuntime {
       transport.readRecordEvents.bind(transport), patch => {
         if (!this.disposed && this.checkIdentity() && this.state.status !== 'unauthorized') this.publish(patch);
       });
+    if (typeof document !== 'undefined') document.addEventListener('visibilitychange', this.onVisibilityChange);
+    if (typeof window !== 'undefined') {
+      window.addEventListener('pagehide', this.onPageHide);
+      window.addEventListener('pageshow', this.onPageShow);
+      window.addEventListener('online', this.onOnline);
+    }
     void this.rebuild();
+  }
+
+  private readonly onVisibilityChange = (): void => {
+    if (typeof document === 'undefined') return;
+    if (document.visibilityState !== 'visible') {
+      this.wasBackgrounded = true;
+      return;
+    }
+    if (!this.wasBackgrounded) return;
+    this.wasBackgrounded = false;
+    this.restartIfFeedIsUnconfirmed();
+  };
+
+  private readonly onPageHide = (): void => { this.wasBackgrounded = true; };
+
+  private readonly onPageShow = (): void => {
+    if (typeof document === 'undefined' || document.visibilityState !== 'visible' || !this.wasBackgrounded) return;
+    this.wasBackgrounded = false;
+    this.restartIfFeedIsUnconfirmed();
+  };
+
+  private readonly onOnline = (): void => { this.restartIfFeedIsUnconfirmed(); };
+
+  private restartIfFeedIsUnconfirmed(): void {
+    if (this.disposed || this.state.status === 'unauthorized' || this.state.identityChanged) return;
+    // If the transport still considers the feed connected, its lifecycle
+    // listener will close it; make that resulting retry prompt as well.
+    this.retryDelayMs = 250;
+    if (this.state.liveConnectionState === 'connected' && !this.state.liveError) return;
+    const now = Date.now();
+    if (this.lastBrowserRecoveryAt !== undefined &&
+        now - this.lastBrowserRecoveryAt < BROWSER_RECOVERY_DEBOUNCE_MS) return;
+    this.lastBrowserRecoveryAt = now;
+    // Browser lifecycle events can arrive in pairs (visibility and page restore).
+    // One immediate restart is enough; a later event can retry if recovery failed.
+    void this.rebuild({ restart: true });
   }
 
   private recordEventFloor(): number {
@@ -1782,6 +1827,12 @@ class SessionRuntime implements ChatRuntime {
   dispose = (): void => {
     if (this.disposed) return;
     this.disposed = true;
+    if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', this.onVisibilityChange);
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('pagehide', this.onPageHide);
+      window.removeEventListener('pageshow', this.onPageShow);
+      window.removeEventListener('online', this.onOnline);
+    }
     this.generation++;
     this.pendingFeedCoverage = undefined;
     this.catchUpConnection = undefined;

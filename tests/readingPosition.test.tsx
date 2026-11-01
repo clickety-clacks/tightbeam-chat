@@ -1011,8 +1011,8 @@ describe('conversation reading position', () => {
     }
   });
 
-  it.each(['visibilitychange', 'pageshow'] as const)(
-    'immediately supersedes closed-feed backoff after a %s foreground return and keeps exponential retries',
+  it.each(['visibilitychange', 'pageshow', 'online'] as const)(
+    'immediately supersedes closed-feed backoff after %s and keeps exponential retries',
     async (trigger) => {
       vi.useFakeTimers();
       const fixture = createReconnectFixture({
@@ -1063,7 +1063,7 @@ describe('conversation reading position', () => {
             document.dispatchEvent(new Event('visibilitychange'));
             await immediateFailure;
           });
-        } else {
+        } else if (trigger === 'pageshow') {
           visibility = 'hidden';
           act(() => window.dispatchEvent(new Event('pagehide')));
           visibility = 'visible';
@@ -1072,16 +1072,20 @@ describe('conversation reading position', () => {
             window.dispatchEvent(new Event('pageshow'));
             await immediateFailure;
           });
+        } else {
+          const immediateFailure = waitForLiveError('Connection unavailable on attempt 3');
+          await act(async () => {
+            window.dispatchEvent(new Event('online'));
+            await immediateFailure;
+          });
         }
         expect(fixture.connectionCount).toBe(3);
         expect(runtime.getSnapshot().records.map(record => record.id)).toEqual(
           fixture.recoveryRows.map(record => record.id));
 
-        // The superseded 500 ms timer must not fire; the immediate failure
-        // retains the existing next delay, then later failures keep doubling.
-        await act(async () => { await vi.advanceTimersByTimeAsync(500); });
-        expect(fixture.connectionCount).toBe(3);
-        await act(async () => { await vi.advanceTimersByTimeAsync(499); });
+        // The browser signal resets backoff for one prompt attempt. A failed
+        // attempt then resumes the existing exponential retry sequence.
+        await act(async () => { await vi.advanceTimersByTimeAsync(249); });
         expect(fixture.connectionCount).toBe(3);
         const fourthFailure = waitForLiveError('Connection unavailable on attempt 4');
         await act(async () => {
@@ -1090,7 +1094,7 @@ describe('conversation reading position', () => {
         });
         expect(fixture.connectionCount).toBe(4);
 
-        await act(async () => { await vi.advanceTimersByTimeAsync(1999); });
+        await act(async () => { await vi.advanceTimersByTimeAsync(499); });
         expect(fixture.connectionCount).toBe(4);
         const fifthFailure = waitForLiveError('Connection unavailable on attempt 5');
         await act(async () => {

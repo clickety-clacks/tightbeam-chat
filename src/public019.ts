@@ -488,7 +488,7 @@ export function createPublic019Transport(config: Public019Config): { transport: 
       let railSubscriptionPending = false;
       let railRefusalBeforeReady = false;
       let lastSeq = 0;
-      let lastFeedActivityAt = Date.now();
+      let pageWasSuspended = typeof document !== 'undefined' && document.visibilityState !== 'visible';
       let stopListening = () => {};
       let readyTimer: ReturnType<typeof setTimeout> | undefined;
       let heartbeatTimer: ReturnType<typeof setTimeout> | undefined;
@@ -504,7 +504,11 @@ export function createPublic019Transport(config: Public019Config): { transport: 
         stopListening();
         signal.removeEventListener('abort', onAbort);
         if (!tools && typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisibilityChange);
-        if (!tools && typeof window !== 'undefined') window.removeEventListener('pageshow', onPageShow);
+        if (!tools && typeof window !== 'undefined') {
+          window.removeEventListener('pagehide', onPageHide);
+          window.removeEventListener('pageshow', onPageShow);
+          window.removeEventListener('online', onOnline);
+        }
         channel.close();
       };
       let rejectReady: (reason: unknown) => void = () => {};
@@ -518,21 +522,41 @@ export function createPublic019Transport(config: Public019Config): { transport: 
       };
       const watchHeartbeat = () => {
         if (closed) return;
-        lastFeedActivityAt = Date.now();
         if (heartbeatTimer) clearTimeout(heartbeatTimer);
         heartbeatTimer = setTimeout(() => doubt('Firehose heartbeat or change timed out.'), heartbeatTimeoutMs);
       };
-      const checkForegroundLiveness = () => {
-        if (closed || !ready || Date.now() - lastFeedActivityAt < heartbeatTimeoutMs) return;
-        doubt('Firehose heartbeat or change timed out.');
+      const refreshAfterLifecycleChange = (reason: string) => {
+        if (closed || !ready) return;
+        // A quiet browser WebSocket cannot prove that its server can still send.
+        // Reopen through the existing subscription path so runtime catch-up
+        // confirms the feed and reads any rows missed while the page was away.
+        doubt(reason);
       };
       const onVisibilityChange = () => {
-        if (typeof document !== 'undefined' && document.visibilityState === 'visible') checkForegroundLiveness();
+        if (typeof document === 'undefined') return;
+        if (document.visibilityState !== 'visible') {
+          pageWasSuspended = true;
+          return;
+        }
+        if (!pageWasSuspended) return;
+        pageWasSuspended = false;
+        refreshAfterLifecycleChange('Refreshing the conversation feed after returning to the app.');
       };
-      const onPageShow = () => checkForegroundLiveness();
+      const onPageHide = () => { pageWasSuspended = true; };
+      const onPageShow = () => {
+        if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+        if (!pageWasSuspended) return;
+        pageWasSuspended = false;
+        refreshAfterLifecycleChange('Refreshing the conversation feed after the page was restored.');
+      };
+      const onOnline = () => refreshAfterLifecycleChange('Refreshing the conversation feed after the network changed.');
       signal.addEventListener('abort', onAbort, { once: true });
       if (!tools && typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisibilityChange);
-      if (!tools && typeof window !== 'undefined') window.addEventListener('pageshow', onPageShow);
+      if (!tools && typeof window !== 'undefined') {
+        window.addEventListener('pagehide', onPageHide);
+        window.addEventListener('pageshow', onPageShow);
+        window.addEventListener('online', onOnline);
+      }
       stopListening = channel.listen((raw) => {
         if (closed) return;
         try {
