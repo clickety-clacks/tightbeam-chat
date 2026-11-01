@@ -1766,6 +1766,70 @@ describe('conversation reading position', () => {
     expect(screen.getByRole('button', { name: /^(?:\d+ unseen messages?|Scroll to bottom)$/ })).toBeTruthy();
   });
 
+  it('does not apply a browser-adjusted scroll offset twice when older history arrives', async () => {
+    const runtime = new ReadingRuntime();
+    const currentPage = Array.from({ length: 20 }, (_, i) => message(i + 100));
+    runtime.state = { ...runtime.state, records: currentPage, hasOlder: true };
+    let releaseOlder!: () => void;
+    const olderPage = new Promise<void>(resolve => { releaseOlder = resolve; });
+    runtime.loadOlder = async () => {
+      runtime.publish({ loadingOlder: true });
+      await olderPage;
+      runtime.publish({
+        records: [...Array.from({ length: 12 }, (_, i) => message(i + 88)), ...runtime.state.records],
+        hasOlder: false,
+        loadingOlder: false,
+      });
+    };
+    render(<TightbeamChat sessionKey="reading" adapter={{ open: () => runtime }} />);
+    const box = screen.getByRole('log');
+    const anchor = screen.getByText('Message 101').closest('article')!;
+    readAt(box, 0);
+    const anchorTop = anchor.getBoundingClientRect().top;
+
+    // Model a browser scroll adjustment that lands before Chat's layout correction.
+    box.scrollTop = 145;
+    await act(async () => { releaseOlder(); await olderPage; });
+
+    expect(runtime.state.records).toHaveLength(32);
+    expect(screen.getByText('Message 88')).toBeTruthy();
+    expect(anchor.getBoundingClientRect().top).toBe(anchorTop);
+    expect(box.scrollTop).toBe(12 * 92);
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('refreshes the held offset when the reader moves during older history loading', async () => {
+    const runtime = new ReadingRuntime();
+    const currentPage = Array.from({ length: 20 }, (_, i) => message(i + 100));
+    runtime.state = { ...runtime.state, records: currentPage, hasOlder: true };
+    let releaseOlder!: () => void;
+    const olderPage = new Promise<void>(resolve => { releaseOlder = resolve; });
+    runtime.loadOlder = async () => {
+      runtime.publish({ loadingOlder: true });
+      await olderPage;
+      runtime.publish({
+        records: [...Array.from({ length: 12 }, (_, i) => message(i + 88)), ...runtime.state.records],
+        hasOlder: false,
+        loadingOlder: false,
+      });
+    };
+    render(<TightbeamChat sessionKey="reading" adapter={{ open: () => runtime }} />);
+    const box = screen.getByRole('log');
+    const anchor = screen.getByText('Message 101').closest('article')!;
+    readAt(box, 0);
+
+    fireEvent.wheel(box, { deltaY: 100 });
+    box.scrollTop = 40;
+    fireEvent.scroll(box);
+    const anchorTop = anchor.getBoundingClientRect().top;
+    // Model the browser adjustment following the reader's move.
+    box.scrollTop = 185;
+    await act(async () => { releaseOlder(); await olderPage; });
+
+    expect(anchor.getBoundingClientRect().top).toBe(anchorTop);
+    expect(box.scrollTop).toBe(40 + 12 * 92);
+  });
+
   it('returns to the newest message after submission, clears on acceptance, and leaves a rejected draft alone', () => {
     const { runtime, box, input } = setup();
     readAt(box, 600);

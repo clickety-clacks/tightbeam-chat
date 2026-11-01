@@ -86,6 +86,8 @@ export function useReadingPosition(
   const lastKnownScrollTop = useRef<number | undefined>(undefined);
   const lastKnownBottom = useRef<number | undefined>(undefined);
   const pendingLayoutRestoreOffsets = useRef<number[]>([]);
+  const heldPositionCount = useRef(0);
+  const heldPositionScrollTop = useRef<number | undefined>(undefined);
   const initialSettlePending = useRef(false);
   const shouldKeepInitialSettleRef = useRef(shouldKeepInitialSettle);
   shouldKeepInitialSettleRef.current = shouldKeepInitialSettle;
@@ -663,7 +665,11 @@ export function useReadingPosition(
           previousScrollTop !== undefined && previousBottom !== undefined &&
           previousBottom > currentBottom + .5 && previousScrollTop > currentBottom + .5 &&
           currentScrollTop >= currentBottom - .5;
-        const scrollBase = wasClampedByShrink ? previousScrollTop! : currentScrollTop;
+        const heldScrollTop = heldPositionCount.current > 0 ? heldPositionScrollTop.current : undefined;
+        // A browser may have already adjusted scrollTop for prepended history
+        // by the time this layout effect runs. Use the reading offset captured
+        // when loading began so that adjustment is not added a second time.
+        const scrollBase = heldScrollTop ?? (wasClampedByShrink ? previousScrollTop! : currentScrollTop);
         const anchorShift = currentScrollTop + offset - survivor.top;
         const wanted = scrollBase + anchorShift;
         // A removed first row can require negative scrollTop; browsers clamp it.
@@ -723,6 +729,7 @@ export function useReadingPosition(
     const box = viewport.current;
     if (!box) return;
     const readerInitiated = userScrollIntent.current;
+    if (readerInitiated && heldPositionCount.current > 0) heldPositionScrollTop.current = box.scrollTop;
     if (readerInitiated && !manualScrollReported.current && lastKnownScrollTop.current !== undefined &&
         Math.abs(box.scrollTop - lastKnownScrollTop.current) >= 1) {
       manualScrollReported.current = true;
@@ -817,6 +824,15 @@ export function useReadingPosition(
     // Older-page loading captures current intent; it must not turn an initial
     // underfilled view at the latest message into an away-from-bottom reading.
     interrupt();
+    if (heldPositionCount.current === 0) heldPositionScrollTop.current = viewport.current?.scrollTop;
+    heldPositionCount.current++;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      heldPositionCount.current = Math.max(0, heldPositionCount.current - 1);
+      if (heldPositionCount.current === 0) heldPositionScrollTop.current = undefined;
+    };
   };
   const preserveVisiblePosition = () => {
     const box = viewport.current;
