@@ -2208,7 +2208,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
 
   return <ActivitySummaryProvider transport={activitySummaries}
     connected={state.liveConnectionState ? state.liveConnectionState === 'connected' : state.status === 'ready'}
-    reconcile={reading.reconcileViewportLayout}><section ref={root} className={`tb-chat ${host.composerHidden ? 'tb-chat-host-composer-hidden' : ''} ${className || ''}`}
+    reconcile={reading.reconcileViewportLayout}><section ref={root} className={`tb-chat ${host.composerHidden ? 'tb-chat-host-composer-hidden' : ''} ${reading.showLatest ? 'tb-chat-has-latest-control' : ''} ${className || ''}`}
     aria-label={agentName ? `${agentName} conversation` : 'Conversation'}>
     <div className="tb-chat-viewport" ref={viewport} onScroll={handleScroll} role="log" tabIndex={-1}
       onWheel={(event) => { reading.interrupt(); if (event.deltaY !== 0) reading.noteUserScroll(); }}
