@@ -115,12 +115,13 @@ export function useReadingPosition(
     }
   };
   const unobscuredBounds = (box: HTMLElement, viewportBounds?: Pick<DOMRect, 'top' | 'bottom'>,
-    includeTopOverlays = false): Pick<DOMRect, 'top' | 'bottom'> => {
+    includeTopOverlays = false, ignorePromptPreview = false): Pick<DOMRect, 'top' | 'bottom'> => {
     const bounds = viewportBounds ?? box.getBoundingClientRect();
     const root = box.parentElement;
     let top = bounds.top;
     if (includeTopOverlays) {
-      const topOverlays = root?.querySelectorAll<HTMLElement>('.tb-chat-runtime-notice, .tb-chat-latest-user-prompt');
+      const topOverlays = root?.querySelectorAll<HTMLElement>(ignorePromptPreview
+        ? '.tb-chat-runtime-notice' : '.tb-chat-runtime-notice, .tb-chat-latest-user-prompt');
       for (const overlay of topOverlays ?? []) {
         const overlayBounds = overlay.getBoundingClientRect();
         if (!Number.isFinite(overlayBounds.top) || !Number.isFinite(overlayBounds.bottom) ||
@@ -213,7 +214,9 @@ export function useReadingPosition(
     if (!row) return Math.max(0, box.scrollHeight - box.clientHeight);
     const groupEndRow = registeredRows.current.get(arrival.groupEndScrollKey) ?? row;
 
-    const bounds = unobscuredBounds(box, undefined, true);
+    // An older prompt preview is hidden as soon as the answered prompt tail
+    // becomes visible, so do not reserve its space when placing that tail.
+    const bounds = unobscuredBounds(box, undefined, true, Boolean(arrival.answeredPromptScrollKey));
     const rowBounds = row.getBoundingClientRect();
     const groupEndBounds = groupEndRow.getBoundingClientRect();
     const arrivalHeight = Math.max(rowBounds.height, groupEndBounds.bottom - rowBounds.top);
