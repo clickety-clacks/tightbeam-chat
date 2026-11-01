@@ -116,7 +116,7 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
 .tb-chat-latest-user-prompt-jump {
   flex: 1 1 auto;
   min-width: 0;
-  padding: .22rem .25rem;
+  padding: .22rem .25rem .04rem;
   border: 0;
   background: transparent;
   color: inherit;
@@ -126,7 +126,8 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
 }
 .tb-chat-latest-user-prompt-text {
   display: -webkit-box;
-  max-height: 4.05em;
+  max-height: calc(4.05em + .18rem);
+  padding-bottom: .18rem;
   overflow: hidden;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
