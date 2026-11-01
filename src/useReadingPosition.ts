@@ -7,7 +7,7 @@ const arrivalDuration = 240;
 const arrivalEasing = 'cubic-bezier(0.2, 0, 0, 1)';
 const arrivalTopInset = 40;
 type Anchor = { key: string; top: number };
-type MessageRow = { key: string; scrollKey: string; role: string; prompt: boolean };
+type MessageRow = { key: string; scrollKey: string; role: string; prompt: boolean; isFromReader: boolean };
 type IncomingMessageArrival = {
   readonly scrollKey: string;
   readonly groupEndScrollKey: string;
@@ -150,7 +150,8 @@ export function useReadingPosition(
     if (!Number.isFinite(bounds.top) || !Number.isFinite(bounds.bottom) || bounds.bottom <= bounds.top) return;
     let overlayMeasured = !measureOverlayOnIntersection;
     for (const [key, scrollKey] of unseenMessages.current) {
-      if (!messageRows.current.has(key)) {
+      const message = messageRows.current.get(key);
+      if (!message || message.isFromReader) {
         unseenMessages.current.delete(key);
         knownMessages.current.add(key);
         continue;
@@ -189,6 +190,8 @@ export function useReadingPosition(
       const row = messageRows.current.get(scrollKey);
       if (!row || knownMessages.current.has(row.key)) continue;
       knownMessages.current.add(row.key);
+      // The reader's principal is shared across clients, so a device change does not make a send unseen.
+      if (row.isFromReader) continue;
       // Initial and prepended history never appears after the previous tail.
       // Appended message bubbles stay unseen until they intersect the viewport.
       unseenMessages.current.set(row.key, row.scrollKey);

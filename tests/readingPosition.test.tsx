@@ -37,6 +37,7 @@ function deferred<T>() {
 }
 const message = (id: number): CanonicalMessage => ({ kind: 'message', id: `message-${id}`, sessionKey: 'reading',
   seq: id, rowVersion: 1, role: 'user', sender: 'user:person', content: `Message ${id}`, raw: {} });
+const receivedMessage = (id: number): CanonicalMessage => ({ ...message(id), sender: 'user:someone-else' });
 const initialRows = Array.from({ length: 20 }, (_, i) => message(i));
 const latestButtonName = /^(?:\d+ unseen messages?|Scroll to bottom)$/;
 function createReconnectFixture(options: {
@@ -406,7 +407,7 @@ describe('conversation reading position', () => {
     expect(screen.getByRole('button', { name: 'Scroll to bottom' })).toBeTruthy();
 
     const anchoredScrollTop = box.scrollTop;
-    const laterMessages = [message(21), message(22), message(23), message(24)];
+    const laterMessages = [receivedMessage(21), receivedMessage(22), receivedMessage(23), receivedMessage(24)];
     act(() => runtime.publish({ records: [...runtime.state.records, ...laterMessages] }));
     expect(box.scrollTop).toBe(anchoredScrollTop);
     expect(firstRow.getBoundingClientRect().top).toBeCloseTo(box.getBoundingClientRect().top + 40);
@@ -1227,12 +1228,13 @@ describe('conversation reading position', () => {
     extraBottomSpace = 132;
     const { runtime, box } = setup();
     readAt(box, 500);
-    act(() => runtime.publish({ records: [...initialRows, message(20), message(21)] }));
+    const sentFromAnotherClient = { ...message(20), deviceId: 'another-browser', clientMessageId: 'own-send-elsewhere' };
+    act(() => runtime.publish({ records: [...initialRows, sentFromAnotherClient, receivedMessage(21), receivedMessage(22)] }));
 
     const revealButton = screen.getByRole('button', { name: '2 unseen messages' });
     expect(revealButton.textContent).toContain(revealButton.getAttribute('aria-label'));
     revealButton.focus();
-    const firstBubble = box.querySelector<HTMLElement>('[data-scroll-key="message-20"]')!;
+    const firstBubble = box.querySelector<HTMLElement>('[data-scroll-key="message-21"]')!;
     const revealTop = box.scrollTop + firstBubble.getBoundingClientRect().bottom - revealButton.getBoundingClientRect().top;
     fireEvent.click(revealButton);
 
@@ -1260,7 +1262,7 @@ describe('conversation reading position', () => {
     const { runtime, box } = setup();
     if (composerHidden) box.parentElement!.classList.add('tb-chat-host-composer-hidden');
     readAt(box, 500);
-    act(() => runtime.publish({ records: [...initialRows, message(20), message(21)] }));
+    act(() => runtime.publish({ records: [...initialRows, receivedMessage(20), receivedMessage(21)] }));
 
     const revealButton = screen.getByRole('button', { name: '2 unseen messages' });
     const visibleBottom = revealButton.getBoundingClientRect().top;
@@ -1281,7 +1283,7 @@ describe('conversation reading position', () => {
   it('keeps an obscured bubble unseen until one pixel enters the unobscured area', () => {
     const { runtime, box } = setup();
     readAt(box, 500);
-    act(() => runtime.publish({ records: [...initialRows, message(20), message(21)] }));
+    act(() => runtime.publish({ records: [...initialRows, receivedMessage(20), receivedMessage(21)] }));
     const button = screen.getByRole('button', { name: '2 unseen messages' });
     const firstBubble = box.querySelector<HTMLElement>('[data-scroll-key="message-20"]')!;
     const visibleBottom = button.getBoundingClientRect().top;
@@ -1341,7 +1343,7 @@ describe('conversation reading position', () => {
     const { runtime, box } = setup();
     if (composerHidden) box.parentElement!.classList.add('tb-chat-host-composer-hidden');
     readAt(box, 500);
-    act(() => runtime.publish({ records: [...initialRows, message(20), message(21), message(22), message(23)] }));
+    act(() => runtime.publish({ records: [...initialRows, receivedMessage(20), receivedMessage(21), receivedMessage(22), receivedMessage(23)] }));
     const tallBubble = box.querySelector<HTMLElement>('[data-scroll-key="message-20"]')!;
     const startTop = box.scrollTop;
     const viewportBounds = box.getBoundingClientRect();
@@ -1409,7 +1411,7 @@ describe('conversation reading position', () => {
     act(() => runtime.publish({ records: [...initialRows, message(20)] }));
     readAt(box, 500);
     scrollTo.mockClear();
-    act(() => runtime.publish({ records: [...runtime.state.records, message(21)] }));
+    act(() => runtime.publish({ records: [...runtime.state.records, receivedMessage(21)] }));
     expect(box.scrollTop).toBe(500);
     expect(scrollTo).not.toHaveBeenCalled();
     const button = screen.getByRole('button', { name: /\d+ unseen messages?/ });
