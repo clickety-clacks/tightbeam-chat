@@ -580,6 +580,7 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
   .tb-chat-bubble { max-width: 92%; padding-inline: .85rem; }
   .tb-chat-caption.tb-chat-runtime-notice-with-tool-history {
     display: grid;
+    width: auto;
     grid-template-columns: auto minmax(0, 1fr);
     align-items: start;
   }
@@ -587,6 +588,12 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
     grid-column: 2;
     grid-row: 2;
     width: 100%;
+  }
+  .tb-chat-message-content.tb-chat-runtime-notice-reserved {
+    padding-block-start: var(--tb-chat-runtime-notice-height, 0px);
+  }
+  .tb-chat-message-content.tb-chat-runtime-notice-reserved > .tb-chat-tool-history-status-placeholder {
+    display: none;
   }
 }
 

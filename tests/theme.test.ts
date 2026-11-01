@@ -271,12 +271,17 @@ describe('Nordic theme', () => {
     const phoneLayout = componentCss.slice(componentCss.indexOf('@media (max-width: 540px)'));
     const phoneNotice = phoneLayout.match(/\.tb-chat-caption\.tb-chat-runtime-notice-with-tool-history\s*\{([^}]*)\}/)?.[1] ?? '';
     expect(phoneNotice).toContain('display: grid');
+    expect(phoneNotice).toContain('width: auto');
     expect(phoneNotice).toContain('grid-template-columns: auto minmax(0, 1fr)');
     expect(phoneNotice).toContain('align-items: start');
     const phoneToolHistory = phoneLayout.match(/\.tb-chat-runtime-notice-with-tool-history > \.tb-chat-runtime-tool-history\s*\{([^}]*)\}/)?.[1] ?? '';
     expect(phoneToolHistory).toContain('grid-column: 2');
     expect(phoneToolHistory).toContain('grid-row: 2');
     expect(phoneToolHistory).toContain('width: 100%');
+    const phoneNoticeReserve = phoneLayout.match(/\.tb-chat-message-content\.tb-chat-runtime-notice-reserved\s*\{([^}]*)\}/)?.[1] ?? '';
+    expect(phoneNoticeReserve).toContain('padding-block-start: var(--tb-chat-runtime-notice-height, 0px)');
+    const phoneHistoryPlaceholder = phoneLayout.match(/\.tb-chat-message-content\.tb-chat-runtime-notice-reserved > \.tb-chat-tool-history-status-placeholder\s*\{([^}]*)\}/)?.[1] ?? '';
+    expect(phoneHistoryPlaceholder).toContain('display: none');
     expect(rule(componentCss, '.tb-chat-transition')).not.toContain('border:');
     expect(rule(componentCss, '.tb-chat-status-ready')).toContain('background: var(--tb-chat-ok)');
     expect(rule(componentCss, '.tb-chat-status-loading, .tb-chat-status-stale')).toContain('background: var(--tb-chat-caution)');
