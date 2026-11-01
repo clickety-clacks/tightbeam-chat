@@ -67,12 +67,15 @@ function canReviseWithoutSequenceChange(record: ConversationRecord): record is C
     record.clientMessageId?.startsWith('terminal-credential:') === true;
 }
 
-function senderSessionKey(sender: string): string | undefined {
+function senderLookupTarget(sender: string): { readonly sessionKey: string; readonly roleName?: string } | undefined {
   const separator = sender.indexOf(':');
   if (separator < 0) return undefined;
   const kind = sender.slice(0, separator);
   if (kind !== 'agent' && kind !== 'session') return undefined;
-  return sender.slice(separator + 1).trim() || undefined;
+  const value = sender.slice(separator + 1).trim();
+  if (!value) return undefined;
+  if (kind === 'agent' && !value.startsWith('agent:')) return { sessionKey: value, roleName: value };
+  return { sessionKey: value };
 }
 
 /** Message publication can acquire its turn link without changing rowVersion. */
@@ -292,21 +295,21 @@ class SessionRuntime implements ChatRuntime {
       if (typeof displayName === 'string' && displayName.trim()) namesInMessages.add(sender);
     }
 
-    const senders = new Map<string, string>();
+    const senders = new Map<string, { readonly sessionKey: string; readonly roleName?: string }>();
     for (const record of records) {
       if (record.kind !== 'message') continue;
       for (const member of parseBatchMembers(record) ?? []) {
         if (!member.sender.startsWith('agent:') && !member.sender.startsWith('session:')) continue;
         if (namesInMessages.has(member.sender) || this.activitySenderDisplayNames.has(member.sender) ||
             this.activitySenderNameLookupGeneration.get(member.sender) === generation) continue;
-        const sessionKey = senderSessionKey(member.sender);
-        if (sessionKey) senders.set(member.sender, sessionKey);
+        const target = senderLookupTarget(member.sender);
+        if (target) senders.set(member.sender, target);
       }
     }
 
     let selectedSessionNameAdded = false;
-    for (const [sender, sessionKey] of senders) {
-      if (sessionKey === this.sessionKey) {
+    for (const [sender, target] of senders) {
+      if (!target.roleName && target.sessionKey === this.sessionKey) {
         const displayName = this.state.session?.displayName.trim();
         if (displayName) {
           this.activitySenderDisplayNames.set(sender, displayName);
@@ -317,20 +320,36 @@ class SessionRuntime implements ChatRuntime {
       }
 
       this.activitySenderNameLookupGeneration.set(sender, generation);
-      const signal = controller.signal;
-      void this.transport.readSession(sessionKey, signal).then((session) => {
-        if (signal.aborted || !this.isCurrent(generation) || !this.checkIdentity() ||
-            session.sessionKey !== sessionKey) return;
-        const displayName = session.displayName.trim();
-        if (!displayName || this.activitySenderDisplayNames.get(sender) === displayName) return;
-        this.activitySenderDisplayNames.set(sender, displayName);
-        this.publish({ activitySenderDisplayNames: new Map(this.activitySenderDisplayNames) });
-      }).catch(() => {
-        // Sender detail is optional; a failed lookup leaves the generic pill label in place.
-      });
+      void this.resolveActivitySenderName(sender, target, controller.signal, generation);
     }
     if (selectedSessionNameAdded) {
       this.publish({ activitySenderDisplayNames: new Map(this.activitySenderDisplayNames) });
+    }
+  }
+
+  private async resolveActivitySenderName(sender: string,
+    target: { readonly sessionKey: string; readonly roleName?: string }, signal: AbortSignal, generation: number): Promise<void> {
+    try {
+      let sessionKey = target.sessionKey;
+      if (target.roleName && this.transport.readRoleSessionKey) {
+        try {
+          sessionKey = await this.transport.readRoleSessionKey(target.roleName, signal);
+        } catch {
+          // Older targets or an unbound role fall back to the original session-key lookup.
+        }
+      }
+      if (signal.aborted || !this.isCurrent(generation) || !this.checkIdentity()) return;
+      const session = sessionKey === this.sessionKey
+        ? this.state.session
+        : await this.transport.readSession(sessionKey, signal);
+      if (signal.aborted || !this.isCurrent(generation) || !this.checkIdentity() ||
+          !session || session.sessionKey !== sessionKey) return;
+      const displayName = session.displayName.trim();
+      if (!displayName || this.activitySenderDisplayNames.get(sender) === displayName) return;
+      this.activitySenderDisplayNames.set(sender, displayName);
+      this.publish({ activitySenderDisplayNames: new Map(this.activitySenderDisplayNames) });
+    } catch {
+      // Sender detail is optional; a failed lookup leaves the generic pill label in place.
     }
   }
 

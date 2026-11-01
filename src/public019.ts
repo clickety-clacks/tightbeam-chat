@@ -723,6 +723,17 @@ export function createPublic019Transport(config: Public019Config): { transport: 
       }
       return decodePublic019Session(body.item, sessionKey);
     },
+    async readRoleSessionKey(roleName, signal) {
+      const body = await get(`/api/roles/${encodeURIComponent(roleName)}`, signal);
+      if (body.schemaVersion !== 1 || body.resource !== 'roles') {
+        throw new UnsupportedTargetError('Unexpected role detail envelope.');
+      }
+      const role = record(body.item);
+      if (requiredString(role, 'roleName') !== roleName) {
+        throw new UnsupportedTargetError('Role detail belongs to a different role.');
+      }
+      return requiredString(role, 'boundSessionKey');
+    },
     async readMessage(sessionKey, messageId, signal) {
       const body = await get(`/api/sessions/${encodeURIComponent(sessionKey)}/messages/${encodeURIComponent(messageId)}`, signal);
       if (body.schemaVersion !== 1 || body.resource !== 'transcript messages') {

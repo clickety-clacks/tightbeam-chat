@@ -934,7 +934,7 @@ describe('conversation surface', () => {
       '[1] source=process:notifications sender=user:person cause=notice class=fyi',
       onBehalfContent,
       '',
-      '[2] source=agent:helper sender=agent:helper cause=notice class=fyi',
+      '[2] source=agent:example:role sender=agent:example:role cause=notice class=fyi',
       agentContent,
       '',
       'coalesced by notices',
@@ -954,7 +954,7 @@ describe('conversation surface', () => {
       truncated: [], startedAt: 1000, endedAt: 1100, rowVersion: 1 };
     const runtime = new FakeRuntime(sessionKey, { records: [prompt, carrier, answer], toolCallsEnabled: true,
       toolCalls: [toolCall], provenanceAvailable: false, activityTurnStateAvailable: true, activeTurn: undefined,
-      activitySenderDisplayNames: new Map([['agent:helper', 'Research helper']]) });
+      activitySenderDisplayNames: new Map([['agent:example:role', 'Research helper']]) });
     const receivedRecords: ConversationRecord[] = [];
     const renderMessage = vi.fn((record: ConversationRecord) => {
       receivedRecords.push(record);

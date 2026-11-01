@@ -42,6 +42,7 @@ class ControlledTransport implements ChatTransport {
   readAfterCalls: string[] = [];
   readMessageCalls: string[] = [];
   readSessionCalls = 0;
+  readRoleSessionKey?: ChatTransport['readRoleSessionKey'];
   closed = 0;
   coverage = true;
   readReadMarker?: ChatTransport['readReadMarker'];
@@ -784,6 +785,59 @@ describe('framework-independent runtime', () => {
       expect(requestedSessionKeys).toContain(senderSessionKey);
       expect(requestedSessionKeys).toContain(unresolvedSessionKey);
       expect(runtime.getSnapshot().activitySenderDisplayNames?.has(unresolvedSender)).toBe(false);
+      expect(runtime.getSnapshot().status).toBe('ready');
+    } finally {
+      runtime.dispose();
+    }
+  });
+
+  it('resolves role-named batched senders through existing role and session details', async () => {
+    const transport = new ControlledTransport();
+    const roleName = 'example:role';
+    const roleSender = `agent:${roleName}`;
+    const roleSessionKey = 'agent:example-host:example-role:main s_role';
+    const unresolvedRoleName = 'missing:role';
+    const unresolvedRoleSender = `agent:${unresolvedRoleName}`;
+    const prompt = message(1, { role: 'user', sender: 'user:person', content: 'Review these updates.' });
+    const carrier = message(2, {
+      role: 'user', sender: 'process:notifications', messageType: 'substrate', isBatchCarrier: true,
+      content: [
+        '[from process:notifications]', '', '[batched notices: 2]', 'batchId=role-senders', 'release=example',
+        `[1] source=notice sender=${roleSender} cause=notice class=fyi`, 'A role-named update.', '',
+        `[2] source=notice sender=${unresolvedRoleSender} cause=notice class=fyi`, 'An unresolved role update.', '',
+        'coalesced by notifications',
+      ].join('\n'),
+    });
+    const answer = message(3, { role: 'assistant', sender: 'assistant-service', content: 'Here is the answer.' });
+    transport.rows = [prompt, carrier, answer];
+    const requestedRoleNames: string[] = [];
+    const requestedSessionKeys: string[] = [];
+    transport.readRoleSessionKey = async (name) => {
+      requestedRoleNames.push(name);
+      if (name === roleName) return roleSessionKey;
+      throw new Error('Role details are unavailable.');
+    };
+    transport.readSession = async (key = sessionKey) => {
+      transport.readSessionCalls++;
+      requestedSessionKeys.push(key);
+      if (key === roleSessionKey) return { sessionKey: key, rowVersion: 1,
+        displayName: 'Example helper', raw: {} };
+      if (key === sessionKey) return { sessionKey: key, rowVersion: 1,
+        displayName: 'Fixture agent', raw: {} };
+      throw new Error('Session details are unavailable.');
+    };
+
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    try {
+      await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+      await vi.waitFor(() => expect(runtime.getSnapshot().activitySenderDisplayNames?.get(roleSender))
+        .toBe('Example helper'));
+      expect(runtime.getSnapshot().records.some((record) => record.kind === 'message' && record.sender === roleSender)).toBe(false);
+      expect(requestedRoleNames).toContain(roleName);
+      expect(requestedRoleNames).toContain(unresolvedRoleName);
+      expect(requestedSessionKeys).toContain(roleSessionKey);
+      expect(requestedSessionKeys).toContain(unresolvedRoleName);
+      expect(runtime.getSnapshot().activitySenderDisplayNames?.has(unresolvedRoleSender)).toBe(false);
       expect(runtime.getSnapshot().status).toBe('ready');
     } finally {
       runtime.dispose();
