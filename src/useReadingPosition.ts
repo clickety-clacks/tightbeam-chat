@@ -239,7 +239,10 @@ export function useReadingPosition(
       const anchorRow = arrival.anchorScrollKey ? registeredRows.current.get(arrival.anchorScrollKey) : undefined;
       if (anchorRow && anchorRow !== row) {
         const anchorBounds = anchorRow.getBoundingClientRect();
-        const promptTailStrip = Math.min(16, Math.max(8, visibleHeight / 20));
+        const previousRow = row.previousElementSibling instanceof HTMLElement ? row.previousElementSibling : undefined;
+        const previousBounds = previousRow?.getBoundingClientRect();
+        const rowGap = previousBounds ? Math.max(0, rowBounds.top - previousBounds.bottom) : 0;
+        const promptTailStrip = Math.max(8, topInset - rowGap);
         // Keep the answered prompt's tail in the open area; intervening rows
         // then take their natural place between it and the arriving reply.
         destination = box.scrollTop + anchorBounds.bottom - (bounds.top + promptTailStrip);
