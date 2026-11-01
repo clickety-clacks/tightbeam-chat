@@ -1,5 +1,18 @@
 [
   {
+    "version": "v0.1.70",
+    "items": [
+      {
+        "title": "Read agent messages with clear sender names",
+        "description": "Agent-message pills identify who sent the message and show readable text without internal tags."
+      },
+      {
+        "title": "Keep your own messages out of unseen counts",
+        "description": "Messages you sent from any device do not count as unseen."
+      }
+    ]
+  },
+  {
     "version": "v0.1.69",
     "items": [
       {
