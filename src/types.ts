@@ -267,6 +267,8 @@ export interface ChatTransport {
   /** Refresh one known in-place-editable transcript row without rereading a page. */
   readMessage?(sessionKey: string, messageId: string, signal: AbortSignal): Promise<ConversationRecord>;
   readSession(sessionKey: string, signal: AbortSignal): Promise<SessionRecord>;
+  /** Resolve a named agent role to its currently bound session, when this route is available. */
+  readRoleSessionKey?(roleName: string, signal: AbortSignal): Promise<string>;
   /** Optional Gateway marker support; older or unverified routes keep Chat unchanged. */
   readReadMarker?(scopeKey: string, signal: AbortSignal): Promise<ReadMarkerReadResult>;
   /** Conditionally advance the authenticated user's marker for this scope. */
@@ -349,6 +351,8 @@ export interface RuntimeState {
   readonly historyRailDenials?: readonly HistoryRailDenial[];
   readonly targetGateway?: string;
   readonly agentDisplayName?: string;
+  /** Display names resolved from existing session details for batch senders. */
+  readonly activitySenderDisplayNames?: ReadonlyMap<string, string>;
   readonly hasOlder: boolean;
   readonly loadingOlder: boolean;
   readonly historyError?: string;

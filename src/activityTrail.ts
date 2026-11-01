@@ -127,6 +127,23 @@ const rawDisplayName = (message: CanonicalMessage): string | undefined => {
 const rawSource = (message: CanonicalMessage): string | undefined =>
   typeof message.raw.source === 'string' ? message.raw.source : undefined;
 
+function knownSenderDisplayNames(records: readonly {
+  readonly seq: number;
+  readonly sender?: string;
+  readonly raw: Readonly<Record<string, unknown>>;
+}[]): ReadonlyMap<string, string> {
+  const latest = new Map<string, { seq: number; displayName: string }>();
+  for (const record of records) {
+    const sender = record.sender ?? '';
+    if (!/^(?:agent|session):/.test(sender)) continue;
+    const displayName = typeof record.raw.senderDisplayName === 'string' ? record.raw.senderDisplayName.trim() : '';
+    if (!displayName) continue;
+    const previous = latest.get(sender);
+    if (!previous || record.seq >= previous.seq) latest.set(sender, { seq: record.seq, displayName });
+  }
+  return new Map([...latest].map(([sender, value]) => [sender, value.displayName]));
+}
+
 function messageCandidate(message: CanonicalMessage): Candidate | undefined {
   const sender = message.sender ?? '';
   if (message.recordEventIds?.length) {
@@ -184,7 +201,8 @@ function messageCandidate(message: CanonicalMessage): Candidate | undefined {
   return undefined;
 }
 
-function memberCandidate(carrier: CanonicalMessage, member: ParsedBatchMember): Candidate | undefined {
+function memberCandidate(carrier: CanonicalMessage, member: ParsedBatchMember,
+  senderDisplayName?: string): Candidate | undefined {
   if (member.sender.startsWith('user:')) return undefined;
   // The carrier's turnSeq belongs to the batching turn, not this notice member.
   const id = `member:${member.sourceId}`;
@@ -214,11 +232,14 @@ function memberCandidate(carrier: CanonicalMessage, member: ParsedBatchMember): 
       semanticFoldKind: gatewayNoticeFoldKind(member.content) };
   }
   if (member.sender.startsWith('agent:') || member.sender.startsWith('session:')) {
-    const gist = detail ? `Another agent — ${detail}` : 'Another agent';
+    const displayName = senderDisplayName?.trim();
+    const label = displayName || 'Another agent';
+    const gist = detail ? `${label} — ${detail}` : label;
     return { id, kind: 'agent', runKey: '', anchorSeq: carrier.seq, position, gist,
       accessibleText: `Other agent: ${gist}`,
       originalContent: member.content,
-      presentation: activityPillPresentation({ kind: 'agent', gist, content: member.content, sender: member.sender }),
+      presentation: activityPillPresentation({ kind: 'agent', gist, content: member.content, sender: member.sender,
+        senderDisplayName: displayName }),
       sortTime, historyBacked: true };
   }
   return undefined;
@@ -337,6 +358,7 @@ export function buildActivityTrail(input: {
   readonly records: readonly { readonly kind: 'message'; readonly id: string; readonly seq: number;
     readonly sender?: string; readonly messageType?: string; readonly role: string; readonly content: string;
     readonly isBatchCarrier?: boolean; readonly turnSeq?: number; readonly recordEventIds?: readonly string[]; readonly raw: Readonly<Record<string, unknown>> }[];
+  readonly senderDisplayNames?: ReadonlyMap<string, string>;
   readonly bubbles: readonly ActivityBubble[];
   readonly transitions: readonly CanonicalTransition[];
   /** Unmatched local sends use timestamps to find their place between tool rows. */
@@ -356,6 +378,10 @@ export function buildActivityTrail(input: {
   readonly expandedRuns: ReadonlySet<string>;
 }): ActivityTrailPlan {
   const visibleIds = new Set(input.bubbles.filter((bubble) => !bubble.member).map((bubble) => bubble.record.id));
+  const senderDisplayNames = new Map(knownSenderDisplayNames(input.records));
+  for (const [sender, displayName] of input.senderDisplayNames ?? []) {
+    if (displayName.trim()) senderDisplayNames.set(sender, displayName.trim());
+  }
   const candidates: Candidate[] = [];
   for (const message of input.records) {
     if (visibleIds.has(message.id)) continue;
@@ -366,7 +392,8 @@ export function buildActivityTrail(input: {
     const batchMembers = parseBatchMembers(message as CanonicalMessage);
     if (batchMembers) {
       for (const member of batchMembers) {
-        const candidate = memberCandidate(message as CanonicalMessage, member);
+        const candidate = memberCandidate(message as CanonicalMessage, member,
+          senderDisplayNames.get(member.sender));
         if (candidate) candidates.push(candidate);
       }
       continue;

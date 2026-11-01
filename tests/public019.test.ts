@@ -109,6 +109,23 @@ describe('Gateway wire mapping and behavior checks', () => {
     runtime.dispose();
   });
 
+  it('resolves a role name to its bound session through the existing role detail route', async () => {
+    const candidate = setup();
+    const roleName = 'example:role';
+    const boundSessionKey = 'agent:example-host:example-role:main s_role';
+    let requestUrl = '';
+    candidate.host.fetch = async (input) => {
+      requestUrl = String(input);
+      return new Response(JSON.stringify({ schemaVersion: 1, resource: 'roles',
+        item: { name: roleName, boundSessionKey } }), { status: 200 });
+    };
+
+    const resolvedSessionKey = await candidate.transport.readRoleSessionKey!(roleName, new AbortController().signal);
+
+    expect(resolvedSessionKey).toBe(boundSessionKey);
+    expect(new URL(requestUrl).pathname).toBe(`/api/roles/${encodeURIComponent(roleName)}`);
+  });
+
   it('encodes the full scope key and retains the higher marker after a conditional-write conflict', async () => {
     const scopeKey = 'agent:sample assistant with space:session-read-position';
     const requests: Array<{ input: string; init: RequestInit }> = [];

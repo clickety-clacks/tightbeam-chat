@@ -35,6 +35,7 @@ import { createTurnProvenance } from './provenance';
 import { getIndex, putIndex, removeIndex, trimIndexBelow, type RecordIndex } from './recordIndex';
 import { sameRailDenial } from './railDenials';
 import { advanceReadMarkerForwardOnly } from './readMarker';
+import { parseBatchMembers } from './messageVisibility';
 
 const LIVE_RECONNECTING_AFTER_MS = 1_000;
 const LIVE_DISCONNECTED_AFTER_MS = 10_000;
@@ -64,6 +65,17 @@ function canReviseWithoutSequenceChange(record: ConversationRecord): record is C
   return record.kind === 'message' && record.role === 'assistant' &&
     record.messageType === 'substrate' && record.attentionTier === 1 &&
     record.clientMessageId?.startsWith('terminal-credential:') === true;
+}
+
+function senderLookupTarget(sender: string): { readonly sessionKey: string; readonly roleName?: string } | undefined {
+  const separator = sender.indexOf(':');
+  if (separator < 0) return undefined;
+  const kind = sender.slice(0, separator);
+  if (kind !== 'agent' && kind !== 'session') return undefined;
+  const value = sender.slice(separator + 1).trim();
+  if (!value) return undefined;
+  if (kind === 'agent' && !value.startsWith('agent:')) return { sessionKey: value, roleName: value };
+  return { sessionKey: value };
 }
 
 /** Message publication can acquire its turn link without changing rowVersion. */
@@ -129,6 +141,8 @@ class SessionRuntime implements ChatRuntime {
   private readonly liveRailDenials = new Map<string, LiveRailDenial>();
   private historyRailDenials: readonly HistoryRailDenial[] = Object.freeze([]);
   private activityTurnStateAvailable = false;
+  private readonly activitySenderDisplayNames = new Map<string, string>();
+  private readonly activitySenderNameLookupGeneration = new Map<string, number>();
   private railArrivalOrder = 0;
   private readonly sendControllers = new Map<string, AbortController>();
   private readonly pendingReconciledIds = new Set<string>();
@@ -193,6 +207,7 @@ class SessionRuntime implements ChatRuntime {
       toolCalls: Object.freeze([]), toolCallIndex: undefined,
       hasOlder: false, loadingOlder: false, sends: Object.freeze([]), targetLabel: profile.label,
       targetGateway: transport.targetGateway, provenance: noProvenance, provenanceAvailable: false,
+      activitySenderDisplayNames: new Map(),
       activityTurnStateAvailable: false, liveRailDenials: Object.freeze([]),
       historyRailDenials: this.historyRailDenials,
     });
@@ -264,6 +279,78 @@ class SessionRuntime implements ChatRuntime {
     }
     this.state = Object.freeze(next);
     for (const listener of this.listeners) listener();
+    if ('records' in patch) this.resolveActivitySenderNames(this.state.records);
+  }
+
+  private resolveActivitySenderNames(records: readonly ConversationRecord[]): void {
+    const controller = this.controller;
+    if (this.state.status !== 'ready' || !controller || controller.signal.aborted) return;
+    const generation = this.generation;
+    const namesInMessages = new Set<string>();
+    for (const record of records) {
+      if (record.kind !== 'message') continue;
+      const sender = record.sender ?? '';
+      if (!/^(?:agent|session):/.test(sender)) continue;
+      const displayName = record.raw.senderDisplayName;
+      if (typeof displayName === 'string' && displayName.trim()) namesInMessages.add(sender);
+    }
+
+    const senders = new Map<string, { readonly sessionKey: string; readonly roleName?: string }>();
+    for (const record of records) {
+      if (record.kind !== 'message') continue;
+      for (const member of parseBatchMembers(record) ?? []) {
+        if (!member.sender.startsWith('agent:') && !member.sender.startsWith('session:')) continue;
+        if (namesInMessages.has(member.sender) || this.activitySenderDisplayNames.has(member.sender) ||
+            this.activitySenderNameLookupGeneration.get(member.sender) === generation) continue;
+        const target = senderLookupTarget(member.sender);
+        if (target) senders.set(member.sender, target);
+      }
+    }
+
+    let selectedSessionNameAdded = false;
+    for (const [sender, target] of senders) {
+      if (!target.roleName && target.sessionKey === this.sessionKey) {
+        const displayName = this.state.session?.displayName.trim();
+        if (displayName) {
+          this.activitySenderDisplayNames.set(sender, displayName);
+          selectedSessionNameAdded = true;
+        }
+        this.activitySenderNameLookupGeneration.set(sender, generation);
+        continue;
+      }
+
+      this.activitySenderNameLookupGeneration.set(sender, generation);
+      void this.resolveActivitySenderName(sender, target, controller.signal, generation);
+    }
+    if (selectedSessionNameAdded) {
+      this.publish({ activitySenderDisplayNames: new Map(this.activitySenderDisplayNames) });
+    }
+  }
+
+  private async resolveActivitySenderName(sender: string,
+    target: { readonly sessionKey: string; readonly roleName?: string }, signal: AbortSignal, generation: number): Promise<void> {
+    try {
+      let sessionKey = target.sessionKey;
+      if (target.roleName && this.transport.readRoleSessionKey) {
+        try {
+          sessionKey = await this.transport.readRoleSessionKey(target.roleName, signal);
+        } catch {
+          // Older targets or an unbound role fall back to the original session-key lookup.
+        }
+      }
+      if (signal.aborted || !this.isCurrent(generation) || !this.checkIdentity()) return;
+      const session = sessionKey === this.sessionKey
+        ? this.state.session
+        : await this.transport.readSession(sessionKey, signal);
+      if (signal.aborted || !this.isCurrent(generation) || !this.checkIdentity() ||
+          !session || session.sessionKey !== sessionKey) return;
+      const displayName = session.displayName.trim();
+      if (!displayName || this.activitySenderDisplayNames.get(sender) === displayName) return;
+      this.activitySenderDisplayNames.set(sender, displayName);
+      this.publish({ activitySenderDisplayNames: new Map(this.activitySenderDisplayNames) });
+    } catch {
+      // Sender detail is optional; a failed lookup leaves the generic pill label in place.
+    }
   }
 
   private activityStatePatch(): Pick<RuntimeState, 'activityTurnStateAvailable' | 'liveRailDenials' | 'historyRailDenials'> {
@@ -488,6 +575,8 @@ class SessionRuntime implements ChatRuntime {
     for (const controller of this.sendControllers.values()) controller.abort();
     this.sendControllers.clear();
     this.rows.clear();
+    this.activitySenderDisplayNames.clear();
+    this.activitySenderNameLookupGeneration.clear();
     this.messageSeqIndex = undefined;
     this.tombstones.clear();
     this.liveRailDenials.clear();
@@ -509,6 +598,7 @@ class SessionRuntime implements ChatRuntime {
       recordEvents: Object.freeze([]), recordEventsHasOlder: false, recordEventsLoading: false, recordEventsError: undefined,
       records: Object.freeze([]), sends: Object.freeze([]), hasOlder: false,
       session: undefined, agentDisplayName: undefined, provenance: Object.freeze([]),
+      activitySenderDisplayNames: new Map(),
       activeTurn: undefined, historyError: undefined, loadingOlder: false,
       ...this.activityStatePatch(),
       sessionError: undefined, sessionNotFound: undefined, conversationError: undefined, liveError: undefined,

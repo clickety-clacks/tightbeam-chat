@@ -1476,6 +1476,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   const activityPlan = useMemo(() => buildActivityTrail({
     sessionKey: state.sessionKey,
     records: activityRecords,
+    senderDisplayNames: state.activitySenderDisplayNames,
     bubbles,
     transitions,
     localSendTimes,
@@ -1493,7 +1494,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     shownRuns,
     expandedRuns,
   }), [activityRecords, bubbles, transitions, localSendTimes, expandedRuns, shownRuns, state.activityTurnStateAvailable, state.activeTurn,
-    state.liveRailDenials, state.historyRailDenials, state.sessionKey,
+    state.liveRailDenials, state.historyRailDenials, state.sessionKey, state.activitySenderDisplayNames,
     state.toolCallsEnabled, toolRecords]);
   const activityFoldIds = useMemo(() => new Set([
     ...activityPlan.messageItems.filter((item): item is ActivityFold => item.kind === 'fold').map(item => item.id),

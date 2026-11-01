@@ -23,6 +23,7 @@ const tool = (id: string, seq: number, status: ToolCallRecord['status'], toolNam
 
 function build(input: {
   records?: readonly CanonicalMessage[];
+  senderDisplayNames?: ReadonlyMap<string, string>;
   bubbles?: readonly ActivityBubble[];
   transitions?: readonly CanonicalTransition[];
   localSendTimes?: readonly number[];
@@ -42,6 +43,7 @@ function build(input: {
     candidate.side === 'human' && candidate.ownerScoped);
   return buildActivityTrail({
     sessionKey: 'session', records: input.records ?? [], bubbles: input.bubbles ?? [], transitions: input.transitions ?? [],
+    senderDisplayNames: input.senderDisplayNames,
     localSendTimes: input.localSendTimes,
     tools: input.tools ?? [], toolsEnabled: input.toolsEnabled ?? true,
     turnStateAvailable: input.turnStateAvailable ?? true, activeTurnRunning: input.activeTurnRunning ?? true,
@@ -231,38 +233,48 @@ describe('activity trail projection', () => {
     expect(build({ records: [hiddenReply], bubbles: [bubble(prompt, 'human')] }).messageItems).toEqual([]);
   });
 
-  it('projects running-index batch members with spaced senders and extends their fold across batches', () => {
+  it('projects batch members with available sender names and folds across carriers without prior direct messages', () => {
+    const sender = 'agent:helper:main session';
+    const unresolvedSender = 'agent:unknown:main session';
     const prompt = message('prompt', 1, 'user:person', 'A question', { role: 'user' });
-    const carrier = (id: string, seq: number, members: Array<{ index: number; detail: string }>) => message(id, seq,
+    const carrier = (id: string, seq: number,
+      members: Array<{ index: number; detail: string; sender?: string }>) => message(id, seq,
       'process:notifications', [
         '[from process:notifications]', '', `[batched notices: ${members.length}]`, `batchId=${id}`, 'release=example',
-        ...members.flatMap(({ index, detail }) => [
-          `[${index}] source=agent:helper sender=agent:helper:main session cause=notice class=fyi`, detail, '',
+        ...members.flatMap(({ index, detail, sender: memberSender = sender }) => [
+          `[${index}] source=agent:helper sender=${memberSender} cause=notice class=fyi`, detail, '',
         ]),
         'coalesced by notices',
       ].join('\n'), { isBatchCarrier: true, messageType: 'substrate' });
     const first = carrier('carrier-first', 2, [
       { index: 7, detail: 'First helper update' },
       { index: 9, detail: 'Second helper update' },
+      { index: 11, detail: 'Unresolved helper update', sender: unresolvedSender },
     ]);
     const second = carrier('carrier-second', 3, [{ index: 12, detail: 'Latest helper update' }]);
     const reply = message('reply', 4, 'assistant-service', 'Answer', { role: 'assistant' });
 
-    const plan = build({ records: [first, second], bubbles: [bubble(prompt, 'human'), bubble(reply, 'agent')] });
+    const plan = build({ records: [first, second], senderDisplayNames: new Map([[sender, 'Research — helper']]),
+      bubbles: [bubble(prompt, 'human'), bubble(reply, 'agent')] });
 
     expect(plan.messageItems).toHaveLength(1);
     const fold = plan.messageItems[0] as ActivityFold;
     expect(fold).toMatchObject({ kind: 'fold', activityKind: 'agent', summary: {
-      kind: 'agent', gist: 'Another agent — Latest helper update',
+      kind: 'agent', gist: 'Research — helper — Latest helper update',
     } });
     expect(fold.lines.map(line => line.gist)).toEqual([
-      'Another agent — First helper update', 'Another agent — Second helper update',
-      'Another agent — Latest helper update',
+      'Research — helper — First helper update', 'Research — helper — Second helper update',
+      'Another agent — Unresolved helper update', 'Research — helper — Latest helper update',
     ]);
     expect(fold.lines.map(line => line.id)).toEqual([
-      'member:carrier-first:member:7', 'member:carrier-first:member:9', 'member:carrier-second:member:12',
+      'member:carrier-first:member:7', 'member:carrier-first:member:9',
+      'member:carrier-first:member:11', 'member:carrier-second:member:12',
     ]);
     expect(fold.lines.every(line => line.presentation !== undefined)).toBe(true);
+    expect(fold.lines[0].presentation).toMatchObject({ label: 'Research — helper', text: 'First helper update', icon: 'message' });
+    expect(fold.lines[2].presentation).toMatchObject({ label: 'Another agent', text: 'Unresolved helper update' });
+    expect(fold.lines[0].accessibleText).toBe('Other agent: Research — helper — First helper update');
+    expect(fold.lines[0].originalContent).toBe('First helper update');
   });
 
   it('rebuilds the same activity pills and fold from retained history after reload', () => {
