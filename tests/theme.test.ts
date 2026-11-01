@@ -269,6 +269,8 @@ describe('Nordic theme', () => {
     expect(componentCss).not.toContain('.tb-chat-tool-controls');
     expect(rule(componentCss, '.tb-chat-tool-history-status')).toContain('display: flex');
     const phoneLayout = componentCss.slice(componentCss.indexOf('@media (max-width: 540px)'));
+    const phoneInitialNotice = phoneLayout.match(/\.tb-chat-caption\.tb-chat-runtime-notice:not\(\.tb-chat-runtime-notice-with-tool-history\)\s*\{([^}]*)\}/)?.[1] ?? '';
+    expect(phoneInitialNotice).toContain('width: auto');
     const phoneNotice = phoneLayout.match(/\.tb-chat-caption\.tb-chat-runtime-notice-with-tool-history\s*\{([^}]*)\}/)?.[1] ?? '';
     expect(phoneNotice).toContain('display: grid');
     expect(phoneNotice).toContain('width: auto');
