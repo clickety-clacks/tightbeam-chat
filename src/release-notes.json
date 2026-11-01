@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.73",
+    "items": [
+      {
+        "title": "Fit initial recovery notices on narrow phones",
+        "description": "When a conversation link is not yet provisioned, its initial recovery notice fits on narrow phone screens before tool history appears."
+      }
+    ]
+  },
+  {
     "version": "v0.1.72",
     "items": [
       {
