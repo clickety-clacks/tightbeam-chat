@@ -600,6 +600,12 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
   }
 }
 
+@media (min-width: 541px) and (max-width: 767px) {
+  .tb-chat-caption.tb-chat-runtime-notice {
+    width: auto;
+  }
+}
+
 .tb-chat-tool-history-status { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin: .5rem 0; font-size: .85rem; }
 .tb-chat-tool { box-sizing: border-box; width: 100%; margin: .6rem 0; padding: .75rem; border: 1px solid color-mix(in srgb, currentColor 20%, transparent); border-radius: .75rem; }
 .tb-chat-transition { white-space: pre-wrap; }
