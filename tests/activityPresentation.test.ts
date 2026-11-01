@@ -161,6 +161,13 @@ describe('activity pill presentation', () => {
       .toMatchObject({ label: 'Activity', tone: 'slate', text: 'Unclassified activity' });
   });
 
+  it('keeps message detail separate when a sender display name contains the gist separator', () => {
+    expect(activityPillPresentation({ kind: 'agent', gist: 'Review — helper — The report is ready',
+      content: 'The report is ready', senderDisplayName: 'Review — helper' })).toMatchObject({
+      label: 'Review — helper', text: 'The report is ready', icon: 'message', senderLabel: true,
+    });
+  });
+
   it('uses the approved color and icon for each recognized activity kind', () => {
     const cases: Array<[ActivityPillSource, { label: string; tone: string; icon: string }]> = [
       [source('agent', 'New detail', 'Review helper — New detail'),

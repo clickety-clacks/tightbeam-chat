@@ -667,6 +667,16 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
   letter-spacing: .01em;
   line-height: 1;
 }
+.tb-chat-activity-pill-sender { flex: 0 1 auto; min-width: 0; }
+.tb-chat-activity-pill-sender-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+@media (max-width: 540px) {
+  .tb-chat-activity-pill-sender-name { max-width: min(36vw, 12rem); }
+}
 .tb-chat-activity-pill svg {
   display: block;
   flex: 0 0 auto;

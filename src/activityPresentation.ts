@@ -9,6 +9,7 @@ export interface ActivityPillPresentation {
   readonly tone: ActivityPillTone;
   readonly icon: ActivityPillIcon;
   readonly text: string;
+  readonly senderLabel?: boolean;
   readonly metadata?: string;
   readonly summaryText?: string;
   readonly summaryPrefix?: string;
@@ -398,9 +399,12 @@ export function activityPillPresentation(source: ActivityPillSource): ActivityPi
   if (source.kind === 'agent') {
     const separator = source.gist.indexOf(' — ');
     const sender = separator >= 0 ? source.gist.slice(0, separator) : 'Another agent';
-    const text = separator >= 0 ? source.gist.slice(separator + 3) : source.gist;
     const displayName = source.senderDisplayName?.trim() || (sender === 'Another agent' ? undefined : sender);
-    presentation = { label: displayName ?? 'Another agent', tone: 'indigo', icon: 'message',
+    const senderPrefix = displayName ? `${displayName} — ` : undefined;
+    const text = senderPrefix && source.gist.startsWith(senderPrefix)
+      ? source.gist.slice(senderPrefix.length)
+      : separator >= 0 ? source.gist.slice(separator + 3) : source.gist;
+    presentation = { label: displayName ?? 'Another agent', tone: 'indigo', icon: 'message', senderLabel: true,
       text: plainText(text) || plainText(source.content) || 'Message received' };
   } else if (source.kind === 'rail') {
     presentation = remedyPresentation(source.gist, source.content) ?? refusalPresentation(source.gist) ?? genericActivity(source);
