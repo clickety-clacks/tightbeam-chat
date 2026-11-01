@@ -126,7 +126,7 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
 }
 .tb-chat-latest-user-prompt-text {
   display: -webkit-box;
-  max-height: 4.05em;
+  max-height: 4.5em;
   overflow: hidden;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
