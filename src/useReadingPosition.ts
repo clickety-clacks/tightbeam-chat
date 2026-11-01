@@ -7,10 +7,11 @@ const arrivalDuration = 240;
 const arrivalEasing = 'cubic-bezier(0.2, 0, 0, 1)';
 const arrivalTopInset = 40;
 type Anchor = { key: string; top: number };
-type MessageRow = { key: string; scrollKey: string; role: string };
+type MessageRow = { key: string; scrollKey: string; role: string; prompt: boolean };
 type IncomingMessageArrival = {
   readonly scrollKey: string;
   readonly groupEndScrollKey: string;
+  readonly anchorScrollKey?: string;
   streaming: boolean;
   locked: boolean;
   mode?: 'bottom' | 'top';
@@ -231,7 +232,16 @@ export function useReadingPosition(
     let destination: number;
     if (arrival.mode === 'top') {
       const topInset = Math.min(arrivalTopInset, Math.max(12, visibleHeight / 4));
-      destination = box.scrollTop + rowBounds.top - (bounds.top + topInset);
+      const anchorRow = arrival.anchorScrollKey ? registeredRows.current.get(arrival.anchorScrollKey) : undefined;
+      if (anchorRow && anchorRow !== row) {
+        const anchorBounds = anchorRow.getBoundingClientRect();
+        const promptTailStrip = Math.min(16, Math.max(8, visibleHeight / 20));
+        // Keep the answered prompt's tail in the open area; intervening rows
+        // then take their natural place between it and the arriving reply.
+        destination = box.scrollTop + anchorBounds.bottom - (bounds.top + promptTailStrip);
+      } else {
+        destination = box.scrollTop + rowBounds.top - (bounds.top + topInset);
+      }
     } else {
       // Messages published together form one arrival. If the group fits, keep
       // following its end; if it does not, the first bubble gets the top anchor.
@@ -352,7 +362,12 @@ export function useReadingPosition(
     const box = viewport.current;
     if (!box || !arrivalEligibleRef.current || !following.current || userScrollIntent.current) return false;
     const streaming = arrivalStreamingRef.current;
-    incomingMessageArrival.current = { scrollKey, groupEndScrollKey, streaming, locked: !streaming };
+    const orderedMessages = [...messageRows.current.values()];
+    const arrivalIndex = orderedMessages.findIndex(row => row.scrollKey === scrollKey);
+    const precedingMessages = arrivalIndex < 0 ? [] : orderedMessages.slice(0, arrivalIndex);
+    const anchor = [...precedingMessages].reverse().find(row => row.prompt) ?? precedingMessages.at(-1);
+    incomingMessageArrival.current = { scrollKey, groupEndScrollKey, anchorScrollKey: anchor?.scrollKey,
+      streaming, locked: !streaming };
     updateLatestControl(box);
     const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
     return startArrivalScroll(reduceMotion ? [] : rows, reduceMotion);
