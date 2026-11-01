@@ -177,11 +177,11 @@ describe('Nordic theme', () => {
     expect(rule(componentCss, '.tb-chat-latest-user-prompt')).toContain('background: var(--tb-chat-human-surface)');
     const promptButton = rule(componentCss, '.tb-chat-latest-user-prompt-jump');
     expect(promptButton).toContain('font-size: .86rem');
-    expect(promptButton).toContain('padding: .22rem .25rem .04rem');
+    expect(promptButton).toContain('padding: .22rem .25rem .4rem');
     const promptText = rule(componentCss, '.tb-chat-latest-user-prompt-text');
     expect(promptText).toContain('-webkit-line-clamp: 3');
-    expect(promptText).toContain('max-height: calc(4.05em + .18rem)');
-    expect(promptText).toContain('padding-bottom: .18rem');
+    expect(promptText).toContain('max-height: 4.05em');
+    expect(promptText).not.toContain('padding-bottom');
     expect(light['human-surface']).toBe(expectedLight['human-surface']);
     expect(dark['human-surface']).toBe(expectedDark['human-surface']);
   });
