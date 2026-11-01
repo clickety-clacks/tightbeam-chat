@@ -972,7 +972,7 @@ describe('conversation surface', () => {
     const pillRow = view.container.querySelector<HTMLElement>('.tb-chat-activity-pill-row')!;
     expect(pillRow.textContent).toContain('Research helper');
     expect(pillRow.getAttribute('aria-label'))
-      .toBe('Other agent: Research helper — An agent update with useful detail.');
+      .toBe('Research helper: An agent update with useful detail.');
     expect(pillRow.textContent).toContain('An agent update with useful detail.');
     expect(pillRow.textContent).not.toContain(tag);
     expect(pillRow.title).not.toContain(tag);
