@@ -145,7 +145,8 @@ function installViewportLayout(viewport: HTMLElement, trailingSpace = 200,
   const originalBounds = HTMLElement.prototype.getBoundingClientRect;
   const bounds = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
     if (this === viewport) return new DOMRect(0, top, width, height);
-    if (this.classList.contains('tb-chat-latest-user-prompt') && frame.promptPreviewHeight) {
+    if ((this.classList.contains('tb-chat-latest-user-prompt') ||
+      this.classList.contains('tb-chat-latest-user-prompt-measurement')) && frame.promptPreviewHeight) {
       return new DOMRect(0, top + 10, width, frame.promptPreviewHeight);
     }
     if (this.classList.contains('tb-chat-scroll-latest')) return new DOMRect(0, top + height - 120, width, 40);

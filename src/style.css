@@ -113,6 +113,24 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
   color: var(--tb-chat-text);
   box-shadow: 0 2px 8px color-mix(in srgb, var(--tb-chat-shadow) 16%, transparent);
 }
+.tb-chat-latest-user-prompt-measurement {
+  position: absolute;
+  top: var(--tb-chat-floating-prompt-top, .65rem);
+  left: 50%;
+  display: flex;
+  align-items: flex-start;
+  gap: .15rem;
+  width: min(40rem, calc(100% - 1.3rem));
+  max-width: calc(100% - 1.3rem);
+  padding: .18rem .25rem .18rem .45rem;
+  transform: translateX(-50%);
+  border-radius: 1.05rem;
+  background: var(--tb-chat-human-surface);
+  color: var(--tb-chat-text);
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--tb-chat-shadow) 16%, transparent);
+  visibility: hidden;
+  pointer-events: none;
+}
 .tb-chat-latest-user-prompt-jump {
   flex: 1 1 auto;
   min-width: 0;

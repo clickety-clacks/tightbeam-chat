@@ -110,11 +110,12 @@ function userPrompts(timeline: readonly TimelineItem[]): UserPrompt[] {
   return prompts;
 }
 
-function nearestPromptAboveVisibleTop(prompts: readonly UserPrompt[], viewport: HTMLElement,
-  getRow: (key: string) => HTMLElement | undefined): UserPrompt | undefined {
+function nearestPromptAboveLine(prompts: readonly UserPrompt[], viewport: HTMLElement,
+  getRow: (key: string) => HTMLElement | undefined, thresholdTop?: number): UserPrompt | undefined {
   const viewportRect = viewport.getBoundingClientRect();
   if (!Number.isFinite(viewportRect.top) || !Number.isFinite(viewportRect.bottom) ||
     viewportRect.bottom <= viewportRect.top) return undefined;
+  const line = thresholdTop ?? viewportRect.top;
 
   // User prompts retain timeline order in the rendered transcript. Binary
   // search keeps per-scroll geometry work bounded as history grows.
@@ -128,10 +129,73 @@ function nearestPromptAboveVisibleTop(prompts: readonly UserPrompt[], viewport: 
     if (!Number.isFinite(rowRect.top) || !Number.isFinite(rowRect.bottom) || rowRect.bottom <= rowRect.top) {
       return undefined;
     }
-    if (rowRect.bottom <= viewportRect.top) low = middle + 1;
+    if (rowRect.bottom <= line) low = middle + 1;
     else high = middle;
   }
   return low > 0 ? prompts[low - 1] : undefined;
+}
+
+function latestPromptIntersectingBubble(prompts: readonly UserPrompt[], top: number, bottom: number,
+  getRow: (key: string) => HTMLElement | undefined): UserPrompt | undefined {
+  if (bottom <= top) return undefined;
+  let low = 0;
+  let high = prompts.length;
+  while (low < high) {
+    const middle = low + Math.floor((high - low) / 2);
+    const row = getRow(prompts[middle].scrollKey);
+    if (!row) return undefined;
+    const rowRect = row.getBoundingClientRect();
+    if (!Number.isFinite(rowRect.bottom)) return undefined;
+    if (rowRect.bottom <= top) low = middle + 1;
+    else high = middle;
+  }
+  let intersecting: UserPrompt | undefined;
+  for (let index = low; index < prompts.length; index++) {
+    const prompt = prompts[index];
+    const row = getRow(prompt.scrollKey);
+    if (!row) break;
+    const rowRect = row.getBoundingClientRect();
+    if (!Number.isFinite(rowRect.top) || !Number.isFinite(rowRect.bottom) || rowRect.top >= bottom) break;
+    if (rowRect.bottom > top) intersecting = prompt;
+  }
+  return intersecting;
+}
+
+interface PromptHandoffRect {
+  readonly top: number;
+  readonly left: number;
+  readonly width: number;
+  readonly height: number;
+}
+
+type PromptHandoffPhase = 'entering' | 'pinned' | 'leaving';
+
+interface PromptHandoffState {
+  readonly identity: string;
+  readonly phase: PromptHandoffPhase;
+}
+
+function promptHandoffRect(rect: DOMRect): PromptHandoffRect {
+  return { top: rect.top, left: rect.left, width: rect.width, height: rect.height };
+}
+
+function promptHandoffTransform(rect: PromptHandoffRect, base: DOMRect): string {
+  const scaleX = rect.width / base.width;
+  const scaleY = rect.height / base.height;
+  const dx = rect.left - base.left;
+  const dy = rect.top - base.top;
+  return `translateX(calc(-50% + ${dx}px)) translateY(${dy}px) scale(${scaleX}, ${scaleY})`;
+}
+
+function animatePromptHandoff(node: HTMLElement, from: PromptHandoffRect, to: PromptHandoffRect): Animation | undefined {
+  const base = node.getBoundingClientRect();
+  if (base.width <= 0 || base.height <= 0 || from.width <= 0 || from.height <= 0 || to.width <= 0 || to.height <= 0 ||
+    typeof node.animate !== 'function') return undefined;
+  node.style.transformOrigin = 'top left';
+  return node.animate([
+    { transform: promptHandoffTransform(from, base) },
+    { transform: promptHandoffTransform(to, base) },
+  ], { duration: 240, easing: 'cubic-bezier(.2, .8, .2, 1)', fill: 'forwards' });
 }
 
 function messageSourceLabel(record: CanonicalMessage, defaultLabel: string): string {
@@ -1377,6 +1441,11 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   const runtimeNotice = useRef<HTMLDivElement>(null);
   const toolHistoryStatus = useRef<HTMLDivElement>(null);
   const stickyPromptOverlay = useRef<HTMLDivElement>(null);
+  const stickyPromptMeasurement = useRef<HTMLDivElement>(null);
+  const promptHandoffAnimation = useRef<Animation | null>(null);
+  const promptHandoffAnimationKey = useRef<string | null>(null);
+  const promptHandoffSource = useRef<{ identity: string; row: HTMLElement; visibility: string } | null>(null);
+  const promptHandoffMotionStart = useRef<{ identity: string; rect: PromptHandoffRect } | null>(null);
   const composer = useRef<ComposerHandle>(null);
   const [overlay, setOverlay] = useState<ChatOverlay | null>(null);
   const overlayRef = useRef<ChatOverlay | null>(null);
@@ -1595,8 +1664,8 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   const promptsByIdentity = useMemo(() => new Map(promptCandidates.map(prompt => [prompt.identity, prompt])), [promptCandidates]);
   const [stickyPromptIdentity, setStickyPromptIdentity] = useState<string | undefined>(undefined);
   const stickyPrompt = stickyPromptIdentity ? promptsByIdentity.get(stickyPromptIdentity) : undefined;
-  const stickyPromptTargetId = stickyPrompt
-    ? `${promptTargetPrefix}-${encodeURIComponent(stickyPrompt.targetKey)}` : undefined;
+  const [overlappingPromptIdentity, setOverlappingPromptIdentity] = useState<string | undefined>(undefined);
+  const [promptHandoff, setPromptHandoff] = useState<PromptHandoffState | null>(null);
   const [latestPromptDismissed, setLatestPromptDismissed] = useState(false);
   const [suppressOlderStickyPrompt, setSuppressOlderStickyPrompt] = useState(false);
   // Transcript refreshes can change the latest row; only a new submission clears dismissal.
@@ -1643,7 +1712,18 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     }
 
     const box = viewport.current;
-    const prompt = box ? nearestPromptAboveVisibleTop(promptCandidates, box, reading.getRow) : undefined;
+    const viewportBounds = box?.getBoundingClientRect();
+    const measuredBubble = stickyPromptMeasurement.current?.getBoundingClientRect();
+    const bubbleTop = measuredBubble && measuredBubble.height > 0
+      ? measuredBubble.top : viewportBounds?.top ?? 0;
+    const bubbleBottom = measuredBubble && measuredBubble.height > 0
+      ? measuredBubble.bottom : viewportBounds?.top ?? 0;
+    const prompt = box
+      ? nearestPromptAboveLine(promptCandidates, box, reading.getRow, bubbleBottom)
+      : undefined;
+    const overlappingPrompt = measuredBubble && measuredBubble.height > 0
+      ? latestPromptIntersectingBubble(promptCandidates, bubbleTop, bubbleBottom, reading.getRow)
+      : undefined;
     const identity = prompt?.identity;
     let suppressSticky = false;
     const anchoredPromptKey = reading.getTopAnchoredPromptScrollKey();
@@ -1660,10 +1740,127 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
       }
     }
     setSuppressOlderStickyPrompt(current => current === suppressSticky ? current : suppressSticky);
+    setOverlappingPromptIdentity(current => current === overlappingPrompt?.identity
+      ? current : overlappingPrompt?.identity);
     if (stickyPromptIdentity === identity) reading.reconcileReducedMotionTopAnchor();
     else setStickyPromptIdentity(identity);
   }, [promptCandidates, reading.getRow, reading.getTopAnchoredPromptScrollKey,
     reading.reconcileReducedMotionTopAnchor, stickyPromptIdentity]);
+  const restorePromptHandoffSource = useCallback(() => {
+    const source = promptHandoffSource.current;
+    if (!source) return;
+    if (source.row.style.visibility === 'hidden') source.row.style.visibility = source.visibility;
+    promptHandoffSource.current = null;
+  }, []);
+  const cancelPromptHandoffAnimation = useCallback(() => {
+    const animation = promptHandoffAnimation.current;
+    promptHandoffAnimation.current = null;
+    promptHandoffAnimationKey.current = null;
+    if (animation) animation.cancel();
+  }, []);
+  const hidePromptHandoffSource = useCallback((identity: string) => {
+    if (promptHandoffSource.current?.identity === identity) return promptHandoffSource.current.row;
+    restorePromptHandoffSource();
+    const prompt = promptsByIdentity.get(identity);
+    const row = prompt && reading.getRow(prompt.scrollKey);
+    if (!row) return undefined;
+    promptHandoffSource.current = { identity, row, visibility: row.style.visibility };
+    row.style.visibility = 'hidden';
+    return row;
+  }, [promptsByIdentity, reading.getRow, restorePromptHandoffSource]);
+  useLayoutEffect(() => {
+    const isEligible = (identity: string) => identity === stickyPromptIdentity &&
+      !latestPromptDismissed && !suppressOlderStickyPrompt &&
+      (!overlappingPromptIdentity || overlappingPromptIdentity === identity);
+    const active = promptHandoff;
+    if (!active) {
+      cancelPromptHandoffAnimation();
+      restorePromptHandoffSource();
+      if (stickyPromptIdentity && isEligible(stickyPromptIdentity)) {
+        setPromptHandoff({ identity: stickyPromptIdentity, phase: 'entering' });
+      }
+      return;
+    }
+
+    const activeIsEligible = isEligible(active.identity);
+    if (active.phase === 'leaving' && activeIsEligible) {
+      const node = stickyPromptOverlay.current;
+      if (node) promptHandoffMotionStart.current = { identity: active.identity, rect: promptHandoffRect(node.getBoundingClientRect()) };
+      cancelPromptHandoffAnimation();
+      setPromptHandoff({ identity: active.identity, phase: 'entering' });
+      return;
+    }
+    if (activeIsEligible) {
+      if (active.phase !== 'entering') return;
+      const animationKey = `${active.identity}:entering`;
+      if (promptHandoffAnimationKey.current === animationKey) return;
+      const prompt = promptsByIdentity.get(active.identity);
+      const row = prompt && reading.getRow(prompt.scrollKey);
+      const from = promptHandoffMotionStart.current?.identity === active.identity
+        ? promptHandoffMotionStart.current.rect
+        : row ? promptHandoffRect(row.getBoundingClientRect()) : undefined;
+      promptHandoffMotionStart.current = null;
+      const node = stickyPromptOverlay.current;
+      const hasMeasuredBubble = (stickyPromptMeasurement.current?.getBoundingClientRect().height ?? 0) > 0;
+      if (hasMeasuredBubble) hidePromptHandoffSource(active.identity);
+      const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+      const animation = !reducedMotion && hasMeasuredBubble && node && from
+        ? animatePromptHandoff(node, from, promptHandoffRect(node.getBoundingClientRect())) : undefined;
+      if (!animation) {
+        setPromptHandoff({ identity: active.identity, phase: 'pinned' });
+        return;
+      }
+      promptHandoffAnimationKey.current = animationKey;
+      promptHandoffAnimation.current = animation;
+      animation.onfinish = () => {
+        if (promptHandoffAnimation.current !== animation) return;
+        promptHandoffAnimation.current = null;
+        promptHandoffAnimationKey.current = null;
+        animation.cancel();
+        setPromptHandoff(current => current?.identity === active.identity
+          ? { identity: active.identity, phase: 'pinned' } : current);
+      };
+      return;
+    }
+
+    const shouldAnimateOut = !latestPromptDismissed && !suppressOlderStickyPrompt &&
+      (!overlappingPromptIdentity || overlappingPromptIdentity === active.identity);
+    if (!shouldAnimateOut) {
+      promptHandoffMotionStart.current = null;
+      setPromptHandoff(null);
+      return;
+    }
+    if (active.phase === 'leaving') return;
+    const animationKey = `${active.identity}:leaving`;
+    const node = stickyPromptOverlay.current;
+    const source = promptHandoffSource.current;
+    const to = source?.identity === active.identity
+      ? promptHandoffRect(source.row.getBoundingClientRect()) : undefined;
+    const from = promptHandoffMotionStart.current?.identity === active.identity
+      ? promptHandoffMotionStart.current.rect
+      : node ? promptHandoffRect(node.getBoundingClientRect()) : undefined;
+    promptHandoffMotionStart.current = null;
+    cancelPromptHandoffAnimation();
+    const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+    const animation = !reducedMotion && node && from && to ? animatePromptHandoff(node, from, to) : undefined;
+    if (!animation) {
+      setPromptHandoff(null);
+      return;
+    }
+    setPromptHandoff({ identity: active.identity, phase: 'leaving' });
+    promptHandoffAnimationKey.current = animationKey;
+    promptHandoffAnimation.current = animation;
+    animation.onfinish = () => {
+      if (promptHandoffAnimation.current !== animation) return;
+      setPromptHandoff(current => current?.identity === active.identity && current.phase === 'leaving' ? null : current);
+    };
+  }, [cancelPromptHandoffAnimation, hidePromptHandoffSource, latestPromptDismissed,
+    overlappingPromptIdentity, promptHandoff, promptsByIdentity, reading.getRow,
+    restorePromptHandoffSource, stickyPromptIdentity, suppressOlderStickyPrompt]);
+  useEffect(() => () => {
+    cancelPromptHandoffAnimation();
+    restorePromptHandoffSource();
+  }, [cancelPromptHandoffAnimation, restorePromptHandoffSource]);
   useEffect(() => {
     if (host.settingsRequestRevision <= handledSettingsRevision.current) return;
     handledSettingsRevision.current = host.settingsRequestRevision;
@@ -1851,7 +2048,8 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     const toolStatus = toolHistoryStatus.current;
     const observer = typeof ResizeObserver === 'undefined'
       ? undefined : new ResizeObserver(updateStickyPrompt);
-    for (const element of [root.current, box, content, notice, toolStatus, stickyPromptOverlay.current]) {
+    for (const element of [root.current, box, content, notice, toolStatus,
+      stickyPromptOverlay.current, stickyPromptMeasurement.current]) {
       if (element) observer?.observe(element);
     }
     window.addEventListener('resize', updateStickyPrompt);
@@ -1867,12 +2065,24 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
       window.visualViewport?.removeEventListener('scroll', updateStickyPrompt);
     };
   }, [promptCandidates, showRuntimeNotice, showToolHistoryStatusInNotice, state.loadingOlder, state.historyError, localNotice,
-    updateStickyPrompt, reading.content, stickyPromptIdentity, latestPromptDismissed, suppressOlderStickyPrompt]);
-  const showStickyPrompt = !!stickyPrompt && !latestPromptDismissed && !suppressOlderStickyPrompt;
+    updateStickyPrompt, reading.content, stickyPromptIdentity, overlappingPromptIdentity,
+    promptHandoff?.identity, promptHandoff?.phase, latestPromptDismissed, suppressOlderStickyPrompt]);
+  const overlappingPrompt = overlappingPromptIdentity ? promptsByIdentity.get(overlappingPromptIdentity) : undefined;
+  const handoffPrompt = promptHandoff ? promptsByIdentity.get(promptHandoff.identity) : undefined;
+  const measurementPrompt = promptHandoff?.phase === 'leaving'
+    ? handoffPrompt : overlappingPrompt ?? handoffPrompt ?? stickyPrompt;
+  const displayedPrompt = handoffPrompt ?? stickyPrompt;
+  const displayedPromptTargetId = displayedPrompt
+    ? `${promptTargetPrefix}-${encodeURIComponent(displayedPrompt.targetKey)}` : undefined;
+  const activeHandoffVisible = !!handoffPrompt && !latestPromptDismissed && !suppressOlderStickyPrompt &&
+    (!overlappingPromptIdentity || overlappingPromptIdentity === promptHandoff?.identity);
+  const candidatePromptVisible = !!stickyPrompt && !latestPromptDismissed && !suppressOlderStickyPrompt &&
+    (!overlappingPromptIdentity || overlappingPromptIdentity === stickyPromptIdentity);
+  const showStickyPrompt = promptHandoff ? activeHandoffVisible : candidatePromptVisible;
   const jumpToStickyPrompt = () => {
     const box = viewport.current;
-    if (!box || !stickyPrompt || !stickyPromptTargetId) return;
-    const target = reading.getRow(stickyPrompt.scrollKey);
+    if (!box || !displayedPrompt || !displayedPromptTargetId) return;
+    const target = reading.getRow(displayedPrompt.scrollKey);
     if (!target) return;
     const viewportRect = box.getBoundingClientRect();
     const targetRect = target.getBoundingClientRect();
@@ -2044,10 +2254,17 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
         <p className="tb-chat-empty">No messages yet.</p>}
       </div>
     </div>
-    {showStickyPrompt && stickyPrompt && <div ref={stickyPromptOverlay} className="tb-chat-latest-user-prompt">
-      <button type="button" className="tb-chat-latest-user-prompt-jump" aria-controls={stickyPromptTargetId}
+    {measurementPrompt && <div ref={stickyPromptMeasurement} className="tb-chat-latest-user-prompt-measurement"
+      aria-hidden="true" inert>
+      <button type="button" className="tb-chat-latest-user-prompt-jump" tabIndex={-1}>
+        <span className="tb-chat-latest-user-prompt-text">{measurementPrompt.content}</span>
+      </button>
+      <button type="button" className="tb-chat-latest-user-prompt-dismiss" tabIndex={-1}>×</button>
+    </div>}
+    {showStickyPrompt && displayedPrompt && <div ref={stickyPromptOverlay} className="tb-chat-latest-user-prompt">
+      <button type="button" className="tb-chat-latest-user-prompt-jump" aria-controls={displayedPromptTargetId}
         aria-label="Jump to user prompt" onClick={jumpToStickyPrompt}>
-        <span className="tb-chat-latest-user-prompt-text">{stickyPrompt.content}</span>
+        <span className="tb-chat-latest-user-prompt-text">{displayedPrompt.content}</span>
       </button>
       <button type="button" className="tb-chat-latest-user-prompt-dismiss" aria-label="Dismiss user prompt preview"
         onClick={() => setLatestPromptDismissed(true)}>×</button>

@@ -181,7 +181,8 @@ beforeEach(() => {
     if (this.classList.contains('tb-chat')) return rect(0, keyboardViewportSimulation ? viewportHeight : 50);
     if (this.classList.contains('tb-chat-viewport')) return rect(0, renderedViewportHeight());
     if (this.classList.contains('tb-chat-runtime-notice')) return rect(0, 50);
-    if (this.classList.contains('tb-chat-latest-user-prompt')) {
+    if (this.classList.contains('tb-chat-latest-user-prompt') ||
+      this.classList.contains('tb-chat-latest-user-prompt-measurement')) {
       if (latestPromptOverlayHeight === 0) return rect(0, 0);
       const top = Number.parseFloat(this.parentElement?.style.getPropertyValue('--tb-chat-floating-prompt-top') || '10') || 0;
       return rect(top, latestPromptOverlayHeight);
@@ -1895,6 +1896,7 @@ describe('conversation reading position', () => {
       if (!layoutAvailable) return rect(0, 0);
       if (this.classList.contains('tb-chat')) return rect(0, 50);
       if (this.classList.contains('tb-chat-viewport')) return rect(0, renderedViewportHeight());
+      if (this.classList.contains('tb-chat-latest-user-prompt-measurement')) return rect(10, 60);
       const index = rows().indexOf(this);
       if (index >= 0) return rect(16 + index * 92 - scrollTop, 80);
       return rect(0, 50);
@@ -1904,16 +1906,90 @@ describe('conversation reading position', () => {
     expect(screen.queryByRole('button', { name: 'Jump to user prompt' })).toBeNull();
 
     layoutAvailable = true;
-    readAt(box, 600);
-    expect(screen.getByRole('button', { name: 'Jump to user prompt' }).textContent).toBe('Message 5');
+    readAt(box, 579);
+    expect(screen.getByRole('button', { name: 'Jump to user prompt' }).textContent).toBe('Message 6');
     const target = targetForPreview()!;
-    expect(target.getBoundingClientRect().bottom).toBeLessThanOrEqual(box.getBoundingClientRect().top);
+    expect(target.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+      box.parentElement!.querySelector<HTMLElement>('.tb-chat-latest-user-prompt-measurement')!.getBoundingClientRect().bottom);
 
-    box.scrollTop = 1724;
+    box.scrollTop = 1500;
     fireEvent.scroll(box);
     expect(screen.getByRole('button', { name: 'Jump to user prompt' }).textContent).toBe('Message 16');
     expect(targetForPreview()?.dataset.recordKey).toBe('message-16');
-    expect(targetForPreview()!.getBoundingClientRect().bottom).toBeLessThanOrEqual(box.getBoundingClientRect().top);
+    expect(targetForPreview()!.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+      box.parentElement!.querySelector<HTMLElement>('.tb-chat-latest-user-prompt-measurement')!.getBoundingClientRect().bottom);
+  });
+
+  it('pins a prompt at the preview bottom line and animates it back when it crosses down', () => {
+    latestPromptOverlayHeight = 60;
+    const { box } = setup();
+    const chat = box.closest<HTMLElement>('.tb-chat')!;
+    const crossingPrompt = box.querySelector<HTMLElement>('[data-scroll-key="message-6"]')!;
+    const bubbleBottom = () => chat.querySelector<HTMLElement>('.tb-chat-latest-user-prompt-measurement')!
+      .getBoundingClientRect().bottom;
+
+    readAt(box, 577);
+    expect(crossingPrompt.getBoundingClientRect().bottom).toBeGreaterThan(bubbleBottom());
+    expect(crossingPrompt.getBoundingClientRect().top).toBeLessThan(bubbleBottom());
+    expect(screen.queryByRole('button', { name: 'Jump to user prompt' })).toBeNull();
+    expect(crossingPrompt.style.visibility).not.toBe('hidden');
+
+    box.scrollTop = 579;
+    fireEvent.scroll(box);
+    const preview = screen.getByRole('button', { name: 'Jump to user prompt' });
+    expect(preview.textContent).toBe('Message 6');
+    expect(targetForPreview()).toBe(crossingPrompt);
+    expect(crossingPrompt.style.visibility).toBe('hidden');
+    expect(screen.getAllByRole('button', { name: 'Jump to user prompt' })).toHaveLength(1);
+    expect(animate).toHaveBeenCalledTimes(1);
+
+    box.scrollTop = 577;
+    fireEvent.scroll(box);
+    expect(screen.getByRole('button', { name: 'Jump to user prompt' }).textContent).toBe('Message 6');
+    expect(crossingPrompt.style.visibility).toBe('hidden');
+    expect(animate).toHaveBeenCalledTimes(2);
+    expect(animate.mock.results[0].value.cancel).toHaveBeenCalledTimes(1);
+
+    act(() => animate.mock.results[0].value.onfinish());
+    expect(screen.getByRole('button', { name: 'Jump to user prompt' }).textContent).toBe('Message 6');
+    expect(crossingPrompt.style.visibility).toBe('hidden');
+
+    const previewNode = chat.querySelector<HTMLElement>('.tb-chat-latest-user-prompt')!;
+    const reverseAnimation = animate.mock.results[1].value;
+    let cancelState: { overlayConnected: boolean; sourceVisibility: string } | undefined;
+    reverseAnimation.cancel = vi.fn(() => {
+      cancelState = { overlayConnected: previewNode.isConnected, sourceVisibility: crossingPrompt.style.visibility };
+    });
+    act(() => reverseAnimation.onfinish());
+    expect(cancelState).toEqual({ overlayConnected: false, sourceVisibility: 'hidden' });
+    expect(crossingPrompt.style.visibility).not.toBe('hidden');
+    expect(screen.queryByRole('button', { name: 'Jump to user prompt' })).toBeNull();
+
+    box.scrollTop = 579;
+    fireEvent.scroll(box);
+    expect(screen.getByRole('button', { name: 'Jump to user prompt' }).textContent).toBe('Message 6');
+    expect(crossingPrompt.style.visibility).toBe('hidden');
+    expect(animate).toHaveBeenCalledTimes(3);
+    act(() => animate.mock.results[2].value.onfinish());
+    expect(crossingPrompt.style.visibility).toBe('hidden');
+  });
+
+  it('moves the prompt instantly with reduced motion enabled', () => {
+    reducedMotion = true;
+    latestPromptOverlayHeight = 60;
+    const { box } = setup();
+    const crossingPrompt = box.querySelector<HTMLElement>('[data-scroll-key="message-6"]')!;
+
+    readAt(box, 579);
+    expect(screen.getByRole('button', { name: 'Jump to user prompt' }).textContent).toBe('Message 6');
+    expect(crossingPrompt.style.visibility).toBe('hidden');
+    expect(animate).not.toHaveBeenCalled();
+
+    box.scrollTop = 577;
+    fireEvent.scroll(box);
+    expect(crossingPrompt.style.visibility).not.toBe('hidden');
+    expect(screen.queryByRole('button', { name: 'Jump to user prompt' })).toBeNull();
+    expect(animate).not.toHaveBeenCalled();
   });
 
   it('keeps a dismissed preview hidden while selection changes and restores it only after a new submission', () => {
