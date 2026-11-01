@@ -288,10 +288,10 @@ describe('Nordic theme', () => {
   it('keeps fixed-control clearance while restoring compact tail spacing at the latest message', () => {
     expect(rule(componentCss, '.tb-chat-viewport')).toContain('4.5rem');
     expect(rule(componentCss, '.tb-chat-host-composer-hidden .tb-chat-viewport')).toContain('4rem');
-    expect(rule(componentCss, '.tb-chat:not(.tb-chat-has-latest-control) .tb-chat-viewport')).toContain('+ 3rem +');
-    expect(rule(componentCss, '.tb-chat-host-composer-hidden:not(.tb-chat-has-latest-control) .tb-chat-viewport'))
+    expect(rule(componentCss, '.tb-chat-viewport:not([data-latest-control-visible])')).toContain('+ 3rem +');
+    expect(rule(componentCss, '.tb-chat-host-composer-hidden .tb-chat-viewport:not([data-latest-control-visible])'))
       .toContain('clamp(1rem, 3.5vw, 2rem) + env(safe-area-inset-bottom)');
-    expect(componentSource).toContain("reading.showLatest ? 'tb-chat-has-latest-control' : ''");
+    expect(componentSource).toContain("data-latest-control-visible={reading.showLatest ? 'true' : undefined}");
   });
 
   it('keeps all served color literals in the shared definition and uses only the approved disabled send opacity', () => {
