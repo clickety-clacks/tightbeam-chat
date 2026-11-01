@@ -438,6 +438,33 @@ describe('conversation reading position', () => {
     expect(replyBounds.top).toBeCloseTo(chipBounds.bottom + expectedInset);
   });
 
+  it('keeps the prompt tail and first reply line clear when the prompt chip appears during top anchoring', () => {
+    extraBottomSpace = 178;
+    const history = initialRows.slice(-2);
+    const { runtime, box } = setup(history);
+    expect(screen.queryByRole('button', { name: 'Jump to user prompt' })).toBeNull();
+    rowHeightOverrides.set('message-20', 320);
+    const reply = { ...message(20), role: 'assistant' as const, sender: 'assistant' };
+    act(() => runtime.publish({ records: [...history, reply] }));
+
+    advanceNextFrame(performance.now() + 100);
+    latestPromptOverlayHeight = 60;
+    fireEvent.scroll(box);
+
+    const chip = box.parentElement!.querySelector<HTMLElement>('.tb-chat-latest-user-prompt')!;
+    expect(chip).not.toBeNull();
+    advanceNextFrame(performance.now() + 300);
+
+    const promptTail = box.querySelector<HTMLElement>('[data-scroll-key="message-19"]')!;
+    const firstReply = box.querySelector<HTMLElement>('[data-scroll-key="message-20"]')!;
+    const visibleBottom = screen.getByRole('button', { name: 'Scroll to bottom' }).getBoundingClientRect().top;
+    const expectedInset = Math.min(40, Math.max(12, (visibleBottom - chip.getBoundingClientRect().bottom) / 4));
+    expect(promptTail.getBoundingClientRect().bottom).toBeGreaterThan(chip.getBoundingClientRect().bottom);
+    expect(promptTail.getBoundingClientRect().bottom).toBeLessThan(firstReply.getBoundingClientRect().top);
+    expect(firstReply.getBoundingClientRect().top).toBeGreaterThan(chip.getBoundingClientRect().bottom);
+    expect(firstReply.getBoundingClientRect().top).toBeCloseTo(chip.getBoundingClientRect().bottom + expectedInset);
+  });
+
   it.each([
     { composerHidden: false, bottomSpace: 178, shouldTopAnchor: true },
     { composerHidden: true, bottomSpace: 94, shouldTopAnchor: false },

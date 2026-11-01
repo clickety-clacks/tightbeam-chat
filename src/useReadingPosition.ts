@@ -202,7 +202,8 @@ export function useReadingPosition(
     return row instanceof HTMLElement && row.dataset.scrollKey !== undefined ? row : undefined;
   };
   const incomingMessageTarget = (box: HTMLElement, arrival: IncomingMessageArrival) => {
-    if (arrival.locked && arrival.lockedTarget !== undefined) return arrival.lockedTarget;
+    const refreshTopAnchor = arrival.locked && arrival.mode === 'top';
+    if (arrival.locked && arrival.lockedTarget !== undefined && !refreshTopAnchor) return arrival.lockedTarget;
     const row = registeredRows.current.get(arrival.scrollKey);
     if (!row) return Math.max(0, box.scrollHeight - box.clientHeight);
     const groupEndRow = registeredRows.current.get(arrival.groupEndScrollKey) ?? row;
@@ -236,7 +237,13 @@ export function useReadingPosition(
       destination = maxScrollTop;
     }
     destination = Math.max(0, Math.min(maxScrollTop, destination));
-    if (arrival.locked && arrival.lockedTarget === undefined) arrival.lockedTarget = destination;
+    if (arrival.locked && (arrival.lockedTarget === undefined || refreshTopAnchor)) {
+      // The prompt chip can appear or change size as this scroll moves prompts
+      // above the viewport. Re-measure a top anchor and only move the target
+      // farther from the top so a later chip change cannot uncover the reply.
+      arrival.lockedTarget = refreshTopAnchor && arrival.lockedTarget !== undefined
+        ? Math.min(arrival.lockedTarget, destination) : destination;
+    }
     return arrival.lockedTarget ?? destination;
   };
   const cancelArrivalAnimations = () => {
