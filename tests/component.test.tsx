@@ -900,6 +900,37 @@ describe('conversation surface', () => {
     expect(localBubble.textContent).not.toContain(tag);
   });
 
+  it('uses the sender name on direct agent pills while keeping provenance markup display-only', () => {
+    const sessionKey = 'direct-agent-pill-label';
+    const tag = '<engram-src id="123e4567-e89b-42d3-a456-426614174000"/>';
+    const agentContent = `${tag}\n\nA direct agent update.`;
+    const prompt = row(sessionKey, 'prompt', 'Please review this.', {
+      seq: 1, role: 'user', sender: 'user:person', messageType: 'chat', turnSeq: 1,
+    });
+    const agent = row(sessionKey, 'direct-agent', agentContent, {
+      seq: 2, role: 'user', sender: 'agent:helper', messageType: 'agent', turnSeq: 1,
+      raw: { source: 'fixture', id: 'direct-agent', senderDisplayName: 'Review helper' },
+    });
+    const answer = row(sessionKey, 'answer', 'Answer', {
+      seq: 3, sender: 'assistant-service', messageType: 'assistant', replyToMessageId: prompt.id, turnSeq: 1,
+      turnIncludesHuman: true,
+    });
+    const runtime = new FakeRuntime(sessionKey, { records: [prompt, agent, answer], provenanceAvailable: false });
+    const view = render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+
+    const pill = view.container.querySelector<HTMLElement>('[data-record-key="message:direct-agent"]')!;
+    expect(pill.getAttribute('aria-label')).toBe('Review helper: A direct agent update.');
+    expect(pill.querySelector('.tb-chat-activity-pill')?.textContent).toBe('Review helper');
+    expect(pill.querySelector('.tb-chat-activity-pill-indigo svg')).toBeTruthy();
+    expect(pill.querySelector('.tb-chat-activity-pill-meta')).toBeNull();
+    expect(pill.textContent).toContain('A direct agent update.');
+    expect(pill.textContent).not.toContain(tag);
+
+    fireEvent.click(within(pill).getByRole('button', { name: /Show full message/ }));
+    expect(pill.querySelector('[data-activity-message-content]')?.textContent).toBe('A direct agent update.');
+    expect(runtime.getSnapshot().records.find(record => record.id === agent.id)?.content).toBe(agentContent);
+  });
+
   it('keeps owner-scoped activity while preserving human exchanges across pages, live updates, and reconnects', async () => {
     const sessionKey = 'conversation-without-provenance';
     const firstPage = visibilityMix(sessionKey, 'first-page');
@@ -1579,13 +1610,14 @@ describe('conversation surface', () => {
 
     const agentFold = within(log).getByRole('button', { name: /Expand agent activity run, 2 entries/ });
     expect(agentFold.classList.contains('tb-chat-activity-pill-toggle')).toBe(true);
-    expect(agentFold.querySelector('.tb-chat-activity-pill')?.textContent).toContain('Message');
+    expect(agentFold.querySelector('.tb-chat-activity-pill')?.textContent).toContain('Review helper');
+    expect(agentFold.getAttribute('aria-label')).toContain('Latest: Review helper: The review is ready');
     expect(agentFold.textContent).toContain('The review is ready');
     fireEvent.click(agentFold);
-    const agentRow = pillFor('Message: A short update, Review helper');
-    expect(agentRow.querySelector('.tb-chat-activity-pill')?.textContent).toContain('Message');
+    const agentRow = pillFor('Review helper: A short update');
+    expect(agentRow.querySelector('.tb-chat-activity-pill')?.textContent).toBe('Review helper');
     expect(agentRow.querySelector('.tb-chat-activity-pill-indigo svg')).toBeTruthy();
-    expect(agentRow.textContent).toContain('Review helper');
+    expect(agentRow.querySelector('.tb-chat-activity-pill-meta')).toBeNull();
 
     const refusedRow = pillFor('Refused: Completion needs a recorded verification first');
     expect(refusedRow.querySelector('.tb-chat-activity-pill-red')).toBeTruthy();

@@ -400,8 +400,8 @@ export function activityPillPresentation(source: ActivityPillSource): ActivityPi
     const sender = separator >= 0 ? source.gist.slice(0, separator) : 'Another agent';
     const text = separator >= 0 ? source.gist.slice(separator + 3) : source.gist;
     const displayName = source.senderDisplayName?.trim() || (sender === 'Another agent' ? undefined : sender);
-    presentation = { label: 'Message', tone: 'indigo', icon: 'message',
-      text: plainText(text) || plainText(source.content) || 'Message received', metadata: displayName };
+    presentation = { label: displayName ?? 'Another agent', tone: 'indigo', icon: 'message',
+      text: plainText(text) || plainText(source.content) || 'Message received' };
   } else if (source.kind === 'rail') {
     presentation = remedyPresentation(source.gist, source.content) ?? refusalPresentation(source.gist) ?? genericActivity(source);
   } else {
