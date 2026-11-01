@@ -1,5 +1,18 @@
 [
   {
+    "version": "v0.1.72",
+    "items": [
+      {
+        "title": "Keep recovery notices within phone width",
+        "description": "On narrow phone screens, recovery notices fit without covering the activity-history retry control, which stays visible and reachable."
+      },
+      {
+        "title": "Keep your place as older messages load",
+        "description": "Loading older messages keeps the message you were reading in the same place. If you scroll while the page loads, Chat keeps your updated reading position."
+      }
+    ]
+  },
+  {
     "version": "v0.1.71",
     "items": [
       {
