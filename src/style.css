@@ -116,7 +116,7 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
 .tb-chat-latest-user-prompt-jump {
   flex: 1 1 auto;
   min-width: 0;
-  padding: .22rem .25rem;
+  padding: .22rem .25rem .4rem;
   border: 0;
   background: transparent;
   color: inherit;

@@ -175,8 +175,13 @@ describe('Nordic theme', () => {
     const { light, dark } = tokenBlocks(themeCss);
     expect(rule(componentCss, '.tb-chat')).toContain('--tb-chat-safe-area-top: env(safe-area-inset-top, 0px)');
     expect(rule(componentCss, '.tb-chat-latest-user-prompt')).toContain('background: var(--tb-chat-human-surface)');
-    expect(rule(componentCss, '.tb-chat-latest-user-prompt-jump')).toContain('font-size: .86rem');
-    expect(rule(componentCss, '.tb-chat-latest-user-prompt-text')).toContain('-webkit-line-clamp: 3');
+    const promptButton = rule(componentCss, '.tb-chat-latest-user-prompt-jump');
+    expect(promptButton).toContain('font-size: .86rem');
+    expect(promptButton).toContain('padding: .22rem .25rem .4rem');
+    const promptText = rule(componentCss, '.tb-chat-latest-user-prompt-text');
+    expect(promptText).toContain('-webkit-line-clamp: 3');
+    expect(promptText).toContain('max-height: 4.05em');
+    expect(promptText).not.toContain('padding-bottom');
     expect(light['human-surface']).toBe(expectedLight['human-surface']);
     expect(dark['human-surface']).toBe(expectedDark['human-surface']);
   });
