@@ -509,20 +509,71 @@ describe('conversation reading position', () => {
     expect(row.getBoundingClientRect().top).toBeCloseTo(box.getBoundingClientRect().top + 40);
   });
 
-  it('keeps a short reply at the bottom, then leaves a later burst for the unseen control', () => {
+  it('starts a fresh arrival after a short reply settles and leaves later arrivals unseen after anchoring tall', () => {
     extraBottomSpace = 178;
     const { runtime, box } = setup();
-    const reply = { ...message(20), role: 'assistant' as const, sender: 'assistant' };
-    act(() => runtime.publish({ records: [...initialRows, reply] }));
-    advanceNextFrame(performance.now() + 300);
+    const firstReply = { ...message(20), role: 'assistant' as const, sender: 'assistant' };
+    const activeTurn = createTurnProvenance({
+      seq: 20, sessionKey: 'reading', messageId: initialRows.at(-1)!.id, origin: 'agent:other',
+      status: 'running', triggerSource: 'agent', raw: { seq: 20, origin: 'agent:other' },
+    }, [initialRows.at(-1)!], 'person', 'person');
+    act(() => runtime.publish({ activityTurnStateAvailable: true, activeTurn, records: [...initialRows, firstReply] }));
+    for (let frame = 0; frame < 8 && animationFrames.size > 0; frame++) {
+      advanceNextFrame(performance.now() + 300 + frame * 300);
+    }
+    expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight);
+    act(() => runtime.publish({ activeTurn: undefined }));
+
+    const secondReply = { ...message(21), role: 'assistant' as const, sender: 'assistant' };
+    act(() => runtime.publish({ records: [...runtime.state.records, secondReply] }));
+    for (let frame = 0; frame < 8 && animationFrames.size > 0; frame++) {
+      advanceNextFrame(performance.now() + 300 + frame * 300);
+    }
     expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight);
 
-    const firstReplyTop = box.querySelector<HTMLElement>('[data-scroll-key="message-20"]')!.getBoundingClientRect().top;
-    const laterMessages = [message(21), message(22), message(23), message(24)];
-    act(() => runtime.publish({ records: [...runtime.state.records, ...laterMessages] }));
-    expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight - 4 * 92);
-    expect(box.querySelector<HTMLElement>('[data-scroll-key="message-20"]')!.getBoundingClientRect().top).toBe(firstReplyTop);
+    rowHeightOverrides.set('message-22', 320);
+    const tallReply = { ...message(22), role: 'assistant' as const, sender: 'assistant' };
+    act(() => runtime.publish({ records: [...runtime.state.records, tallReply] }));
+    for (let frame = 0; frame < 8 && animationFrames.size > 0; frame++) {
+      advanceNextFrame(performance.now() + 300 + frame * 300);
+    }
+    const tallReplyRow = box.querySelector<HTMLElement>('[data-scroll-key="message-22"]')!;
+    expect(tallReplyRow.getBoundingClientRect().top).toBeCloseTo(box.getBoundingClientRect().top + 40);
+
+    const anchoredScrollTop = box.scrollTop;
+    const laterReply = { ...message(23), role: 'assistant' as const, sender: 'assistant' };
+    act(() => runtime.publish({ records: [...runtime.state.records, laterReply] }));
+    expect(box.scrollTop).toBe(anchoredScrollTop);
     expect(screen.getByRole('button', { name: /^[1-9]\d* unseen messages?$/ })).toBeTruthy();
+  });
+
+  it.each([
+    { label: 'fits', fraction: 0.3, shouldAnchor: false },
+    { label: 'overflows', fraction: 0.6, shouldAnchor: true },
+  ])('treats messages published together as one arrival when the group $label', ({ fraction, shouldAnchor }) => {
+    extraBottomSpace = 178;
+    const { runtime, box } = setup();
+    const top = box.getBoundingClientRect().top;
+    const visibleBottom = box.parentElement!.querySelector<HTMLElement>('.tb-chat-composer')!.getBoundingClientRect().top;
+    const visibleHeight = visibleBottom - top;
+    rowHeightOverrides.set('message-20', visibleHeight * fraction);
+    rowHeightOverrides.set('message-21', visibleHeight * fraction);
+    const firstReply = { ...message(20), role: 'assistant' as const, sender: 'assistant' };
+    const secondReply = { ...message(21), role: 'assistant' as const, sender: 'assistant' };
+    act(() => runtime.publish({ records: [...initialRows, firstReply, secondReply] }));
+
+    const firstRow = box.querySelector<HTMLElement>('[data-scroll-key="message-20"]')!;
+    const secondRow = box.querySelector<HTMLElement>('[data-scroll-key="message-21"]')!;
+    const groupHeight = secondRow.getBoundingClientRect().bottom - firstRow.getBoundingClientRect().top;
+    expect(firstRow.getBoundingClientRect().height).toBeLessThan(visibleHeight);
+    expect(groupHeight > visibleHeight).toBe(shouldAnchor);
+    advanceNextFrame(performance.now() + 300);
+
+    if (shouldAnchor) {
+      expect(firstRow.getBoundingClientRect().top).toBeCloseTo(top + 40);
+    } else {
+      expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight);
+    }
   });
 
   it('keeps a following reader still for real reconnect catch-up, then animates the next live row', async () => {

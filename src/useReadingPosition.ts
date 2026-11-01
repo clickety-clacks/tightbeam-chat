@@ -10,6 +10,7 @@ type Anchor = { key: string; top: number };
 type MessageRow = { key: string; scrollKey: string; role: string };
 type IncomingMessageArrival = {
   readonly scrollKey: string;
+  readonly groupEndScrollKey: string;
   streaming: boolean;
   locked: boolean;
   mode?: 'bottom' | 'top';
@@ -200,28 +201,25 @@ export function useReadingPosition(
       row.dataset.recordKey?.startsWith('local-'))) row = row.previousElementSibling;
     return row instanceof HTMLElement && row.dataset.scrollKey !== undefined ? row : undefined;
   };
-  const lastScrollableRow = () => {
-    let row = content.current?.lastElementChild ?? null;
-    while (row instanceof HTMLElement && (row.dataset.scrollKey === undefined ||
-      row.dataset.recordKey?.startsWith('local-'))) row = row.previousElementSibling;
-    return row instanceof HTMLElement && row.dataset.scrollKey !== undefined ? row : undefined;
-  };
   const incomingMessageTarget = (box: HTMLElement, arrival: IncomingMessageArrival) => {
     if (arrival.locked && arrival.lockedTarget !== undefined) return arrival.lockedTarget;
     const row = registeredRows.current.get(arrival.scrollKey);
     if (!row) return Math.max(0, box.scrollHeight - box.clientHeight);
+    const groupEndRow = registeredRows.current.get(arrival.groupEndScrollKey) ?? row;
 
     const bounds = unobscuredBounds(box, undefined, true);
     const rowBounds = row.getBoundingClientRect();
+    const groupEndBounds = groupEndRow.getBoundingClientRect();
+    const arrivalHeight = Math.max(rowBounds.height, groupEndBounds.bottom - rowBounds.top);
     const visibleHeight = Math.max(0, bounds.bottom - bounds.top);
-    if (arrival.mode === undefined && rowBounds.height > visibleHeight) {
+    if (arrival.mode === undefined && arrivalHeight > visibleHeight) {
       arrival.mode = 'top';
       arrival.locked = true;
       following.current = false;
     } else if (arrival.mode === undefined) {
       arrival.mode = 'bottom';
       if (!arrival.streaming) arrival.locked = true;
-    } else if (arrival.mode === 'bottom' && !arrival.locked && rowBounds.height > visibleHeight) {
+    } else if (arrival.mode === 'bottom' && !arrival.locked && arrivalHeight > visibleHeight) {
       arrival.mode = 'top';
       arrival.locked = true;
       following.current = false;
@@ -232,13 +230,10 @@ export function useReadingPosition(
     if (arrival.mode === 'top') {
       const topInset = Math.min(arrivalTopInset, Math.max(12, visibleHeight / 4));
       destination = box.scrollTop + rowBounds.top - (bounds.top + topInset);
-    } else if (row === lastScrollableRow()) {
-      // Keep the established bottom placement when the reply is the transcript tail.
-      destination = maxScrollTop;
     } else {
-      // A burst may already contain later rows. Hold the first message just
-      // above the floating control so those later arrivals stay below it.
-      destination = box.scrollTop + rowBounds.bottom - Math.max(bounds.top, bounds.bottom - 16);
+      // Messages published together form one arrival. If the group fits, keep
+      // following its end; if it does not, the first bubble gets the top anchor.
+      destination = maxScrollTop;
     }
     destination = Math.max(0, Math.min(maxScrollTop, destination));
     if (arrival.locked && arrival.lockedTarget === undefined) arrival.lockedTarget = destination;
@@ -312,6 +307,8 @@ export function useReadingPosition(
         target.current = undefined;
         animating.current = false;
         if (!incoming || !incoming.locked) following.current = true;
+        const settledArrival = incomingMessageArrival.current;
+        if (settledArrival && !settledArrival.streaming) incomingMessageArrival.current = undefined;
         updateLatestControl(currentBox);
         capture();
         return;
@@ -327,11 +324,13 @@ export function useReadingPosition(
       window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return false;
     return startArrivalScroll(rows, false);
   };
-  const startIncomingMessageArrival = (rows: readonly HTMLElement[], scrollKey: string) => {
+  const startIncomingMessageArrival = (
+    rows: readonly HTMLElement[], scrollKey: string, groupEndScrollKey: string,
+  ) => {
     const box = viewport.current;
     if (!box || !arrivalEligibleRef.current || !following.current || userScrollIntent.current) return false;
     const streaming = arrivalStreamingRef.current;
-    incomingMessageArrival.current = { scrollKey, streaming, locked: !streaming };
+    incomingMessageArrival.current = { scrollKey, groupEndScrollKey, streaming, locked: !streaming };
     updateLatestControl(box);
     const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
     return startArrivalScroll(reduceMotion ? [] : rows, reduceMotion);
@@ -504,10 +503,6 @@ export function useReadingPosition(
       incoming.streaming = false;
       incoming.locked = true;
     }
-    if (incoming?.locked) {
-      const incomingRow = registeredRows.current.get(incoming.scrollKey);
-      if (incomingRow && incomingRow !== lastScrollableRow()) following.current = false;
-    }
     if (arrivalStartTime.current !== undefined &&
       (userScrollIntent.current || !arrivalEligibleRef.current || (!following.current && !incoming))) {
       cancelArrivalAnimations();
@@ -519,11 +514,11 @@ export function useReadingPosition(
     const firstAppendedMessage = [...appendedScrollKeys].find(scrollKey =>
       !scrollKey.startsWith('local-') && messageRows.current.get(scrollKey)?.role === 'assistant');
     if (!incoming && firstAppendedMessage && arrivalEligibleRef.current && following.current && !userScrollIntent.current) {
-      const started = startIncomingMessageArrival(canAnimateArrival ? appendedRows : [], firstAppendedMessage);
+      const appendedMessageKeys = [...appendedScrollKeys].filter(scrollKey =>
+        !scrollKey.startsWith('local-') && messageRows.current.has(scrollKey));
+      const groupEndScrollKey = appendedMessageKeys.at(-1) ?? firstAppendedMessage;
+      const started = startIncomingMessageArrival(canAnimateArrival ? appendedRows : [], firstAppendedMessage, groupEndScrollKey);
       if (started) {
-        const firstIndex = [...appendedScrollKeys].indexOf(firstAppendedMessage);
-        const laterRows = [...appendedScrollKeys].slice(firstIndex + 1);
-        if (!arrivalStreamingRef.current && laterRows.length > 0) following.current = false;
         capture();
         return;
       }
@@ -531,8 +526,6 @@ export function useReadingPosition(
 
     incoming = incomingMessageArrival.current;
     if (incoming) {
-      const hasLaterRows = [...appendedScrollKeys].some(scrollKey => scrollKey !== incoming!.scrollKey);
-      if (incoming.locked && hasLaterRows) following.current = false;
       if (!incoming.locked && canAnimateArrival && appendedRows.length) animateArrivalRows(appendedRows);
       if (incoming.streaming && !incoming.locked) {
         const destination = incomingMessageTarget(box, incoming);
@@ -619,6 +612,10 @@ export function useReadingPosition(
         if (Math.abs(box.scrollTop - Math.max(0, wanted)) > .5) box.scrollTop = Math.max(0, wanted);
       }
       updateLatestControl(box);
+    }
+    const settledArrival = incomingMessageArrival.current;
+    if (settledArrival && !settledArrival.streaming && arrivalStartTime.current === undefined) {
+      incomingMessageArrival.current = undefined;
     }
     capture();
   };
