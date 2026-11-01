@@ -15,6 +15,7 @@ type IncomingMessageArrival = {
   locked: boolean;
   mode?: 'bottom' | 'top';
   lockedTarget?: number;
+  awaitingReducedMotionTopCommit?: boolean;
 };
 
 function easeArrival(progress: number): number {
@@ -312,10 +313,15 @@ export function useReadingPosition(
       if (progress >= 1) {
         if (!reduceMotion) currentBox.scrollTop = destination;
         if (needsReducedMotionTopSettle) {
-          // Let the instant scroll's event update the prompt chip before the
-          // locked top anchor is finalized. Repeat only if that changed target
-          // still requires another instant correction.
-          arrivalFrame.current = window.requestAnimationFrame(step);
+          // Wait for the scroll event and Chat's post-commit prompt-chip
+          // measurement before deciding whether another instant placement is needed.
+          incoming!.awaitingReducedMotionTopCommit = true;
+          arrivalFrame.current = undefined;
+          arrivalStartTime.current = undefined;
+          target.current = undefined;
+          animating.current = false;
+          updateLatestControl(currentBox);
+          capture();
           return;
         }
         arrivalFrame.current = undefined;
@@ -367,6 +373,7 @@ export function useReadingPosition(
       incomingMessageArrival.current.streaming = false;
       incomingMessageArrival.current.locked = true;
       incomingMessageArrival.current.lockedTarget = undefined;
+      incomingMessageArrival.current.awaitingReducedMotionTopCommit = false;
     }
     if (!userScrollIntent.current) manualScrollReported.current = false;
     userScrollIntent.current = true;
@@ -630,7 +637,8 @@ export function useReadingPosition(
       updateLatestControl(box);
     }
     const settledArrival = incomingMessageArrival.current;
-    if (settledArrival && !settledArrival.streaming && arrivalStartTime.current === undefined) {
+    if (settledArrival && !settledArrival.streaming && !settledArrival.awaitingReducedMotionTopCommit &&
+      arrivalStartTime.current === undefined) {
       incomingMessageArrival.current = undefined;
     }
     capture();
@@ -638,6 +646,25 @@ export function useReadingPosition(
   const currentUpdate = useRef(updateLayout);
   currentUpdate.current = updateLayout;
   const reconcileViewportLayout = useCallback(() => currentUpdate.current(), []);
+  const reconcileReducedMotionTopAnchor = useCallback(() => {
+    const box = viewport.current;
+    const arrival = incomingMessageArrival.current;
+    if (!box || !arrival?.awaitingReducedMotionTopCommit) return;
+    const destination = incomingMessageTarget(box, arrival);
+    if (Math.abs(box.scrollTop - destination) > .5) {
+      target.current = destination;
+      box.scrollTo({ top: destination, behavior: 'instant' });
+      updateLatestControl(box);
+      capture();
+      return;
+    }
+
+    arrival.awaitingReducedMotionTopCommit = false;
+    target.current = undefined;
+    if (!arrival.streaming) incomingMessageArrival.current = undefined;
+    updateLatestControl(box);
+    capture();
+  }, []);
 
   useLayoutEffect(updateLayout, [revision]);
   useLayoutEffect(() => {
@@ -904,5 +931,5 @@ export function useReadingPosition(
   return { viewport, content, registerRow, getRow, showLatest, unseenMessageCount, unseenButtonLabel,
     hasUnseenButtonCount: unseenMessageCount > 0 && !unseenControlPrimed, setMessageRows, onScroll, interrupt,
     holdPosition, preserveVisiblePosition, scrollBy, scrollToLatest, scrollToLatestFromControl, scrollToNextUnseen, arriveOwnMessages,
-    noteUserScroll, reconcileViewportLayout };
+    noteUserScroll, reconcileViewportLayout, reconcileReducedMotionTopAnchor };
 }

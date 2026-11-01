@@ -465,7 +465,7 @@ describe('conversation reading position', () => {
     expect(firstReply.getBoundingClientRect().top).toBeCloseTo(chip.getBoundingClientRect().bottom + expectedInset);
   });
 
-  it('repositions a reduced-motion top anchor after the prompt chip appears on landing', () => {
+  it('repositions a reduced-motion top anchor after the prompt chip commits on landing', async () => {
     extraBottomSpace = 178;
     reducedMotion = true;
     const history = initialRows.slice(-2);
@@ -478,23 +478,23 @@ describe('conversation reading position', () => {
     advanceNextFrame(performance.now() + 300);
     const firstReply = box.querySelector<HTMLElement>('[data-scroll-key="message-20"]')!;
     expect(firstReply.getBoundingClientRect().top).toBeCloseTo(box.getBoundingClientRect().top + 40);
-    expect(animationFrames.size).toBe(1);
+    expect(animationFrames.size).toBe(0);
 
     latestPromptOverlayHeight = 60;
-    fireEvent.scroll(box);
-    const chip = box.parentElement!.querySelector<HTMLElement>('.tb-chat-latest-user-prompt')!;
-    expect(chip).not.toBeNull();
-    advanceNextFrame(performance.now() + 600);
+    box.dispatchEvent(new Event('scroll', { bubbles: true }));
+    await waitFor(() => {
+      const chip = box.parentElement!.querySelector<HTMLElement>('.tb-chat-latest-user-prompt');
+      expect(chip).not.toBeNull();
+      expect(firstReply.getBoundingClientRect().top).toBeGreaterThan(chip!.getBoundingClientRect().bottom);
+    });
 
+    const chip = box.parentElement!.querySelector<HTMLElement>('.tb-chat-latest-user-prompt')!;
     const promptTail = box.querySelector<HTMLElement>('[data-scroll-key="message-19"]')!;
     const visibleBottom = screen.getByRole('button', { name: 'Scroll to bottom' }).getBoundingClientRect().top;
     const expectedInset = Math.min(40, Math.max(12, (visibleBottom - chip.getBoundingClientRect().bottom) / 4));
     expect(promptTail.getBoundingClientRect().bottom).toBeGreaterThan(chip.getBoundingClientRect().bottom);
     expect(firstReply.getBoundingClientRect().top).toBeGreaterThan(chip.getBoundingClientRect().bottom);
     expect(firstReply.getBoundingClientRect().top).toBeCloseTo(chip.getBoundingClientRect().bottom + expectedInset);
-    expect(animationFrames.size).toBe(1);
-
-    advanceNextFrame(performance.now() + 900);
     expect(animationFrames.size).toBe(0);
     expect(scrollTo).toHaveBeenNthCalledWith(1, { top: expect.any(Number), behavior: 'instant' });
     expect(scrollTo).toHaveBeenNthCalledWith(2, { top: expect.any(Number), behavior: 'instant' });
