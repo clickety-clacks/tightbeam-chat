@@ -7,10 +7,12 @@ const arrivalDuration = 240;
 const arrivalEasing = 'cubic-bezier(0.2, 0, 0, 1)';
 const arrivalTopInset = 40;
 type Anchor = { key: string; top: number };
-type MessageRow = { key: string; scrollKey: string; role: string };
+type MessageRow = { key: string; scrollKey: string; role: string; prompt: boolean };
 type IncomingMessageArrival = {
   readonly scrollKey: string;
   readonly groupEndScrollKey: string;
+  readonly anchorScrollKey?: string;
+  readonly answeredPromptScrollKey?: string;
   streaming: boolean;
   locked: boolean;
   mode?: 'bottom' | 'top';
@@ -53,6 +55,7 @@ export function useReadingPosition(
   const arrivalFrame = useRef<number | undefined>(undefined);
   const previousTailRow = useRef<HTMLElement | undefined>(undefined);
   const incomingMessageArrival = useRef<IncomingMessageArrival | undefined>(undefined);
+  const topAnchoredPrompt = useRef<{ readonly scrollKey: string; readonly bottomOffset: number } | undefined>(undefined);
   const arrivalStreamingRef = useRef(arrivalStreaming);
   const seenArrivalRows = useRef(new Set<string>());
   const arrivalScopeRef = useRef(arrivalScope);
@@ -66,6 +69,7 @@ export function useReadingPosition(
     seenArrivalRows.current.clear();
     previousTailRow.current = undefined;
     incomingMessageArrival.current = undefined;
+    topAnchoredPrompt.current = undefined;
     knownMessages.current.clear();
     unseenMessages.current.clear();
     messageBaselineReady.current = false;
@@ -111,12 +115,13 @@ export function useReadingPosition(
     }
   };
   const unobscuredBounds = (box: HTMLElement, viewportBounds?: Pick<DOMRect, 'top' | 'bottom'>,
-    includeTopOverlays = false): Pick<DOMRect, 'top' | 'bottom'> => {
+    includeTopOverlays = false, ignorePromptPreview = false): Pick<DOMRect, 'top' | 'bottom'> => {
     const bounds = viewportBounds ?? box.getBoundingClientRect();
     const root = box.parentElement;
     let top = bounds.top;
     if (includeTopOverlays) {
-      const topOverlays = root?.querySelectorAll<HTMLElement>('.tb-chat-runtime-notice, .tb-chat-latest-user-prompt');
+      const topOverlays = root?.querySelectorAll<HTMLElement>(ignorePromptPreview
+        ? '.tb-chat-runtime-notice' : '.tb-chat-runtime-notice, .tb-chat-latest-user-prompt');
       for (const overlay of topOverlays ?? []) {
         const overlayBounds = overlay.getBoundingClientRect();
         if (!Number.isFinite(overlayBounds.top) || !Number.isFinite(overlayBounds.bottom) ||
@@ -209,7 +214,9 @@ export function useReadingPosition(
     if (!row) return Math.max(0, box.scrollHeight - box.clientHeight);
     const groupEndRow = registeredRows.current.get(arrival.groupEndScrollKey) ?? row;
 
-    const bounds = unobscuredBounds(box, undefined, true);
+    // An older prompt preview is hidden as soon as the answered prompt tail
+    // becomes visible, so do not reserve its space when placing that tail.
+    const bounds = unobscuredBounds(box, undefined, true, Boolean(arrival.answeredPromptScrollKey));
     const rowBounds = row.getBoundingClientRect();
     const groupEndBounds = groupEndRow.getBoundingClientRect();
     const arrivalHeight = Math.max(rowBounds.height, groupEndBounds.bottom - rowBounds.top);
@@ -231,7 +238,25 @@ export function useReadingPosition(
     let destination: number;
     if (arrival.mode === 'top') {
       const topInset = Math.min(arrivalTopInset, Math.max(12, visibleHeight / 4));
-      destination = box.scrollTop + rowBounds.top - (bounds.top + topInset);
+      const anchorRow = arrival.anchorScrollKey ? registeredRows.current.get(arrival.anchorScrollKey) : undefined;
+      if (anchorRow && anchorRow !== row) {
+        const anchorBounds = anchorRow.getBoundingClientRect();
+        const previousRow = row.previousElementSibling instanceof HTMLElement ? row.previousElementSibling : undefined;
+        const previousBounds = previousRow?.getBoundingClientRect();
+        const rowGap = previousBounds ? Math.max(0, rowBounds.top - previousBounds.bottom) : 0;
+        const promptTailStrip = Math.max(8, topInset - rowGap);
+        // Keep the answered prompt's tail in the open area; intervening rows
+        // then take their natural place between it and the arriving reply.
+        destination = box.scrollTop + anchorBounds.bottom - (bounds.top + promptTailStrip);
+        const viewportBounds = box.getBoundingClientRect();
+        topAnchoredPrompt.current = arrival.answeredPromptScrollKey
+          ? { scrollKey: arrival.answeredPromptScrollKey,
+            bottomOffset: bounds.top + promptTailStrip - viewportBounds.top }
+          : undefined;
+      } else {
+        topAnchoredPrompt.current = undefined;
+        destination = box.scrollTop + rowBounds.top - (bounds.top + topInset);
+      }
     } else {
       // Messages published together form one arrival. If the group fits, keep
       // following its end; if it does not, the first bubble gets the top anchor.
@@ -352,7 +377,15 @@ export function useReadingPosition(
     const box = viewport.current;
     if (!box || !arrivalEligibleRef.current || !following.current || userScrollIntent.current) return false;
     const streaming = arrivalStreamingRef.current;
-    incomingMessageArrival.current = { scrollKey, groupEndScrollKey, streaming, locked: !streaming };
+    const orderedMessages = [...messageRows.current.values()];
+    const arrivalIndex = orderedMessages.findIndex(row => row.scrollKey === scrollKey);
+    const precedingMessages = arrivalIndex < 0 ? [] : orderedMessages.slice(0, arrivalIndex);
+    const anchor = precedingMessages.at(-1);
+    const answeredPrompt = anchor?.prompt ? anchor : undefined;
+    topAnchoredPrompt.current = undefined;
+    incomingMessageArrival.current = { scrollKey, groupEndScrollKey, anchorScrollKey: anchor?.scrollKey,
+      answeredPromptScrollKey: answeredPrompt?.scrollKey,
+      streaming, locked: !streaming };
     updateLatestControl(box);
     const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
     return startArrivalScroll(reduceMotion ? [] : rows, reduceMotion);
@@ -801,6 +834,7 @@ export function useReadingPosition(
     const box = viewport.current;
     if (!box || !Number.isFinite(amount) || amount === 0) return;
     incomingMessageArrival.current = undefined;
+    topAnchoredPrompt.current = undefined;
     if (arrivalStartTime.current !== undefined || arrivalAnimations.current.size > 0) cancelArrivalAnimations();
     initialSettlePending.current = false;
     const bottom = Math.max(0, box.scrollHeight - box.clientHeight);
@@ -832,6 +866,7 @@ export function useReadingPosition(
     const box = viewport.current;
     if (!box) return;
     incomingMessageArrival.current = undefined;
+    topAnchoredPrompt.current = undefined;
     if (arrivalStartTime.current !== undefined || arrivalAnimations.current.size > 0) cancelArrivalAnimations();
     initialSettlePending.current = false;
     // Keep keyboard navigation somewhere useful after its button disappears.
@@ -850,6 +885,7 @@ export function useReadingPosition(
     const box = viewport.current;
     if (!box) return false;
     incomingMessageArrival.current = undefined;
+    topAnchoredPrompt.current = undefined;
     const bounds = unobscuredBounds(box);
     const measuredRows = new Map<HTMLElement, DOMRect>();
     refreshUnseenMessages(bounds, measuredRows);
@@ -895,6 +931,7 @@ export function useReadingPosition(
     const box = viewport.current;
     if (!box) return;
     incomingMessageArrival.current = undefined;
+    topAnchoredPrompt.current = undefined;
     initialSettlePending.current = false;
     for (const key of scrollKeys) {
       unseenMessages.current.delete(key);
@@ -928,8 +965,27 @@ export function useReadingPosition(
     ? `${unseenMessageCount} unseen message${unseenMessageCount === 1 ? '' : 's'}`
     : 'Scroll to bottom';
 
+  const getTopAnchoredPromptScrollKey = useCallback(() => {
+    const anchor = topAnchoredPrompt.current;
+    const box = viewport.current;
+    const row = anchor ? registeredRows.current.get(anchor.scrollKey) : undefined;
+    if (!anchor || !box || !row) {
+      topAnchoredPrompt.current = undefined;
+      return undefined;
+    }
+    const viewportBounds = box.getBoundingClientRect();
+    const rowBounds = row.getBoundingClientRect();
+    const bottomOffset = rowBounds.bottom - viewportBounds.top;
+    if (!Number.isFinite(bottomOffset) || bottomOffset <= 0 ||
+      bottomOffset > anchor.bottomOffset + arrivalTopInset) {
+      topAnchoredPrompt.current = undefined;
+      return undefined;
+    }
+    return anchor.scrollKey;
+  }, []);
+
   return { viewport, content, registerRow, getRow, showLatest, unseenMessageCount, unseenButtonLabel,
     hasUnseenButtonCount: unseenMessageCount > 0 && !unseenControlPrimed, setMessageRows, onScroll, interrupt,
     holdPosition, preserveVisiblePosition, scrollBy, scrollToLatest, scrollToLatestFromControl, scrollToNextUnseen, arriveOwnMessages,
-    noteUserScroll, reconcileViewportLayout, reconcileReducedMotionTopAnchor };
+    noteUserScroll, reconcileViewportLayout, reconcileReducedMotionTopAnchor, getTopAnchoredPromptScrollKey };
 }

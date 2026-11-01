@@ -108,8 +108,12 @@ function setDocumentVisibility(initial: DocumentVisibilityState) {
 }
 
 function installViewportLayout(viewport: HTMLElement, trailingSpace = 200,
-  rowHeightOverride?: (row: Element) => number | undefined, summaryHeightChange = false) {
+  rowHeightOverride?: (row: Element) => number | undefined, summaryHeightChange = false,
+  frame: { readonly width?: number; readonly height?: number; readonly top?: number; readonly promptPreviewHeight?: number } = {}) {
   const content = viewport.querySelector<HTMLElement>('.tb-chat-message-content')!;
+  const width = frame.width ?? 320;
+  const height = frame.height ?? 180;
+  const top = frame.top ?? 100;
   const rowHeight = 92;
   const activityDetailHeight = 32;
   const heightOf = (row: Element): number => {
@@ -128,11 +132,11 @@ function installViewportLayout(viewport: HTMLElement, trailingSpace = 200,
   const anchorSpace = () => Number.parseFloat(viewport.style.getPropertyValue('--tb-chat-anchor-space')) || 0;
   const scrollHeight = () => 32 + rowsHeight() + anchorSpace() + trailingSpace;
   Object.defineProperties(viewport, {
-    clientHeight: { configurable: true, get: () => 180 },
+    clientHeight: { configurable: true, get: () => height },
     scrollHeight: { configurable: true, get: scrollHeight },
     scrollTop: {
       configurable: true, get: () => scrollTop,
-      set: (value: number) => { scrollTop = Math.max(0, Math.min(value, scrollHeight() - 180)); },
+      set: (value: number) => { scrollTop = Math.max(0, Math.min(value, scrollHeight() - height)); },
     },
   });
   Object.defineProperty(viewport, 'scrollTo', { configurable: true, value: (options: ScrollToOptions) => {
@@ -140,11 +144,16 @@ function installViewportLayout(viewport: HTMLElement, trailingSpace = 200,
   } });
   const originalBounds = HTMLElement.prototype.getBoundingClientRect;
   const bounds = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
-    if (this === viewport) return new DOMRect(0, 100, 320, 180);
+    if (this === viewport) return new DOMRect(0, top, width, height);
+    if (this.classList.contains('tb-chat-latest-user-prompt') && frame.promptPreviewHeight) {
+      return new DOMRect(0, top + 10, width, frame.promptPreviewHeight);
+    }
+    if (this.classList.contains('tb-chat-scroll-latest')) return new DOMRect(0, top + height - 120, width, 40);
+    if (this.classList.contains('tb-chat-composer')) return new DOMRect(0, top + height - 60, width, 60);
     const index = [...content.children].indexOf(this);
     if (index >= 0) {
       const offset = [...content.children].slice(0, index).reduce((height, row) => height + heightOf(row), 0);
-      return new DOMRect(0, 116 + anchorSpace() + offset - scrollTop, 320, heightOf(this) - 12);
+      return new DOMRect(0, top + 16 + anchorSpace() + offset - scrollTop, width, heightOf(this) - 12);
     }
     return originalBounds.call(this);
   });
@@ -156,6 +165,92 @@ function installViewportLayout(viewport: HTMLElement, trailingSpace = 200,
     restore() { bounds.mockRestore(); },
   };
 }
+
+it.each([
+  { label: 'phone', width: 390, height: 844 },
+  { label: 'desktop', width: 1440, height: 900 },
+])('keeps the answered prompt tail uncovered above a tall reply with intervening rows on $label', ({ width, height }) => {
+  const sessionKey = `prompt-tail-${width}`;
+  const prompts = Array.from({ length: 12 }, (_, index) => row(sessionKey, `prompt-${index + 1}`, `Question ${index + 1}`, {
+    seq: index + 1, role: 'user', sender: 'user:person', messageType: 'chat',
+    createdAt: new Date((index + 1) * 1000).toISOString(),
+  }));
+  const answeredPrompt = prompts.at(-1)!;
+  const runtime = new FakeRuntime(sessionKey, { records: prompts, toolCallsEnabled: true });
+  const restoreMotion = installMotionPreference(true);
+  const frames: FrameRequestCallback[] = [];
+  const priorFrame = Object.getOwnPropertyDescriptor(window, 'requestAnimationFrame');
+  const priorCancelFrame = Object.getOwnPropertyDescriptor(window, 'cancelAnimationFrame');
+  Object.defineProperty(window, 'requestAnimationFrame', { configurable: true, value: (callback: FrameRequestCallback) => {
+    frames.push(callback);
+    return frames.length;
+  } });
+  Object.defineProperty(window, 'cancelAnimationFrame', { configurable: true, value: () => {} });
+  const view = render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+  const viewport = screen.getByRole('log');
+  const layout = installViewportLayout(viewport, 200, element => {
+    if (element.matches('[data-scroll-key="assistant-reply"]')) return height * 0.95;
+    if (element.matches('.tb-chat-activity-tool')) return 48;
+    if (element.matches('.tb-chat-activity-pill-row')) return 40;
+    return undefined;
+  },
+  false, { width, height, top: 0, promptPreviewHeight: 60 });
+
+  try {
+    layout.setScrollTop(viewport.scrollHeight - viewport.clientHeight);
+    fireEvent.scroll(viewport);
+
+    const reply = row(sessionKey, 'assistant-reply', 'Here is the answer', {
+      seq: 14, sender: 'assistant-service', messageType: 'assistant', replyToMessageId: answeredPrompt.id, turnSeq: 3,
+      createdAt: new Date(15000).toISOString(),
+    });
+    const toolCall: ToolCallRecord = { id: 'read-call', seq: 1, sessionKey, turnSeq: 3, afterMessageSeq: answeredPrompt.seq,
+      harnessToolCallId: 'read-file', title: 'Read a file', kind: 'read', toolName: 'read_file', status: 'completed',
+      rawInput: null, rawOutput: null, content: null, truncated: [], startedAt: 12500, endedAt: 12600, rowVersion: 1 };
+    const event = { eventId: 'update-example', sessionKey, at: 14000, kind: 'work_item.filed',
+      record: { type: 'work item', id: 'example', detail: '/api/work-items/example' }, actorSessionKey: sessionKey,
+      tiedAs: ['creator'], cause: { turnSeq: 3, messageId: answeredPrompt.id }, noticeMessageIds: [] };
+    act(() => runtime.update({ records: [...prompts, reply], toolCalls: [toolCall], recordEvents: [event] }));
+
+    const flushFrames = () => {
+      for (let pass = 0; pass < 4 && frames.length; pass++) {
+        const pending = frames.splice(0);
+        act(() => pending.forEach(callback => callback(performance.now() + 300 + pass * 300)));
+      }
+    };
+    flushFrames();
+    fireEvent.scroll(viewport);
+    flushFrames();
+
+    const answeredPromptRow = viewport.querySelector<HTMLElement>(`[data-scroll-key="${answeredPrompt.id}"]`)!;
+    const replyRow = viewport.querySelector<HTMLElement>('[data-scroll-key="assistant-reply"]')!;
+    const preview = screen.queryByRole('button', { name: 'Jump to user prompt' });
+    const previewBottom = preview?.getBoundingClientRect().bottom ?? viewport.getBoundingClientRect().top;
+    const visibleBottom = screen.getByRole('button', { name: 'Scroll to bottom' }).getBoundingClientRect().top;
+    const visibleHeight = visibleBottom - viewport.getBoundingClientRect().top;
+
+    expect(viewport.querySelector('[data-record-key="tool-read-call"]')).not.toBeNull();
+    expect(viewport.querySelector('[data-record-key="record-event:update-example"]')).not.toBeNull();
+    expect(answeredPromptRow.getBoundingClientRect().bottom - previewBottom).toBeGreaterThanOrEqual(4);
+    expect(answeredPromptRow.getBoundingClientRect().bottom).toBeLessThan(replyRow.getBoundingClientRect().top);
+    expect(replyRow.getBoundingClientRect().top).toBeLessThanOrEqual(viewport.getBoundingClientRect().top + visibleHeight / 2);
+    if (preview) expect(preview.textContent).toContain(answeredPrompt.content);
+
+    layout.setScrollTop(layout.scrollTop + height / 2);
+    fireEvent.scroll(viewport);
+    const restoredPreview = screen.getByRole('button', { name: 'Jump to user prompt' });
+    expect(restoredPreview.textContent).toContain(answeredPrompt.content);
+    expect(restoredPreview.getAttribute('aria-controls')).toBe(answeredPromptRow.id);
+  } finally {
+    view.unmount();
+    layout.restore();
+    restoreMotion();
+    if (priorFrame) Object.defineProperty(window, 'requestAnimationFrame', priorFrame);
+    else Reflect.deleteProperty(window, 'requestAnimationFrame');
+    if (priorCancelFrame) Object.defineProperty(window, 'cancelAnimationFrame', priorCancelFrame);
+    else Reflect.deleteProperty(window, 'cancelAnimationFrame');
+  }
+});
 
 function installFoldAnimationMock() {
   const previous = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'animate');

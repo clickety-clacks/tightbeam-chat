@@ -1575,14 +1575,15 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   const timeline = useMemo(() => composeTimeline(bubbles, localSends, canonicalSends, sendsByIdentity,
     transitions, activityPlan.messageItems), [activityPlan.messageItems, bubbles, canonicalSends, localSends, sendsByIdentity, transitions]);
   const messageRows = useMemo(() => {
-    const rows = new Map<string, { key: string; scrollKey: string; role: string }>();
+    const rows = new Map<string, { key: string; scrollKey: string; role: string; prompt: boolean }>();
     for (const item of timeline) {
       if (item.kind === 'bubble') {
         const scrollKey = item.scrollKey ?? (item.bubble.derived ? item.bubble.key : item.bubble.record.id);
-        rows.set(scrollKey, { key: scrollKey, scrollKey, role: item.bubble.record.role });
+        rows.set(scrollKey, { key: scrollKey, scrollKey, role: item.bubble.record.role,
+          prompt: item.bubble.side === 'human' && item.bubble.ownerScoped });
       } else if (item.kind === 'local') {
         const scrollKey = `local-${item.send.clientMessageId}`;
-        rows.set(scrollKey, { key: scrollKey, scrollKey, role: 'user' });
+        rows.set(scrollKey, { key: scrollKey, scrollKey, role: 'user', prompt: true });
       }
     }
     return rows;
@@ -1595,6 +1596,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   const stickyPromptTargetId = stickyPrompt
     ? `${promptTargetPrefix}-${encodeURIComponent(stickyPrompt.targetKey)}` : undefined;
   const [latestPromptDismissed, setLatestPromptDismissed] = useState(false);
+  const [suppressOlderStickyPrompt, setSuppressOlderStickyPrompt] = useState(false);
   // Transcript refreshes can change the latest row; only a new submission clears dismissal.
   const observedPromptSubmissions = useRef<Set<string> | null>(null);
   if (!observedPromptSubmissions.current) {
@@ -1641,9 +1643,25 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     const box = viewport.current;
     const prompt = box ? nearestPromptAboveVisibleTop(promptCandidates, box, reading.getRow) : undefined;
     const identity = prompt?.identity;
+    let suppressSticky = false;
+    const anchoredPromptKey = reading.getTopAnchoredPromptScrollKey();
+    if (box && anchoredPromptKey) {
+      const answeredPromptIndex = promptCandidates.findIndex(candidate => candidate.scrollKey === anchoredPromptKey);
+      const selectedPromptIndex = promptCandidates.findIndex(candidate => candidate.identity === identity);
+      const answeredPromptRow = reading.getRow(anchoredPromptKey);
+      if (answeredPromptIndex >= 0 && selectedPromptIndex >= 0 && selectedPromptIndex <= answeredPromptIndex && answeredPromptRow) {
+        const viewportBounds = box.getBoundingClientRect();
+        const promptBounds = answeredPromptRow.getBoundingClientRect();
+        const otherTopOverlayBottom = Math.max(viewportBounds.top,
+          notice?.getBoundingClientRect().bottom ?? Number.NEGATIVE_INFINITY);
+        suppressSticky = promptBounds.bottom > otherTopOverlayBottom && promptBounds.top < viewportBounds.bottom;
+      }
+    }
+    setSuppressOlderStickyPrompt(current => current === suppressSticky ? current : suppressSticky);
     if (stickyPromptIdentity === identity) reading.reconcileReducedMotionTopAnchor();
     else setStickyPromptIdentity(identity);
-  }, [promptCandidates, reading.getRow, reading.reconcileReducedMotionTopAnchor, stickyPromptIdentity]);
+  }, [promptCandidates, reading.getRow, reading.getTopAnchoredPromptScrollKey,
+    reading.reconcileReducedMotionTopAnchor, stickyPromptIdentity]);
   useEffect(() => {
     if (host.settingsRequestRevision <= handledSettingsRevision.current) return;
     handledSettingsRevision.current = host.settingsRequestRevision;
@@ -1847,8 +1865,8 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
       window.visualViewport?.removeEventListener('scroll', updateStickyPrompt);
     };
   }, [promptCandidates, showRuntimeNotice, showToolHistoryStatusInNotice, state.loadingOlder, state.historyError, localNotice,
-    updateStickyPrompt, reading.content, stickyPromptIdentity, latestPromptDismissed]);
-  const showStickyPrompt = !!stickyPrompt && !latestPromptDismissed;
+    updateStickyPrompt, reading.content, stickyPromptIdentity, latestPromptDismissed, suppressOlderStickyPrompt]);
+  const showStickyPrompt = !!stickyPrompt && !latestPromptDismissed && !suppressOlderStickyPrompt;
   const jumpToStickyPrompt = () => {
     const box = viewport.current;
     if (!box || !stickyPrompt || !stickyPromptTargetId) return;
