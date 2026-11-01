@@ -284,6 +284,8 @@ describe('Nordic theme', () => {
     expect(phoneNoticeReserve).toContain('padding-block-start: var(--tb-chat-runtime-notice-height, 0px)');
     const phoneHistoryPlaceholder = phoneLayout.match(/\.tb-chat-message-content\.tb-chat-runtime-notice-reserved > \.tb-chat-tool-history-status-placeholder\s*\{([^}]*)\}/)?.[1] ?? '';
     expect(phoneHistoryPlaceholder).toContain('display: none');
+    const tabletNotice = componentCss.match(/@media \(min-width: 541px\) and \(max-width: 767px\)\s*\{\s*\.tb-chat-caption\.tb-chat-runtime-notice\s*\{([^}]*)\}/)?.[1] ?? '';
+    expect(tabletNotice).toContain('width: auto');
     expect(rule(componentCss, '.tb-chat-transition')).not.toContain('border:');
     expect(rule(componentCss, '.tb-chat-status-ready')).toContain('background: var(--tb-chat-ok)');
     expect(rule(componentCss, '.tb-chat-status-loading, .tb-chat-status-stale')).toContain('background: var(--tb-chat-caution)');
