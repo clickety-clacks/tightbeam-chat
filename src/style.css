@@ -794,7 +794,7 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
 .tb-chat-activity-run-chevron.is-expanded { transform: translateY(-.15em) rotate(45deg); }
 .tb-chat-activity-run-toggle .tb-chat-activity-gist { flex: 1 1 auto; }
 .tb-chat-activity-run-count { flex: 0 0 auto; font-variant-numeric: tabular-nums; }
-.tb-chat-activity-tool-run-toggle { align-items: center; color: var(--tb-chat-caution); }
+.tb-chat .tb-chat-activity-tool-run-toggle { align-items: center; color: var(--tb-chat-caution); }
 .tb-chat-activity-tool-run-toggle > .tb-chat-tool-terminal-icon { margin-inline-end: .1rem; }
 .tb-chat-activity-tool-run-toggle > .tb-chat-activity-run-chevron {
   margin-inline-start: .2rem;
