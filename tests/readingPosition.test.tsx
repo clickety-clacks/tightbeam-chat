@@ -100,6 +100,7 @@ let scrollTop = 0;
 let clampScrollTopOnRead = false;
 let viewportHeight = 300;
 let lateLayoutGrowth = 0;
+let scrollHeightRowCountOverride: number | undefined;
 // Model the stylesheet's tail padding (composer 60px, 16px/rem, no safe-area inset).
 let extraBottomSpace = 0;
 const rowHeightOverrides = new Map<string, number>();
@@ -124,8 +125,13 @@ const renderedViewportHeight = () => {
   return Math.max(0, viewportHeight - (keyboardViewportSimulation && followsKeyboardInset ? keyboardInset() : 0));
 };
 const testRowHeight = (row: HTMLElement) => rowHeightOverrides.get(row.dataset.recordKey ?? '') ?? 80;
-const scrollHeight = () => 32 + rows().length * 92 + rows().reduce((total, row) => total + testRowHeight(row) - 80, 0) + extraBottomSpace + lateLayoutGrowth + Number.parseFloat(document.querySelector<HTMLElement>('.tb-chat-viewport')?.style.getPropertyValue('--tb-chat-anchor-space') || '0') +
+const scrollHeight = () => {
+  const measuredRows = scrollHeightRowCountOverride === undefined || rowHeightOverrides.size > 0 ? rows() : undefined;
+  const rowCount = scrollHeightRowCountOverride ?? measuredRows!.length;
+  const rowHeightAdjustment = measuredRows?.reduce((total, row) => total + testRowHeight(row) - 80, 0) ?? 0;
+  return 32 + rowCount * 92 + rowHeightAdjustment + extraBottomSpace + lateLayoutGrowth + Number.parseFloat(document.querySelector<HTMLElement>('.tb-chat-viewport')?.style.getPropertyValue('--tb-chat-anchor-space') || '0') +
   (modelActiveCaptionSlot && (hasStableActiveCaptionSlot || document.querySelector('.tb-chat-active-caption')) ? 26 : 0);
+};
 const rect = (top: number, height: number) => ({ top, bottom: top + height, left: 0, right: 400, width: 400, height, x: 0, y: top, toJSON() {} });
 class TestVisualViewport extends EventTarget {
   offsetTop = 0;
@@ -154,6 +160,7 @@ beforeEach(() => {
   clampScrollTopOnRead = false;
   viewportHeight = 300;
   lateLayoutGrowth = 0;
+  scrollHeightRowCountOverride = undefined;
   extraBottomSpace = 0;
   rowHeightOverrides.clear();
   latestPromptOverlayHeight = 0;
@@ -194,7 +201,9 @@ beforeEach(() => {
     if (this.classList.contains('tb-chat-composer')) return rect(renderedViewportHeight() - 60, 60);
     const index = this.dataset.testPosition === undefined ? rows().indexOf(this) : Number(this.dataset.testPosition);
     if (index >= 0) {
-      const precedingHeight = rows().slice(0, index).reduce((total, row) => total + testRowHeight(row) - 80, 0);
+      const precedingHeight = rowHeightOverrides.size === 0
+        ? 0
+        : rows().slice(0, index).reduce((total, row) => total + testRowHeight(row) - 80, 0);
       return rect(16 + Number.parseFloat(document.querySelector<HTMLElement>('.tb-chat-viewport')?.style.getPropertyValue('--tb-chat-anchor-space') || '0') + index * 92 + precedingHeight - readScrollTop(), testRowHeight(this));
     }
     return rect(0, 50);
@@ -242,6 +251,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   resizeCallbacks.clear();
   resizeTargets.clear();
+  scrollHeightRowCountOverride = undefined;
 });
 
 function advanceNextFrame(at: number) {
@@ -1100,6 +1110,10 @@ describe('conversation reading position', () => {
 
   it('bounds scroll measurements to the viewport neighborhood in a long history and preserves position when older rows arrive', () => {
     function History({ ids }: { ids: number[] }) {
+      // Keep the real rows mounted, but model their uniform heights directly.
+      // Re-scanning the full history for each mock scrollHeight read makes this
+      // test measure runner speed instead of viewport-neighborhood work.
+      scrollHeightRowCountOverride = ids.length;
       const reading = useReadingPosition(true, ids);
       return <div ref={reading.viewport} className="tb-chat-viewport" onScroll={reading.onScroll}
         onWheel={event => { if (event.deltaY !== 0) reading.noteUserScroll(); }}>
