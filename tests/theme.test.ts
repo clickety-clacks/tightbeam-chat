@@ -268,6 +268,15 @@ describe('Nordic theme', () => {
     expect(captionAction).toContain('text-decoration: underline');
     expect(componentCss).not.toContain('.tb-chat-tool-controls');
     expect(rule(componentCss, '.tb-chat-tool-history-status')).toContain('display: flex');
+    const phoneLayout = componentCss.slice(componentCss.indexOf('@media (max-width: 540px)'));
+    const phoneNotice = phoneLayout.match(/\.tb-chat-caption\.tb-chat-runtime-notice-with-tool-history\s*\{([^}]*)\}/)?.[1] ?? '';
+    expect(phoneNotice).toContain('display: grid');
+    expect(phoneNotice).toContain('grid-template-columns: auto minmax(0, 1fr)');
+    expect(phoneNotice).toContain('align-items: start');
+    const phoneToolHistory = phoneLayout.match(/\.tb-chat-runtime-notice-with-tool-history > \.tb-chat-runtime-tool-history\s*\{([^}]*)\}/)?.[1] ?? '';
+    expect(phoneToolHistory).toContain('grid-column: 2');
+    expect(phoneToolHistory).toContain('grid-row: 2');
+    expect(phoneToolHistory).toContain('width: 100%');
     expect(rule(componentCss, '.tb-chat-transition')).not.toContain('border:');
     expect(rule(componentCss, '.tb-chat-status-ready')).toContain('background: var(--tb-chat-ok)');
     expect(rule(componentCss, '.tb-chat-status-loading, .tb-chat-status-stale')).toContain('background: var(--tb-chat-caution)');

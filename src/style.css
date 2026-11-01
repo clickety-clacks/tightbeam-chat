@@ -578,7 +578,11 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
 
 @media (max-width: 540px) {
   .tb-chat-bubble { max-width: 92%; padding-inline: .85rem; }
-  .tb-chat-runtime-notice-with-tool-history { grid-template-columns: auto minmax(0, 1fr); }
+  .tb-chat-caption.tb-chat-runtime-notice-with-tool-history {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start;
+  }
   .tb-chat-runtime-notice-with-tool-history > .tb-chat-runtime-tool-history {
     grid-column: 2;
     grid-row: 2;
