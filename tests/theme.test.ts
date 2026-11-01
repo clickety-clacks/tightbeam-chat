@@ -285,6 +285,15 @@ describe('Nordic theme', () => {
     expect(hostDisabled).not.toContain('opacity:');
   });
 
+  it('keeps fixed-control clearance while restoring compact tail spacing at the latest message', () => {
+    expect(rule(componentCss, '.tb-chat-viewport')).toContain('4.5rem');
+    expect(rule(componentCss, '.tb-chat-host-composer-hidden .tb-chat-viewport')).toContain('4rem');
+    expect(rule(componentCss, '.tb-chat-viewport:not([data-latest-control-visible])')).toContain('+ 3rem +');
+    expect(rule(componentCss, '.tb-chat-host-composer-hidden .tb-chat-viewport:not([data-latest-control-visible])'))
+      .toContain('clamp(1rem, 3.5vw, 2rem) + env(safe-area-inset-bottom)');
+    expect(componentSource).toContain("data-latest-control-visible={reading.showLatest ? 'true' : undefined}");
+  });
+
   it('keeps all served color literals in the shared definition and uses only the approved disabled send opacity', () => {
     const colorLiteral = /#[\da-f]{3,8}\b|\b(?:rgba?|hsla?)\s*\(|(?:^|[;{])\s*(?:color|background(?:-color)?|border(?:-[\w-]+)?|outline(?:-[\w-]+)?|box-shadow|text-shadow)\s*:\s*(?:white|black|red|green|blue|gray|grey|orange|purple|yellow|pink|brown|navy|teal|silver|maroon)\b/im;
     expect(componentCss).toContain("@import './theme.css';");
