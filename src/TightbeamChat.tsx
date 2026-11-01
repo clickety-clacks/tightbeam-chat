@@ -1596,6 +1596,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   const stickyPromptTargetId = stickyPrompt
     ? `${promptTargetPrefix}-${encodeURIComponent(stickyPrompt.targetKey)}` : undefined;
   const [latestPromptDismissed, setLatestPromptDismissed] = useState(false);
+  const [suppressOlderStickyPrompt, setSuppressOlderStickyPrompt] = useState(false);
   // Transcript refreshes can change the latest row; only a new submission clears dismissal.
   const observedPromptSubmissions = useRef<Set<string> | null>(null);
   if (!observedPromptSubmissions.current) {
@@ -1642,9 +1643,26 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     const box = viewport.current;
     const prompt = box ? nearestPromptAboveVisibleTop(promptCandidates, box, reading.getRow) : undefined;
     const identity = prompt?.identity;
+    let suppressSticky = false;
+    const anchoredPromptKey = reading.getTopAnchoredPromptScrollKey();
+    if (box && anchoredPromptKey) {
+      const answeredPromptIndex = promptCandidates.findIndex(candidate => candidate.scrollKey === anchoredPromptKey);
+      const selectedPromptIndex = promptCandidates.findIndex(candidate => candidate.identity === identity);
+      const answeredPromptRow = reading.getRow(anchoredPromptKey);
+      if (answeredPromptIndex >= 0 && selectedPromptIndex >= 0 && selectedPromptIndex <= answeredPromptIndex && answeredPromptRow) {
+        const viewportBounds = box.getBoundingClientRect();
+        const promptBounds = answeredPromptRow.getBoundingClientRect();
+        const otherTopOverlayBottom = Math.max(viewportBounds.top,
+          notice?.getBoundingClientRect().bottom ?? Number.NEGATIVE_INFINITY,
+          toolHistoryStatus.current?.getBoundingClientRect().bottom ?? Number.NEGATIVE_INFINITY);
+        suppressSticky = promptBounds.bottom > otherTopOverlayBottom && promptBounds.top < viewportBounds.bottom;
+      }
+    }
+    setSuppressOlderStickyPrompt(current => current === suppressSticky ? current : suppressSticky);
     if (stickyPromptIdentity === identity) reading.reconcileReducedMotionTopAnchor();
     else setStickyPromptIdentity(identity);
-  }, [promptCandidates, reading.getRow, reading.reconcileReducedMotionTopAnchor, stickyPromptIdentity]);
+  }, [promptCandidates, reading.getRow, reading.getTopAnchoredPromptScrollKey,
+    reading.reconcileReducedMotionTopAnchor, stickyPromptIdentity]);
   useEffect(() => {
     if (host.settingsRequestRevision <= handledSettingsRevision.current) return;
     handledSettingsRevision.current = host.settingsRequestRevision;
@@ -1848,8 +1866,8 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
       window.visualViewport?.removeEventListener('scroll', updateStickyPrompt);
     };
   }, [promptCandidates, showRuntimeNotice, showToolHistoryStatusInNotice, state.loadingOlder, state.historyError, localNotice,
-    updateStickyPrompt, reading.content, stickyPromptIdentity, latestPromptDismissed]);
-  const showStickyPrompt = !!stickyPrompt && !latestPromptDismissed;
+    updateStickyPrompt, reading.content, stickyPromptIdentity, latestPromptDismissed, suppressOlderStickyPrompt]);
+  const showStickyPrompt = !!stickyPrompt && !latestPromptDismissed && !suppressOlderStickyPrompt;
   const jumpToStickyPrompt = () => {
     const box = viewport.current;
     if (!box || !stickyPrompt || !stickyPromptTargetId) return;

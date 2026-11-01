@@ -235,6 +235,12 @@ it.each([
     expect(answeredPromptRow.getBoundingClientRect().bottom).toBeLessThan(replyRow.getBoundingClientRect().top);
     expect(replyRow.getBoundingClientRect().top).toBeLessThanOrEqual(viewport.getBoundingClientRect().top + visibleHeight / 2);
     if (preview) expect(preview.textContent).toContain(answeredPrompt.content);
+
+    layout.setScrollTop(layout.scrollTop + height / 2);
+    fireEvent.scroll(viewport);
+    const restoredPreview = screen.getByRole('button', { name: 'Jump to user prompt' });
+    expect(restoredPreview.textContent).toContain(answeredPrompt.content);
+    expect(restoredPreview.getAttribute('aria-controls')).toBe(answeredPromptRow.id);
   } finally {
     view.unmount();
     layout.restore();
