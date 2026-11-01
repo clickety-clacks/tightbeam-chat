@@ -1,5 +1,18 @@
 [
   {
+    "version": "v0.1.74",
+    "items": [
+      {
+        "title": "Reconnect when you return to Chat",
+        "description": "When Chat returns to view, the page is restored, or your browser comes back online, Chat immediately checks the live connection. If it is not live, Chat reconnects and catches up on missed messages within a few seconds without reloading. Your draft and reading position stay in place; after 10 seconds without a live feed, the status changes to Disconnected while Chat keeps retrying."
+      },
+      {
+        "title": "Fit recovery notices on landscape phones and small tablets",
+        "description": "Recovery notices wrap within the available width on landscape phones and small tablets, keeping their text on screen."
+      }
+    ]
+  },
+  {
     "version": "v0.1.73",
     "items": [
       {
