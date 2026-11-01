@@ -1345,7 +1345,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     priorArrivalContext.recoveryRevision === recoveryRevision;
   const reading = useReadingPosition(state.status === 'ready', readingRevision, box =>
     Boolean(state.loadingOlder || state.recordEventsLoading || (!state.historyError && (state.hasOlder || state.recordEventsHasOlder) && box.scrollTop < olderHistoryPrefetchDistance(box))),
-    arrivalEligible, state.sessionKey, markReadPosition);
+    arrivalEligible, state.sessionKey, markReadPosition, state.activeTurn?.turn.status === 'running');
   const preserveReadingPositionRef = useRef(reading.preserveVisiblePosition);
   preserveReadingPositionRef.current = reading.preserveVisiblePosition;
   const preserveReadingPosition = useCallback(() => preserveReadingPositionRef.current(), []);
@@ -1573,14 +1573,14 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   const timeline = useMemo(() => composeTimeline(bubbles, localSends, canonicalSends, sendsByIdentity,
     transitions, activityPlan.messageItems), [activityPlan.messageItems, bubbles, canonicalSends, localSends, sendsByIdentity, transitions]);
   const messageRows = useMemo(() => {
-    const rows = new Map<string, { key: string; scrollKey: string }>();
+    const rows = new Map<string, { key: string; scrollKey: string; role: string }>();
     for (const item of timeline) {
       if (item.kind === 'bubble') {
         const scrollKey = item.scrollKey ?? (item.bubble.derived ? item.bubble.key : item.bubble.record.id);
-        rows.set(scrollKey, { key: scrollKey, scrollKey });
+        rows.set(scrollKey, { key: scrollKey, scrollKey, role: item.bubble.record.role });
       } else if (item.kind === 'local') {
         const scrollKey = `local-${item.send.clientMessageId}`;
-        rows.set(scrollKey, { key: scrollKey, scrollKey });
+        rows.set(scrollKey, { key: scrollKey, scrollKey, role: 'user' });
       }
     }
     return rows;

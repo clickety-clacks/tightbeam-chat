@@ -101,6 +101,7 @@ let viewportHeight = 300;
 let lateLayoutGrowth = 0;
 // Model the stylesheet's tail padding (composer 60px, 16px/rem, no safe-area inset).
 let extraBottomSpace = 0;
+const rowHeightOverrides = new Map<string, number>();
 let scrollTo: ReturnType<typeof vi.fn>;
 let reducedMotion = false;
 let animate: ReturnType<typeof vi.fn>;
@@ -120,7 +121,8 @@ let keyboardViewportSimulation = false;
 const renderedViewportHeight = () => {
   return Math.max(0, viewportHeight - (keyboardViewportSimulation && followsKeyboardInset ? keyboardInset() : 0));
 };
-const scrollHeight = () => 32 + rows().length * 92 + extraBottomSpace + lateLayoutGrowth + Number.parseFloat(document.querySelector<HTMLElement>('.tb-chat-viewport')?.style.getPropertyValue('--tb-chat-anchor-space') || '0') +
+const testRowHeight = (row: HTMLElement) => rowHeightOverrides.get(row.dataset.recordKey ?? '') ?? 80;
+const scrollHeight = () => 32 + rows().length * 92 + rows().reduce((total, row) => total + testRowHeight(row) - 80, 0) + extraBottomSpace + lateLayoutGrowth + Number.parseFloat(document.querySelector<HTMLElement>('.tb-chat-viewport')?.style.getPropertyValue('--tb-chat-anchor-space') || '0') +
   (modelActiveCaptionSlot && (hasStableActiveCaptionSlot || document.querySelector('.tb-chat-active-caption')) ? 26 : 0);
 const rect = (top: number, height: number) => ({ top, bottom: top + height, left: 0, right: 400, width: 400, height, x: 0, y: top, toJSON() {} });
 class TestVisualViewport extends EventTarget {
@@ -151,6 +153,7 @@ beforeEach(() => {
   viewportHeight = 300;
   lateLayoutGrowth = 0;
   extraBottomSpace = 0;
+  rowHeightOverrides.clear();
   reducedMotion = false;
   modelActiveCaptionSlot = false;
   animationFrames.clear();
@@ -180,7 +183,10 @@ beforeEach(() => {
     }
     if (this.classList.contains('tb-chat-composer')) return rect(renderedViewportHeight() - 60, 60);
     const index = this.dataset.testPosition === undefined ? rows().indexOf(this) : Number(this.dataset.testPosition);
-    if (index >= 0) return rect(16 + Number.parseFloat(document.querySelector<HTMLElement>('.tb-chat-viewport')?.style.getPropertyValue('--tb-chat-anchor-space') || '0') + index * 92 - readScrollTop(), 80);
+    if (index >= 0) {
+      const precedingHeight = rows().slice(0, index).reduce((total, row) => total + testRowHeight(row) - 80, 0);
+      return rect(16 + Number.parseFloat(document.querySelector<HTMLElement>('.tb-chat-viewport')?.style.getPropertyValue('--tb-chat-anchor-space') || '0') + index * 92 + precedingHeight - readScrollTop(), testRowHeight(this));
+    }
     return rect(0, 50);
   });
   vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function (this: HTMLElement) {
@@ -373,32 +379,117 @@ describe('conversation reading position', () => {
     expect(input.value).toBe('repeat without editing');
   });
 
-  it('glides to the exact latest bottom once for a burst of appended rows', () => {
-    const { runtime, box } = setup();
-    const startingBottom = box.scrollHeight - box.clientHeight;
-    scrollTo.mockClear();
+  it.each([true, false])('top-anchors a tall reply with a strip of earlier content visible (prior prompt=%s)', priorPrompt => {
+    extraBottomSpace = 178;
+    const history = priorPrompt ? initialRows : initialRows.map(record => ({ ...record,
+      role: 'assistant' as const, sender: 'assistant' }));
+    const { runtime, box } = setup(history);
+    rowHeightOverrides.set('message-20', 320);
+    const reply = { ...message(20), role: 'assistant' as const, sender: 'assistant' };
+    act(() => runtime.publish({ records: [...history, reply] }));
 
-    act(() => runtime.publish({ records: [...initialRows, message(20)] }));
-    const firstRow = screen.getByText('Message 20').closest('article');
-    expect(animate).toHaveBeenCalledTimes(1);
-    expect(animate.mock.contexts[0]).toBe(firstRow);
-    expect(animate).toHaveBeenCalledWith([
-      { opacity: 0, transform: 'translateY(18px)' },
-      { opacity: 1, transform: 'translateY(0)' },
-    ], { duration: 240, easing: 'cubic-bezier(0.2, 0, 0, 1)' });
-    expect(box.scrollTop).toBe(startingBottom);
-    expect(scrollTo).not.toHaveBeenCalled();
-    expect(animationFrames.size).toBe(1);
-
-    act(() => runtime.publish({ records: [...runtime.state.records, message(21)] }));
-    expect(animate).toHaveBeenCalledTimes(2);
-    expect(animationFrames.size).toBe(1);
-
+    const firstRow = screen.getByText('Message 20').closest<HTMLElement>('article')!;
+    const previousRow = box.querySelector<HTMLElement>('[data-scroll-key="message-19"]')!;
     advanceNextFrame(performance.now() + 300);
 
+    expect(firstRow.getBoundingClientRect().top).toBeCloseTo(box.getBoundingClientRect().top + 40);
+    expect(previousRow.getBoundingClientRect().bottom).toBeGreaterThan(box.getBoundingClientRect().top);
+    expect(previousRow.getBoundingClientRect().bottom).toBeLessThan(firstRow.getBoundingClientRect().top);
+    expect(screen.getByRole('button', { name: 'Scroll to bottom' })).toBeTruthy();
+
+    const anchoredScrollTop = box.scrollTop;
+    const laterMessages = [message(21), message(22), message(23), message(24)];
+    act(() => runtime.publish({ records: [...runtime.state.records, ...laterMessages] }));
+    expect(box.scrollTop).toBe(anchoredScrollTop);
+    expect(firstRow.getBoundingClientRect().top).toBeCloseTo(box.getBoundingClientRect().top + 40);
+    expect(screen.getByRole('button', { name: /^[1-9]\d* unseen messages?$/ })).toBeTruthy();
+  });
+
+  it.each([
+    { composerHidden: false, bottomSpace: 178, shouldTopAnchor: true },
+    { composerHidden: true, bottomSpace: 94, shouldTopAnchor: false },
+  ])('measures tall replies in the unobscured area with composer hidden=$composerHidden', ({ composerHidden, bottomSpace, shouldTopAnchor }) => {
+    extraBottomSpace = bottomSpace;
+    const { runtime, box } = setup();
+    if (composerHidden) box.parentElement!.classList.add('tb-chat-host-composer-hidden');
+    rowHeightOverrides.set('message-20', 200);
+    const reply = { ...message(20), role: 'assistant' as const, sender: 'assistant' };
+    act(() => runtime.publish({ records: [...initialRows, reply] }));
+    const row = screen.getByText('Message 20').closest<HTMLElement>('article')!;
+    advanceNextFrame(performance.now() + 300);
+
+    if (shouldTopAnchor) {
+      expect(row.getBoundingClientRect().top).toBeCloseTo(box.getBoundingClientRect().top + 40);
+    } else {
+      expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight);
+      expect(row.getBoundingClientRect().bottom).toBeLessThan(
+        box.getBoundingClientRect().bottom - 60,
+      );
+    }
+  });
+
+  it('follows a streaming reply until it fills the unobscured area, then holds its top', () => {
+    extraBottomSpace = 178;
+    const { runtime, box } = setup();
+    const activeTurn = createTurnProvenance({
+      seq: 20, sessionKey: 'reading', messageId: initialRows.at(-1)!.id, origin: 'agent:other',
+      status: 'running', triggerSource: 'agent', raw: { seq: 20, origin: 'agent:other' },
+    }, [initialRows.at(-1)!], 'person', 'person');
+    const reply = { ...message(20), role: 'assistant' as const, sender: 'assistant' };
+    act(() => runtime.publish({ activityTurnStateAvailable: true, activeTurn, records: [...initialRows, reply] }));
+    for (let frame = 0; frame < 8 && animationFrames.size > 0; frame++) {
+      advanceNextFrame(performance.now() + 300 + frame * 300);
+    }
     expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight);
-    expect(animationFrames.size).toBe(0);
-    expect(scrollTo).not.toHaveBeenCalled();
+
+    rowHeightOverrides.set('message-20', 320);
+    act(() => runtime.publish({ records: [...initialRows, { ...reply, content: 'A longer reply' }] }));
+    for (let frame = 0; frame < 8 && animationFrames.size > 0; frame++) {
+      advanceNextFrame(performance.now() + 300 + frame * 300);
+    }
+    const row = box.querySelector<HTMLElement>('[data-scroll-key="message-20"]')!;
+    const anchoredTop = row.getBoundingClientRect().top;
+    const anchoredScrollTop = box.scrollTop;
+    expect(anchoredTop).toBeCloseTo(box.getBoundingClientRect().top + 40);
+
+    rowHeightOverrides.set('message-20', 420);
+    act(() => runtime.publish({ records: [...initialRows, { ...reply, content: 'The reply continues growing' }] }));
+    expect(box.scrollTop).toBe(anchoredScrollTop);
+    expect(row.getBoundingClientRect().top).toBe(anchoredTop);
+    act(() => runtime.publish({ activeTurn: undefined }));
+    expect(row.getBoundingClientRect().top).toBe(anchoredTop);
+  });
+
+  it('top-anchors a tall reply instantly when reduced motion is enabled', () => {
+    extraBottomSpace = 178;
+    reducedMotion = true;
+    const { runtime, box } = setup();
+    rowHeightOverrides.set('message-20', 320);
+    const reply = { ...message(20), role: 'assistant' as const, sender: 'assistant' };
+
+    act(() => runtime.publish({ records: [...initialRows, reply] }));
+    advanceNextFrame(performance.now() + 300);
+
+    const row = box.querySelector<HTMLElement>('[data-scroll-key="message-20"]')!;
+    expect(animate).not.toHaveBeenCalled();
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: box.scrollTop, behavior: 'instant' });
+    expect(row.getBoundingClientRect().top).toBeCloseTo(box.getBoundingClientRect().top + 40);
+  });
+
+  it('keeps a short reply at the bottom, then leaves a later burst for the unseen control', () => {
+    extraBottomSpace = 178;
+    const { runtime, box } = setup();
+    const reply = { ...message(20), role: 'assistant' as const, sender: 'assistant' };
+    act(() => runtime.publish({ records: [...initialRows, reply] }));
+    advanceNextFrame(performance.now() + 300);
+    expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight);
+
+    const firstReplyTop = box.querySelector<HTMLElement>('[data-scroll-key="message-20"]')!.getBoundingClientRect().top;
+    const laterMessages = [message(21), message(22), message(23), message(24)];
+    act(() => runtime.publish({ records: [...runtime.state.records, ...laterMessages] }));
+    expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight - 4 * 92);
+    expect(box.querySelector<HTMLElement>('[data-scroll-key="message-20"]')!.getBoundingClientRect().top).toBe(firstReplyTop);
+    expect(screen.getByRole('button', { name: /^[1-9]\d* unseen messages?$/ })).toBeTruthy();
   });
 
   it('keeps a following reader still for real reconnect catch-up, then animates the next live row', async () => {
