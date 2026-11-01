@@ -578,6 +578,9 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
 
 @media (max-width: 540px) {
   .tb-chat-bubble { max-width: 92%; padding-inline: .85rem; }
+  .tb-chat-caption.tb-chat-runtime-notice:not(.tb-chat-runtime-notice-with-tool-history) {
+    width: auto;
+  }
   .tb-chat-caption.tb-chat-runtime-notice-with-tool-history {
     display: grid;
     width: auto;
