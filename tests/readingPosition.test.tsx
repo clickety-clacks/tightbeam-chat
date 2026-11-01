@@ -1772,6 +1772,7 @@ describe('conversation reading position', () => {
     runtime.state = { ...runtime.state, records: currentPage, hasOlder: true };
     let releaseOlder!: () => void;
     const olderPage = new Promise<void>(resolve => { releaseOlder = resolve; });
+    const followUpPage = deferred<void>();
     runtime.loadOlder = async () => {
       runtime.publish({ loadingOlder: true });
       await olderPage;
@@ -1780,6 +1781,8 @@ describe('conversation reading position', () => {
         hasOlder: false,
         loadingOlder: false,
       });
+      await followUpPage.promise;
+      runtime.publish({ recordEventsLoading: false });
     };
     render(<TightbeamChat sessionKey="reading" adapter={{ open: () => runtime }} />);
     const box = screen.getByRole('log');
@@ -1796,6 +1799,14 @@ describe('conversation reading position', () => {
     expect(anchor.getBoundingClientRect().top).toBe(anchorTop);
     expect(box.scrollTop).toBe(12 * 92);
     expect(screen.queryByRole('alert')).toBeNull();
+
+    // The record-event page can publish after the message page while loadOlder
+    // is still pending; this second layout pass must use the newly captured base.
+    act(() => runtime.publish({ recordEventsLoading: true }));
+    expect(anchor.getBoundingClientRect().top).toBe(anchorTop);
+    expect(box.scrollTop).toBe(12 * 92);
+
+    await act(async () => { followUpPage.resolve(); await followUpPage.promise; });
   });
 
   it('refreshes the held offset when the reader moves during older history loading', async () => {

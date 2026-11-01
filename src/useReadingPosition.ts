@@ -675,6 +675,8 @@ export function useReadingPosition(
         // A removed first row can require negative scrollTop; browsers clamp it.
         if (wanted < 0) box.style.setProperty('--tb-chat-anchor-space', `${-wanted}px`);
         if (Math.abs(box.scrollTop - Math.max(0, wanted)) > .5) box.scrollTop = Math.max(0, wanted);
+        // The next capture uses this corrected offset as its anchor base too.
+        if (heldPositionCount.current > 0) heldPositionScrollTop.current = box.scrollTop;
       }
       updateLatestControl(box);
     }
