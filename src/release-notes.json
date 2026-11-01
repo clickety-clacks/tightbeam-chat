@@ -1,5 +1,18 @@
 [
   {
+    "version": "v0.1.68",
+    "items": [
+      {
+        "title": "Keep the start of long replies in view",
+        "description": "When a reply is taller than the visible conversation, Chat keeps its beginning near the top and leaves a strip of your previous prompt visible. The starting point stays put as the reply continues to grow."
+      },
+      {
+        "title": "See who sent an agent message",
+        "description": "Chat shows the sender’s name on agent message pills and removes markup tags from the message text."
+      }
+    ]
+  },
+  {
     "version": "v0.1.67",
     "items": [
       {
