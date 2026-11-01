@@ -1576,15 +1576,16 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   const timeline = useMemo(() => composeTimeline(bubbles, localSends, canonicalSends, sendsByIdentity,
     transitions, activityPlan.messageItems), [activityPlan.messageItems, bubbles, canonicalSends, localSends, sendsByIdentity, transitions]);
   const messageRows = useMemo(() => {
-    const rows = new Map<string, { key: string; scrollKey: string; role: string; prompt: boolean }>();
+    const rows = new Map<string, { key: string; scrollKey: string; role: string; prompt: boolean; isFromReader: boolean }>();
     for (const item of timeline) {
       if (item.kind === 'bubble') {
         const scrollKey = item.scrollKey ?? (item.bubble.derived ? item.bubble.key : item.bubble.record.id);
+        const isFromReader = item.bubble.side === 'human' && item.bubble.ownerScoped;
         rows.set(scrollKey, { key: scrollKey, scrollKey, role: item.bubble.record.role,
-          prompt: item.bubble.side === 'human' && item.bubble.ownerScoped });
+          prompt: isFromReader, isFromReader });
       } else if (item.kind === 'local') {
         const scrollKey = `local-${item.send.clientMessageId}`;
-        rows.set(scrollKey, { key: scrollKey, scrollKey, role: 'user', prompt: true });
+        rows.set(scrollKey, { key: scrollKey, scrollKey, role: 'user', prompt: true, isFromReader: true });
       }
     }
     return rows;
