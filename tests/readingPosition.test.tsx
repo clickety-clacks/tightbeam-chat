@@ -423,6 +423,7 @@ describe('conversation reading position', () => {
     const reply = { ...message(20), role: 'assistant' as const, sender: 'assistant' };
     act(() => runtime.publish({ records: [...initialRows, reply] }));
     advanceNextFrame(performance.now() + 300);
+    fireEvent.scroll(box);
 
     const chip = chat.querySelector<HTMLElement>('.tb-chat-latest-user-prompt');
     const prompt = box.querySelector<HTMLElement>('[data-scroll-key="message-19"]')!;
@@ -493,7 +494,7 @@ describe('conversation reading position', () => {
     expect(firstReply.getBoundingClientRect().top).toBeCloseTo(viewportBounds.top + 40);
     expect(animationFrames.size).toBe(0);
     expect(scrollTo).toHaveBeenNthCalledWith(1, { top: expect.any(Number), behavior: 'instant' });
-    expect(scrollTo).toHaveBeenNthCalledWith(2, { top: expect.any(Number), behavior: 'instant' });
+    expect(scrollTo).toHaveBeenCalledTimes(1);
   });
 
   it.each([
