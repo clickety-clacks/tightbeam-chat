@@ -1696,6 +1696,13 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   const updateStickyPrompt = useCallback(() => {
     const element = root.current;
     const notice = runtimeNotice.current;
+    const content = reading.content.current;
+    if (content) {
+      const noticeHeight = `${notice?.getBoundingClientRect().height ?? 0}px`;
+      if (content.style.getPropertyValue('--tb-chat-runtime-notice-height') !== noticeHeight) {
+        content.style.setProperty('--tb-chat-runtime-notice-height', noticeHeight);
+      }
+    }
     if (element) {
       const rootTop = element.getBoundingClientRect().top;
       const safeAreaTop = Number.parseFloat(getComputedStyle(element).getPropertyValue('--tb-chat-safe-area-top')) || 0;
@@ -2238,7 +2245,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
           {renderToolHistoryStatus()}
         </div>}
       </div>}
-      <div className="tb-chat-message-content" ref={reading.content}>
+      <div className={`tb-chat-message-content${showToolHistoryStatusInNotice ? ' tb-chat-runtime-notice-reserved' : ''}`} ref={reading.content}>
       {hasToolHistoryStatus && renderToolHistoryStatus(showToolHistoryStatusInNotice)}
       {projection.issues.length > 0 && <div className="tb-chat-history-error tb-chat-caption tb-chat-caption-danger" role="alert">
         Some message sources could not be interpreted. Conversation filtering is incomplete.

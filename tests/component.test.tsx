@@ -2338,6 +2338,41 @@ describe('conversation surface', () => {
     }
   });
 
+  it('reserves the full phone recovery notice above activity-history retry', () => {
+    vi.useFakeTimers();
+    const runtime = new FakeRuntime('phone-recovery-notice', {
+      conversationError: 'The linked target is unavailable.',
+      toolCallsEnabled: true,
+      toolCallsError: 'Connection unavailable',
+      recordEventsError: 'Activity history request failed',
+    });
+    render(<TightbeamChat sessionKey="phone-recovery-notice" adapter={adapterFor(runtime)}
+      configuredConversationHref="/" />);
+
+    act(() => { vi.advanceTimersByTime(1000); });
+
+    const viewport = screen.getByRole('log');
+    const alert = screen.getByRole('alert');
+    expect(alert.classList.contains('tb-chat-runtime-notice-with-tool-history')).toBe(true);
+    expect(within(alert).getByRole('button', { name: 'Reconnect' })).toBeTruthy();
+    expect(within(alert).getByRole('link', { name: 'Open the configured conversation' })).toBeTruthy();
+    expect(within(alert).getByRole('button', { name: 'Retry tool history' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Retry activity history' })).toBeTruthy();
+
+    const content = viewport.querySelector<HTMLElement>('.tb-chat-message-content');
+    expect(content?.classList.contains('tb-chat-runtime-notice-reserved')).toBe(true);
+    const noticeBounds = vi.spyOn(alert, 'getBoundingClientRect').mockReturnValue({
+      x: 0, y: 10, top: 10, right: 368, bottom: 172, left: 22, width: 346, height: 162,
+      toJSON: () => ({}),
+    } as DOMRect);
+    try {
+      fireEvent(window, new Event('resize'));
+      expect(content?.style.getPropertyValue('--tb-chat-runtime-notice-height')).toBe('162px');
+    } finally {
+      noticeBounds.mockRestore();
+    }
+  });
+
   it('keeps tool history loading and retry notices without a Tool calls control', () => {
     vi.useFakeTimers();
     const runtime = new FakeRuntime('tool-history-caption', { toolCallsEnabled: true, toolCallsLoading: true });
