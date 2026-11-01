@@ -2003,8 +2003,8 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   const hasOlder = state.hasOlder || state.recordEventsHasOlder;
   const loadingOlder = state.loadingOlder || state.recordEventsLoading;
   const loadOlder = () => {
-    reading.holdPosition();
-    void runtime.loadOlder();
+    const releasePosition = reading.holdPosition();
+    void runtime.loadOlder().finally(releasePosition);
   };
 
   const previousScrollTop = useRef<number | undefined>(undefined);
