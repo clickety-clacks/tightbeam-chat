@@ -304,11 +304,20 @@ export function useReadingPosition(
         ? incomingMessageTarget(currentBox, incoming)
         : Math.max(0, currentBox.scrollHeight - currentBox.clientHeight);
       const progress = reduceMotion ? 1 : Math.min(1, Math.max(0, (now - arrivalStartTime.current) / arrivalDuration));
+      const needsReducedMotionTopSettle = reduceMotion && incoming?.mode === 'top' &&
+        Math.abs(currentBox.scrollTop - destination) > .5;
       target.current = destination;
       if (reduceMotion) currentBox.scrollTo({ top: destination, behavior: 'instant' });
       else currentBox.scrollTop = arrivalStartTop.current + (destination - arrivalStartTop.current) * easeArrival(progress);
       if (progress >= 1) {
         if (!reduceMotion) currentBox.scrollTop = destination;
+        if (needsReducedMotionTopSettle) {
+          // Let the instant scroll's event update the prompt chip before the
+          // locked top anchor is finalized. Repeat only if that changed target
+          // still requires another instant correction.
+          arrivalFrame.current = window.requestAnimationFrame(step);
+          return;
+        }
         arrivalFrame.current = undefined;
         arrivalStartTime.current = undefined;
         target.current = undefined;
