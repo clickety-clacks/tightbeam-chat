@@ -117,7 +117,7 @@ describe('Gateway wire mapping and behavior checks', () => {
     candidate.host.fetch = async (input) => {
       requestUrl = String(input);
       return new Response(JSON.stringify({ schemaVersion: 1, resource: 'roles',
-        item: { roleName, boundSessionKey } }), { status: 200 });
+        item: { name: roleName, boundSessionKey } }), { status: 200 });
     };
 
     const resolvedSessionKey = await candidate.transport.readRoleSessionKey!(roleName, new AbortController().signal);

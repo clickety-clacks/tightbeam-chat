@@ -729,7 +729,7 @@ export function createPublic019Transport(config: Public019Config): { transport: 
         throw new UnsupportedTargetError('Unexpected role detail envelope.');
       }
       const role = record(body.item);
-      if (requiredString(role, 'roleName') !== roleName) {
+      if (requiredString(role, 'name') !== roleName) {
         throw new UnsupportedTargetError('Role detail belongs to a different role.');
       }
       return requiredString(role, 'boundSessionKey');
