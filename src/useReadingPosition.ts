@@ -108,18 +108,32 @@ export function useReadingPosition(
       }
     }
   };
-  const unobscuredBounds = (box: HTMLElement, viewportBounds?: Pick<DOMRect, 'top' | 'bottom'>): Pick<DOMRect, 'top' | 'bottom'> => {
+  const unobscuredBounds = (box: HTMLElement, viewportBounds?: Pick<DOMRect, 'top' | 'bottom'>,
+    includeTopOverlays = false): Pick<DOMRect, 'top' | 'bottom'> => {
     const bounds = viewportBounds ?? box.getBoundingClientRect();
     const root = box.parentElement;
+    let top = bounds.top;
+    if (includeTopOverlays) {
+      const topOverlays = root?.querySelectorAll<HTMLElement>('.tb-chat-runtime-notice, .tb-chat-latest-user-prompt');
+      for (const overlay of topOverlays ?? []) {
+        const overlayBounds = overlay.getBoundingClientRect();
+        if (!Number.isFinite(overlayBounds.top) || !Number.isFinite(overlayBounds.bottom) ||
+          overlayBounds.bottom <= top || overlayBounds.top >= bounds.bottom ||
+          overlayBounds.top >= top + arrivalTopInset + 24) continue;
+        // Keep both the prior bubble's prompt-tail strip and the reply's first
+        // line below top overlays before placing the reply's top inset.
+        top = Math.min(bounds.bottom, Math.max(top, overlayBounds.bottom));
+      }
+    }
     const button = root?.querySelector<HTMLElement>('.tb-chat-scroll-latest');
     const composer = !button && !root?.classList.contains('tb-chat-host-composer-hidden')
       ? root?.querySelector<HTMLElement>('.tb-chat-composer') : undefined;
     const occluder = button ?? composer;
-    if (!occluder) return bounds;
+    if (!occluder) return { top, bottom: bounds.bottom };
     const overlay = occluder.getBoundingClientRect();
     if (!Number.isFinite(overlay.top) || !Number.isFinite(overlay.bottom) ||
-      overlay.bottom <= bounds.top || overlay.top >= bounds.bottom) return bounds;
-    return { top: bounds.top, bottom: Math.max(bounds.top, Math.min(bounds.bottom, overlay.top)) };
+      overlay.bottom <= top || overlay.top >= bounds.bottom) return { top, bottom: bounds.bottom };
+    return { top, bottom: Math.max(top, Math.min(bounds.bottom, overlay.top)) };
   };
   const refreshUnseenMessages = (viewportBounds?: Pick<DOMRect, 'top' | 'bottom'>, measuredRows?: Map<HTMLElement, DOMRect>,
     measureOverlayOnIntersection = false) => {
@@ -197,7 +211,7 @@ export function useReadingPosition(
     const row = registeredRows.current.get(arrival.scrollKey);
     if (!row) return Math.max(0, box.scrollHeight - box.clientHeight);
 
-    const bounds = unobscuredBounds(box);
+    const bounds = unobscuredBounds(box, undefined, true);
     const rowBounds = row.getBoundingClientRect();
     const visibleHeight = Math.max(0, bounds.bottom - bounds.top);
     if (arrival.mode === undefined && rowBounds.height > visibleHeight) {
