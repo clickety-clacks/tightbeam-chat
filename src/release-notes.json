@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.69",
+    "items": [
+      {
+        "title": "Keep the answered prompt visible with long replies",
+        "description": "When a long reply appears, Chat keeps part of the prompt it answers in view and keeps the reply readable, even when tool calls or activity pills appear between the two."
+      }
+    ]
+  },
+  {
     "version": "v0.1.68",
     "items": [
       {
