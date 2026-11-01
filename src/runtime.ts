@@ -163,7 +163,6 @@ class SessionRuntime implements ChatRuntime {
   private controller: AbortController | undefined;
   private cursor: string | null = null;
   private newestCursor: string | null = null;
-  private clearBarrier = 0;
   private buffered: ChangeNotice[] = [];
   private bufferedSession: RuntimeState['session'];
   private pendingFeedCoverage: {
@@ -181,7 +180,6 @@ class SessionRuntime implements ChatRuntime {
   private initializing = false;
   private restoreDepth = 0;
   private preserveRowsOnReconnect = false;
-  private pendingHistoryReanchor = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   private retryDelayMs = 250;
   private liveOutageStartedAt: number | undefined;
@@ -586,8 +584,6 @@ class SessionRuntime implements ChatRuntime {
     this.turns.clear();
     this.cursor = null;
     this.newestCursor = null;
-    this.clearBarrier = 0;
-    this.pendingHistoryReanchor = false;
     this.restoreDepth = 0;
     this.publish({
       generation: this.generation, status: 'unauthorized',
@@ -623,7 +619,7 @@ class SessionRuntime implements ChatRuntime {
   }
 
   private put(pageRecord: ConversationRecord): void {
-    if (pageRecord.sessionKey !== this.sessionKey || pageRecord.seq <= this.clearBarrier) return;
+    if (pageRecord.sessionKey !== this.sessionKey) return;
     if ((this.tombstones.get(pageRecord.id) ?? -1) >= pageRecord.rowVersion) return;
     const previous = this.rows.get(pageRecord.id);
     const record = mergeRecord(previous, pageRecord);
@@ -683,17 +679,16 @@ class SessionRuntime implements ChatRuntime {
       }
       case 'session':
         if (notice.session.sessionKey !== this.sessionKey) return false;
-        const clearedRows = this.advanceClearBarrier(notice.session);
         if (this.initializing) {
           if (!this.bufferedSession || notice.session.rowVersion > this.bufferedSession.rowVersion) {
             this.bufferedSession = notice.session;
           }
-          return clearedRows;
+          return false;
         }
         if (!this.state.session || notice.session.rowVersion > this.state.session.rowVersion) {
           this.publish({ session: notice.session, agentDisplayName: notice.session.displayName });
         }
-        return clearedRows;
+        return false;
       case 'turn': {
         const turn = notice.turn;
         this.activityTurnStateAvailable = true;
@@ -708,23 +703,6 @@ class SessionRuntime implements ChatRuntime {
         // change the selected transcript or justify replacing its snapshot.
         return false;
     }
-  }
-
-  private advanceClearBarrier(session: SessionRecord): boolean {
-    const barrier = session.clearedThroughSeq ?? session.raw.clearedThroughSeq;
-    if (typeof barrier !== 'number' || !Number.isSafeInteger(barrier) || barrier < 0 || barrier <= this.clearBarrier) {
-      return false;
-    }
-    this.clearBarrier = barrier;
-    let changed = false;
-    for (const [id, record] of this.rows) {
-      if (record.seq <= barrier) {
-        this.updateMessageSeqIndex(record, undefined);
-        this.rows.delete(id);
-        changed = true;
-      }
-    }
-    return changed;
   }
 
   private receive(notice: ChangeNotice, generation: number): void {
@@ -1032,8 +1010,6 @@ class SessionRuntime implements ChatRuntime {
     this.railArrivalOrder = 0;
     this.cursor = null;
     this.newestCursor = null;
-    this.clearBarrier = 0;
-    this.pendingHistoryReanchor = false;
     this.restoreDepth = 0;
     this.turns.clear();
     this.publish({
@@ -1187,14 +1163,9 @@ class SessionRuntime implements ChatRuntime {
         sessionError = sessionNotFound ? 'This conversation no longer exists.' : errorText(sessionFailure);
       }
 
-      const snapshotBarrier = session?.clearedThroughSeq ?? session?.raw.clearedThroughSeq;
-      const clearInvalidatesOlderAnchor = this.pendingHistoryReanchor || (this.preserveRowsOnReconnect &&
-        typeof snapshotBarrier === 'number' && Number.isSafeInteger(snapshotBarrier) &&
-        snapshotBarrier > this.clearBarrier && !!priorOldest && priorOldest.seq <= snapshotBarrier);
-      if (session) this.advanceClearBarrier(session);
       const feedReadyWhenHistoryRequestStarted = Boolean(this.connection);
       const catchingUp = this.preserveRowsOnReconnect && !!priorNewestCursor &&
-        !!this.transport.readAfter && !clearInvalidatesOlderAnchor;
+        !!this.transport.readAfter;
       const [tailResult] = await Promise.allSettled([
         catchingUp
           ? this.readAfterPages(priorNewestCursor!, controller.signal)
@@ -1223,14 +1194,6 @@ class SessionRuntime implements ChatRuntime {
       let hasOlder = this.state.hasOlder;
       let historyRailDenials = this.historyRailDenials;
       let historyError: string | undefined;
-      if (clearInvalidatesOlderAnchor && !tail) {
-        // The previous before-cursor is now below the visibility barrier. Keep
-        // retained rows, but don't expose that stale paging affordance.
-        cursor = null;
-        hasOlder = false;
-        this.pendingHistoryReanchor = true;
-        historyError = conversationError ?? errorText(tailResult.status === 'rejected' ? tailResult.reason : 'History could not be refreshed.');
-      }
       if (tail) {
         historyRailDenials = tail.railDenials ?? [];
         const candidate = new Map<string, ConversationRecord>();
@@ -1242,9 +1205,10 @@ class SessionRuntime implements ChatRuntime {
         hasOlder = catchingUp ? priorHasOlder : tail.hasOlder;
         let restored = 0;
         let restoreFailed = false;
-        // Newer rows use the bounded forward cursor. Only a session history
-        // clear invalidating the old anchor falls back to a fresh tail.
-        while (!catchingUp && !clearInvalidatesOlderAnchor && hasOlder && cursor && priorOldest &&
+        // Newer rows use the bounded forward cursor. Restore the prior older
+        // history coordinate without treating an agent context reset as a
+        // transcript visibility boundary.
+        while (!catchingUp && hasOlder && cursor && priorOldest &&
           (restored < priorDepth ||
             [...candidate.values()].every((record) => compareRecords(record, priorOldest) > 0))) {
           try {
@@ -1305,13 +1269,6 @@ class SessionRuntime implements ChatRuntime {
         if (preservingReconnectRows && priorHasOlder) {
           if (!hasOlder && priorCursor) cursor = priorCursor;
           hasOlder = true;
-        }
-        if (clearInvalidatesOlderAnchor) {
-          // The old before-cursor is below the new visibility barrier. The
-          // tail supplied a fresh paging anchor for the retained conversation.
-          cursor = tail.oldestCursor;
-          hasOlder = tail.hasOlder;
-          this.pendingHistoryReanchor = false;
         }
         this.cursor = cursor;
         this.restoreDepth = preservingReconnectRows ? Math.max(priorDepth, restored) : restored;

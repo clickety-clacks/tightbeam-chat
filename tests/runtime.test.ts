@@ -51,7 +51,7 @@ class ControlledTransport implements ChatTransport {
   railDenials?: readonly HistoryRailDenial[];
   afterHook?: (cursor: string) => ConversationPage | Promise<ConversationPage>;
   messageDetails = new Map<string, ConversationRecord>();
-  clearBarrier = 0;
+  resetBoundary = 0;
   openingFailures: Error[] = [];
   readyGate?: ReturnType<typeof deferred<void>>;
   tailHook?: () => void;
@@ -76,13 +76,13 @@ class ControlledTransport implements ChatTransport {
     this.readSessionCalls++;
     await this.readSessionHook?.(this.readSessionCalls);
     return { sessionKey: key, rowVersion: this.readSessionCalls, displayName: 'Fixture agent',
-      clearedThroughSeq: this.clearBarrier, raw: { clearedThroughSeq: this.clearBarrier }, activity: 'idle' };
+      clearedThroughSeq: this.resetBoundary, raw: { clearedThroughSeq: this.resetBoundary }, activity: 'idle' };
   };
   private page(rows: ConversationRecord[]): ConversationPage {
     const firstSeq = rows[0]?.seq;
     return { records: rows, oldestCursor: rows.length ? rows[0].id : null,
       newestCursor: rows.length ? `after:${rows.at(-1)!.seq}` : null, hasNewer: false,
-      hasOlder: rows.length ? this.rows.some((row) => row.seq < firstSeq! && row.seq > this.clearBarrier) : false,
+      hasOlder: rows.length ? this.rows.some((row) => row.seq < firstSeq!) : false,
       ...(this.railDenials === undefined ? {} : { railDenials: this.railDenials }),
       coverage: 'controlled-fixture' };
   }
@@ -104,7 +104,7 @@ class ControlledTransport implements ChatTransport {
     this.readOlderCalls++;
     const index = this.rows.findIndex((row) => row.id === before);
     if (index < 0) throw new Error('cursor missing');
-    return this.page(this.rows.slice(Math.max(0, index - 3), index).filter((row) => row.seq > this.clearBarrier));
+    return this.page(this.rows.slice(Math.max(0, index - 3), index));
   };
   readMessage: ChatTransport['readMessage'] = async (_key: string, id: string): Promise<ConversationRecord> => {
     this.readMessageCalls.push(id);
@@ -121,7 +121,7 @@ class ControlledTransport implements ChatTransport {
   emit(record: ConversationRecord) { this.callbacks?.onNotice({ operation: 'upsert', record }); }
   reset() {
     this.callbacks?.onNotice({ operation: 'session', session: {
-      sessionKey, rowVersion: 2, displayName: 'Fixture agent', raw: { clearedThroughSeq: this.clearBarrier }, activity: 'reset',
+      sessionKey, rowVersion: 2, displayName: 'Fixture agent', raw: { clearedThroughSeq: this.resetBoundary }, activity: 'reset',
     } });
   }
   doubt() { this.callbacks?.onDoubt('connection lost'); }
@@ -156,12 +156,16 @@ describe('framework-independent runtime', () => {
     runtime.dispose();
   });
 
-  it('keeps the newest canonical message lookup current through paging, deletion, and clear', async () => {
+  it('keeps the newest canonical message lookup current through paging, deletion, and reset', async () => {
     const transport = new ControlledTransport();
     transport.identity = { principalKey: 'mike', deviceId: 'fixture-device' };
     transport.rows = [...Array.from({ length: 12 }, (_, index) => message(index + 1)), switchAt(13, 'model')];
-    const read = vi.fn(async () => ({ supported: true as const, marker: null }));
-    const write = vi.fn(async () => 'written' as const);
+    let storedMarker: string | null = null;
+    const read = vi.fn(async () => ({ supported: true as const, marker: storedMarker }));
+    const write = vi.fn(async (request: { sequence: string }) => {
+      storedMarker = request.sequence;
+      return 'written' as const;
+    });
     transport.readReadMarker = read;
     transport.writeReadMarker = write;
 
@@ -176,32 +180,36 @@ describe('framework-independent runtime', () => {
     transport.emit(newest);
     await runtime.markReadPosition?.();
     expect(write).toHaveBeenLastCalledWith({ userId: 'mike', scopeKey: `${sessionKey}:session-read-position`,
-      sequence: '14', expectedCurrent: null }, expect.any(AbortSignal));
+      sequence: '14', expectedCurrent: '12' }, expect.any(AbortSignal));
 
     transport.callbacks?.onNotice({ operation: 'delete', sessionKey, id: newest.id, rowVersion: 2 });
+    const writesAfterNewest = write.mock.calls.length;
     await runtime.markReadPosition?.();
-    expect(write).toHaveBeenLastCalledWith({ userId: 'mike', scopeKey: `${sessionKey}:session-read-position`,
-      sequence: '12', expectedCurrent: null }, expect.any(AbortSignal));
+    expect(write).toHaveBeenCalledTimes(writesAfterNewest);
 
-    transport.clearBarrier = 12;
-    const afterClearBarrier = message(15);
-    transport.emit(afterClearBarrier);
+    transport.resetBoundary = 12;
+    const afterReset = message(15);
+    transport.emit(afterReset);
+    const readsBeforeReset = read.mock.calls.length;
+    const writesBeforeReset = write.mock.calls.length;
     transport.reset();
+    expect(read).toHaveBeenCalledTimes(readsBeforeReset);
+    expect(write).toHaveBeenCalledTimes(writesBeforeReset);
     await runtime.markReadPosition?.();
     expect(write).toHaveBeenLastCalledWith({ userId: 'mike', scopeKey: `${sessionKey}:session-read-position`,
-      sequence: '15', expectedCurrent: null }, expect.any(AbortSignal));
+      sequence: '15', expectedCurrent: '14' }, expect.any(AbortSignal));
 
-    transport.callbacks?.onNotice({ operation: 'delete', sessionKey, id: afterClearBarrier.id, rowVersion: 2 });
-    const readsBeforeEmptyMarker = read.mock.calls.length;
-    const writesBeforeEmptyMarker = write.mock.calls.length;
+    transport.callbacks?.onNotice({ operation: 'delete', sessionKey, id: afterReset.id, rowVersion: 2 });
+    const readsBeforeDeletedNewest = read.mock.calls.length;
+    const writesBeforeDeletedNewest = write.mock.calls.length;
     await runtime.markReadPosition?.();
-    expect(read).toHaveBeenCalledTimes(readsBeforeEmptyMarker);
-    expect(write).toHaveBeenCalledTimes(writesBeforeEmptyMarker);
+    expect(read).toHaveBeenCalledTimes(readsBeforeDeletedNewest + 1);
+    expect(write).toHaveBeenCalledTimes(writesBeforeDeletedNewest);
 
     transport.emit(message(16));
     await runtime.markReadPosition?.();
     expect(write).toHaveBeenLastCalledWith({ userId: 'mike', scopeKey: `${sessionKey}:session-read-position`,
-      sequence: '16', expectedCurrent: null }, expect.any(AbortSignal));
+      sequence: '16', expectedCurrent: '15' }, expect.any(AbortSignal));
     runtime.dispose();
   });
 
@@ -1179,21 +1187,37 @@ describe('framework-independent runtime', () => {
     runtime.dispose();
   });
 
-  it('reanchors from a fresh tail when a session clear invalidates the held history cursor', async () => {
+  it('loads retained pre-reset history and preserves its cursor and rows across a live reset', async () => {
     const transport = new ControlledTransport();
+    transport.resetBoundary = 5;
     const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
     await runtime.rebuild();
+    expect(runtime.getSnapshot().records.map((row) => row.seq)).toEqual([6, 7, 8]);
     await runtime.loadOlder();
+    expect(runtime.getSnapshot().records.map((row) => row.seq)).toEqual([3, 4, 5, 6, 7, 8]);
+    const shownIds = runtime.getSnapshot().records.map((row) => row.id);
+
+    transport.resetBoundary = 7;
+    transport.reset();
+    expect(runtime.getSnapshot().records.map((row) => row.id)).toEqual(shownIds);
+    expect(runtime.getSnapshot().session?.raw.clearedThroughSeq).toBe(7);
+
     const tailReads = transport.readTailCalls;
-    transport.clearBarrier = 5;
     transport.rows.push(message(9));
     transport.doubt();
-    await vi.waitFor(() => expect(runtime.getSnapshot().records.some((row) => row.id === 'm9')).toBe(true));
+    await runtime.rebuild();
 
-    expect(transport.readTailCalls).toBe(tailReads + 1);
-    expect(transport.readAfterCalls).toHaveLength(0);
-    expect(runtime.getSnapshot().records.map((row) => row.seq)).toEqual([6, 7, 8, 9]);
+    expect(transport.readTailCalls).toBe(tailReads);
+    expect(transport.readAfterCalls).toEqual(['after:8']);
+    expect(shownIds.every((id) => runtime.getSnapshot().records.some((row) => row.id === id))).toBe(true);
+    expect(runtime.getSnapshot().records.map((row) => row.seq)).toEqual([3, 4, 5, 6, 7, 8, 9]);
     expect(runtime.getSnapshot().hasOlder).toBe(true);
+
+    while (runtime.getSnapshot().hasOlder) await runtime.loadOlder();
+    expect(runtime.getSnapshot().records.map((row) => row.seq)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+
+    transport.callbacks?.onNotice({ operation: 'delete', sessionKey, id: 'm3', rowVersion: 2 });
+    expect(runtime.getSnapshot().records.some((row) => row.id === 'm3')).toBe(false);
     runtime.dispose();
   });
 
