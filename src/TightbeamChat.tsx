@@ -1653,8 +1653,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
         const viewportBounds = box.getBoundingClientRect();
         const promptBounds = answeredPromptRow.getBoundingClientRect();
         const otherTopOverlayBottom = Math.max(viewportBounds.top,
-          notice?.getBoundingClientRect().bottom ?? Number.NEGATIVE_INFINITY,
-          toolHistoryStatus.current?.getBoundingClientRect().bottom ?? Number.NEGATIVE_INFINITY);
+          notice?.getBoundingClientRect().bottom ?? Number.NEGATIVE_INFINITY);
         suppressSticky = promptBounds.bottom > otherTopOverlayBottom && promptBounds.top < viewportBounds.bottom;
       }
     }

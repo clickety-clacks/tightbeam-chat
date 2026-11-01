@@ -120,8 +120,7 @@ export function useReadingPosition(
     const root = box.parentElement;
     let top = bounds.top;
     if (includeTopOverlays) {
-      const topOverlays = root?.querySelectorAll<HTMLElement>(
-        '.tb-chat-runtime-notice, .tb-chat-tool-history-status, .tb-chat-latest-user-prompt');
+      const topOverlays = root?.querySelectorAll<HTMLElement>('.tb-chat-runtime-notice, .tb-chat-latest-user-prompt');
       for (const overlay of topOverlays ?? []) {
         const overlayBounds = overlay.getBoundingClientRect();
         if (!Number.isFinite(overlayBounds.top) || !Number.isFinite(overlayBounds.bottom) ||
@@ -378,8 +377,8 @@ export function useReadingPosition(
     const orderedMessages = [...messageRows.current.values()];
     const arrivalIndex = orderedMessages.findIndex(row => row.scrollKey === scrollKey);
     const precedingMessages = arrivalIndex < 0 ? [] : orderedMessages.slice(0, arrivalIndex);
-    const answeredPrompt = [...precedingMessages].reverse().find(row => row.prompt);
-    const anchor = answeredPrompt ?? precedingMessages.at(-1);
+    const anchor = precedingMessages.at(-1);
+    const answeredPrompt = anchor?.prompt ? anchor : undefined;
     topAnchoredPrompt.current = undefined;
     incomingMessageArrival.current = { scrollKey, groupEndScrollKey, anchorScrollKey: anchor?.scrollKey,
       answeredPromptScrollKey: answeredPrompt?.scrollKey,
