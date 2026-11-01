@@ -71,10 +71,10 @@ class ControlledTransport implements ChatTransport {
     if (this.readyGate) await this.readyGate.promise;
     return { close: () => { this.closed++; if (this.callbacks === callbacks) this.callbacks = undefined; } };
   };
-  readSession = async (): Promise<SessionRecord> => {
+  readSession = async (key = sessionKey, _signal?: AbortSignal): Promise<SessionRecord> => {
     this.readSessionCalls++;
     await this.readSessionHook?.(this.readSessionCalls);
-    return { sessionKey, rowVersion: this.readSessionCalls, displayName: 'Fixture agent',
+    return { sessionKey: key, rowVersion: this.readSessionCalls, displayName: 'Fixture agent',
       clearedThroughSeq: this.clearBarrier, raw: { clearedThroughSeq: this.clearBarrier }, activity: 'idle' };
   };
   private page(rows: ConversationRecord[]): ConversationPage {
@@ -746,6 +746,48 @@ describe('framework-independent runtime', () => {
     expect(transport.readTailCalls).toBe(1);
     expect(transport.readOlderCalls).toBe(0);
     runtime.dispose();
+  });
+
+  it('resolves batched senders through existing session details without a prior direct message', async () => {
+    const transport = new ControlledTransport();
+    const senderSessionKey = 'agent:research helper s_sender';
+    const sender = `agent:${senderSessionKey}`;
+    const unresolvedSessionKey = 'agent:unknown helper s_missing';
+    const unresolvedSender = `agent:${unresolvedSessionKey}`;
+    const prompt = message(1, { role: 'user', sender: 'user:person', content: 'Review these updates.' });
+    const carrier = message(2, {
+      role: 'user', sender: 'process:notifications', messageType: 'substrate', isBatchCarrier: true,
+      content: [
+        '[from process:notifications]', '', '[batched notices: 2]', 'batchId=batch-senders', 'release=example',
+        `[1] source=notice sender=${sender} cause=notice class=fyi`, 'A named helper update.', '',
+        `[2] source=notice sender=${unresolvedSender} cause=notice class=fyi`, 'An unknown helper update.', '',
+        'coalesced by notifications',
+      ].join('\n'),
+    });
+    const answer = message(3, { role: 'assistant', sender: 'assistant-service', content: 'Here is the answer.' });
+    transport.rows = [prompt, carrier, answer];
+    const requestedSessionKeys: string[] = [];
+    transport.readSession = async (key = sessionKey) => {
+      transport.readSessionCalls++;
+      requestedSessionKeys.push(key);
+      if (key === unresolvedSessionKey) throw new Error('Sender details are unavailable.');
+      return { sessionKey: key, rowVersion: 1,
+        displayName: key === senderSessionKey ? 'Research helper' : 'Fixture agent', raw: {} };
+    };
+
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    try {
+      await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+      await vi.waitFor(() => expect(runtime.getSnapshot().activitySenderDisplayNames?.get(sender))
+        .toBe('Research helper'));
+      expect(runtime.getSnapshot().records.some((record) => record.kind === 'message' && record.sender === sender)).toBe(false);
+      expect(requestedSessionKeys).toContain(senderSessionKey);
+      expect(requestedSessionKeys).toContain(unresolvedSessionKey);
+      expect(runtime.getSnapshot().activitySenderDisplayNames?.has(unresolvedSender)).toBe(false);
+      expect(runtime.getSnapshot().status).toBe('ready');
+    } finally {
+      runtime.dispose();
+    }
   });
 
   it('keeps history and sending available without turn detail endpoints', async () => {

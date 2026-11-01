@@ -858,7 +858,8 @@ describe('conversation surface', () => {
       status: 'completed', rawInput: toolInput, rawOutput: toolResult, content: null,
       truncated: [], startedAt: 1000, endedAt: 1100, rowVersion: 1 };
     const runtime = new FakeRuntime(sessionKey, { records: [prompt, carrier, answer], toolCallsEnabled: true,
-      toolCalls: [toolCall], provenanceAvailable: false, activityTurnStateAvailable: true, activeTurn: undefined });
+      toolCalls: [toolCall], provenanceAvailable: false, activityTurnStateAvailable: true, activeTurn: undefined,
+      activitySenderDisplayNames: new Map([['agent:helper', 'Research helper']]) });
     const receivedRecords: ConversationRecord[] = [];
     const renderMessage = vi.fn((record: ConversationRecord) => {
       receivedRecords.push(record);
@@ -874,6 +875,9 @@ describe('conversation surface', () => {
     expect(receivedRecords.find(record => record.id === 'carrier:member:1')?.content).toBe(onBehalfContent);
 
     const pillRow = view.container.querySelector<HTMLElement>('.tb-chat-activity-pill-row')!;
+    expect(pillRow.textContent).toContain('Research helper');
+    expect(pillRow.getAttribute('aria-label'))
+      .toBe('Other agent: Research helper — An agent update with useful detail.');
     expect(pillRow.textContent).toContain('An agent update with useful detail.');
     expect(pillRow.textContent).not.toContain(tag);
     expect(pillRow.title).not.toContain(tag);

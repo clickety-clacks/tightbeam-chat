@@ -358,6 +358,7 @@ export function buildActivityTrail(input: {
   readonly records: readonly { readonly kind: 'message'; readonly id: string; readonly seq: number;
     readonly sender?: string; readonly messageType?: string; readonly role: string; readonly content: string;
     readonly isBatchCarrier?: boolean; readonly turnSeq?: number; readonly recordEventIds?: readonly string[]; readonly raw: Readonly<Record<string, unknown>> }[];
+  readonly senderDisplayNames?: ReadonlyMap<string, string>;
   readonly bubbles: readonly ActivityBubble[];
   readonly transitions: readonly CanonicalTransition[];
   /** Unmatched local sends use timestamps to find their place between tool rows. */
@@ -377,7 +378,10 @@ export function buildActivityTrail(input: {
   readonly expandedRuns: ReadonlySet<string>;
 }): ActivityTrailPlan {
   const visibleIds = new Set(input.bubbles.filter((bubble) => !bubble.member).map((bubble) => bubble.record.id));
-  const senderDisplayNames = knownSenderDisplayNames(input.records);
+  const senderDisplayNames = new Map(knownSenderDisplayNames(input.records));
+  for (const [sender, displayName] of input.senderDisplayNames ?? []) {
+    if (displayName.trim()) senderDisplayNames.set(sender, displayName.trim());
+  }
   const candidates: Candidate[] = [];
   for (const message of input.records) {
     if (visibleIds.has(message.id)) continue;

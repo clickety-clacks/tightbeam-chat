@@ -349,6 +349,8 @@ export interface RuntimeState {
   readonly historyRailDenials?: readonly HistoryRailDenial[];
   readonly targetGateway?: string;
   readonly agentDisplayName?: string;
+  /** Display names resolved from existing session details for batch senders. */
+  readonly activitySenderDisplayNames?: ReadonlyMap<string, string>;
   readonly hasOlder: boolean;
   readonly loadingOlder: boolean;
   readonly historyError?: string;

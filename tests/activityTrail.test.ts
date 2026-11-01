@@ -23,6 +23,7 @@ const tool = (id: string, seq: number, status: ToolCallRecord['status'], toolNam
 
 function build(input: {
   records?: readonly CanonicalMessage[];
+  senderDisplayNames?: ReadonlyMap<string, string>;
   bubbles?: readonly ActivityBubble[];
   transitions?: readonly CanonicalTransition[];
   localSendTimes?: readonly number[];
@@ -42,6 +43,7 @@ function build(input: {
     candidate.side === 'human' && candidate.ownerScoped);
   return buildActivityTrail({
     sessionKey: 'session', records: input.records ?? [], bubbles: input.bubbles ?? [], transitions: input.transitions ?? [],
+    senderDisplayNames: input.senderDisplayNames,
     localSendTimes: input.localSendTimes,
     tools: input.tools ?? [], toolsEnabled: input.toolsEnabled ?? true,
     turnStateAvailable: input.turnStateAvailable ?? true, activeTurnRunning: input.activeTurnRunning ?? true,
@@ -231,13 +233,10 @@ describe('activity trail projection', () => {
     expect(build({ records: [hiddenReply], bubbles: [bubble(prompt, 'human')] }).messageItems).toEqual([]);
   });
 
-  it('projects running-index batch members with spaced senders and extends their fold across batches', () => {
+  it('projects batch members with available sender names and folds across carriers without prior direct messages', () => {
     const sender = 'agent:helper:main session';
     const unresolvedSender = 'agent:unknown:main session';
-    const knownSender = message('known-helper', 1, sender, 'Earlier helper update', {
-      messageType: 'agent', raw: { senderDisplayName: 'Research — helper' },
-    });
-    const prompt = message('prompt', 2, 'user:person', 'A question', { role: 'user' });
+    const prompt = message('prompt', 1, 'user:person', 'A question', { role: 'user' });
     const carrier = (id: string, seq: number,
       members: Array<{ index: number; detail: string; sender?: string }>) => message(id, seq,
       'process:notifications', [
@@ -247,15 +246,15 @@ describe('activity trail projection', () => {
         ]),
         'coalesced by notices',
       ].join('\n'), { isBatchCarrier: true, messageType: 'substrate' });
-    const first = carrier('carrier-first', 3, [
+    const first = carrier('carrier-first', 2, [
       { index: 7, detail: 'First helper update' },
       { index: 9, detail: 'Second helper update' },
       { index: 11, detail: 'Unresolved helper update', sender: unresolvedSender },
     ]);
-    const second = carrier('carrier-second', 4, [{ index: 12, detail: 'Latest helper update' }]);
-    const reply = message('reply', 5, 'assistant-service', 'Answer', { role: 'assistant' });
+    const second = carrier('carrier-second', 3, [{ index: 12, detail: 'Latest helper update' }]);
+    const reply = message('reply', 4, 'assistant-service', 'Answer', { role: 'assistant' });
 
-    const plan = build({ records: [knownSender, first, second],
+    const plan = build({ records: [first, second], senderDisplayNames: new Map([[sender, 'Research — helper']]),
       bubbles: [bubble(prompt, 'human'), bubble(reply, 'agent')] });
 
     expect(plan.messageItems).toHaveLength(1);
