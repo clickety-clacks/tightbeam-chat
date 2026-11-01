@@ -1345,7 +1345,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     priorArrivalContext.recoveryRevision === recoveryRevision;
   const reading = useReadingPosition(state.status === 'ready', readingRevision, box =>
     Boolean(state.loadingOlder || state.recordEventsLoading || (!state.historyError && (state.hasOlder || state.recordEventsHasOlder) && box.scrollTop < olderHistoryPrefetchDistance(box))),
-    arrivalEligible, state.sessionKey, markReadPosition);
+    arrivalEligible, state.sessionKey, markReadPosition, state.activeTurn?.turn.status === 'running');
   const preserveReadingPositionRef = useRef(reading.preserveVisiblePosition);
   preserveReadingPositionRef.current = reading.preserveVisiblePosition;
   const preserveReadingPosition = useCallback(() => preserveReadingPositionRef.current(), []);
@@ -1375,6 +1375,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   const root = useRef<HTMLElement>(null);
   const runtimeNotice = useRef<HTMLDivElement>(null);
   const toolHistoryStatus = useRef<HTMLDivElement>(null);
+  const stickyPromptOverlay = useRef<HTMLDivElement>(null);
   const composer = useRef<ComposerHandle>(null);
   const [overlay, setOverlay] = useState<ChatOverlay | null>(null);
   const overlayRef = useRef<ChatOverlay | null>(null);
@@ -1573,14 +1574,14 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   const timeline = useMemo(() => composeTimeline(bubbles, localSends, canonicalSends, sendsByIdentity,
     transitions, activityPlan.messageItems), [activityPlan.messageItems, bubbles, canonicalSends, localSends, sendsByIdentity, transitions]);
   const messageRows = useMemo(() => {
-    const rows = new Map<string, { key: string; scrollKey: string }>();
+    const rows = new Map<string, { key: string; scrollKey: string; role: string }>();
     for (const item of timeline) {
       if (item.kind === 'bubble') {
         const scrollKey = item.scrollKey ?? (item.bubble.derived ? item.bubble.key : item.bubble.record.id);
-        rows.set(scrollKey, { key: scrollKey, scrollKey });
+        rows.set(scrollKey, { key: scrollKey, scrollKey, role: item.bubble.record.role });
       } else if (item.kind === 'local') {
         const scrollKey = `local-${item.send.clientMessageId}`;
-        rows.set(scrollKey, { key: scrollKey, scrollKey });
+        rows.set(scrollKey, { key: scrollKey, scrollKey, role: 'user' });
       }
     }
     return rows;
@@ -1639,8 +1640,9 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     const box = viewport.current;
     const prompt = box ? nearestPromptAboveVisibleTop(promptCandidates, box, reading.getRow) : undefined;
     const identity = prompt?.identity;
-    setStickyPromptIdentity(prior => prior === identity ? prior : identity);
-  }, [promptCandidates, reading.getRow]);
+    if (stickyPromptIdentity === identity) reading.reconcileReducedMotionTopAnchor();
+    else setStickyPromptIdentity(identity);
+  }, [promptCandidates, reading.getRow, reading.reconcileReducedMotionTopAnchor, stickyPromptIdentity]);
   useEffect(() => {
     if (host.settingsRequestRevision <= handledSettingsRevision.current) return;
     handledSettingsRevision.current = host.settingsRequestRevision;
@@ -1828,7 +1830,9 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     const toolStatus = toolHistoryStatus.current;
     const observer = typeof ResizeObserver === 'undefined'
       ? undefined : new ResizeObserver(updateStickyPrompt);
-    for (const element of [root.current, box, content, notice, toolStatus]) if (element) observer?.observe(element);
+    for (const element of [root.current, box, content, notice, toolStatus, stickyPromptOverlay.current]) {
+      if (element) observer?.observe(element);
+    }
     window.addEventListener('resize', updateStickyPrompt);
     window.addEventListener('orientationchange', updateStickyPrompt);
     window.visualViewport?.addEventListener('resize', updateStickyPrompt);
@@ -1842,7 +1846,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
       window.visualViewport?.removeEventListener('scroll', updateStickyPrompt);
     };
   }, [promptCandidates, showRuntimeNotice, showToolHistoryStatusInNotice, state.loadingOlder, state.historyError, localNotice,
-    updateStickyPrompt, reading.content]);
+    updateStickyPrompt, reading.content, stickyPromptIdentity, latestPromptDismissed]);
   const showStickyPrompt = !!stickyPrompt && !latestPromptDismissed;
   const jumpToStickyPrompt = () => {
     const box = viewport.current;
@@ -2019,7 +2023,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
         <p className="tb-chat-empty">No messages yet.</p>}
       </div>
     </div>
-    {showStickyPrompt && stickyPrompt && <div className="tb-chat-latest-user-prompt">
+    {showStickyPrompt && stickyPrompt && <div ref={stickyPromptOverlay} className="tb-chat-latest-user-prompt">
       <button type="button" className="tb-chat-latest-user-prompt-jump" aria-controls={stickyPromptTargetId}
         aria-label="Jump to user prompt" onClick={jumpToStickyPrompt}>
         <span className="tb-chat-latest-user-prompt-text">{stickyPrompt.content}</span>

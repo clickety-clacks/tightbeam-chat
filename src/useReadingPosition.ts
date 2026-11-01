@@ -5,8 +5,18 @@ const bottomThreshold = 64;
 const bottomTolerance = 1;
 const arrivalDuration = 240;
 const arrivalEasing = 'cubic-bezier(0.2, 0, 0, 1)';
+const arrivalTopInset = 40;
 type Anchor = { key: string; top: number };
-type MessageRow = { key: string; scrollKey: string };
+type MessageRow = { key: string; scrollKey: string; role: string };
+type IncomingMessageArrival = {
+  readonly scrollKey: string;
+  readonly groupEndScrollKey: string;
+  streaming: boolean;
+  locked: boolean;
+  mode?: 'bottom' | 'top';
+  lockedTarget?: number;
+  awaitingReducedMotionTopCommit?: boolean;
+};
 
 function easeArrival(progress: number): number {
   // Match cubic-bezier(0.2, 0, 0, 1) for the scroll and row entrance.
@@ -30,6 +40,7 @@ export function useReadingPosition(
   arrivalEligible = false,
   arrivalScope?: string,
   onManualScroll?: () => void,
+  arrivalStreaming = false,
 ) {
   const viewport = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
@@ -41,6 +52,8 @@ export function useReadingPosition(
   const arrivalStartTop = useRef(0);
   const arrivalFrame = useRef<number | undefined>(undefined);
   const previousTailRow = useRef<HTMLElement | undefined>(undefined);
+  const incomingMessageArrival = useRef<IncomingMessageArrival | undefined>(undefined);
+  const arrivalStreamingRef = useRef(arrivalStreaming);
   const seenArrivalRows = useRef(new Set<string>());
   const arrivalScopeRef = useRef(arrivalScope);
   const messageRows = useRef<ReadonlyMap<string, MessageRow>>(new Map());
@@ -52,6 +65,7 @@ export function useReadingPosition(
   if (arrivalScopeRef.current !== arrivalScope) {
     seenArrivalRows.current.clear();
     previousTailRow.current = undefined;
+    incomingMessageArrival.current = undefined;
     knownMessages.current.clear();
     unseenMessages.current.clear();
     messageBaselineReady.current = false;
@@ -83,6 +97,7 @@ export function useReadingPosition(
   const [showLatest, setShowLatest] = useState(false);
   latestReady.current = ready;
   arrivalEligibleRef.current = arrivalEligible;
+  arrivalStreamingRef.current = arrivalStreaming;
 
   const distance = (box: HTMLElement) => Math.max(0, box.scrollHeight - box.clientHeight - box.scrollTop);
   const updateLatestControl = (box: HTMLElement) => {
@@ -95,18 +110,32 @@ export function useReadingPosition(
       }
     }
   };
-  const unobscuredBounds = (box: HTMLElement, viewportBounds?: Pick<DOMRect, 'top' | 'bottom'>): Pick<DOMRect, 'top' | 'bottom'> => {
+  const unobscuredBounds = (box: HTMLElement, viewportBounds?: Pick<DOMRect, 'top' | 'bottom'>,
+    includeTopOverlays = false): Pick<DOMRect, 'top' | 'bottom'> => {
     const bounds = viewportBounds ?? box.getBoundingClientRect();
     const root = box.parentElement;
+    let top = bounds.top;
+    if (includeTopOverlays) {
+      const topOverlays = root?.querySelectorAll<HTMLElement>('.tb-chat-runtime-notice, .tb-chat-latest-user-prompt');
+      for (const overlay of topOverlays ?? []) {
+        const overlayBounds = overlay.getBoundingClientRect();
+        if (!Number.isFinite(overlayBounds.top) || !Number.isFinite(overlayBounds.bottom) ||
+          overlayBounds.bottom <= top || overlayBounds.top >= bounds.bottom ||
+          overlayBounds.top >= top + arrivalTopInset + 24) continue;
+        // Keep both the prior bubble's prompt-tail strip and the reply's first
+        // line below top overlays before placing the reply's top inset.
+        top = Math.min(bounds.bottom, Math.max(top, overlayBounds.bottom));
+      }
+    }
     const button = root?.querySelector<HTMLElement>('.tb-chat-scroll-latest');
     const composer = !button && !root?.classList.contains('tb-chat-host-composer-hidden')
       ? root?.querySelector<HTMLElement>('.tb-chat-composer') : undefined;
     const occluder = button ?? composer;
-    if (!occluder) return bounds;
+    if (!occluder) return { top, bottom: bounds.bottom };
     const overlay = occluder.getBoundingClientRect();
     if (!Number.isFinite(overlay.top) || !Number.isFinite(overlay.bottom) ||
-      overlay.bottom <= bounds.top || overlay.top >= bounds.bottom) return bounds;
-    return { top: bounds.top, bottom: Math.max(bounds.top, Math.min(bounds.bottom, overlay.top)) };
+      overlay.bottom <= top || overlay.top >= bounds.bottom) return { top, bottom: bounds.bottom };
+    return { top, bottom: Math.max(top, Math.min(bounds.bottom, overlay.top)) };
   };
   const refreshUnseenMessages = (viewportBounds?: Pick<DOMRect, 'top' | 'bottom'>, measuredRows?: Map<HTMLElement, DOMRect>,
     measureOverlayOnIntersection = false) => {
@@ -173,6 +202,51 @@ export function useReadingPosition(
       row.dataset.recordKey?.startsWith('local-'))) row = row.previousElementSibling;
     return row instanceof HTMLElement && row.dataset.scrollKey !== undefined ? row : undefined;
   };
+  const incomingMessageTarget = (box: HTMLElement, arrival: IncomingMessageArrival) => {
+    const refreshTopAnchor = arrival.locked && arrival.mode === 'top';
+    if (arrival.locked && arrival.lockedTarget !== undefined && !refreshTopAnchor) return arrival.lockedTarget;
+    const row = registeredRows.current.get(arrival.scrollKey);
+    if (!row) return Math.max(0, box.scrollHeight - box.clientHeight);
+    const groupEndRow = registeredRows.current.get(arrival.groupEndScrollKey) ?? row;
+
+    const bounds = unobscuredBounds(box, undefined, true);
+    const rowBounds = row.getBoundingClientRect();
+    const groupEndBounds = groupEndRow.getBoundingClientRect();
+    const arrivalHeight = Math.max(rowBounds.height, groupEndBounds.bottom - rowBounds.top);
+    const visibleHeight = Math.max(0, bounds.bottom - bounds.top);
+    if (arrival.mode === undefined && arrivalHeight > visibleHeight) {
+      arrival.mode = 'top';
+      arrival.locked = true;
+      following.current = false;
+    } else if (arrival.mode === undefined) {
+      arrival.mode = 'bottom';
+      if (!arrival.streaming) arrival.locked = true;
+    } else if (arrival.mode === 'bottom' && !arrival.locked && arrivalHeight > visibleHeight) {
+      arrival.mode = 'top';
+      arrival.locked = true;
+      following.current = false;
+    }
+
+    const maxScrollTop = Math.max(0, box.scrollHeight - box.clientHeight);
+    let destination: number;
+    if (arrival.mode === 'top') {
+      const topInset = Math.min(arrivalTopInset, Math.max(12, visibleHeight / 4));
+      destination = box.scrollTop + rowBounds.top - (bounds.top + topInset);
+    } else {
+      // Messages published together form one arrival. If the group fits, keep
+      // following its end; if it does not, the first bubble gets the top anchor.
+      destination = maxScrollTop;
+    }
+    destination = Math.max(0, Math.min(maxScrollTop, destination));
+    if (arrival.locked && (arrival.lockedTarget === undefined || refreshTopAnchor)) {
+      // The prompt chip can appear or change size as this scroll moves prompts
+      // above the viewport. Re-measure a top anchor and only move the target
+      // farther from the top so a later chip change cannot uncover the reply.
+      arrival.lockedTarget = refreshTopAnchor && arrival.lockedTarget !== undefined
+        ? Math.min(arrival.lockedTarget, destination) : destination;
+    }
+    return arrival.lockedTarget ?? destination;
+  };
   const cancelArrivalAnimations = () => {
     if (arrivalFrame.current !== undefined) window.cancelAnimationFrame(arrivalFrame.current);
     arrivalFrame.current = undefined;
@@ -207,46 +281,57 @@ export function useReadingPosition(
       animateArrivalRow(row, startedAt);
     }
   };
-  const startArrivalMotion = (rows: readonly HTMLElement[]) => {
+  const startArrivalScroll = (rows: readonly HTMLElement[], reduceMotion: boolean) => {
     const box = viewport.current;
-    if (!box || !arrivalEligibleRef.current || !following.current || userScrollIntent.current ||
-      window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return false;
-
-    animateArrivalRows(rows);
-    if (arrivalStartTime.current !== undefined) {
-      target.current = Math.max(0, box.scrollHeight - box.clientHeight);
-      return true;
-    }
+    if (!box) return false;
+    if (!reduceMotion) animateArrivalRows(rows);
+    if (arrivalStartTime.current !== undefined) return true;
 
     // An explicit return-to-latest may already have a native smooth scroll in
     // flight. Take it over from its current position so the new row joins it.
     if (animating.current) box.scrollTo({ top: box.scrollTop, behavior: 'instant' });
     animating.current = false;
     target.current = undefined;
-    const bottom = Math.max(0, box.scrollHeight - box.clientHeight);
     const start = box.scrollTop;
-    if (Math.abs(bottom - start) < 1) return true;
-
     const startedAt = performance.now();
     arrivalStartTop.current = start;
     arrivalStartTime.current = startedAt;
-    target.current = bottom;
-    animating.current = true;
+    animating.current = !reduceMotion;
     const step = (now: number) => {
       const currentBox = viewport.current;
       if (!currentBox || arrivalStartTime.current === undefined) return;
-      const progress = Math.min(1, Math.max(0, (now - arrivalStartTime.current) / arrivalDuration));
-      const currentBottom = Math.max(0, currentBox.scrollHeight - currentBox.clientHeight);
-      target.current = currentBottom;
-      currentBox.scrollTop = arrivalStartTop.current + (currentBottom - arrivalStartTop.current) * easeArrival(progress);
+      const incoming = incomingMessageArrival.current;
+      const destination = incoming
+        ? incomingMessageTarget(currentBox, incoming)
+        : Math.max(0, currentBox.scrollHeight - currentBox.clientHeight);
+      const progress = reduceMotion ? 1 : Math.min(1, Math.max(0, (now - arrivalStartTime.current) / arrivalDuration));
+      const needsReducedMotionTopSettle = reduceMotion && incoming?.mode === 'top' &&
+        Math.abs(currentBox.scrollTop - destination) > .5;
+      target.current = destination;
+      if (reduceMotion) currentBox.scrollTo({ top: destination, behavior: 'instant' });
+      else currentBox.scrollTop = arrivalStartTop.current + (destination - arrivalStartTop.current) * easeArrival(progress);
       if (progress >= 1) {
-        currentBox.scrollTop = currentBottom;
+        if (!reduceMotion) currentBox.scrollTop = destination;
+        if (needsReducedMotionTopSettle) {
+          // Wait for the scroll event and Chat's post-commit prompt-chip
+          // measurement before deciding whether another instant placement is needed.
+          incoming!.awaitingReducedMotionTopCommit = true;
+          arrivalFrame.current = undefined;
+          arrivalStartTime.current = undefined;
+          target.current = undefined;
+          animating.current = false;
+          updateLatestControl(currentBox);
+          capture();
+          return;
+        }
         arrivalFrame.current = undefined;
         arrivalStartTime.current = undefined;
         target.current = undefined;
         animating.current = false;
-        following.current = true;
-        setShowLatest(false);
+        if (!incoming || !incoming.locked) following.current = true;
+        const settledArrival = incomingMessageArrival.current;
+        if (settledArrival && !settledArrival.streaming) incomingMessageArrival.current = undefined;
+        updateLatestControl(currentBox);
         capture();
         return;
       }
@@ -254,6 +339,23 @@ export function useReadingPosition(
     };
     arrivalFrame.current = window.requestAnimationFrame(step);
     return true;
+  };
+  const startArrivalMotion = (rows: readonly HTMLElement[]) => {
+    const box = viewport.current;
+    if (!box || !arrivalEligibleRef.current || !following.current || userScrollIntent.current ||
+      window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return false;
+    return startArrivalScroll(rows, false);
+  };
+  const startIncomingMessageArrival = (
+    rows: readonly HTMLElement[], scrollKey: string, groupEndScrollKey: string,
+  ) => {
+    const box = viewport.current;
+    if (!box || !arrivalEligibleRef.current || !following.current || userScrollIntent.current) return false;
+    const streaming = arrivalStreamingRef.current;
+    incomingMessageArrival.current = { scrollKey, groupEndScrollKey, streaming, locked: !streaming };
+    updateLatestControl(box);
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+    return startArrivalScroll(reduceMotion ? [] : rows, reduceMotion);
   };
   const clearUserScrollIntent = () => {
     userScrollIntent.current = false;
@@ -267,6 +369,12 @@ export function useReadingPosition(
   };
   const noteUserScroll = () => {
     if (arrivalStartTime.current !== undefined || arrivalAnimations.current.size > 0) cancelArrivalAnimations();
+    if (incomingMessageArrival.current) {
+      incomingMessageArrival.current.streaming = false;
+      incomingMessageArrival.current.locked = true;
+      incomingMessageArrival.current.lockedTarget = undefined;
+      incomingMessageArrival.current.awaitingReducedMotionTopCommit = false;
+    }
     if (!userScrollIntent.current) manualScrollReported.current = false;
     userScrollIntent.current = true;
     initialSettlePending.current = false;
@@ -381,7 +489,7 @@ export function useReadingPosition(
         if (seenArrivalRows.current.has(scrollKey)) continue;
         seenArrivalRows.current.add(scrollKey);
         appendedScrollKeys.add(scrollKey);
-        if (canAnimateArrival) appendedRows.push(row);
+        appendedRows.push(row);
       }
     } else if (contentElement) {
       // Initial content and catch-up are already on screen; remember them so a
@@ -413,18 +521,65 @@ export function useReadingPosition(
       arrivalAnimationStarts.current.delete(row);
     }
 
+    let incoming = incomingMessageArrival.current;
+    if (incoming?.streaming && !arrivalStreamingRef.current) {
+      incoming.streaming = false;
+      incoming.locked = true;
+    }
     if (arrivalStartTime.current !== undefined &&
-      (!following.current || userScrollIntent.current || !arrivalEligibleRef.current)) {
+      (userScrollIntent.current || !arrivalEligibleRef.current || (!following.current && !incoming))) {
       cancelArrivalAnimations();
     }
-    if (appendedRows.length && startArrivalMotion(appendedRows)) {
+    if (arrivalStartTime.current !== undefined && !incoming && canAnimateArrival && appendedRows.length) {
+      animateArrivalRows(appendedRows);
+    }
+
+    const firstAppendedMessage = [...appendedScrollKeys].find(scrollKey =>
+      !scrollKey.startsWith('local-') && messageRows.current.get(scrollKey)?.role === 'assistant');
+    if (!incoming && firstAppendedMessage && arrivalEligibleRef.current && following.current && !userScrollIntent.current) {
+      const appendedMessageKeys = [...appendedScrollKeys].filter(scrollKey =>
+        !scrollKey.startsWith('local-') && messageRows.current.has(scrollKey));
+      const groupEndScrollKey = appendedMessageKeys.at(-1) ?? firstAppendedMessage;
+      const started = startIncomingMessageArrival(canAnimateArrival ? appendedRows : [], firstAppendedMessage, groupEndScrollKey);
+      if (started) {
+        capture();
+        return;
+      }
+    }
+
+    incoming = incomingMessageArrival.current;
+    if (incoming) {
+      if (!incoming.locked && canAnimateArrival && appendedRows.length) animateArrivalRows(appendedRows);
+      if (incoming.streaming && !incoming.locked) {
+        const destination = incomingMessageTarget(box, incoming);
+        if (arrivalStartTime.current !== undefined) {
+          target.current = destination;
+          updateLatestControl(box);
+          capture();
+          return;
+        }
+        if (incoming.locked) {
+          const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+          startArrivalScroll([], reduceMotion);
+        } else if (Math.abs(box.scrollTop - destination) > .5) {
+          box.scrollTop = destination;
+        }
+        updateLatestControl(box);
+        capture();
+        return;
+      }
+    }
+
+    if (arrivalStartTime.current !== undefined) {
+      const activeArrival = incomingMessageArrival.current;
+      target.current = activeArrival
+        ? incomingMessageTarget(box, activeArrival)
+        : Math.max(0, box.scrollHeight - box.clientHeight);
+      updateLatestControl(box);
       capture();
       return;
     }
-    // Retarget the existing frame loop when content changes during an arrival.
-    // A burst never queues another scroll animation or snaps to the new end.
-    if (arrivalStartTime.current !== undefined) {
-      target.current = Math.max(0, box.scrollHeight - box.clientHeight);
+    if (!incoming && appendedRows.length && canAnimateArrival && startArrivalMotion(appendedRows)) {
       capture();
       return;
     }
@@ -481,11 +636,35 @@ export function useReadingPosition(
       }
       updateLatestControl(box);
     }
+    const settledArrival = incomingMessageArrival.current;
+    if (settledArrival && !settledArrival.streaming && !settledArrival.awaitingReducedMotionTopCommit &&
+      arrivalStartTime.current === undefined) {
+      incomingMessageArrival.current = undefined;
+    }
     capture();
   };
   const currentUpdate = useRef(updateLayout);
   currentUpdate.current = updateLayout;
   const reconcileViewportLayout = useCallback(() => currentUpdate.current(), []);
+  const reconcileReducedMotionTopAnchor = useCallback(() => {
+    const box = viewport.current;
+    const arrival = incomingMessageArrival.current;
+    if (!box || !arrival?.awaitingReducedMotionTopCommit) return;
+    const destination = incomingMessageTarget(box, arrival);
+    if (Math.abs(box.scrollTop - destination) > .5) {
+      target.current = destination;
+      box.scrollTo({ top: destination, behavior: 'instant' });
+      updateLatestControl(box);
+      capture();
+      return;
+    }
+
+    arrival.awaitingReducedMotionTopCommit = false;
+    target.current = undefined;
+    if (!arrival.streaming) incomingMessageArrival.current = undefined;
+    updateLatestControl(box);
+    capture();
+  }, []);
 
   useLayoutEffect(updateLayout, [revision]);
   useLayoutEffect(() => {
@@ -530,8 +709,9 @@ export function useReadingPosition(
       target.current = undefined;
     }
     if (arrivalStartTime.current !== undefined && !readerInitiated) {
-      target.current = bottom;
-      setShowLatest(false);
+      const incoming = incomingMessageArrival.current;
+      target.current = incoming ? incomingMessageTarget(box, incoming) : bottom;
+      updateLatestControl(box);
       capture();
       return;
     }
@@ -540,6 +720,12 @@ export function useReadingPosition(
       if (readerInitiated) {
         initialSettlePending.current = false;
         following.current = isAtLatest(box);
+        if (following.current) incomingMessageArrival.current = undefined;
+        else if (incomingMessageArrival.current) {
+          incomingMessageArrival.current.streaming = false;
+          incomingMessageArrival.current.locked = true;
+          incomingMessageArrival.current.lockedTarget = undefined;
+        }
       } else if (following.current) {
         if (!moveToLatest(false) && initialSettlePending.current && !shouldKeepInitialSettleRef.current(box)) initialSettlePending.current = false;
       }
@@ -547,6 +733,12 @@ export function useReadingPosition(
       if (readerInitiated) {
         initialSettlePending.current = false;
         following.current = isAtLatest(box);
+        if (following.current) incomingMessageArrival.current = undefined;
+        else if (incomingMessageArrival.current) {
+          incomingMessageArrival.current.streaming = false;
+          incomingMessageArrival.current.locked = true;
+          incomingMessageArrival.current.lockedTarget = undefined;
+        }
       } else if (following.current && currentDistance > bottomThreshold && initialSettlePending.current && latestReady.current) {
         // Correct only the initial browser restoration before the first settle.
         moveToLatest(false);
@@ -608,6 +800,7 @@ export function useReadingPosition(
   const scrollBy = (amount: number) => {
     const box = viewport.current;
     if (!box || !Number.isFinite(amount) || amount === 0) return;
+    incomingMessageArrival.current = undefined;
     if (arrivalStartTime.current !== undefined || arrivalAnimations.current.size > 0) cancelArrivalAnimations();
     initialSettlePending.current = false;
     const bottom = Math.max(0, box.scrollHeight - box.clientHeight);
@@ -638,6 +831,7 @@ export function useReadingPosition(
   const scrollToLatest = () => {
     const box = viewport.current;
     if (!box) return;
+    incomingMessageArrival.current = undefined;
     if (arrivalStartTime.current !== undefined || arrivalAnimations.current.size > 0) cancelArrivalAnimations();
     initialSettlePending.current = false;
     // Keep keyboard navigation somewhere useful after its button disappears.
@@ -655,6 +849,7 @@ export function useReadingPosition(
   const scrollToNextUnseen = (): boolean => {
     const box = viewport.current;
     if (!box) return false;
+    incomingMessageArrival.current = undefined;
     const bounds = unobscuredBounds(box);
     const measuredRows = new Map<HTMLElement, DOMRect>();
     refreshUnseenMessages(bounds, measuredRows);
@@ -699,6 +894,7 @@ export function useReadingPosition(
   const arriveOwnMessages = (scrollKeys: readonly string[]) => {
     const box = viewport.current;
     if (!box) return;
+    incomingMessageArrival.current = undefined;
     initialSettlePending.current = false;
     for (const key of scrollKeys) {
       unseenMessages.current.delete(key);
@@ -735,5 +931,5 @@ export function useReadingPosition(
   return { viewport, content, registerRow, getRow, showLatest, unseenMessageCount, unseenButtonLabel,
     hasUnseenButtonCount: unseenMessageCount > 0 && !unseenControlPrimed, setMessageRows, onScroll, interrupt,
     holdPosition, preserveVisiblePosition, scrollBy, scrollToLatest, scrollToLatestFromControl, scrollToNextUnseen, arriveOwnMessages,
-    noteUserScroll, reconcileViewportLayout };
+    noteUserScroll, reconcileViewportLayout, reconcileReducedMotionTopAnchor };
 }
