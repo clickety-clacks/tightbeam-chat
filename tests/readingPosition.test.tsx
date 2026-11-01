@@ -1954,7 +1954,14 @@ describe('conversation reading position', () => {
     expect(screen.getByRole('button', { name: 'Jump to user prompt' }).textContent).toBe('Message 6');
     expect(crossingPrompt.style.visibility).toBe('hidden');
 
-    act(() => animate.mock.results[1].value.onfinish());
+    const previewNode = chat.querySelector<HTMLElement>('.tb-chat-latest-user-prompt')!;
+    const reverseAnimation = animate.mock.results[1].value;
+    let cancelState: { overlayConnected: boolean; sourceVisibility: string } | undefined;
+    reverseAnimation.cancel = vi.fn(() => {
+      cancelState = { overlayConnected: previewNode.isConnected, sourceVisibility: crossingPrompt.style.visibility };
+    });
+    act(() => reverseAnimation.onfinish());
+    expect(cancelState).toEqual({ overlayConnected: false, sourceVisibility: 'hidden' });
     expect(crossingPrompt.style.visibility).not.toBe('hidden');
     expect(screen.queryByRole('button', { name: 'Jump to user prompt' })).toBeNull();
 

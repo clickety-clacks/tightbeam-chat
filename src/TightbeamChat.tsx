@@ -1774,6 +1774,8 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
       (!overlappingPromptIdentity || overlappingPromptIdentity === identity);
     const active = promptHandoff;
     if (!active) {
+      cancelPromptHandoffAnimation();
+      restorePromptHandoffSource();
       if (stickyPromptIdentity && isEligible(stickyPromptIdentity)) {
         setPromptHandoff({ identity: stickyPromptIdentity, phase: 'entering' });
       }
@@ -1824,9 +1826,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     const shouldAnimateOut = !latestPromptDismissed && !suppressOlderStickyPrompt &&
       (!overlappingPromptIdentity || overlappingPromptIdentity === active.identity);
     if (!shouldAnimateOut) {
-      cancelPromptHandoffAnimation();
       promptHandoffMotionStart.current = null;
-      restorePromptHandoffSource();
       setPromptHandoff(null);
       return;
     }
@@ -1844,8 +1844,6 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
     const animation = !reducedMotion && node && from && to ? animatePromptHandoff(node, from, to) : undefined;
     if (!animation) {
-      cancelPromptHandoffAnimation();
-      restorePromptHandoffSource();
       setPromptHandoff(null);
       return;
     }
@@ -1854,11 +1852,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     promptHandoffAnimation.current = animation;
     animation.onfinish = () => {
       if (promptHandoffAnimation.current !== animation) return;
-      promptHandoffAnimation.current = null;
-      promptHandoffAnimationKey.current = null;
-      animation.cancel();
-      restorePromptHandoffSource();
-      setPromptHandoff(current => current?.identity === active.identity ? null : current);
+      setPromptHandoff(current => current?.identity === active.identity && current.phase === 'leaving' ? null : current);
     };
   }, [cancelPromptHandoffAnimation, hidePromptHandoffSource, latestPromptDismissed,
     overlappingPromptIdentity, promptHandoff, promptsByIdentity, reading.getRow,
