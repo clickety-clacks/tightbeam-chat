@@ -900,6 +900,60 @@ describe('conversation surface', () => {
     expect(localBubble.textContent).not.toContain(tag);
   });
 
+  it('keeps direct agent names accessible and leaves message text visible on narrow screens', () => {
+    const sessionKey = 'direct-agent-pill-label';
+    const tag = '<engram-src id="123e4567-e89b-42d3-a456-426614174000"/>';
+    const agentContent = `${tag}\n\nA direct agent update.`;
+    const senderDisplayName = 'Review — helper with a deliberately long display name';
+    const prompt = row(sessionKey, 'prompt', 'Please review this.', {
+      seq: 1, role: 'user', sender: 'user:person', messageType: 'chat', turnSeq: 1,
+    });
+    const agent = row(sessionKey, 'direct-agent', agentContent, {
+      seq: 2, role: 'user', sender: 'agent:helper', messageType: 'agent', turnSeq: 1,
+      raw: { source: 'fixture', id: 'direct-agent', senderDisplayName },
+    });
+    const answer = row(sessionKey, 'answer', 'Answer', {
+      seq: 3, sender: 'assistant-service', messageType: 'assistant', replyToMessageId: prompt.id, turnSeq: 1,
+      turnIncludesHuman: true,
+    });
+    const runtime = new FakeRuntime(sessionKey, { records: [prompt, agent, answer], provenanceAvailable: false });
+    const componentStyles = document.createElement('style');
+    componentStyles.textContent = readFileSync(resolve(process.cwd(), 'src/style.css'), 'utf8')
+      .replace("@import './theme.css';", '');
+    document.head.append(componentStyles);
+    try {
+      const view = render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+
+      const pill = view.container.querySelector<HTMLElement>('[data-record-key="message:direct-agent"]')!;
+      expect(pill.getAttribute('aria-label')).toBe(`${senderDisplayName}: A direct agent update.`);
+      const senderChip = pill.querySelector<HTMLElement>('.tb-chat-activity-pill-sender')!;
+      const senderName = senderChip.querySelector<HTMLElement>('.tb-chat-activity-pill-sender-name')!;
+      expect(senderName.textContent).toBe(senderDisplayName);
+      const rules = Array.from(componentStyles.sheet!.cssRules);
+      const senderRule = rules.find(rule => rule.cssText.startsWith('.tb-chat-activity-pill-sender-name')) as CSSStyleRule;
+      const narrowRule = rules.find(rule => rule.cssText.startsWith('@media (max-width: 540px)') &&
+        rule.cssText.includes('tb-chat-activity-pill-sender-name')) as CSSMediaRule;
+      const narrowSenderRule = Array.from(narrowRule.cssRules)
+        .find(rule => rule.cssText.startsWith('.tb-chat-activity-pill-sender-name')) as CSSStyleRule;
+      const messageRule = rules.find(rule => rule.cssText.startsWith('.tb-chat-activity-pill-text')) as CSSStyleRule;
+      expect(senderRule.style.textOverflow).toBe('ellipsis');
+      expect(senderRule.style.whiteSpace).toBe('nowrap');
+      expect(narrowSenderRule.style.maxWidth).toBe('min(36vw, 12rem)');
+      expect(messageRule.style.flex).toBe('1 1 auto');
+      expect(messageRule.style.minWidth).toBe('0');
+      expect(pill.querySelector('.tb-chat-activity-pill-indigo svg')).toBeTruthy();
+      expect(pill.querySelector('.tb-chat-activity-pill-meta')).toBeNull();
+      expect(pill.querySelector('.tb-chat-activity-pill-text')?.textContent).toBe('A direct agent update.');
+      expect(pill.textContent).not.toContain(tag);
+
+      fireEvent.click(within(pill).getByRole('button', { name: /Show full message/ }));
+      expect(pill.querySelector('[data-activity-message-content]')?.textContent).toBe('A direct agent update.');
+      expect(runtime.getSnapshot().records.find(record => record.id === agent.id)?.content).toBe(agentContent);
+    } finally {
+      componentStyles.remove();
+    }
+  });
+
   it('keeps owner-scoped activity while preserving human exchanges across pages, live updates, and reconnects', async () => {
     const sessionKey = 'conversation-without-provenance';
     const firstPage = visibilityMix(sessionKey, 'first-page');
@@ -1579,13 +1633,14 @@ describe('conversation surface', () => {
 
     const agentFold = within(log).getByRole('button', { name: /Expand agent activity run, 2 entries/ });
     expect(agentFold.classList.contains('tb-chat-activity-pill-toggle')).toBe(true);
-    expect(agentFold.querySelector('.tb-chat-activity-pill')?.textContent).toContain('Message');
+    expect(agentFold.querySelector('.tb-chat-activity-pill')?.textContent).toContain('Review helper');
+    expect(agentFold.getAttribute('aria-label')).toContain('Latest: Review helper: The review is ready');
     expect(agentFold.textContent).toContain('The review is ready');
     fireEvent.click(agentFold);
-    const agentRow = pillFor('Message: A short update, Review helper');
-    expect(agentRow.querySelector('.tb-chat-activity-pill')?.textContent).toContain('Message');
+    const agentRow = pillFor('Review helper: A short update');
+    expect(agentRow.querySelector('.tb-chat-activity-pill')?.textContent).toBe('Review helper');
     expect(agentRow.querySelector('.tb-chat-activity-pill-indigo svg')).toBeTruthy();
-    expect(agentRow.textContent).toContain('Review helper');
+    expect(agentRow.querySelector('.tb-chat-activity-pill-meta')).toBeNull();
 
     const refusedRow = pillFor('Refused: Completion needs a recorded verification first');
     expect(refusedRow.querySelector('.tb-chat-activity-pill-red')).toBeTruthy();

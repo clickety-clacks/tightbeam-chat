@@ -138,8 +138,11 @@ describe('activity pill presentation', () => {
   it('presents every delivered non-tool activity line, including wakes and reminders', () => {
     expect(activityPillPresentation({ kind: 'agent', gist: 'Review helper — Updated the report', content: 'Updated the report',
       senderDisplayName: 'Review helper' })).toMatchObject({
-      label: 'Message', tone: 'indigo', text: 'Updated the report', metadata: 'Review helper',
+      label: 'Review helper', tone: 'indigo', icon: 'message', text: 'Updated the report',
     });
+    const anonymousAgent = activityPillPresentation(source('agent', 'Updated the report'));
+    expect(anonymousAgent).toMatchObject({ label: 'Another agent', icon: 'message', text: 'Updated the report' });
+    expect(anonymousAgent?.metadata).toBeUndefined();
     expect(activityPillPresentation(source('substrate', '[woke: fact wake_12345678-1111-4111-8111-123456789abc; assignment asg_abcdef12-1111-4111-8111-123456789abc]\nRead the latest result')))
       .toMatchObject({ label: 'Wake', tone: 'purple', icon: 'alarm', text: 'Read the latest result', metadata: 'asg_abcd' });
     expect(activityPillPresentation(source('substrate', '[woke: fallback deadline]\nRead the latest result')))
@@ -158,10 +161,17 @@ describe('activity pill presentation', () => {
       .toMatchObject({ label: 'Activity', tone: 'slate', text: 'Unclassified activity' });
   });
 
+  it('keeps message detail separate when a sender display name contains the gist separator', () => {
+    expect(activityPillPresentation({ kind: 'agent', gist: 'Review — helper — The report is ready',
+      content: 'The report is ready', senderDisplayName: 'Review — helper' })).toMatchObject({
+      label: 'Review — helper', text: 'The report is ready', icon: 'message', senderLabel: true,
+    });
+  });
+
   it('uses the approved color and icon for each recognized activity kind', () => {
     const cases: Array<[ActivityPillSource, { label: string; tone: string; icon: string }]> = [
       [source('agent', 'New detail', 'Review helper — New detail'),
-        { label: 'Message', tone: 'indigo', icon: 'message' }],
+        { label: 'Review helper', tone: 'indigo', icon: 'message' }],
       [source('substrate', 'Attest att_12345678 (completion) was filed on assignment asg_abcdef12.'),
         { label: 'Attest', tone: 'amber', icon: 'attest' }],
       [source('substrate', '[assignment: asg_12345678]\nCheck the result'),

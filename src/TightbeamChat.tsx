@@ -989,9 +989,10 @@ function ToolCallTerminalIcon({ className }: { readonly className: string }) {
 function ActivityPillContents({ presentation, summaryState }: { readonly presentation: ActivityPillPresentation;
   readonly summaryState?: SummaryAnswer['state'] }) {
   return <>
-    <span className={`tb-chat-activity-pill tb-chat-activity-pill-${presentation.tone}`}>
+    <span className={`tb-chat-activity-pill tb-chat-activity-pill-${presentation.tone}${
+      presentation.senderLabel ? ' tb-chat-activity-pill-sender' : ''}`}>
       <ActivityPillIconView icon={presentation.icon} />
-      <span>{presentation.label}</span>
+      <span className={presentation.senderLabel ? 'tb-chat-activity-pill-sender-name' : undefined}>{presentation.label}</span>
     </span>
     <span className="tb-chat-activity-pill-text">{presentation.text}</span>
     {summaryState === 'pending' && <span className="tb-chat-summary-pending">summarizing</span>}
@@ -1010,7 +1011,7 @@ function displayPillPresentation(presentation: ActivityPillPresentation): Activi
 function sameActivityPresentation(left: ActivityPillPresentation | undefined,
   right: ActivityPillPresentation | undefined): boolean {
   return left === right || Boolean(left && right && left.label === right.label && left.tone === right.tone &&
-    left.icon === right.icon && left.text === right.text && left.metadata === right.metadata &&
+    left.icon === right.icon && left.text === right.text && left.senderLabel === right.senderLabel && left.metadata === right.metadata &&
     left.summaryText === right.summaryText && left.summaryPrefix === right.summaryPrefix && left.attestId === right.attestId);
 }
 
