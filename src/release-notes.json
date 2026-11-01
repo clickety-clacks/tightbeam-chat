@@ -1,5 +1,18 @@
 [
   {
+    "version": "v0.1.71",
+    "items": [
+      {
+        "title": "Add space below three-line pinned prompts",
+        "description": "Three-line pinned prompt previews have extra room below the text, keeping it clear of the bubble edge."
+      },
+      {
+        "title": "Smooth the latest-prompt handoff",
+        "description": "As your latest prompt reaches or leaves the pinned preview, the same prompt moves smoothly between them. Reduced-motion settings keep the handoff instant."
+      }
+    ]
+  },
+  {
     "version": "v0.1.70",
     "items": [
       {
