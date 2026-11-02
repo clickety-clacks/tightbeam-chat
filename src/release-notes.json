@@ -3,8 +3,8 @@
     "version": "v0.1.80",
     "items": [
       {
-        "title": "Keep agent messages clear in mixed notice groups",
-        "description": "Chat hides valid message markers even when they appear without quotation marks. In mixed notice groups, agent updates appear individually while the other notices retain their usual display."
+        "title": "Keep agent updates and the composer readable",
+        "description": "Chat hides valid message markers even when unquoted. In mixed notice groups, agent updates appear individually while other notices retain their usual display. On phones, an empty composer shows its conversation title centered on one ellipsized line; its tinted surface keeps scrolled messages muted in light and dark themes even when blur is subtle, while typed drafts keep their usual wrapping."
       }
     ]
   },
