@@ -2919,7 +2919,7 @@ describe('conversation surface', () => {
     expect(screen.getByRole('button', { name: 'Remove current-draft.pdf' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Remove failed-photo.png' })).toBeNull();
     expect(screen.getByText(
-      'Clear the current draft before restoring this attachment send. Both drafts are still preserved.',
+      'Clear the current draft before restoring this send. Both drafts are still preserved.',
     ).getAttribute('role')).toBe('alert');
 
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
@@ -2929,6 +2929,38 @@ describe('conversation surface', () => {
     expect(runtime.attachmentSubmissions[0].inputs[0].filename).toBe('current-draft.pdf');
     expect(runtime.attachmentSubmissions[0].inputs[0].bytes).toBe(currentSource);
     expect(runtime.attachmentSubmissions[0].inputs.some(input => input.bytes === failedSource)).toBe(false);
+  });
+
+  it('preserves text and files when restoring a failed text-only send into a nonempty composer', async () => {
+    const sessionKey = 'restore-failed-text-with-current-attachment';
+    const currentSource = new File(['current attachment bytes'], 'current-draft.pdf', { type: 'application/pdf' });
+    const failedSend = {
+      sessionKey, deviceId: 'device', clientMessageId: 'failed-text-send',
+      content: 'failed text-only draft', submittedAt: '2026-10-30T09:00:00.000Z',
+      status: 'failed', reconciled: false, reason: 'refused',
+    } as unknown as LocalSend;
+    const runtime = new FakeRuntime(sessionKey, { sends: [failedSend] });
+    const view = render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+    const composer = screen.getByRole('textbox', { name: 'Message to Research assistant' }) as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: 'current draft text' } });
+    const filePicker = view.container.querySelectorAll<HTMLInputElement>('input[type="file"]')[1];
+    fireEvent.change(filePicker, { target: { files: [currentSource] } });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send message' })).toHaveProperty('disabled', false));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Restore text to the composer' }));
+
+    expect(composer.value).toBe('current draft text');
+    expect(screen.getByRole('button', { name: 'Remove current-draft.pdf' })).toBeTruthy();
+    expect(screen.getByText(
+      'Clear the current draft before restoring this send. Both drafts are still preserved.',
+    ).getAttribute('role')).toBe('alert');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    expect(runtime.attachmentSubmissions).toHaveLength(1);
+    expect(runtime.attachmentSubmissions[0].content).toBe('current draft text');
+    expect(runtime.attachmentSubmissions[0].inputs).toHaveLength(1);
+    expect(runtime.attachmentSubmissions[0].inputs[0].filename).toBe('current-draft.pdf');
+    expect(runtime.attachmentSubmissions[0].inputs[0].bytes).toBe(currentSource);
   });
 
   it('pastes image bytes with clipboard text, leaves ordinary text paste native, and reports unreadable clipboard images', async () => {

@@ -1183,8 +1183,8 @@ const Composer = forwardRef<ComposerHandle, {
   };
 
   const restoreDraft = (content: string, items: readonly ComposerAttachmentInput[] = []) => {
-    if (items.length && (draft.length > 0 || attachmentsRef.current.length > 0)) {
-      setAcquisitionError('Clear the current draft before restoring this attachment send. Both drafts are still preserved.');
+    if (attachmentsRef.current.length > 0 || (items.length > 0 && draft.length > 0)) {
+      setAcquisitionError('Clear the current draft before restoring this send. Both drafts are still preserved.');
       return;
     }
     const restoredAttachments = items.map(item => {
