@@ -2476,12 +2476,16 @@ describe('conversation surface', () => {
   it('keeps recovery controls in the initial notice before tool history arrives', () => {
     const runtime = new FakeRuntime('initial-phone-recovery', {
       conversationError: 'The linked target is unavailable.',
+      recordEventsError: 'Activity history request failed',
     });
     render(<TightbeamChat sessionKey="initial-phone-recovery" adapter={adapterFor(runtime)}
       configuredConversationHref="/" />);
 
     const alert = screen.getByRole('alert');
+    const content = screen.getByRole('log').querySelector('.tb-chat-message-content');
     expect(alert.classList.contains('tb-chat-runtime-notice-with-tool-history')).toBe(false);
+    expect(content?.classList.contains('tb-chat-runtime-notice-reserved')).toBe(true);
+    expect(content?.querySelector('[role="status"]')?.textContent).toContain('Activity history is unavailable.');
     const reconnect = within(alert).getByRole('button', { name: 'Reconnect' });
     const recovery = within(alert).getByRole('link', { name: 'Open the configured conversation' });
     expect(recovery.getAttribute('href')).toBe('/');
@@ -2490,6 +2494,7 @@ describe('conversation surface', () => {
     act(() => runtime.update({ toolCallsEnabled: true, toolCallsLoading: true }));
 
     expect(alert.classList.contains('tb-chat-runtime-notice-with-tool-history')).toBe(true);
+    expect(content?.classList.contains('tb-chat-runtime-notice-reserved')).toBe(true);
     expect(within(alert).getByRole('button', { name: 'Reconnect' })).toBe(reconnect);
     expect(within(alert).getByRole('link', { name: 'Open the configured conversation' })).toBe(recovery);
     expect(within(alert).getByText('Loading tool history…')).toBeTruthy();
