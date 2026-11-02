@@ -508,7 +508,12 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     expect(screen.getByRole('alert').textContent).toContain('client_message_id_conflict');
     expect(screen.queryByText('Delivery is uncertain')).toBeNull();
     expect(screen.getByText('refuse').closest('[data-send-state]')?.getAttribute('data-send-state')).toBe('refused');
-    expect(screen.getByText('uncertain').closest('[data-send-state]')?.getAttribute('data-send-state')).toBe('ghosted');
+    const uncertain = screen.getByText('uncertain').closest('[data-send-state]');
+    expect(uncertain?.getAttribute('data-send-state')).toBe('uncertain');
+    expect(uncertain?.getAttribute('aria-label'))
+      .toBe("We couldn't confirm whether this message was sent. Check the conversation before trying again.");
+    expect(uncertain?.querySelector('.tb-chat-send-uncertainty')?.textContent)
+      .toBe("We couldn't confirm whether this message was sent. Check the conversation before trying again.");
     expect(screen.queryByText(/Message could not be sent|Delivery could not be confirmed|This message was refused/)).toBeNull();
     expect(screen.queryByRole('button', { name: 'Retry message' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Restore text to the composer' })).toBeNull();
