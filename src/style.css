@@ -248,6 +248,7 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
 .tb-chat-image-alt { color: var(--tb-chat-muted); font-style: italic; }
 .tb-chat-time { display: block; margin-top: .32rem; color: var(--tb-chat-muted); font-size: .7rem; line-height: 1.2; text-align: end; }
 .tb-chat-send-indicator { display: flex; align-items: center; min-height: .9rem; margin: .35rem 0 0; }
+.tb-chat-send-refusal { margin: .35rem 0 0; color: var(--tb-chat-danger); font-size: .82rem; }
 .tb-chat-send-spinner {
   display: inline-block;
   width: .78rem;

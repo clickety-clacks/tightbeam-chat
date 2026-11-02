@@ -2183,10 +2183,19 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
         const hostManaged = send.hostSend !== undefined;
         const refused = send.status === 'failed' && !send.reconciled;
         const retryAvailable = !hostManaged && refused;
+        const refusalCopy = refused
+          ? send.reason === 'payload_too_large'
+            ? 'The server refused this prompt because it is too large. Shorten it and try again.'
+            : send.reason === 'invalid_message_id'
+              ? 'This message could not be sent because its ID is invalid.'
+              : undefined
+          : undefined;
         const announcement = send.reconciled
           ? 'Your message is in the conversation.'
           : refused
-            ? `Your message was not sent. Reason: ${send.reason || 'The message was refused.'}`
+            ? refusalCopy
+              ? `Your message was not sent. ${refusalCopy}`
+              : `Your message was not sent. Reason: ${send.reason || 'The message was refused.'}`
             : 'Your message is sending.';
         const targetKey = `local-${send.clientMessageId}`;
         return <article ref={element => reading.registerRow(targetKey, element)}
@@ -2196,6 +2205,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
           aria-label={announcement}
           data-send-state={send.reconciled ? 'solid' : refused ? 'refused' : 'ghosted'}>
           <div className="tb-chat-bubble-body">{markdownBody(stripProvenanceMarkup(send.content))}</div>
+          {refusalCopy && <p className="tb-chat-send-refusal" aria-hidden="true">{refusalCopy}</p>}
           {!send.reconciled && <div className="tb-chat-send-indicator" data-send-status={send.status} aria-hidden="true">
             {refused ? <span className="tb-chat-send-error">!</span> : <span className="tb-chat-send-spinner" />}
           </div>}

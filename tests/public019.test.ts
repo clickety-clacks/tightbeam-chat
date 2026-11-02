@@ -1196,6 +1196,38 @@ describe('Gateway wire mapping and behavior checks', () => {
     expect(await third).toMatchObject({ outcome: 'retryable' });
   });
 
+  it('sends UTF-8 content above the former cap intact and maps a Gateway size refusal by ID', async () => {
+    const content = '🦊'.repeat(16_385);
+    expect(new TextEncoder().encode(content).byteLength).toBeGreaterThan(64 * 1024);
+    const submission = { sessionKey, deviceId: 'device-1', clientMessageId: 'c_large', content };
+
+    const accepted = setup();
+    const acceptedResult = accepted.transport.sendHuman(submission, new AbortController().signal);
+    await vi.waitFor(() => expect(accepted.human.sent).toHaveLength(1));
+    expect(accepted.human.sent[0]).toEqual({ type: 'message', id: 'c_large', sessionKey, content });
+    accepted.human.emit({ type: 'ack', id: 'c_large' });
+    await expect(acceptedResult).resolves.toEqual({ outcome: 'accepted' });
+    expect(accepted.human.sent).toHaveLength(1);
+
+    const refused = setup();
+    const refusedResult = refused.transport.sendHuman(submission, new AbortController().signal);
+    await vi.waitFor(() => expect(refused.human.sent).toHaveLength(1));
+    refused.human.emit({ type: 'error', code: 'payload_too_large', messageId: 'c_large' });
+    await expect(refusedResult).resolves.toEqual({ outcome: 'refused', reason: 'payload_too_large' });
+    expect(refused.human.sent).toHaveLength(1);
+  });
+
+  it('refuses a malformed client message ID separately before opening the human socket', async () => {
+    const candidate = setup();
+    const open = vi.spyOn(candidate.host, 'openAuthenticatedHuman');
+
+    await expect(candidate.transport.sendHuman({ sessionKey, deviceId: 'device-1',
+      clientMessageId: 'invalid', content: 'hello' }, new AbortController().signal))
+      .resolves.toEqual({ outcome: 'refused', reason: 'invalid_message_id' });
+    expect(open).not.toHaveBeenCalled();
+    expect(candidate.human.sent).toHaveLength(0);
+  });
+
   it('keeps waiting for a human acknowledgement beyond the general response timeout', async () => {
     vi.useFakeTimers();
     try {
