@@ -14,7 +14,7 @@ const bubble = (record: CanonicalMessage, side: ActivityBubble['side']): Activit
   key: record.id, record, side, ownerScoped: side === 'agent' || record.sender === 'user:person',
 });
 
-const tool = (id: string, seq: number, status: ToolCallRecord['status'], toolName = 'read_file'): ToolCallRecord => ({
+const tool = (id: string, seq: number, status: ToolCallRecord['status'], toolName: string | null = 'read_file'): ToolCallRecord => ({
   id, seq, sessionKey: 'session', turnSeq: 1, afterMessageSeq: 1, harnessToolCallId: id,
   title: `Tool ${id}`, kind: 'read', toolName, status, rawInput: null,
   rawOutput: null, content: null, truncated: [], startedAt: seq, endedAt: status === 'completed' || status === 'failed' ? seq + 1 : null,
@@ -27,6 +27,7 @@ function build(input: {
   bubbles?: readonly ActivityBubble[];
   transitions?: readonly CanonicalTransition[];
   localSendTimes?: readonly number[];
+  recordEventTimes?: readonly number[];
   tools?: readonly ToolCallRecord[];
   toolsEnabled?: boolean;
   turnStateAvailable?: boolean;
@@ -45,6 +46,7 @@ function build(input: {
     sessionKey: 'session', records: input.records ?? [], bubbles: input.bubbles ?? [], transitions: input.transitions ?? [],
     senderDisplayNames: input.senderDisplayNames,
     localSendTimes: input.localSendTimes,
+    recordEventTimes: input.recordEventTimes,
     tools: input.tools ?? [], toolsEnabled: input.toolsEnabled ?? true,
     turnStateAvailable: input.turnStateAvailable ?? true, activeTurnRunning: input.activeTurnRunning ?? true,
     activeOwnerTurnRunning: input.activeOwnerTurnRunning ?? input.activeTurnRunning ?? true,
@@ -169,19 +171,53 @@ describe('activity trail projection', () => {
     expect(plan.toolItems.get('after-send')?.kind).toBe('tool');
   });
 
-  it('keeps different tool names in separate activity entries', () => {
+  it('folds adjacent tool calls across unnamed and mixed-name records', () => {
     const prompt = message('prompt', 1, 'user:person', 'A question', { role: 'user' });
     const plan = build({ bubbles: [bubble(prompt, 'human')], tools: [
-      tool('read-one', 1, 'completed', 'Read'), tool('read-two', 2, 'failed', 'Read'),
-      tool('bash', 3, 'completed', 'Bash'), tool('grep', 4, 'completed', 'Grep'),
+      { ...tool('codex-read', 101, 'completed', null), title: 'Read first file' },
+      { ...tool('claude-read', 102, 'failed', 'Read'), title: 'Read second file' },
+      { ...tool('claude-bash', 103, 'completed', 'Bash'), title: 'Run command' },
     ] });
 
-    const readFold = plan.toolItems.get('read-one');
-    expect(readFold?.kind).toBe('fold');
-    expect(plan.toolItems.get('read-two')).toBe(readFold);
-    expect((readFold as ActivityFold).lines.map(line => line.call?.toolName)).toEqual(['Read', 'Read']);
-    expect(plan.toolItems.get('bash')?.kind).toBe('tool');
-    expect(plan.toolItems.get('grep')?.kind).toBe('tool');
+    const fold = plan.toolItems.get('codex-read');
+    expect(fold?.kind).toBe('fold');
+    expect(plan.toolItems.get('claude-read')).toBe(fold);
+    expect(plan.toolItems.get('claude-bash')).toBe(fold);
+    expect((fold as ActivityFold).lines.map(line => line.call?.id)).toEqual([
+      'codex-read', 'claude-read', 'claude-bash',
+    ]);
+    expect((fold as ActivityFold).summary.call?.id).toBe('claude-bash');
+    expect((fold as ActivityFold).summary.gist).toBe('Run command · done');
+  });
+
+  it('does not fold tool calls across a visible message or a non-tool activity row', () => {
+    const prompt = message('prompt', 1, 'user:person', 'A question', { role: 'user', turnSeq: 1 });
+    const reply = message('reply', 10, 'assistant-service', 'An answer', { role: 'assistant', turnSeq: 1 });
+    const messageBoundary = build({ bubbles: [bubble(prompt, 'human'), bubble(reply, 'agent')], tools: [
+      tool('before-message', 101, 'completed'),
+      { ...tool('after-message', 102, 'completed', 'bash'), afterMessageSeq: reply.seq },
+    ] });
+    expect(messageBoundary.toolItems.get('before-message')?.kind).toBe('tool');
+    expect(messageBoundary.toolItems.get('after-message')?.kind).toBe('tool');
+
+    const notice = message('notice', 2, 'process:events', 'A background task started', {
+      messageType: 'substrate', turnSeq: 1,
+    });
+    const activityBoundary = build({ records: [notice], bubbles: [bubble(prompt, 'human'), bubble(reply, 'agent')], tools: [
+      tool('before-notice', 201, 'completed'),
+      { ...tool('after-notice', 202, 'completed', 'bash'), afterMessageSeq: notice.seq },
+    ] });
+    expect(activityBoundary.messageItems.some(item => item.id === 'message:notice')).toBe(true);
+    expect(activityBoundary.toolItems.get('before-notice')?.kind).toBe('tool');
+    expect(activityBoundary.toolItems.get('after-notice')?.kind).toBe('tool');
+
+    const recordEventBoundary = build({ bubbles: [bubble(prompt, 'human'), bubble(reply, 'agent')],
+      tools: [
+        { ...tool('before-record-event', 301, 'completed'), startedAt: 2_000 },
+        { ...tool('after-record-event', 302, 'completed', 'bash'), startedAt: 4_000 },
+      ], recordEventTimes: [3_000] });
+    expect(recordEventBoundary.toolItems.get('before-record-event')?.kind).toBe('tool');
+    expect(recordEventBoundary.toolItems.get('after-record-event')?.kind).toBe('tool');
   });
 
   it('folds an entire long homogeneous run before applying the display history cap', () => {
