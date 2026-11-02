@@ -900,16 +900,25 @@ interface ComposerHandle {
   closeStatusPopup(): void;
 }
 
+interface ChatRecoverySnapshot {
+  key: string;
+  draft: string;
+  scrollTop: number;
+  followLatest: boolean;
+  hasReadingPosition: boolean;
+}
+
 const Composer = forwardRef<ComposerHandle, {
   runtime: ChatRuntime;
   state: RuntimeState;
+  recoverySnapshot: ChatRecoverySnapshot;
   agentName: string;
   root: RefObject<HTMLElement | null>;
   suppressStatus: boolean;
   onSettings: () => void;
   onSubmitted: () => void;
-}>(function Composer({ runtime, state, agentName, root, suppressStatus, onSettings, onSubmitted }, ref) {
-  const [draft, setDraft] = useState('');
+}>(function Composer({ runtime, state, recoverySnapshot, agentName, root, suppressStatus, onSettings, onSubmitted }, ref) {
+  const [draft, setDraft] = useState(recoverySnapshot.draft);
   const [statusOpen, setStatusOpen] = useState(false);
   const editRevision = useRef(0);
   const submittedRevisions = useRef(new Map<string, number>());
@@ -926,11 +935,15 @@ const Composer = forwardRef<ComposerHandle, {
   const titleId = useId();
   const statusName = statusText(state);
   const statusId = `${titleId}-status-details`;
+  const updateDraft = useCallback((content: string) => {
+    recoverySnapshot.draft = content;
+    setDraft(content);
+  }, [recoverySnapshot]);
 
   useImperativeHandle(ref, () => ({
     restore: (content) => {
       editRevision.current++;
-      setDraft(content);
+      updateDraft(content);
     },
     contains: (target) => target instanceof Node && Boolean(shell.current?.contains(target)),
     focusAtEnd: () => {
@@ -942,7 +955,7 @@ const Composer = forwardRef<ComposerHandle, {
       return document.activeElement === element;
     },
     closeStatusPopup: () => setStatusOpen(false),
-  }), []);
+  }), [updateDraft]);
 
   const closeStatusPopup = () => {
     setStatusOpen(false);
@@ -983,10 +996,10 @@ const Composer = forwardRef<ComposerHandle, {
       submittedRevisions.current.delete(send.clientMessageId);
       if (send.status === 'accepted' && editRevision.current === submittedRevision) {
         editRevision.current++;
-        setDraft('');
+        updateDraft('');
       }
     }
-  }, [state.sends]);
+  }, [state.sends, updateDraft]);
 
   useLayoutEffect(() => {
     const element = shell.current;
@@ -1004,7 +1017,7 @@ const Composer = forwardRef<ComposerHandle, {
     if (!draft.trim()) return;
     if (isSettingsCommand(draft)) {
       editRevision.current++;
-      setDraft('');
+      updateDraft('');
       setStatusOpen(false);
       onSettings();
       return;
@@ -1023,7 +1036,7 @@ const Composer = forwardRef<ComposerHandle, {
       <textarea ref={input} id={`${titleId}-input`} value={draft}
         onChange={(event) => {
           editRevision.current++;
-          setDraft(event.target.value);
+          updateDraft(event.target.value);
         }}
         onKeyDown={(event) => {
           if (event.key !== 'Enter') return;
@@ -1038,7 +1051,7 @@ const Composer = forwardRef<ComposerHandle, {
             const end = element.selectionEnd;
             pendingCaret.current = start + 1;
             editRevision.current++;
-            setDraft((current) => `${current.slice(0, start)}\n${current.slice(end)}`);
+            updateDraft(`${draft.slice(0, start)}\n${draft.slice(end)}`);
             return;
           }
           if (event.altKey || event.metaKey) return;
@@ -1359,13 +1372,15 @@ const ActivityRunRow = memo(function ActivityRunRow({ entry, expanded, toggle, r
   return before.lines.every((line, index) => sameActivityLine(line, after.lines[index]));
 });
 
-function ChatBody({ runtime, renderMessage, className, hostBridge, configuredConversationHref, activitySummaries }: {
+function ChatBody({ runtime, renderMessage, className, hostBridge, configuredConversationHref, activitySummaries,
+  recoverySnapshot }: {
   activitySummaries?: ActivitySummaryTransport;
   runtime: ChatRuntime;
   renderMessage?: TightbeamChatProps['renderMessage'];
   className?: string;
   hostBridge: HostComposerBridge | null;
   configuredConversationHref?: string;
+  recoverySnapshot: ChatRecoverySnapshot;
 }) {
   const state = useSyncExternalStore(runtime.subscribe, runtime.getSnapshot, runtime.getSnapshot);
   const promptTargetPrefix = useId();
@@ -1486,6 +1501,27 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   const reading = useReadingPosition(state.status === 'ready', readingRevision, box =>
     Boolean(state.loadingOlder || state.recordEventsLoading || (!state.historyError && (state.hasOlder || state.recordEventsHasOlder) && box.scrollTop < olderHistoryPrefetchDistance(box))),
     arrivalEligible, state.sessionKey, markReadPosition, state.activeTurn?.turn.status === 'running');
+  const { viewport } = reading;
+  const rememberReadingPosition = useCallback(() => {
+    const box = viewport.current;
+    if (!box) return;
+    recoverySnapshot.scrollTop = box.scrollTop;
+    recoverySnapshot.followLatest = Math.max(0, box.scrollHeight - box.clientHeight - box.scrollTop) <= 64;
+    recoverySnapshot.hasReadingPosition = true;
+  }, [recoverySnapshot, viewport]);
+  const readingOnScroll = useRef(reading.onScroll);
+  readingOnScroll.current = reading.onScroll;
+  useLayoutEffect(() => {
+    if (!recoverySnapshot.hasReadingPosition) return;
+    const box = viewport.current;
+    if (!box) return;
+    const bottom = Math.max(0, box.scrollHeight - box.clientHeight);
+    box.scrollTop = recoverySnapshot.followLatest
+      ? bottom : Math.max(0, Math.min(recoverySnapshot.scrollTop, bottom));
+    readingOnScroll.current();
+    rememberReadingPosition();
+  }, [recoverySnapshot, rememberReadingPosition, viewport]);
+  useLayoutEffect(() => { rememberReadingPosition(); }, [host, rememberReadingPosition, state]);
   const retryTranscript = useCallback(() => { void runtime.rebuild({ restart: true }); }, [runtime]);
   const preserveReadingPositionRef = useRef(reading.preserveVisiblePosition);
   preserveReadingPositionRef.current = reading.preserveVisiblePosition;
@@ -1494,7 +1530,6 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     previousArrivalContext.current = { sessionKey: state.sessionKey, generation: state.generation,
       recoveryRevision, ready: state.status === 'ready' };
   }, [state.sessionKey, state.generation, state.status, recoveryRevision]);
-  const { viewport } = reading;
   const observedHostSendIds = useRef<Set<string> | undefined>(undefined);
   if (!observedHostSendIds.current) {
     observedHostSendIds.current = new Set(state.sends
@@ -2100,6 +2135,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   const handleScroll = () => {
     const box = viewport.current;
     if (!box) return;
+    rememberReadingPosition();
     const previous = previousScrollTop.current;
     const current = box.scrollTop;
     previousScrollTop.current = current;
@@ -2377,7 +2413,8 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
       }}>
       <span aria-hidden="true">↓</span> {reading.unseenButtonLabel}
     </button>}
-    {!host.composerHidden && <Composer ref={composer} runtime={runtime} state={state} agentName={agentName}
+    {!host.composerHidden && <Composer ref={composer} runtime={runtime} state={state}
+      recoverySnapshot={recoverySnapshot} agentName={agentName}
       root={root} suppressStatus={host.optedIn} onSettings={openSettings} onSubmitted={reading.scrollToLatest} />}
     {overlay && <ReleaseNotesDialog overlay={overlay} entries={bundledNotes} onClose={closeOverlay}
       onOpenReleaseNotes={openReleaseNotes} onBack={backToSettings} />}
@@ -2388,6 +2425,11 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
 export function TightbeamChat({ sessionKey, adapter, identityKey, renderMessage, className,
   configuredConversationHref }: TightbeamChatProps) {
   const key = `${sessionKey}\u0000${identityKey || ''}`;
+  const recoverySnapshot = useRef<ChatRecoverySnapshot>({ key, draft: '', scrollTop: 0,
+    followLatest: true, hasReadingPosition: false });
+  if (recoverySnapshot.current.key !== key) {
+    recoverySnapshot.current = { key, draft: '', scrollTop: 0, followLatest: true, hasReadingPosition: false };
+  }
   const latest = useRef({ key, sessionKey, adapter });
   latest.current = { key, sessionKey, adapter };
   const [opened, setOpened] = useState<{ key: string; adapter: TightbeamAdapter; runtime: ChatRuntime } | null>(null);
@@ -2422,7 +2464,17 @@ export function TightbeamChat({ sessionKey, adapter, identityKey, renderMessage,
       </span>
     </section>;
   }
-  return <ChatBody key={key} runtime={opened.runtime} renderMessage={renderMessage}
-    className={className} hostBridge={hostBridge} configuredConversationHref={configuredConversationHref}
-    activitySummaries={adapter.activitySummaries} />;
+  const retryChat = () => { void opened.runtime.rebuild({ restart: true }); };
+  return <TranscriptRenderBoundary resetKey={opened.runtime} onRetry={retryChat} fallback={retry => <section
+    className={`tb-chat ${className || ''}`} aria-label="Conversation">
+    <div className="tb-chat-render-failure tb-chat-render-failure-transcript tb-chat-caption tb-chat-caption-danger"
+      role="alert" data-chat-render-failure="chat">
+      <span>The conversation could not be displayed. Its history is still available.</span>
+      <button type="button" onClick={retry}>Reconnect and try again</button>
+    </div>
+  </section>}>
+    <ChatBody key={key} runtime={opened.runtime} renderMessage={renderMessage}
+      className={className} hostBridge={hostBridge} configuredConversationHref={configuredConversationHref}
+      activitySummaries={adapter.activitySummaries} recoverySnapshot={recoverySnapshot.current} />
+  </TranscriptRenderBoundary>;
 }

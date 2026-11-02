@@ -1570,6 +1570,66 @@ describe('conversation surface', () => {
     }
   });
 
+  it('shows recoverable Chat state and restores the draft and reading position after a body failure', async () => {
+    const sessionKey = 'chat-body-render-failure';
+    const records = [
+      row(sessionKey, 'before', 'Earlier message', { seq: 1 }),
+      row(sessionKey, 'anchor', 'Reading position stays here', { seq: 2 }),
+      row(sessionKey, 'after', 'Later message', { seq: 3 }),
+    ];
+    const runtime = new FakeRuntime(sessionKey, { records });
+    const getSnapshot = runtime.getSnapshot;
+    let shouldThrow = false;
+    runtime.getSnapshot = () => {
+      if (shouldThrow) throw new Error('body snapshot failed');
+      return getSnapshot();
+    };
+    const adapter = adapterFor(runtime);
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const view = render(<TightbeamChat sessionKey={sessionKey} adapter={adapter} />);
+    let originalLayout: ReturnType<typeof installViewportLayout> | undefined;
+    let recoveredLayout: ReturnType<typeof installViewportLayout> | undefined;
+
+    try {
+      const viewport = screen.getByRole('log');
+      originalLayout = installViewportLayout(viewport, 200);
+      const composer = screen.getByRole('textbox', { name: 'Message to Research assistant' }) as HTMLTextAreaElement;
+      fireEvent.change(composer, { target: { value: 'keep this draft through body recovery' } });
+      fireEvent.wheel(viewport, { deltaY: -1 });
+      originalLayout.setScrollTop(230);
+      fireEvent.scroll(viewport);
+      const originalScrollTop = originalLayout.scrollTop;
+      const originalAnchorOffset = originalLayout.offset(viewport.querySelector<HTMLElement>('[data-scroll-key="anchor"]')!);
+      originalLayout.restore();
+      originalLayout = undefined;
+
+      shouldThrow = true;
+      view.rerender(<TightbeamChat sessionKey={sessionKey} adapter={adapter} className="failure-trigger" />);
+      expect(view.container.querySelector('[data-chat-render-failure="chat"]')?.textContent)
+        .toContain('Its history is still available.');
+      expect(screen.getByRole('button', { name: 'Reconnect and try again' })).toBeTruthy();
+
+      shouldThrow = false;
+      fireEvent.click(screen.getByRole('button', { name: 'Reconnect and try again' }));
+      expect(await screen.findByText('Reading position stays here')).toBeTruthy();
+      const restoredComposer = screen.getByRole('textbox', { name: 'Message to Research assistant' }) as HTMLTextAreaElement;
+      expect(restoredComposer.value).toBe('keep this draft through body recovery');
+      const restoredViewport = screen.getByRole('log');
+      expect(restoredViewport.scrollTop).toBe(originalScrollTop);
+      recoveredLayout = installViewportLayout(restoredViewport, 200);
+      recoveredLayout.setScrollTop(originalScrollTop);
+      expect(recoveredLayout.offset(restoredViewport.querySelector<HTMLElement>('[data-scroll-key="anchor"]')!))
+        .toBeCloseTo(originalAnchorOffset, 0);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+      expect(runtime.sent).toEqual(['keep this draft through body recovery']);
+    } finally {
+      originalLayout?.restore();
+      recoveredLayout?.restore();
+      errorLog.mockRestore();
+    }
+  });
+
   it('keeps the authorization-loss explanation with the red connection dot', () => {
     const runtime = new FakeRuntime('unauthorized-status', { status: 'unauthorized' });
     render(<TightbeamChat sessionKey="unauthorized-status" adapter={adapterFor(runtime)} />);
