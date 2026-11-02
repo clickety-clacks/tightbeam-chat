@@ -320,6 +320,32 @@ describe('Nordic theme', () => {
     expect(hostDisabled).not.toContain('opacity:');
   });
 
+  it('keeps an empty conversation title centered on one ellipsized line while drafts keep growing', () => {
+    const emptyInput = rule(componentCss, '.tb-chat-input-shell-empty textarea');
+    expect(emptyInput).toContain('field-sizing: fixed');
+    expect(emptyInput).toContain('height: var(--tb-chat-control-size)');
+    expect(emptyInput).toContain('max-height: var(--tb-chat-control-size)');
+    expect(emptyInput).toContain('overflow: hidden');
+
+    const title = rule(componentCss, '.tb-chat-empty-title > span');
+    expect(title).toContain('overflow: hidden');
+    expect(title).toContain('white-space: nowrap');
+    expect(title).toContain('text-overflow: ellipsis');
+    expect(rule(componentCss, '.tb-chat-empty-title')).toContain('align-items: center');
+    expect(rule(componentCss, '.tb-chat-empty-title')).toContain('display: none');
+    expect(rule(componentCss, '.tb-chat-input-shell-empty .tb-chat-empty-title')).toContain('display: flex');
+    expect(rule(componentCss, '.tb-chat-input-shell-empty textarea::placeholder'))
+      .toContain('color: transparent');
+    expect(rule(componentCss, '.tb-chat-input-shell-no-status .tb-chat-empty-title')).toContain('padding-left: 3rem');
+
+    const draftInput = rule(componentCss, '.tb-chat-input-shell textarea');
+    expect(draftInput).toContain('min-height: var(--tb-chat-control-size)');
+    expect(draftInput).toContain('max-height: calc(var(--tb-chat-full-height, 100vh) / 2)');
+    expect(draftInput).toContain('overflow-y: auto');
+    expect(draftInput).toContain('line-height: 1.5');
+    expect(draftInput).toContain('padding: .425rem 3.55rem .425rem 5.35rem');
+  });
+
   it('keeps fixed-control clearance while restoring compact tail spacing at the latest message', () => {
     expect(rule(componentCss, '.tb-chat-viewport')).toContain('4.5rem');
     expect(rule(componentCss, '.tb-chat-host-composer-hidden .tb-chat-viewport')).toContain('4rem');

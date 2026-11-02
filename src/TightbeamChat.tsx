@@ -1602,7 +1602,7 @@ const Composer = forwardRef<ComposerHandle, {
     {attachments.some(item => item.preparationState === 'failed') && <button type="button"
       className="tb-chat-attachment-send-retry" aria-label="Retry attachment preparation"
       onClick={() => prepareDraftAttachments(attachmentsRef.current)}>Retry preparation</button>}
-    <div className={`tb-chat-input-shell${suppressStatus ? ' tb-chat-input-shell-no-status' : ''}`}>
+    <div className={`tb-chat-input-shell${suppressStatus ? ' tb-chat-input-shell-no-status' : ''}${draft.length === 0 ? ' tb-chat-input-shell-empty' : ''}`}>
       <textarea ref={input} id={`${titleId}-input`} value={draft}
         onChange={(event) => {
           recoverySnapshot.editRevision++;
@@ -1632,6 +1632,7 @@ const Composer = forwardRef<ComposerHandle, {
         rows={1}
         aria-label={`Message to ${agentName || 'the selected agent'}`} placeholder={agentName}
         autoComplete="off" spellCheck />
+      <span className="tb-chat-empty-title" aria-hidden="true"><span>{agentName}</span></span>
       {!suppressStatus && <button ref={statusControl} type="button" className="tb-chat-status-control" aria-label={`Connection status: ${statusName}. Show details`}
         aria-expanded={statusOpen} aria-controls={statusId} onClick={() => setStatusOpen((open) => !open)}>
         <StatusIcon state={state} />
