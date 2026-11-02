@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.76",
+    "items": [
+      {
+        "title": "Keep the conversation visible and recoverable",
+        "description": "Message display failures keep the text and a retry action visible; a failed conversation view offers reconnection. Retrying preserves your draft and reading position. Previously loaded history stays visible across resets, and the latest message keeps space above the composer."
+      }
+    ]
+  },
+  {
     "version": "v0.1.75",
     "items": [
       {
