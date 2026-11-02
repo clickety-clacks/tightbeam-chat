@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.77",
+    "items": [
+      {
+        "title": "Show uncertain delivery and keep recovery controls visible",
+        "description": "When Chat cannot confirm whether a message was sent, it says so and keeps your full draft available. When supported, Check and retry checks the conversation before retrying the same message. On narrow screens, recovery notices leave activity-history errors and retry controls visible."
+      }
+    ]
+  },
+  {
     "version": "v0.1.76",
     "items": [
       {
