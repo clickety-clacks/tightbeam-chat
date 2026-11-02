@@ -1,8 +1,8 @@
 import { uncoveredRecordEvents, recordEventPresentation } from './sessionRecordEvents';
 import type { SessionRecordEvent } from './types';
-import { forwardRef, memo, useCallback, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore,
+import { Component, forwardRef, memo, useCallback, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore,
   type AnchorHTMLAttributes, type FormEvent, type HTMLAttributes, type ImgHTMLAttributes,
-  type ReactNode, type RefObject, type TableHTMLAttributes } from 'react';
+  type ErrorInfo, type ReactNode, type RefObject, type TableHTMLAttributes } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { highlightRecognizedCode } from './markdownHighlight';
@@ -448,6 +448,70 @@ function markdownBody(content: string): ReactNode {
   </div>;
 }
 
+interface TranscriptRenderBoundaryProps {
+  children: ReactNode;
+  resetKey: unknown;
+  fallback: (retry: () => void) => ReactNode;
+  onRetry: () => void;
+  onRecovered?: () => void;
+}
+
+interface TranscriptRenderBoundaryState {
+  failed: boolean;
+  resetKey: unknown;
+}
+
+class TranscriptRenderBoundary extends Component<TranscriptRenderBoundaryProps, TranscriptRenderBoundaryState> {
+  constructor(props: TranscriptRenderBoundaryProps) {
+    super(props);
+    this.state = { failed: false, resetKey: props.resetKey };
+  }
+
+  static getDerivedStateFromProps(props: TranscriptRenderBoundaryProps, state: TranscriptRenderBoundaryState) {
+    return props.resetKey === state.resetKey ? null : { failed: false, resetKey: props.resetKey };
+  }
+
+  static getDerivedStateFromError(): Partial<TranscriptRenderBoundaryState> {
+    return { failed: true };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    // Keep diagnostics useful without sending conversation text to the console.
+    console.error('[Chat] transcript render failed', { errorName: error.name, componentStack: info.componentStack });
+  }
+
+  componentDidUpdate(_previousProps: TranscriptRenderBoundaryProps, previousState: TranscriptRenderBoundaryState) {
+    if (previousState.failed && !this.state.failed) this.props.onRecovered?.();
+  }
+
+  private retry = () => {
+    this.setState({ failed: false }, () => this.props.onRetry());
+  };
+
+  render(): ReactNode {
+    return this.state.failed ? this.props.fallback(this.retry) : this.props.children;
+  }
+}
+
+function TranscriptRenderFailure({ scope, className, onLayoutChange, children }: {
+  scope: 'message' | 'transcript';
+  className: string;
+  onLayoutChange?: () => void;
+  children: ReactNode;
+}) {
+  useLayoutEffect(() => { onLayoutChange?.(); }, [onLayoutChange]);
+  return <div className={className} role="alert" data-chat-render-failure={scope}>{children}</div>;
+}
+
+function RenderedRecordBody({ record, context, renderMessage }: {
+  record: ConversationRecord;
+  context: RenderContext;
+  renderMessage?: TightbeamChatProps['renderMessage'];
+}) {
+  const custom = renderMessage?.(record, context);
+  return custom === undefined ? context.defaultRender() : custom;
+}
+
 const foldMotionDuration = 180;
 const foldMotionEasing = 'cubic-bezier(0.2, 0, 0, 1)';
 
@@ -756,13 +820,14 @@ function StatusIcon({ state }: { state: RuntimeState }) {
 }
 
 const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, registerRow, preservePosition,
-  reconcileLayout, scrollKey: scrollKeyOverride, promptTargetPrefix }: {
+  reconcileLayout, onRetryRender, scrollKey: scrollKeyOverride, promptTargetPrefix }: {
   bubble: Bubble;
   renderMessage?: TightbeamChatProps['renderMessage'];
   agentName: string;
   registerRow: (key: string, element: HTMLElement | null) => void;
   preservePosition: () => void;
   reconcileLayout: () => void;
+  onRetryRender: () => void;
   scrollKey?: string;
   promptTargetPrefix: string;
 }) {
@@ -793,12 +858,21 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, re
     raw: Object.freeze({ carrierId: record.id, memberSourceId: bubble.member.sourceId,
       memberIndex: bubble.member.index, sender: bubble.member.sender, content: bubble.member.content }),
   }) : record;
-  const custom = renderMessage?.(displayRecord, context);
   return <article ref={rowRef} id={`${promptTargetPrefix}-${encodeURIComponent(bubble.key)}`}
     className={`tb-chat-bubble tb-chat-bubble-${bubble.side}`} data-record-key={bubble.key} data-scroll-key={scrollKey}
     aria-label={`Message from ${bubble.sender || sourceLabel(bubble.side, agentName)}`}>
     {bubble.side === 'human' && <span className="tb-chat-bubble-sender" aria-hidden="true">{bubble.sender}</span>}
-    <div className="tb-chat-bubble-body">{custom === undefined ? context.defaultRender() : custom}</div>
+    <div className="tb-chat-bubble-body">
+      <TranscriptRenderBoundary resetKey={record.rowVersion} onRecovered={reconcileLayout}
+        onRetry={onRetryRender} fallback={retry => <TranscriptRenderFailure scope="message"
+          className="tb-chat-render-failure tb-chat-render-failure-message" onLayoutChange={reconcileLayout}>
+          <span>Message formatting failed. The text is still available.</span>
+          <div className="tb-chat-render-failure-text">{displayContent}</div>
+          <button type="button" onClick={retry}>Try formatting again</button>
+        </TranscriptRenderFailure>}>
+        <RenderedRecordBody record={displayRecord} context={context} renderMessage={renderMessage} />
+      </TranscriptRenderBoundary>
+    </div>
     <time className="tb-chat-time" dateTime={time.dateTime}>{time.text}</time>
   </article>;
 }, (previous, next) => {
@@ -812,6 +886,7 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, re
   return before.key === after.key && before.record === after.record && before.side === after.side &&
     before.sender === after.sender && before.displayContent === after.displayContent &&
     before.derived === after.derived && sameMember && previous.renderMessage === next.renderMessage &&
+    previous.onRetryRender === next.onRetryRender &&
     previous.promptTargetPrefix === next.promptTargetPrefix &&
     previous.agentName === next.agentName && previous.registerRow === next.registerRow &&
     previous.preservePosition === next.preservePosition && previous.reconcileLayout === next.reconcileLayout &&
@@ -1411,6 +1486,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   const reading = useReadingPosition(state.status === 'ready', readingRevision, box =>
     Boolean(state.loadingOlder || state.recordEventsLoading || (!state.historyError && (state.hasOlder || state.recordEventsHasOlder) && box.scrollTop < olderHistoryPrefetchDistance(box))),
     arrivalEligible, state.sessionKey, markReadPosition, state.activeTurn?.turn.status === 'running');
+  const retryTranscript = useCallback(() => { void runtime.rebuild({ restart: true }); }, [runtime]);
   const preserveReadingPositionRef = useRef(reading.preserveVisiblePosition);
   preserveReadingPositionRef.current = reading.preserveVisiblePosition;
   const preserveReadingPosition = useCallback(() => preserveReadingPositionRef.current(), []);
@@ -2176,7 +2252,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
           return <RecordRow key={bubble.key} bubble={bubble} scrollKey={item.scrollKey}
             renderMessage={renderMessage} agentName={agentName} registerRow={reading.registerRow}
             preservePosition={preserveReadingPosition} reconcileLayout={reading.reconcileViewportLayout}
-            promptTargetPrefix={promptTargetPrefix} />;
+            onRetryRender={retryTranscript} promptTargetPrefix={promptTargetPrefix} />;
         }
         const { send } = item;
         const time = localTimestamp(send.submittedAt);
@@ -2221,7 +2297,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   }, [activityPlan.toolItems, expandedActivityRuns, expandedToolCalls, toggleActivityRun, setToolCallExpanded,
     revealingActivityItems, finishActivityReveal, reading.registerRow, reading.preserveVisiblePosition,
     reading.reconcileViewportLayout, preserveReadingPosition, expandRun,
-    renderMessage, agentName, state.status, runtime, promptTargetPrefix]);
+    renderMessage, agentName, state.status, runtime, retryTranscript, promptTargetPrefix]);
 
   return <ActivitySummaryProvider transport={activitySummaries}
     connected={state.liveConnectionState ? state.liveConnectionState === 'connected' : state.status === 'ready'}
@@ -2256,19 +2332,27 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
         </div>}
       </div>}
       <div className={`tb-chat-message-content${showToolHistoryStatusInNotice ? ' tb-chat-runtime-notice-reserved' : ''}`} ref={reading.content}>
-      {hasToolHistoryStatus && renderToolHistoryStatus(showToolHistoryStatusInNotice)}
-      {projection.issues.length > 0 && <div className="tb-chat-history-error tb-chat-caption tb-chat-caption-danger" role="alert">
-        Some message sources could not be interpreted. Conversation filtering is incomplete.
-      </div>}
-      {state.recordEventsError && <div role="status" className="tb-chat-caption">
-        Activity history is unavailable. <button type="button" onClick={() => runtime.retryRecordEvents?.()}>Retry activity history</button>
-      </div>}
-      <IndexedTimeline messages={transcript.index} tools={tools} pending={pending.index} render={renderItem} />
-      {pending.tail.map(renderItem)}
-      {caption && state.activeTurn && <WorkingStateCaption caption={caption} turnSeq={state.activeTurn.turn.seq} />}
-      {state.status === 'ready' && !state.conversationError && !state.sessionNotFound &&
-        bubbles.length === 0 && localSends.length === 0 &&
-        <p className="tb-chat-empty">No messages yet.</p>}
+      <TranscriptRenderBoundary resetKey={state.generation} onRetry={retryTranscript}
+        onRecovered={reading.reconcileViewportLayout} fallback={retry => <div
+          className="tb-chat-render-failure tb-chat-render-failure-transcript tb-chat-caption tb-chat-caption-danger"
+          role="alert" data-chat-render-failure="transcript">
+          <span>The conversation could not be displayed. Its history is still available.</span>
+          <button type="button" onClick={retry}>Reconnect and try again</button>
+        </div>}>
+        {hasToolHistoryStatus && renderToolHistoryStatus(showToolHistoryStatusInNotice)}
+        {projection.issues.length > 0 && <div className="tb-chat-history-error tb-chat-caption tb-chat-caption-danger" role="alert">
+          Some message sources could not be interpreted. Conversation filtering is incomplete.
+        </div>}
+        {state.recordEventsError && <div role="status" className="tb-chat-caption">
+          Activity history is unavailable. <button type="button" onClick={() => runtime.retryRecordEvents?.()}>Retry activity history</button>
+        </div>}
+        <IndexedTimeline messages={transcript.index} tools={tools} pending={pending.index} render={renderItem} />
+        {pending.tail.map(renderItem)}
+        {caption && state.activeTurn && <WorkingStateCaption caption={caption} turnSeq={state.activeTurn.turn.seq} />}
+        {state.status === 'ready' && !state.conversationError && !state.sessionNotFound &&
+          bubbles.length === 0 && localSends.length === 0 &&
+          <p className="tb-chat-empty">No messages yet.</p>}
+      </TranscriptRenderBoundary>
       </div>
     </div>
     {measurementPrompt && <div ref={stickyPromptMeasurement} className="tb-chat-latest-user-prompt-measurement"
