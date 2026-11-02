@@ -1192,8 +1192,10 @@ describe('Gateway wire mapping and behavior checks', () => {
     const uncertain = setup();
     const third = uncertain.transport.sendHuman(submission, new AbortController().signal);
     await vi.waitFor(() => expect(uncertain.human.sent).toHaveLength(1));
-    uncertain.human.disconnect();
-    expect(await third).toMatchObject({ outcome: 'retryable' });
+    uncertain.human.disconnect({ code: 1006 });
+    expect(await third).toEqual({
+      outcome: 'uncertain', reason: 'connection-closed-before-acknowledgement',
+    });
   });
 
   it('sends the complete prompt once and maps a Gateway size refusal by matching ID', async () => {

@@ -231,6 +231,7 @@ export type HumanSendResult =
   | { readonly outcome: 'retryable'; readonly reason: string }
   /** No authenticated send connection could be established. */
   | { readonly outcome: 'unreachable'; readonly reason: string }
+  /** The message may have been accepted, but no response confirmed its delivery. */
   | { readonly outcome: 'uncertain'; readonly reason: string };
 
 export interface ChangeConnection {
@@ -277,7 +278,7 @@ export interface ChatTransport {
   readonly targetGateway?: string;
   /** Establishes the elected target's snapshot/notice coverage rule. */
   proveCoverage(session: SessionRecord, page: ConversationPage, buffered: readonly ChangeNotice[]): boolean;
-  /** Separate authenticated human /ws post, resolved by ack/refusal, retry after a dropped socket, or uncertainty. */
+  /** Separate authenticated human /ws post, resolved by ack/refusal, bounded retry, or uncertainty. */
   sendHuman(submission: HumanSubmission, signal: AbortSignal): Promise<HumanSendResult>;
 }
 

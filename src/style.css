@@ -210,6 +210,7 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
 .tb-chat-bubble-agent { align-self: flex-start; }
 .tb-chat-local { border-color: var(--tb-chat-border); }
 .tb-chat-local[data-send-state="ghosted"] { opacity: .68; }
+.tb-chat-local[data-send-state="uncertain"] { opacity: .88; }
 .tb-chat-bubble-body { min-width: 0; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
 .tb-chat-markdown { min-width: 0; overflow-wrap: anywhere; }
 .tb-chat-markdown > :first-child { margin-top: 0; }
@@ -255,6 +256,7 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
 .tb-chat-time { display: block; margin-top: .32rem; color: var(--tb-chat-muted); font-size: .7rem; line-height: 1.2; text-align: end; }
 .tb-chat-send-indicator { display: flex; align-items: center; min-height: .9rem; margin: .35rem 0 0; }
 .tb-chat-send-refusal { margin: .35rem 0 0; color: var(--tb-chat-danger); font-size: .82rem; }
+.tb-chat-send-uncertainty { margin: .35rem 0 0; color: var(--tb-chat-muted); font-size: .82rem; }
 .tb-chat-send-spinner {
   display: inline-block;
   width: .78rem;
@@ -273,6 +275,18 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
   border-radius: 50%;
   color: var(--tb-chat-danger);
   font-size: .65rem;
+  font-weight: 700;
+  line-height: 1;
+}
+.tb-chat-send-uncertain-mark {
+  display: grid;
+  width: .82rem;
+  height: .82rem;
+  place-items: center;
+  border: 1px solid var(--tb-chat-muted);
+  border-radius: 50%;
+  color: var(--tb-chat-muted);
+  font-size: .6rem;
   font-weight: 700;
   line-height: 1;
 }
