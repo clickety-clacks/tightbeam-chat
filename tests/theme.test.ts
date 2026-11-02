@@ -90,7 +90,7 @@ const expectedLight: Tokens = {
   accent: '#526657', 'on-accent': '#F3F0EA', teak: '#7A5540', fjord: '#4D6470',
   'pill-purple': '#6B3CC0',
   ok: '#4E6547', caution: '#73592A', transition: '#6B6458', danger: '#A63A2A', idle: '#5C5854',
-  placeholder: '#53504C', glass: 'rgba(250,246,238,0.74)',
+  placeholder: '#53504C', glass: 'rgba(250,246,238,0.74)', 'composer-glass': 'rgba(250,246,238,0.94)',
   'glass-edge': 'rgba(60,45,30,0.10)', shadow: 'rgb(60,45,30)',
   'composer-shadow-alpha': '12%',
 };
@@ -103,7 +103,7 @@ const expectedDark: Tokens = {
   accent: '#A5BAA9', 'on-accent': '#19211B', teak: '#C9A891', fjord: '#9FB4BF',
   'pill-purple': '#C9B7F1',
   ok: '#A5BC9C', caution: '#D8BE84', transition: '#B0A18D', danger: '#EE8B75', idle: '#9E9992',
-  placeholder: '#D2CDC6', glass: 'rgba(46,42,37,0.74)',
+  placeholder: '#D2CDC6', glass: 'rgba(46,42,37,0.74)', 'composer-glass': 'rgba(46,42,37,0.94)',
   'glass-edge': 'rgba(240,230,215,0.10)', shadow: '#000000',
   'composer-shadow-alpha': '35%',
 };
@@ -205,7 +205,7 @@ describe('Nordic theme', () => {
     const { light, dark } = tokenBlocks(themeCss);
     const shell = rule(componentCss, '.tb-chat-input-shell');
     expect(shell).toContain('border: var(--tb-chat-input-border-width) solid var(--tb-chat-glass-edge)');
-    expect(shell).toContain('background: var(--tb-chat-glass)');
+    expect(shell).toContain('background: var(--tb-chat-composer-glass)');
     expect(shell).toContain('backdrop-filter: blur(14px)');
     expect(shell).toContain('var(--tb-chat-composer-shadow-alpha)');
     expect(rule(componentCss, '.tb-chat-input-shell textarea::placeholder')).toContain('color: var(--tb-chat-placeholder)');
@@ -344,6 +344,15 @@ describe('Nordic theme', () => {
     expect(draftInput).toContain('overflow-y: auto');
     expect(draftInput).toContain('line-height: 1.5');
     expect(draftInput).toContain('padding: .425rem 3.55rem .425rem 5.35rem');
+  });
+
+  it('keeps scrolled message lettering muted beneath the composer glass', () => {
+    const inputShell = rule(componentCss, '.tb-chat-input-shell');
+    expect(inputShell).toContain('background: var(--tb-chat-composer-glass)');
+    expect(inputShell).toContain('-webkit-backdrop-filter: blur(14px)');
+    expect(themeCss).toContain('--tb-chat-composer-glass: rgba(250,246,238,0.94)');
+    const darkTheme = themeCss.slice(themeCss.indexOf('@media (prefers-color-scheme: dark)'));
+    expect(darkTheme).toContain('--tb-chat-composer-glass: rgba(46,42,37,0.94)');
   });
 
   it('keeps fixed-control clearance while restoring compact tail spacing at the latest message', () => {
