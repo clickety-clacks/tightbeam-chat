@@ -1,8 +1,8 @@
 import { uncoveredRecordEvents, recordEventPresentation } from './sessionRecordEvents';
 import type { SessionRecordEvent } from './types';
-import { forwardRef, memo, useCallback, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore,
+import { Component, forwardRef, memo, useCallback, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore,
   type AnchorHTMLAttributes, type FormEvent, type HTMLAttributes, type ImgHTMLAttributes,
-  type ReactNode, type RefObject, type TableHTMLAttributes } from 'react';
+  type ErrorInfo, type ReactNode, type RefObject, type TableHTMLAttributes } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { highlightRecognizedCode } from './markdownHighlight';
@@ -448,6 +448,70 @@ function markdownBody(content: string): ReactNode {
   </div>;
 }
 
+interface TranscriptRenderBoundaryProps {
+  children: ReactNode;
+  resetKey: unknown;
+  fallback: (retry: () => void) => ReactNode;
+  onRetry: () => void;
+  onRecovered?: () => void;
+}
+
+interface TranscriptRenderBoundaryState {
+  failed: boolean;
+  resetKey: unknown;
+}
+
+class TranscriptRenderBoundary extends Component<TranscriptRenderBoundaryProps, TranscriptRenderBoundaryState> {
+  constructor(props: TranscriptRenderBoundaryProps) {
+    super(props);
+    this.state = { failed: false, resetKey: props.resetKey };
+  }
+
+  static getDerivedStateFromProps(props: TranscriptRenderBoundaryProps, state: TranscriptRenderBoundaryState) {
+    return props.resetKey === state.resetKey ? null : { failed: false, resetKey: props.resetKey };
+  }
+
+  static getDerivedStateFromError(): Partial<TranscriptRenderBoundaryState> {
+    return { failed: true };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    // Keep diagnostics useful without sending conversation text to the console.
+    console.error('[Chat] transcript render failed', { errorName: error.name, componentStack: info.componentStack });
+  }
+
+  componentDidUpdate(_previousProps: TranscriptRenderBoundaryProps, previousState: TranscriptRenderBoundaryState) {
+    if (previousState.failed && !this.state.failed) this.props.onRecovered?.();
+  }
+
+  private retry = () => {
+    this.setState({ failed: false }, () => this.props.onRetry());
+  };
+
+  render(): ReactNode {
+    return this.state.failed ? this.props.fallback(this.retry) : this.props.children;
+  }
+}
+
+function TranscriptRenderFailure({ scope, className, onLayoutChange, children }: {
+  scope: 'message' | 'transcript';
+  className: string;
+  onLayoutChange?: () => void;
+  children: ReactNode;
+}) {
+  useLayoutEffect(() => { onLayoutChange?.(); }, [onLayoutChange]);
+  return <div className={className} role="alert" data-chat-render-failure={scope}>{children}</div>;
+}
+
+function RenderedRecordBody({ record, context, renderMessage }: {
+  record: ConversationRecord;
+  context: RenderContext;
+  renderMessage?: TightbeamChatProps['renderMessage'];
+}) {
+  const custom = renderMessage?.(record, context);
+  return custom === undefined ? context.defaultRender() : custom;
+}
+
 const foldMotionDuration = 180;
 const foldMotionEasing = 'cubic-bezier(0.2, 0, 0, 1)';
 
@@ -756,13 +820,14 @@ function StatusIcon({ state }: { state: RuntimeState }) {
 }
 
 const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, registerRow, preservePosition,
-  reconcileLayout, scrollKey: scrollKeyOverride, promptTargetPrefix }: {
+  reconcileLayout, onRetryRender, scrollKey: scrollKeyOverride, promptTargetPrefix }: {
   bubble: Bubble;
   renderMessage?: TightbeamChatProps['renderMessage'];
   agentName: string;
   registerRow: (key: string, element: HTMLElement | null) => void;
   preservePosition: () => void;
   reconcileLayout: () => void;
+  onRetryRender: () => void;
   scrollKey?: string;
   promptTargetPrefix: string;
 }) {
@@ -793,12 +858,21 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, re
     raw: Object.freeze({ carrierId: record.id, memberSourceId: bubble.member.sourceId,
       memberIndex: bubble.member.index, sender: bubble.member.sender, content: bubble.member.content }),
   }) : record;
-  const custom = renderMessage?.(displayRecord, context);
   return <article ref={rowRef} id={`${promptTargetPrefix}-${encodeURIComponent(bubble.key)}`}
     className={`tb-chat-bubble tb-chat-bubble-${bubble.side}`} data-record-key={bubble.key} data-scroll-key={scrollKey}
     aria-label={`Message from ${bubble.sender || sourceLabel(bubble.side, agentName)}`}>
     {bubble.side === 'human' && <span className="tb-chat-bubble-sender" aria-hidden="true">{bubble.sender}</span>}
-    <div className="tb-chat-bubble-body">{custom === undefined ? context.defaultRender() : custom}</div>
+    <div className="tb-chat-bubble-body">
+      <TranscriptRenderBoundary resetKey={record.rowVersion} onRecovered={reconcileLayout}
+        onRetry={onRetryRender} fallback={retry => <TranscriptRenderFailure scope="message"
+          className="tb-chat-render-failure tb-chat-render-failure-message" onLayoutChange={reconcileLayout}>
+          <span>Message formatting failed. The text is still available.</span>
+          <div className="tb-chat-render-failure-text">{displayContent}</div>
+          <button type="button" onClick={retry}>Try formatting again</button>
+        </TranscriptRenderFailure>}>
+        <RenderedRecordBody record={displayRecord} context={context} renderMessage={renderMessage} />
+      </TranscriptRenderBoundary>
+    </div>
     <time className="tb-chat-time" dateTime={time.dateTime}>{time.text}</time>
   </article>;
 }, (previous, next) => {
@@ -812,6 +886,7 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, re
   return before.key === after.key && before.record === after.record && before.side === after.side &&
     before.sender === after.sender && before.displayContent === after.displayContent &&
     before.derived === after.derived && sameMember && previous.renderMessage === next.renderMessage &&
+    previous.onRetryRender === next.onRetryRender &&
     previous.promptTargetPrefix === next.promptTargetPrefix &&
     previous.agentName === next.agentName && previous.registerRow === next.registerRow &&
     previous.preservePosition === next.preservePosition && previous.reconcileLayout === next.reconcileLayout &&
@@ -825,19 +900,28 @@ interface ComposerHandle {
   closeStatusPopup(): void;
 }
 
+interface ChatRecoverySnapshot {
+  key: string;
+  draft: string;
+  editRevision: number;
+  submittedRevisions: Map<string, number>;
+  scrollTop: number;
+  followLatest: boolean;
+  hasReadingPosition: boolean;
+}
+
 const Composer = forwardRef<ComposerHandle, {
   runtime: ChatRuntime;
   state: RuntimeState;
+  recoverySnapshot: ChatRecoverySnapshot;
   agentName: string;
   root: RefObject<HTMLElement | null>;
   suppressStatus: boolean;
   onSettings: () => void;
   onSubmitted: () => void;
-}>(function Composer({ runtime, state, agentName, root, suppressStatus, onSettings, onSubmitted }, ref) {
-  const [draft, setDraft] = useState('');
+}>(function Composer({ runtime, state, recoverySnapshot, agentName, root, suppressStatus, onSettings, onSubmitted }, ref) {
+  const [draft, setDraft] = useState(recoverySnapshot.draft);
   const [statusOpen, setStatusOpen] = useState(false);
-  const editRevision = useRef(0);
-  const submittedRevisions = useRef(new Map<string, number>());
   const nativeContentSizing = useRef<boolean | null>(null);
   if (nativeContentSizing.current === null) {
     nativeContentSizing.current = typeof CSS !== 'undefined' &&
@@ -851,11 +935,15 @@ const Composer = forwardRef<ComposerHandle, {
   const titleId = useId();
   const statusName = statusText(state);
   const statusId = `${titleId}-status-details`;
+  const updateDraft = useCallback((content: string) => {
+    recoverySnapshot.draft = content;
+    setDraft(content);
+  }, [recoverySnapshot]);
 
   useImperativeHandle(ref, () => ({
     restore: (content) => {
-      editRevision.current++;
-      setDraft(content);
+      recoverySnapshot.editRevision++;
+      updateDraft(content);
     },
     contains: (target) => target instanceof Node && Boolean(shell.current?.contains(target)),
     focusAtEnd: () => {
@@ -867,7 +955,7 @@ const Composer = forwardRef<ComposerHandle, {
       return document.activeElement === element;
     },
     closeStatusPopup: () => setStatusOpen(false),
-  }), []);
+  }), [updateDraft]);
 
   const closeStatusPopup = () => {
     setStatusOpen(false);
@@ -903,15 +991,15 @@ const Composer = forwardRef<ComposerHandle, {
 
   useEffect(() => {
     for (const send of state.sends) {
-      const submittedRevision = submittedRevisions.current.get(send.clientMessageId);
+      const submittedRevision = recoverySnapshot.submittedRevisions.get(send.clientMessageId);
       if (submittedRevision === undefined || send.status === 'pending') continue;
-      submittedRevisions.current.delete(send.clientMessageId);
-      if (send.status === 'accepted' && editRevision.current === submittedRevision) {
-        editRevision.current++;
-        setDraft('');
+      recoverySnapshot.submittedRevisions.delete(send.clientMessageId);
+      if (send.status === 'accepted' && recoverySnapshot.editRevision === submittedRevision) {
+        recoverySnapshot.editRevision++;
+        updateDraft('');
       }
     }
-  }, [state.sends]);
+  }, [recoverySnapshot, state.sends, updateDraft]);
 
   useLayoutEffect(() => {
     const element = shell.current;
@@ -928,8 +1016,8 @@ const Composer = forwardRef<ComposerHandle, {
     event.preventDefault();
     if (!draft.trim()) return;
     if (isSettingsCommand(draft)) {
-      editRevision.current++;
-      setDraft('');
+      recoverySnapshot.editRevision++;
+      updateDraft('');
       setStatusOpen(false);
       onSettings();
       return;
@@ -937,7 +1025,7 @@ const Composer = forwardRef<ComposerHandle, {
     if (state.status === 'unauthorized') return;
     const sendId = runtime.send(draft);
     if (sendId) {
-      submittedRevisions.current.set(sendId, editRevision.current);
+      recoverySnapshot.submittedRevisions.set(sendId, recoverySnapshot.editRevision);
       onSubmitted();
     }
   };
@@ -947,8 +1035,8 @@ const Composer = forwardRef<ComposerHandle, {
     <div className="tb-chat-input-shell">
       <textarea ref={input} id={`${titleId}-input`} value={draft}
         onChange={(event) => {
-          editRevision.current++;
-          setDraft(event.target.value);
+          recoverySnapshot.editRevision++;
+          updateDraft(event.target.value);
         }}
         onKeyDown={(event) => {
           if (event.key !== 'Enter') return;
@@ -962,8 +1050,8 @@ const Composer = forwardRef<ComposerHandle, {
             const start = element.selectionStart;
             const end = element.selectionEnd;
             pendingCaret.current = start + 1;
-            editRevision.current++;
-            setDraft((current) => `${current.slice(0, start)}\n${current.slice(end)}`);
+            recoverySnapshot.editRevision++;
+            updateDraft(`${draft.slice(0, start)}\n${draft.slice(end)}`);
             return;
           }
           if (event.altKey || event.metaKey) return;
@@ -1284,13 +1372,15 @@ const ActivityRunRow = memo(function ActivityRunRow({ entry, expanded, toggle, r
   return before.lines.every((line, index) => sameActivityLine(line, after.lines[index]));
 });
 
-function ChatBody({ runtime, renderMessage, className, hostBridge, configuredConversationHref, activitySummaries }: {
+function ChatBody({ runtime, renderMessage, className, hostBridge, configuredConversationHref, activitySummaries,
+  recoverySnapshot }: {
   activitySummaries?: ActivitySummaryTransport;
   runtime: ChatRuntime;
   renderMessage?: TightbeamChatProps['renderMessage'];
   className?: string;
   hostBridge: HostComposerBridge | null;
   configuredConversationHref?: string;
+  recoverySnapshot: ChatRecoverySnapshot;
 }) {
   const state = useSyncExternalStore(runtime.subscribe, runtime.getSnapshot, runtime.getSnapshot);
   const promptTargetPrefix = useId();
@@ -1411,6 +1501,29 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   const reading = useReadingPosition(state.status === 'ready', readingRevision, box =>
     Boolean(state.loadingOlder || state.recordEventsLoading || (!state.historyError && (state.hasOlder || state.recordEventsHasOlder) && box.scrollTop < olderHistoryPrefetchDistance(box))),
     arrivalEligible, state.sessionKey, markReadPosition, state.activeTurn?.turn.status === 'running');
+  const { viewport } = reading;
+  const rememberReadingPosition = useCallback(() => {
+    const box = viewport.current;
+    if (!box) return;
+    recoverySnapshot.scrollTop = box.scrollTop;
+    recoverySnapshot.followLatest = Math.max(0, box.scrollHeight - box.clientHeight - box.scrollTop) <= 64;
+    recoverySnapshot.hasReadingPosition = true;
+  }, [recoverySnapshot, viewport]);
+  const readingOnScroll = useRef(reading.onScroll);
+  readingOnScroll.current = reading.onScroll;
+  useLayoutEffect(() => {
+    if (!recoverySnapshot.hasReadingPosition) return;
+    const box = viewport.current;
+    if (!box) return;
+    const bottom = Math.max(0, box.scrollHeight - box.clientHeight);
+    // The browser clamps an offset if recovered history has become shorter.
+    box.scrollTop = recoverySnapshot.followLatest
+      ? bottom : recoverySnapshot.scrollTop;
+    readingOnScroll.current();
+    rememberReadingPosition();
+  }, [recoverySnapshot, rememberReadingPosition, viewport]);
+  useLayoutEffect(() => { rememberReadingPosition(); }, [host, rememberReadingPosition, state]);
+  const retryTranscript = useCallback(() => { void runtime.rebuild({ restart: true }); }, [runtime]);
   const preserveReadingPositionRef = useRef(reading.preserveVisiblePosition);
   preserveReadingPositionRef.current = reading.preserveVisiblePosition;
   const preserveReadingPosition = useCallback(() => preserveReadingPositionRef.current(), []);
@@ -1418,7 +1531,6 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     previousArrivalContext.current = { sessionKey: state.sessionKey, generation: state.generation,
       recoveryRevision, ready: state.status === 'ready' };
   }, [state.sessionKey, state.generation, state.status, recoveryRevision]);
-  const { viewport } = reading;
   const observedHostSendIds = useRef<Set<string> | undefined>(undefined);
   if (!observedHostSendIds.current) {
     observedHostSendIds.current = new Set(state.sends
@@ -2024,6 +2136,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   const handleScroll = () => {
     const box = viewport.current;
     if (!box) return;
+    rememberReadingPosition();
     const previous = previousScrollTop.current;
     const current = box.scrollTop;
     previousScrollTop.current = current;
@@ -2176,7 +2289,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
           return <RecordRow key={bubble.key} bubble={bubble} scrollKey={item.scrollKey}
             renderMessage={renderMessage} agentName={agentName} registerRow={reading.registerRow}
             preservePosition={preserveReadingPosition} reconcileLayout={reading.reconcileViewportLayout}
-            promptTargetPrefix={promptTargetPrefix} />;
+            onRetryRender={retryTranscript} promptTargetPrefix={promptTargetPrefix} />;
         }
         const { send } = item;
         const time = localTimestamp(send.submittedAt);
@@ -2221,7 +2334,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   }, [activityPlan.toolItems, expandedActivityRuns, expandedToolCalls, toggleActivityRun, setToolCallExpanded,
     revealingActivityItems, finishActivityReveal, reading.registerRow, reading.preserveVisiblePosition,
     reading.reconcileViewportLayout, preserveReadingPosition, expandRun,
-    renderMessage, agentName, state.status, runtime, promptTargetPrefix]);
+    renderMessage, agentName, state.status, runtime, retryTranscript, promptTargetPrefix]);
 
   return <ActivitySummaryProvider transport={activitySummaries}
     connected={state.liveConnectionState ? state.liveConnectionState === 'connected' : state.status === 'ready'}
@@ -2256,19 +2369,27 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
         </div>}
       </div>}
       <div className={`tb-chat-message-content${showToolHistoryStatusInNotice ? ' tb-chat-runtime-notice-reserved' : ''}`} ref={reading.content}>
-      {hasToolHistoryStatus && renderToolHistoryStatus(showToolHistoryStatusInNotice)}
-      {projection.issues.length > 0 && <div className="tb-chat-history-error tb-chat-caption tb-chat-caption-danger" role="alert">
-        Some message sources could not be interpreted. Conversation filtering is incomplete.
-      </div>}
-      {state.recordEventsError && <div role="status" className="tb-chat-caption">
-        Activity history is unavailable. <button type="button" onClick={() => runtime.retryRecordEvents?.()}>Retry activity history</button>
-      </div>}
-      <IndexedTimeline messages={transcript.index} tools={tools} pending={pending.index} render={renderItem} />
-      {pending.tail.map(renderItem)}
-      {caption && state.activeTurn && <WorkingStateCaption caption={caption} turnSeq={state.activeTurn.turn.seq} />}
-      {state.status === 'ready' && !state.conversationError && !state.sessionNotFound &&
-        bubbles.length === 0 && localSends.length === 0 &&
-        <p className="tb-chat-empty">No messages yet.</p>}
+      <TranscriptRenderBoundary resetKey={state.generation} onRetry={retryTranscript}
+        onRecovered={reading.reconcileViewportLayout} fallback={retry => <div
+          className="tb-chat-render-failure tb-chat-render-failure-transcript tb-chat-caption tb-chat-caption-danger"
+          role="alert" data-chat-render-failure="transcript">
+          <span>The conversation could not be displayed. Its history is still available.</span>
+          <button type="button" onClick={retry}>Reconnect and try again</button>
+        </div>}>
+        {hasToolHistoryStatus && renderToolHistoryStatus(showToolHistoryStatusInNotice)}
+        {projection.issues.length > 0 && <div className="tb-chat-history-error tb-chat-caption tb-chat-caption-danger" role="alert">
+          Some message sources could not be interpreted. Conversation filtering is incomplete.
+        </div>}
+        {state.recordEventsError && <div role="status" className="tb-chat-caption">
+          Activity history is unavailable. <button type="button" onClick={() => runtime.retryRecordEvents?.()}>Retry activity history</button>
+        </div>}
+        <IndexedTimeline messages={transcript.index} tools={tools} pending={pending.index} render={renderItem} />
+        {pending.tail.map(renderItem)}
+        {caption && state.activeTurn && <WorkingStateCaption caption={caption} turnSeq={state.activeTurn.turn.seq} />}
+        {state.status === 'ready' && !state.conversationError && !state.sessionNotFound &&
+          bubbles.length === 0 && localSends.length === 0 &&
+          <p className="tb-chat-empty">No messages yet.</p>}
+      </TranscriptRenderBoundary>
       </div>
     </div>
     {measurementPrompt && <div ref={stickyPromptMeasurement} className="tb-chat-latest-user-prompt-measurement"
@@ -2293,7 +2414,8 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
       }}>
       <span aria-hidden="true">↓</span> {reading.unseenButtonLabel}
     </button>}
-    {!host.composerHidden && <Composer ref={composer} runtime={runtime} state={state} agentName={agentName}
+    {!host.composerHidden && <Composer ref={composer} runtime={runtime} state={state}
+      recoverySnapshot={recoverySnapshot} agentName={agentName}
       root={root} suppressStatus={host.optedIn} onSettings={openSettings} onSubmitted={reading.scrollToLatest} />}
     {overlay && <ReleaseNotesDialog overlay={overlay} entries={bundledNotes} onClose={closeOverlay}
       onOpenReleaseNotes={openReleaseNotes} onBack={backToSettings} />}
@@ -2304,6 +2426,12 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
 export function TightbeamChat({ sessionKey, adapter, identityKey, renderMessage, className,
   configuredConversationHref }: TightbeamChatProps) {
   const key = `${sessionKey}\u0000${identityKey || ''}`;
+  const recoverySnapshot = useRef<ChatRecoverySnapshot>({ key, draft: '', editRevision: 0,
+    submittedRevisions: new Map(), scrollTop: 0, followLatest: true, hasReadingPosition: false });
+  if (recoverySnapshot.current.key !== key) {
+    recoverySnapshot.current = { key, draft: '', editRevision: 0, submittedRevisions: new Map(),
+      scrollTop: 0, followLatest: true, hasReadingPosition: false };
+  }
   const latest = useRef({ key, sessionKey, adapter });
   latest.current = { key, sessionKey, adapter };
   const [opened, setOpened] = useState<{ key: string; adapter: TightbeamAdapter; runtime: ChatRuntime } | null>(null);
@@ -2338,7 +2466,17 @@ export function TightbeamChat({ sessionKey, adapter, identityKey, renderMessage,
       </span>
     </section>;
   }
-  return <ChatBody key={key} runtime={opened.runtime} renderMessage={renderMessage}
-    className={className} hostBridge={hostBridge} configuredConversationHref={configuredConversationHref}
-    activitySummaries={adapter.activitySummaries} />;
+  const retryChat = () => { void opened.runtime.rebuild({ restart: true }); };
+  return <TranscriptRenderBoundary resetKey={opened.runtime} onRetry={retryChat} fallback={retry => <section
+    className={`tb-chat ${className || ''}`} aria-label="Conversation">
+    <div className="tb-chat-render-failure tb-chat-render-failure-transcript tb-chat-caption tb-chat-caption-danger"
+      role="alert" data-chat-render-failure="chat">
+      <span>The conversation could not be displayed. Its history is still available.</span>
+      <button type="button" onClick={retry}>Reconnect and try again</button>
+    </div>
+  </section>}>
+    <ChatBody key={key} runtime={opened.runtime} renderMessage={renderMessage}
+      className={className} hostBridge={hostBridge} configuredConversationHref={configuredConversationHref}
+      activitySummaries={adapter.activitySummaries} recoverySnapshot={recoverySnapshot.current} />
+  </TranscriptRenderBoundary>;
 }

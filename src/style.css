@@ -319,6 +319,26 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
 .tb-chat-caption-neutral { color: var(--tb-chat-muted); }
 .tb-chat-caption-caution { color: color-mix(in srgb, var(--tb-chat-caution) 94%, var(--tb-chat-background)); }
 .tb-chat-caption-danger { color: color-mix(in srgb, var(--tb-chat-danger) 94%, var(--tb-chat-background)); }
+.tb-chat-render-failure {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: .4rem;
+  min-width: 0;
+  padding: .45rem;
+  border: 1px solid color-mix(in srgb, var(--tb-chat-danger) 48%, var(--tb-chat-border));
+  border-radius: .4rem;
+  overflow-wrap: anywhere;
+}
+.tb-chat-render-failure-transcript { margin: .45rem 0; }
+.tb-chat-render-failure-text { color: var(--tb-chat-text); white-space: pre-wrap; }
+.tb-chat-render-failure button {
+  border: 1px solid var(--tb-chat-border);
+  border-radius: 999px;
+  padding: .25rem .65rem;
+  background: transparent;
+  color: inherit;
+}
 .tb-chat-caption-body {
   display: flex;
   flex: 1 1 auto;

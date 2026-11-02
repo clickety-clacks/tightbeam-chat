@@ -1467,11 +1467,13 @@ describe('conversation surface', () => {
   });
 
   it('shows live-feed reconnecting, sustained failure, and recovery through the status dot', () => {
-    const runtime = new FakeRuntime('feed-status', { status: 'ready', liveError: 'Changes socket closed',
+    const history = [row('feed-status', 'retained-feed-row', 'Existing conversation text')];
+    const runtime = new FakeRuntime('feed-status', { records: history, status: 'ready', liveError: 'Changes socket closed',
       liveConnectionState: 'reconnecting' });
     render(<TightbeamChat sessionKey="feed-status" adapter={adapterFor(runtime)} />);
     const composer = screen.getByRole('textbox') as HTMLTextAreaElement;
     fireEvent.change(composer, { target: { value: 'keep this draft while the feed reconnects' } });
+    expect(screen.getByText('Existing conversation text')).toBeTruthy();
 
     const reconnectingButton = screen.getByRole('button', { name: 'Connection status: Reconnecting. Show details' });
     expect(reconnectingButton.querySelector('.tb-chat-status-dot')?.classList.contains('tb-chat-status-stale')).toBe(true);
@@ -1492,7 +1494,140 @@ describe('conversation surface', () => {
     const connectedButton = screen.getByRole('button', { name: 'Connection status: Connected. Show details' });
     expect(connectedButton.querySelector('.tb-chat-status-dot')?.classList.contains('tb-chat-status-ready')).toBe(true);
     expect(screen.queryByText(/Reconnecting|Live updates are reconnecting|conversation may be out of date/)).toBeNull();
+    expect(screen.getByText('Existing conversation text')).toBeTruthy();
     expect(composer.value).toBe('keep this draft while the feed reconnects');
+  });
+
+  it('keeps a message visible and its reading position when its renderer fails', async () => {
+    const sessionKey = 'message-render-failure';
+    const records = [
+      row(sessionKey, 'before', 'Earlier message', { seq: 1 }),
+      row(sessionKey, 'broken', 'Stored message text remains available', { seq: 2, rowVersion: 1 }),
+      row(sessionKey, 'reading-anchor', 'Reading position stays here', { seq: 3 }),
+      row(sessionKey, 'after', 'Later message', { seq: 4 }),
+    ];
+    let shouldThrow = false;
+    const renderMessage = vi.fn((record: ConversationRecord) => {
+      if (record.kind === 'message' && record.id === 'broken') {
+        if (shouldThrow) throw new Error('must not log conversation content');
+        return <div>Custom message rendering</div>;
+      }
+      return undefined;
+    });
+    const runtime = new FakeRuntime(sessionKey, { records });
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const view = render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} renderMessage={renderMessage} />);
+
+    const viewport = screen.getByRole('log');
+    const layout = installViewportLayout(viewport, 200, element => {
+      if (element instanceof HTMLElement && element.dataset.scrollKey === 'broken') {
+        return element.querySelector('[data-chat-render-failure]') ? 92 : 220;
+      }
+      return undefined;
+    });
+    const composer = screen.getByRole('textbox', { name: 'Message to Research assistant' }) as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: 'draft survives render recovery' } });
+    composer.setSelectionRange(7, 7);
+    fireEvent.wheel(viewport, { deltaY: -1 });
+    layout.setScrollTop(320);
+    fireEvent.scroll(viewport);
+    const readingAnchor = viewport.querySelector<HTMLElement>('[data-scroll-key="reading-anchor"]')!;
+    const originalOffset = layout.offset(readingAnchor);
+    const failedRow = viewport.querySelector<HTMLElement>('[data-scroll-key="broken"]')!;
+
+    try {
+      shouldThrow = true;
+      act(() => runtime.update({ records: [records[0], { ...records[1], rowVersion: 2 }, ...records.slice(2)] }));
+
+      const failure = view.container.querySelector<HTMLElement>('[data-chat-render-failure="message"]');
+      expect(failure?.getAttribute('role')).toBe('alert');
+      expect(failure?.textContent).toContain('Stored message text remains available');
+      expect(viewport.querySelector('[data-scroll-key="broken"]')).toBe(failedRow);
+      expect(screen.getByText('Earlier message')).toBeTruthy();
+      expect(screen.getByText('Reading position stays here')).toBeTruthy();
+      expect(screen.getByText('Later message')).toBeTruthy();
+      expect(layout.offset(readingAnchor)).toBeCloseTo(originalOffset, 0);
+      expect(composer.value).toBe('draft survives render recovery');
+      expect(composer.selectionStart).toBe(7);
+      expect(screen.getByRole('button', { name: 'Send message' })).toHaveProperty('disabled', false);
+
+      shouldThrow = false;
+      fireEvent.click(screen.getByRole('button', { name: 'Try formatting again' }));
+      expect(await screen.findByText('Custom message rendering')).toBeTruthy();
+      expect(runtime.rebuildOptions).toEqual([{ restart: true }]);
+      expect(layout.offset(readingAnchor)).toBeCloseTo(originalOffset, 0);
+      expect(composer.value).toBe('draft survives render recovery');
+      expect(composer.selectionStart).toBe(7);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+      expect(runtime.sent).toEqual(['draft survives render recovery']);
+      const diagnostic = errorLog.mock.calls.find(([label]) => label === '[Chat] transcript render failed')?.[1];
+      expect(diagnostic).toEqual(expect.objectContaining({ errorName: 'Error' }));
+      expect(diagnostic).not.toHaveProperty('message');
+    } finally {
+      layout.restore();
+      errorLog.mockRestore();
+    }
+  });
+
+  it('shows recoverable Chat state and restores the draft and reading position after a body failure', async () => {
+    const sessionKey = 'chat-body-render-failure';
+    const records = [
+      row(sessionKey, 'before', 'Earlier message', { seq: 1 }),
+      row(sessionKey, 'anchor', 'Reading position stays here', { seq: 2 }),
+      row(sessionKey, 'after', 'Later message', { seq: 3 }),
+    ];
+    const runtime = new FakeRuntime(sessionKey, { records });
+    const getSnapshot = runtime.getSnapshot;
+    let shouldThrow = false;
+    runtime.getSnapshot = () => {
+      if (shouldThrow) throw new Error('body snapshot failed');
+      return getSnapshot();
+    };
+    const adapter = adapterFor(runtime);
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const view = render(<TightbeamChat sessionKey={sessionKey} adapter={adapter} />);
+    let originalLayout: ReturnType<typeof installViewportLayout> | undefined;
+    let recoveredLayout: ReturnType<typeof installViewportLayout> | undefined;
+
+    try {
+      const viewport = screen.getByRole('log');
+      originalLayout = installViewportLayout(viewport, 200);
+      const composer = screen.getByRole('textbox', { name: 'Message to Research assistant' }) as HTMLTextAreaElement;
+      fireEvent.change(composer, { target: { value: 'keep this draft through body recovery' } });
+      fireEvent.wheel(viewport, { deltaY: -1 });
+      originalLayout.setScrollTop(230);
+      fireEvent.scroll(viewport);
+      const originalScrollTop = originalLayout.scrollTop;
+      const originalAnchorOffset = originalLayout.offset(viewport.querySelector<HTMLElement>('[data-scroll-key="anchor"]')!);
+      originalLayout.restore();
+      originalLayout = undefined;
+
+      shouldThrow = true;
+      view.rerender(<TightbeamChat sessionKey={sessionKey} adapter={adapter} className="failure-trigger" />);
+      expect(view.container.querySelector('[data-chat-render-failure="chat"]')?.textContent)
+        .toContain('Its history is still available.');
+      expect(screen.getByRole('button', { name: 'Reconnect and try again' })).toBeTruthy();
+
+      shouldThrow = false;
+      fireEvent.click(screen.getByRole('button', { name: 'Reconnect and try again' }));
+      expect(await screen.findByText('Reading position stays here')).toBeTruthy();
+      const restoredComposer = screen.getByRole('textbox', { name: 'Message to Research assistant' }) as HTMLTextAreaElement;
+      expect(restoredComposer.value).toBe('keep this draft through body recovery');
+      const restoredViewport = screen.getByRole('log');
+      expect(restoredViewport.scrollTop).toBe(originalScrollTop);
+      recoveredLayout = installViewportLayout(restoredViewport, 200);
+      recoveredLayout.setScrollTop(originalScrollTop);
+      expect(recoveredLayout.offset(restoredViewport.querySelector<HTMLElement>('[data-scroll-key="anchor"]')!))
+        .toBeCloseTo(originalAnchorOffset, 0);
+
+      fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+      expect(runtime.sent).toEqual(['keep this draft through body recovery']);
+    } finally {
+      originalLayout?.restore();
+      recoveredLayout?.restore();
+      errorLog.mockRestore();
+    }
   });
 
   it('keeps the authorization-loss explanation with the red connection dot', () => {
