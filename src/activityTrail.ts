@@ -363,6 +363,8 @@ export function buildActivityTrail(input: {
   readonly transitions: readonly CanonicalTransition[];
   /** Unmatched local sends use timestamps to find their place between tool rows. */
   readonly localSendTimes?: readonly number[];
+  /** Durable record events also occupy timeline positions between tool rows. */
+  readonly recordEventTimes?: readonly number[];
   readonly tools: readonly ToolCallRecord[];
   readonly toolsEnabled: boolean;
   readonly turnStateAvailable: boolean;
@@ -523,7 +525,7 @@ export function buildActivityTrail(input: {
   const messageItems: MessageActivityItem[] = [];
   const toolItems = new Map<string, ToolActivityItem>();
   const transitionSequences = input.transitions.map((record) => record.seq).sort((a, b) => a - b);
-  const localSendTimes = [...(input.localSendTimes ?? [])].sort((a, b) => a - b);
+  const nonToolRowTimes = [...(input.localSendTimes ?? []), ...(input.recordEventTimes ?? [])].sort((a, b) => a - b);
   const hasTransitionBetween = (previous: number, next: number) => {
     let low = 0;
     let high = transitionSequences.length;
@@ -534,16 +536,18 @@ export function buildActivityTrail(input: {
     }
     return low < transitionSequences.length && transitionSequences[low] <= next;
   };
-  const hasPendingSendBetween = (previous?: number, next?: number) => {
+  const hasNonToolRowBetween = (previous?: number, next?: number) => {
     if (previous === undefined || next === undefined || previous >= next) return false;
     let low = 0;
-    let high = localSendTimes.length;
+    let high = nonToolRowTimes.length;
     while (low < high) {
       const middle = low + Math.floor((high - low) / 2);
-      if (localSendTimes[middle] <= previous) low = middle + 1;
+      if (nonToolRowTimes[middle] < previous) low = middle + 1;
       else high = middle;
     }
-    return low < localSendTimes.length && localSendTimes[low] < next;
+    // Timeline placement uses the first tool strictly after a row timestamp,
+    // so a tied row sits after the tool at that timestamp and before the next.
+    return low < nonToolRowTimes.length && nonToolRowTimes[low] < next;
   };
   const addLine = (line: ActivityLine) => {
     if (line.kind === 'tool' && line.call) toolItems.set(line.call.id, line);
@@ -577,10 +581,7 @@ export function buildActivityTrail(input: {
     const foldGroupByCandidateId = new Map<string, string>();
     const foldGroupCounts = new Map<string, number>();
     const foldGroupIdentity = (candidate: Candidate) => {
-      if (candidate.kind === 'tool') {
-        const toolName = candidate.call?.toolName?.trim();
-        return toolName ? `tool:${toolName}` : `single:${candidate.id}`;
-      }
+      if (candidate.kind === 'tool') return 'tool';
       if (candidate.kind === 'agent') return 'agent';
       if (candidate.kind === 'substrate' && candidate.semanticFoldKind) {
         return `gateway:${candidate.semanticFoldKind}`;
@@ -593,7 +594,7 @@ export function buildActivityTrail(input: {
       if (!previousRow || previousRow.segmentKey !== row.segmentKey ||
         foldGroupIdentity(previousRow.candidate) !== foldGroupIdentity(row.candidate) ||
         hasTransitionBetween(previousRow.candidate.position.sequence, row.candidate.position.sequence) ||
-        hasPendingSendBetween(previousRow.candidate.sortTime, row.candidate.sortTime)) {
+        hasNonToolRowBetween(previousRow.candidate.sortTime, row.candidate.sortTime)) {
         groupId = row.candidate.id;
       }
       foldGroupByCandidateId.set(row.candidate.id, groupId);
