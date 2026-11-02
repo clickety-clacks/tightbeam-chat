@@ -244,6 +244,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   cleanup();
+  window.localStorage.removeItem('tb-chat:dismissed-prompt:reading');
   for (const frame of animationFrames.values()) clearTimeout(frame.timer);
   animationFrames.clear();
   restoreVisualViewport?.();
@@ -1994,23 +1995,26 @@ describe('conversation reading position', () => {
       if (index >= 0) return rect(16 + index * 92 - scrollTop, 80);
       return rect(0, 50);
     });
-    const { box } = setup();
+    const sparseHistory = initialRows.map((record, index) => index === 0 || index === 6
+      ? record : { ...record, role: 'assistant' as const, sender: 'assistant' });
+    const { box } = setup(sparseHistory);
 
     expect(screen.queryByRole('button', { name: 'Jump to user prompt' })).toBeNull();
 
     layoutAvailable = true;
     readAt(box, 579);
     expect(screen.getByRole('button', { name: 'Jump to user prompt' }).textContent).toBe('Message 6');
+    expect(box.querySelector<HTMLElement>('[data-scroll-key="message-6"]')?.style.visibility).toBe('hidden');
+
+    readAt(box, 650);
+    expect(screen.getByRole('button', { name: 'Jump to user prompt' }).textContent).toBe('Message 6');
     const target = targetForPreview()!;
-    expect(target.getBoundingClientRect().bottom).toBeLessThanOrEqual(
-      box.parentElement!.querySelector<HTMLElement>('.tb-chat-latest-user-prompt-measurement')!.getBoundingClientRect().bottom);
+    expect(target.getBoundingClientRect().bottom).toBeLessThanOrEqual(box.getBoundingClientRect().top);
 
     box.scrollTop = 1500;
     fireEvent.scroll(box);
-    expect(screen.getByRole('button', { name: 'Jump to user prompt' }).textContent).toBe('Message 16');
-    expect(targetForPreview()?.dataset.recordKey).toBe('message-16');
-    expect(targetForPreview()!.getBoundingClientRect().bottom).toBeLessThanOrEqual(
-      box.parentElement!.querySelector<HTMLElement>('.tb-chat-latest-user-prompt-measurement')!.getBoundingClientRect().bottom);
+    expect(screen.getByRole('button', { name: 'Jump to user prompt' }).textContent).toBe('Message 6');
+    expect(targetForPreview()?.dataset.recordKey).toBe('message-6');
   });
 
   it('pins a prompt at the preview bottom line and animates it back when it crosses down', () => {
@@ -2060,11 +2064,9 @@ describe('conversation reading position', () => {
 
     box.scrollTop = 579;
     fireEvent.scroll(box);
-    expect(screen.getByRole('button', { name: 'Jump to user prompt' }).textContent).toBe('Message 6');
-    expect(crossingPrompt.style.visibility).toBe('hidden');
-    expect(animate).toHaveBeenCalledTimes(3);
-    act(() => animate.mock.results[2].value.onfinish());
-    expect(crossingPrompt.style.visibility).toBe('hidden');
+    expect(screen.queryByRole('button', { name: 'Jump to user prompt' })).toBeNull();
+    expect(crossingPrompt.style.visibility).not.toBe('hidden');
+    expect(animate).toHaveBeenCalledTimes(2);
   });
 
   it('moves the prompt instantly with reduced motion enabled', () => {
@@ -2085,8 +2087,34 @@ describe('conversation reading position', () => {
     expect(animate).not.toHaveBeenCalled();
   });
 
-  it('keeps a dismissed preview hidden while selection changes and restores it only after a new submission', () => {
-    const { runtime, box } = setup();
+  it('hides the sticky copy when its represented original remains visible', () => {
+    latestPromptOverlayHeight = 60;
+    const answer = (id: number): CanonicalMessage => ({ ...message(id), role: 'assistant', sender: 'assistant' });
+    const history = [message(1), message(2), ...Array.from({ length: 12 }, (_, index) => answer(index + 3))];
+    const { box } = setup(history);
+    readAt(box, 132);
+
+    const preview = screen.getByRole('button', { name: 'Jump to user prompt' });
+    const original = targetForPreview()!;
+    expect(preview.textContent).toBe('Message 2');
+    expect(original.getBoundingClientRect().bottom).toBeGreaterThan(box.getBoundingClientRect().top);
+    expect(original.getBoundingClientRect().top).toBeLessThan(box.getBoundingClientRect().bottom);
+    act(() => animate.mock.results[0].value.onfinish());
+    box.scrollTop = 0;
+    fireEvent.scroll(box);
+    expect(screen.queryByRole('button', { name: 'Jump to user prompt' })).toBeNull();
+    expect(original.style.visibility).not.toBe('hidden');
+
+    box.scrollTop = 120;
+    fireEvent.scroll(box);
+    expect(original.getBoundingClientRect().bottom).toBeGreaterThan(box.getBoundingClientRect().top);
+    expect(original.style.visibility).not.toBe('hidden');
+    expect(screen.queryByRole('button', { name: 'Jump to user prompt' })).toBeNull();
+  });
+
+  it('persists a dismissed preview through reload and restores it only after a new submission', () => {
+    const { runtime, box: initialBox } = setup();
+    let box = initialBox;
     readAt(box, 600);
     expect(targetForPreview()?.dataset.recordKey).toBe('message-5');
     scrollTo.mockClear();
@@ -2097,6 +2125,13 @@ describe('conversation reading position', () => {
     expect(scrollTo).not.toHaveBeenCalled();
     expect(box.querySelector('[data-record-key="message-5"]')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Jump to user prompt' })).toBeNull();
+
+    cleanup();
+    render(<TightbeamChat sessionKey="reading" adapter={{ open: () => runtime }} />);
+    box = screen.getByRole('log');
+    readAt(box, 600);
+    expect(screen.queryByRole('button', { name: 'Jump to user prompt' })).toBeNull();
+
     act(() => runtime.publish({ agentDisplayName: 'Updated assistant' }));
     expect(screen.queryByRole('button', { name: 'Jump to user prompt' })).toBeNull();
     box.scrollTop = 950;
