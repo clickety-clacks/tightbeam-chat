@@ -2837,7 +2837,9 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   const handoffPrompt = promptHandoff ? promptsByIdentity.get(promptHandoff.identity) : undefined;
   // Measure the content the preview would show. Using the overlapping prompt
   // here makes its text height change the overlap result that selected it.
-  const measurementPrompt = handoffPrompt ?? stickyPrompt;
+  // When a tall-reply anchor suppresses that preview, omit its measuring copy
+  // so its hidden height cannot keep changing prompt selection.
+  const measurementPrompt = suppressOlderStickyPrompt ? undefined : handoffPrompt ?? stickyPrompt;
   const displayedPrompt = handoffPrompt ?? stickyPrompt;
   const displayedPromptTargetId = displayedPrompt
     ? `${promptTargetPrefix}-${encodeURIComponent(displayedPrompt.targetKey)}` : undefined;

@@ -222,10 +222,13 @@ it.each([
   { label: 'desktop', width: 1440, height: 900 },
 ])('keeps the answered prompt tail uncovered above a tall reply with intervening rows on $label', ({ width, height }) => {
   const sessionKey = `prompt-tail-${width}`;
-  const prompts = Array.from({ length: 12 }, (_, index) => row(sessionKey, `prompt-${index + 1}`, `Question ${index + 1}`, {
-    seq: index + 1, role: 'user', sender: 'user:person', messageType: 'chat',
-    createdAt: new Date((index + 1) * 1000).toISOString(),
-  }));
+  const prompts = Array.from({ length: 12 }, (_, index) => row(sessionKey, `prompt-${index + 1}`,
+    index === 11 ? 'Short answered prompt'
+      : index % 2 === 0 ? `Long previous prompt ${index + 1} ${'earlier context '.repeat(18)}`
+        : `Short previous prompt ${index + 1}`, {
+      seq: index + 1, role: 'user', sender: 'user:person', messageType: 'chat',
+      createdAt: new Date((index + 1) * 1000).toISOString(),
+    }));
   const answeredPrompt = prompts.at(-1)!;
   const runtime = new FakeRuntime(sessionKey, { records: prompts, toolCallsEnabled: true });
   const restoreMotion = installMotionPreference(true);
@@ -270,9 +273,19 @@ it.each([
       }
     };
     flushFrames();
+    const measurement = viewport.parentElement?.querySelector<HTMLElement>('.tb-chat-latest-user-prompt-measurement');
+    expect(measurement).toBeTruthy();
+    expect(measurement?.querySelector('.tb-chat-latest-user-prompt-text')?.textContent)
+      .toMatch(/Long previous prompt|Short previous prompt|Short answered prompt/);
+    Object.defineProperty(measurement, 'getBoundingClientRect', { configurable: true, value: () => {
+      const text = measurement!.querySelector('.tb-chat-latest-user-prompt-text')?.textContent ?? '';
+      return new DOMRect(0, 10, width, text.startsWith('Long previous prompt') ? 70 : 30);
+    } });
     fireEvent.scroll(viewport);
     flushFrames();
 
+    expect(screen.queryByText('The conversation could not be displayed. Its history is still available.')).toBeNull();
+    expect(viewport.parentElement?.querySelector('.tb-chat-latest-user-prompt-measurement')).toBeNull();
     const answeredPromptRow = viewport.querySelector<HTMLElement>(`[data-scroll-key="${answeredPrompt.id}"]`)!;
     const replyRow = viewport.querySelector<HTMLElement>('[data-scroll-key="assistant-reply"]')!;
     const promptBody = answeredPromptRow.querySelector<HTMLElement>('.tb-chat-bubble-body')!;
