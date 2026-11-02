@@ -222,10 +222,13 @@ it.each([
   { label: 'desktop', width: 1440, height: 900 },
 ])('keeps the answered prompt tail uncovered above a tall reply with intervening rows on $label', ({ width, height }) => {
   const sessionKey = `prompt-tail-${width}`;
-  const prompts = Array.from({ length: 12 }, (_, index) => row(sessionKey, `prompt-${index + 1}`, `Question ${index + 1}`, {
-    seq: index + 1, role: 'user', sender: 'user:person', messageType: 'chat',
-    createdAt: new Date((index + 1) * 1000).toISOString(),
-  }));
+  const prompts = Array.from({ length: 12 }, (_, index) => row(sessionKey, `prompt-${index + 1}`,
+    index === 11 ? 'Short answered prompt'
+      : index % 2 === 0 ? `Long previous prompt ${index + 1} ${'earlier context '.repeat(18)}`
+        : `Short previous prompt ${index + 1}`, {
+      seq: index + 1, role: 'user', sender: 'user:person', messageType: 'chat',
+      createdAt: new Date((index + 1) * 1000).toISOString(),
+    }));
   const answeredPrompt = prompts.at(-1)!;
   const runtime = new FakeRuntime(sessionKey, { records: prompts, toolCallsEnabled: true });
   const restoreMotion = installMotionPreference(true);
@@ -270,9 +273,19 @@ it.each([
       }
     };
     flushFrames();
+    const measurement = viewport.parentElement?.querySelector<HTMLElement>('.tb-chat-latest-user-prompt-measurement');
+    expect(measurement).toBeTruthy();
+    expect(measurement?.querySelector('.tb-chat-latest-user-prompt-text')?.textContent)
+      .toMatch(/Long previous prompt|Short previous prompt|Short answered prompt/);
+    Object.defineProperty(measurement, 'getBoundingClientRect', { configurable: true, value: () => {
+      const text = measurement!.querySelector('.tb-chat-latest-user-prompt-text')?.textContent ?? '';
+      return new DOMRect(0, 10, width, text.startsWith('Long previous prompt') ? 70 : 30);
+    } });
     fireEvent.scroll(viewport);
     flushFrames();
 
+    expect(screen.queryByText('The conversation could not be displayed. Its history is still available.')).toBeNull();
+    expect(viewport.parentElement?.querySelector('.tb-chat-latest-user-prompt-measurement')).toBeNull();
     const answeredPromptRow = viewport.querySelector<HTMLElement>(`[data-scroll-key="${answeredPrompt.id}"]`)!;
     const replyRow = viewport.querySelector<HTMLElement>('[data-scroll-key="assistant-reply"]')!;
     const promptBody = answeredPromptRow.querySelector<HTMLElement>('.tb-chat-bubble-body')!;
@@ -2448,6 +2461,135 @@ describe('conversation surface', () => {
       layout.restore();
     }
   });
+
+  it.each([100, 110, 120, 130])(
+    'keeps sticky prompt selection stable across a shorter prompt preview at scrollTop %i', (scrollTop) => {
+    const sessionKey = `prompt-preview-history-measurement-${scrollTop}`;
+    const promptA = row(sessionKey, 'prompt-a', `Long prompt A ${'earlier context '.repeat(18)}`, {
+      seq: 1, role: 'user', sender: 'user:person', messageType: 'chat', turnSeq: 1,
+    });
+    const replyA = row(sessionKey, 'reply-a', 'Reply A', {
+      seq: 2, sender: 'assistant-service', messageType: 'assistant', replyToMessageId: promptA.id, turnSeq: 1,
+    });
+    const promptB = row(sessionKey, 'prompt-b', 'Short prompt B', {
+      seq: 3, role: 'user', sender: 'user:person', messageType: 'chat', turnSeq: 2,
+    });
+    const replyB = row(sessionKey, 'reply-b', 'Reply B', {
+      seq: 4, sender: 'assistant-service', messageType: 'assistant', replyToMessageId: promptB.id, turnSeq: 2,
+    });
+    const runtime = new FakeRuntime(sessionKey, { records: [promptA, replyA, promptB, replyB] });
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+    const log = screen.getByRole('log');
+    const layout = installViewportLayout(log, 200, (element) => {
+      const key = (element as HTMLElement).dataset.recordKey;
+      if (key === 'prompt-a') return 92;
+      if (key === 'reply-a') return 48;
+      if (key === 'prompt-b') return 32;
+      return 92;
+    }, false, { width: 390, height: 180, top: 100 });
+
+    try {
+      fireEvent.wheel(log, { deltaY: -1 });
+      layout.setScrollTop(scrollTop);
+      fireEvent.scroll(log);
+      const promptARow = within(log).getByText(/Long prompt A/).closest<HTMLElement>('[data-scroll-key]')!;
+      const promptBRow = within(log).getByText('Short prompt B').closest<HTMLElement>('[data-scroll-key]')!;
+      expect(promptARow.getBoundingClientRect().bottom).toBeLessThanOrEqual(110);
+      expect(promptBRow.getBoundingClientRect().bottom).toBe(276 - scrollTop);
+      expect(promptBRow.getBoundingClientRect().bottom).toBeGreaterThan(140);
+      expect(promptBRow.getBoundingClientRect().bottom).toBeLessThanOrEqual(180);
+      const measurement = log.parentElement?.querySelector<HTMLElement>('.tb-chat-latest-user-prompt-measurement');
+      expect(measurement).toBeTruthy();
+      const measuredPrompts: string[] = [];
+      Object.defineProperty(measurement, 'getBoundingClientRect', { configurable: true, value: () => {
+        const text = measurement!.querySelector('.tb-chat-latest-user-prompt-text')?.textContent ?? '';
+        measuredPrompts.push(text.startsWith('Long prompt A') ? 'A' : 'B');
+        return new DOMRect(0, 110, 390, text.startsWith('Long prompt A') ? 70 : 30);
+      } });
+
+      fireEvent.scroll(log);
+
+      expect(screen.queryByText('The conversation could not be displayed. Its history is still available.')).toBeNull();
+      expect(screen.queryByRole('log')).toBeTruthy();
+      expect(measuredPrompts.length).toBeGreaterThan(0);
+      expect(measuredPrompts.length).toBeLessThan(10);
+      const measurementChanges = measuredPrompts.slice(1)
+        .filter((prompt, index) => prompt !== measuredPrompts[index]).length;
+      expect(measurementChanges).toBeLessThanOrEqual(1);
+    } finally {
+      layout.restore();
+    }
+  });
+
+  it('keeps a retained message reachable after repeated older-history scrolling', async () => {
+    const sessionKey = 'long-older-history';
+    const pageSize = 50;
+    const pageCount = 20;
+    const firstSequence = 17;
+    const pageAt = (first: number) => [
+      ...Array.from({ length: 5 }, (_, index) => {
+        const seq = first + index;
+        const isPrompt = index === 0;
+        const content = seq === firstSequence ? 'Older target remains reachable'
+          : isPrompt ? `Prompt ${seq}: ${'older context '.repeat(seq % 5 + 1)}` : `History ${seq}`;
+        return row(sessionKey, `history-${seq}`, content, {
+          seq, role: isPrompt ? 'user' : 'assistant', sender: isPrompt ? 'user:person' : 'assistant-service',
+          messageType: isPrompt ? 'chat' : 'assistant',
+        });
+      }),
+      ...Array.from({ length: pageSize - 5 }, (_, index) => {
+        const seq = first + index + 5;
+        return row(sessionKey, `hidden-${seq}`, `Hidden agent activity ${seq}`, {
+          seq, role: 'user', sender: 'agent:external', messageType: 'agent', turnSeq: seq,
+        });
+      }),
+    ];
+    const latest = pageAt(firstSequence + pageCount * pageSize);
+    const runtime = new FakeRuntime(sessionKey, { records: latest, provenanceAvailable: false });
+    runtime.olderPages = Array.from({ length: pageCount }, (_, index) => ({
+      records: pageAt(firstSequence + (pageCount - index - 1) * pageSize), provenance: [],
+      hasOlder: index < pageCount - 1,
+    }));
+
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+    const log = screen.getByRole('log');
+    const layout = installViewportLayout(log, 200, undefined, false, { promptPreviewHeight: 60 });
+
+    try {
+      layout.setScrollTop(500);
+      fireEvent.scroll(log);
+      const measurement = log.parentElement?.querySelector<HTMLElement>('.tb-chat-latest-user-prompt-measurement');
+      expect(measurement).toBeTruthy();
+      Object.defineProperty(measurement, 'getBoundingClientRect', { configurable: true, value: () => {
+        const text = measurement!.querySelector('.tb-chat-latest-user-prompt-text')?.textContent ?? '';
+        const height = Math.min(110, 32 + Math.ceil(text.length / 36) * 18);
+        return new DOMRect(0, 110, 320, height);
+      } });
+      act(() => runtime.update({ hasOlder: true }));
+
+      for (let page = 0; page < pageCount; page++) {
+        layout.setScrollTop(layout.scrollTop + 500);
+        fireEvent.scroll(log);
+        layout.setScrollTop(250);
+        fireEvent.scroll(log);
+
+        await waitFor(() => expect(runtime.loadOlderCalls).toBe(page + 1));
+        await waitFor(() => expect(runtime.getSnapshot().records).toHaveLength(latest.length + (page + 1) * pageSize));
+        expect(log.querySelector('[data-chat-render-failure="transcript"]')).toBeNull();
+      }
+
+      const target = within(log).getByText('Older target remains reachable').closest<HTMLElement>('[data-scroll-key]')!;
+      fireEvent.wheel(log, { deltaY: -1 });
+      layout.setScrollTop(layout.scrollTop + layout.offset(target));
+      fireEvent.scroll(log);
+
+      expect(layout.offset(target)).toBeGreaterThanOrEqual(0);
+      expect(layout.offset(target)).toBeLessThan(log.clientHeight);
+      expect(log.querySelector('[data-chat-render-failure="transcript"]')).toBeNull();
+    } finally {
+      layout.restore();
+    }
+  }, 15000);
 
   it('retracts a failed history load without moving the reader and retries on the next upward scroll', async () => {
     const sessionKey = 'history-retry-on-scroll';
