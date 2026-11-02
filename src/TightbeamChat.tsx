@@ -10,7 +10,8 @@ import type { ChatRuntime, CanonicalMessage, CanonicalTransition, ToolCallRecord
 import { projectMessages, type HumanMember } from './messageVisibility';
 import { ActivitySummaryProvider, useActivitySummary } from './ActivitySummaryView';
 import type { SummaryAnswer, ActivitySummaryTransport } from './activitySummaries';
-import { buildActivityTrail, type ActivityFold, type ActivityLine, type ActivityOverflow, type MessageActivityItem } from './activityTrail';
+import { buildActivityTrail, placeToolCallsInMessageChronology, type ActivityFold, type ActivityLine,
+  type ActivityOverflow, type MessageActivityItem } from './activityTrail';
 import type { ActivityPillIcon, ActivityPillPresentation } from './activityPresentation';
 import { useReadingPosition } from './useReadingPosition';
 import { firstAfterTime, getIndex, indexValues, putIndex, type RecordIndex } from './recordIndex';
@@ -1636,16 +1637,18 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   }), [localSends]);
   const tools = useMemo(() => {
     if (!state.toolCallsEnabled) return undefined;
-    if (state.toolCallIndex) return state.toolCallIndex;
-    // Custom hosts may still provide an array snapshot. The live runtime uses
-    // the persistent index and never takes this full conversion path.
+    const calls: ToolCallRecord[] = [];
+    if (state.toolCallIndex) {
+      for (const byAnchor of indexValues(state.toolCallIndex)) calls.push(...indexValues(byAnchor));
+    } else calls.push(...(state.toolCalls ?? []));
+    const positioned = placeToolCallsInMessageChronology(calls, state.records);
     let index: ToolCallIndex | undefined;
-    for (const call of state.toolCalls ?? []) {
-      const calls = putIndex(getIndex(index, call.afterMessageSeq), call.seq, call, call.startedAt);
-      index = putIndex(index, call.afterMessageSeq, calls, calls.maxTime);
+    for (const call of positioned) {
+      const bySequence = putIndex(getIndex(index, call.afterMessageSeq), call.seq, call, call.startedAt);
+      index = putIndex(index, call.afterMessageSeq, bySequence, bySequence.maxTime);
     }
     return index;
-  }, [state.toolCallsEnabled, state.toolCallIndex, state.toolCalls]);
+  }, [state.toolCallsEnabled, state.toolCallIndex, state.toolCalls, state.records]);
   const toolRecords = useMemo(() => {
     if (!tools) return [];
     const calls: ToolCallRecord[] = [];

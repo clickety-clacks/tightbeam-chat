@@ -3300,7 +3300,7 @@ describe('tool-call and transition display', () => {
     expect(within(screen.getByRole('log')).getByText('Keep this message visible')).toBeTruthy();
   });
 
-  it('keeps an unmatched send at submission time among tools, then uses its canonical anchor with the same scroll key', () => {
+  it('keeps a send in timestamp order among tools and preserves its place after canonical reconciliation', () => {
     let index: ToolCallIndex | undefined;
     for (const [seq, startedAt] of [[201, 2000], [202, 4000]]) {
       const call: ToolCallRecord = { id: 'tc_' + seq, seq, sessionKey: 'ordered-tools', turnSeq: 1,
@@ -3321,9 +3321,68 @@ describe('tool-call and transition display', () => {
     const canonical = row('ordered-tools', 'canonical-send', send.content, { seq: 11, role: 'user', sender: 'user:person',
       createdAt: send.submittedAt, clientMessageId: send.clientMessageId, deviceId: send.deviceId });
     act(() => runtime.update({ records: [human, canonical, reply], sends: [{ ...send, reconciled: true, status: 'accepted' }] }));
-    expect(keys()).toEqual(['human', 'tool:tc_201', 'local-c_pending', 'reply']);
-    expect(screen.getByRole('button', { name: /2 entries\. Latest: Tool 202/ })).toBeTruthy();
+    expect(keys()).toEqual(['human', 'tool-tc_201', 'local-c_pending', 'tool-tc_202', 'reply']);
+    expect(screen.getByText('Tool 201 · running')).toBeTruthy();
+    expect(screen.getByText('Tool 202 · running')).toBeTruthy();
     expect(within(screen.getByRole('log')).getAllByText('Follow-up')).toHaveLength(1);
+  });
+
+  it('keeps tool rows in message chronology across live updates, reload, and history catch-up', () => {
+    const sessionKey = 'tool-chronology';
+    const prompt = row(sessionKey, 'prompt', 'Question', { seq: 1, role: 'user', sender: 'user:person',
+      messageType: 'chat', turnSeq: 1, createdAt: new Date(1_000).toISOString() });
+    const firstReply = row(sessionKey, 'first-reply', 'First answer', { seq: 2, sender: 'assistant-service',
+      messageType: 'assistant', replyToMessageId: prompt.id, turnSeq: 1, createdAt: new Date(2_000).toISOString() });
+    const followUp = row(sessionKey, 'follow-up', 'More detail', { seq: 3, role: 'user', sender: 'user:person',
+      messageType: 'chat', turnSeq: 2, createdAt: new Date(4_000).toISOString() });
+    const finalReply = row(sessionKey, 'final-reply', 'Final answer', { seq: 4, sender: 'assistant-service',
+      messageType: 'assistant', replyToMessageId: followUp.id, turnSeq: 2, createdAt: new Date(6_000).toISOString() });
+    const records = [prompt, firstReply, followUp, finalReply];
+    const tool = (id: string, seq: number, startedAt: number): ToolCallRecord => ({
+      id, seq, sessionKey, turnSeq: 1, afterMessageSeq: prompt.seq, harnessToolCallId: id,
+      title: `Read ${id}`, kind: 'read', toolName: 'read_file', status: 'in_progress', rawInput: null,
+      rawOutput: null, content: null, truncated: [], startedAt, endedAt: null, rowVersion: 1,
+    });
+    const calls = [tool('tc-one', 101, 2_500), tool('tc-two', 102, 3_000), tool('tc-three', 103, 5_000)];
+    const toolCallIndex = (records: readonly ToolCallRecord[]) => {
+      let index: ToolCallIndex | undefined;
+      for (const call of records) {
+        const bySequence = putIndex(getIndex(index, call.afterMessageSeq), call.seq, call, call.startedAt);
+        index = putIndex(index, call.afterMessageSeq, bySequence, bySequence.maxTime);
+      }
+      return index;
+    };
+    const order = (container: HTMLElement) => [...container.querySelectorAll('.tb-chat-message-content > [data-scroll-key]')]
+      .map(element => element.getAttribute('data-scroll-key'));
+
+    const reloaded = render(<TightbeamChat sessionKey={sessionKey}
+      adapter={adapterFor(new FakeRuntime(sessionKey, { records, toolCallsEnabled: true,
+        toolCallIndex: toolCallIndex(calls) }))} />);
+    const reloadOrder = order(reloaded.container);
+    reloaded.unmount();
+
+    const liveRuntime = new FakeRuntime(sessionKey, { records: [prompt], toolCallsEnabled: true });
+    const live = render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(liveRuntime)} />);
+    act(() => liveRuntime.update({ records: [prompt, firstReply] }));
+    act(() => liveRuntime.update({ toolCallIndex: toolCallIndex(calls.slice(0, 2)) }));
+    act(() => liveRuntime.update({ records: [prompt, firstReply, followUp] }));
+    act(() => liveRuntime.update({ toolCallIndex: toolCallIndex(calls) }));
+    act(() => liveRuntime.update({ records }));
+    const liveOrder = order(live.container);
+    live.unmount();
+
+    const catchUpRuntime = new FakeRuntime(sessionKey, {
+      records: [followUp, finalReply], hasOlder: true, toolCallsEnabled: true,
+      toolCallIndex: toolCallIndex(calls),
+    });
+    const catchUp = render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(catchUpRuntime)} />);
+    act(() => catchUpRuntime.update({ records, hasOlder: false }));
+    const catchUpOrder = order(catchUp.container);
+    catchUp.unmount();
+
+    expect(reloadOrder).toEqual(['prompt', 'first-reply', 'tool:tc-one', 'follow-up', 'tool-tc-three', 'final-reply']);
+    expect(liveOrder).toEqual(reloadOrder);
+    expect(catchUpOrder).toEqual(reloadOrder);
   });
 
   it('displays served tool calls automatically and keeps their details and the draft intact', async () => {
