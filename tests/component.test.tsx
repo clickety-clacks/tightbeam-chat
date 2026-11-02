@@ -190,6 +190,15 @@ function installViewportLayout(viewport: HTMLElement, trailingSpace = 200,
       this.classList.contains('tb-chat-latest-user-prompt-measurement')) && frame.promptPreviewHeight) {
       return new DOMRect(0, top + 10, width, frame.promptPreviewHeight);
     }
+    if (this.classList.contains('tb-chat-bubble-body')) {
+      const row = this.closest<HTMLElement>('article[data-record-key]');
+      if (row) {
+        const rowBounds = row.getBoundingClientRect();
+        const bodyTop = rowBounds.top + 12;
+        const bodyBottom = rowBounds.bottom - 29;
+        return new DOMRect(0, bodyTop, width, Math.max(0, bodyBottom - bodyTop));
+      }
+    }
     if (this.classList.contains('tb-chat-scroll-latest')) return new DOMRect(0, top + height - 120, width, 40);
     if (this.classList.contains('tb-chat-composer')) return new DOMRect(0, top + height - 60, width, 60);
     const index = [...content.children].indexOf(this);
@@ -266,6 +275,7 @@ it.each([
 
     const answeredPromptRow = viewport.querySelector<HTMLElement>(`[data-scroll-key="${answeredPrompt.id}"]`)!;
     const replyRow = viewport.querySelector<HTMLElement>('[data-scroll-key="assistant-reply"]')!;
+    const promptBody = answeredPromptRow.querySelector<HTMLElement>('.tb-chat-bubble-body')!;
     const preview = screen.queryByRole('button', { name: 'Jump to user prompt' });
     const previewBottom = preview?.getBoundingClientRect().bottom ?? viewport.getBoundingClientRect().top;
     const visibleBottom = screen.getByRole('button', { name: 'Scroll to bottom' }).getBoundingClientRect().top;
@@ -274,6 +284,7 @@ it.each([
     expect(viewport.querySelector('[data-record-key="tool-read-call"]')).not.toBeNull();
     expect(viewport.querySelector('[data-record-key="record-event:update-example"]')).not.toBeNull();
     expect(answeredPromptRow.getBoundingClientRect().bottom - previewBottom).toBeGreaterThanOrEqual(4);
+    expect(promptBody.getBoundingClientRect().bottom - previewBottom).toBeGreaterThanOrEqual(12);
     expect(answeredPromptRow.getBoundingClientRect().bottom).toBeLessThan(replyRow.getBoundingClientRect().top);
     expect(replyRow.getBoundingClientRect().top).toBeLessThanOrEqual(viewport.getBoundingClientRect().top + visibleHeight / 2);
     if (preview) expect(preview.textContent).toContain(answeredPrompt.content);
