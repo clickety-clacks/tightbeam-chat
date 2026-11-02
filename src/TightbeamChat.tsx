@@ -2834,10 +2834,10 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   }, [promptCandidates, showRuntimeNotice, showToolHistoryStatusInNotice, state.loadingOlder, state.historyError, localNotice,
     updateStickyPrompt, reading.content, stickyPromptIdentity, overlappingPromptIdentity, visibleOriginalPromptIdentities,
     promptHandoff?.identity, promptHandoff?.phase, latestPromptDismissed, suppressOlderStickyPrompt]);
-  const overlappingPrompt = overlappingPromptIdentity ? promptsByIdentity.get(overlappingPromptIdentity) : undefined;
   const handoffPrompt = promptHandoff ? promptsByIdentity.get(promptHandoff.identity) : undefined;
-  const measurementPrompt = promptHandoff?.phase === 'leaving'
-    ? handoffPrompt : overlappingPrompt ?? handoffPrompt ?? stickyPrompt;
+  // Measure the content the preview would show. Using the overlapping prompt
+  // here makes its text height change the overlap result that selected it.
+  const measurementPrompt = handoffPrompt ?? stickyPrompt;
   const displayedPrompt = handoffPrompt ?? stickyPrompt;
   const displayedPromptTargetId = displayedPrompt
     ? `${promptTargetPrefix}-${encodeURIComponent(displayedPrompt.targetKey)}` : undefined;
