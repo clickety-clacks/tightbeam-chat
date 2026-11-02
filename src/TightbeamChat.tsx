@@ -903,6 +903,8 @@ interface ComposerHandle {
 interface ChatRecoverySnapshot {
   key: string;
   draft: string;
+  editRevision: number;
+  submittedRevisions: Map<string, number>;
   scrollTop: number;
   followLatest: boolean;
   hasReadingPosition: boolean;
@@ -920,8 +922,6 @@ const Composer = forwardRef<ComposerHandle, {
 }>(function Composer({ runtime, state, recoverySnapshot, agentName, root, suppressStatus, onSettings, onSubmitted }, ref) {
   const [draft, setDraft] = useState(recoverySnapshot.draft);
   const [statusOpen, setStatusOpen] = useState(false);
-  const editRevision = useRef(0);
-  const submittedRevisions = useRef(new Map<string, number>());
   const nativeContentSizing = useRef<boolean | null>(null);
   if (nativeContentSizing.current === null) {
     nativeContentSizing.current = typeof CSS !== 'undefined' &&
@@ -942,7 +942,7 @@ const Composer = forwardRef<ComposerHandle, {
 
   useImperativeHandle(ref, () => ({
     restore: (content) => {
-      editRevision.current++;
+      recoverySnapshot.editRevision++;
       updateDraft(content);
     },
     contains: (target) => target instanceof Node && Boolean(shell.current?.contains(target)),
@@ -991,15 +991,15 @@ const Composer = forwardRef<ComposerHandle, {
 
   useEffect(() => {
     for (const send of state.sends) {
-      const submittedRevision = submittedRevisions.current.get(send.clientMessageId);
+      const submittedRevision = recoverySnapshot.submittedRevisions.get(send.clientMessageId);
       if (submittedRevision === undefined || send.status === 'pending') continue;
-      submittedRevisions.current.delete(send.clientMessageId);
-      if (send.status === 'accepted' && editRevision.current === submittedRevision) {
-        editRevision.current++;
+      recoverySnapshot.submittedRevisions.delete(send.clientMessageId);
+      if (send.status === 'accepted' && recoverySnapshot.editRevision === submittedRevision) {
+        recoverySnapshot.editRevision++;
         updateDraft('');
       }
     }
-  }, [state.sends, updateDraft]);
+  }, [recoverySnapshot, state.sends, updateDraft]);
 
   useLayoutEffect(() => {
     const element = shell.current;
@@ -1016,7 +1016,7 @@ const Composer = forwardRef<ComposerHandle, {
     event.preventDefault();
     if (!draft.trim()) return;
     if (isSettingsCommand(draft)) {
-      editRevision.current++;
+      recoverySnapshot.editRevision++;
       updateDraft('');
       setStatusOpen(false);
       onSettings();
@@ -1025,7 +1025,7 @@ const Composer = forwardRef<ComposerHandle, {
     if (state.status === 'unauthorized') return;
     const sendId = runtime.send(draft);
     if (sendId) {
-      submittedRevisions.current.set(sendId, editRevision.current);
+      recoverySnapshot.submittedRevisions.set(sendId, recoverySnapshot.editRevision);
       onSubmitted();
     }
   };
@@ -1035,7 +1035,7 @@ const Composer = forwardRef<ComposerHandle, {
     <div className="tb-chat-input-shell">
       <textarea ref={input} id={`${titleId}-input`} value={draft}
         onChange={(event) => {
-          editRevision.current++;
+          recoverySnapshot.editRevision++;
           updateDraft(event.target.value);
         }}
         onKeyDown={(event) => {
@@ -1050,7 +1050,7 @@ const Composer = forwardRef<ComposerHandle, {
             const start = element.selectionStart;
             const end = element.selectionEnd;
             pendingCaret.current = start + 1;
-            editRevision.current++;
+            recoverySnapshot.editRevision++;
             updateDraft(`${draft.slice(0, start)}\n${draft.slice(end)}`);
             return;
           }
@@ -2425,10 +2425,11 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
 export function TightbeamChat({ sessionKey, adapter, identityKey, renderMessage, className,
   configuredConversationHref }: TightbeamChatProps) {
   const key = `${sessionKey}\u0000${identityKey || ''}`;
-  const recoverySnapshot = useRef<ChatRecoverySnapshot>({ key, draft: '', scrollTop: 0,
-    followLatest: true, hasReadingPosition: false });
+  const recoverySnapshot = useRef<ChatRecoverySnapshot>({ key, draft: '', editRevision: 0,
+    submittedRevisions: new Map(), scrollTop: 0, followLatest: true, hasReadingPosition: false });
   if (recoverySnapshot.current.key !== key) {
-    recoverySnapshot.current = { key, draft: '', scrollTop: 0, followLatest: true, hasReadingPosition: false };
+    recoverySnapshot.current = { key, draft: '', editRevision: 0, submittedRevisions: new Map(),
+      scrollTop: 0, followLatest: true, hasReadingPosition: false };
   }
   const latest = useRef({ key, sessionKey, adapter });
   latest.current = { key, sessionKey, adapter };
