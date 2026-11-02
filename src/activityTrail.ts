@@ -206,7 +206,7 @@ function messageCandidate(message: CanonicalMessage, senderDisplayName?: string)
 }
 
 function memberCandidate(carrier: CanonicalMessage, member: ParsedBatchMember,
-  senderDisplayName?: string, separatePill = false, userAsNotice = false): Candidate | undefined {
+  senderDisplayName?: string, separatePill = false, nonAgentAsNotice = false): Candidate | undefined {
   // The carrier's turnSeq belongs to the batching turn, not this notice member.
   const id = `member:${member.sourceId}`;
   const position = { sequence: carrier.seq, phase: 1, order: member.index };
@@ -214,17 +214,22 @@ function memberCandidate(carrier: CanonicalMessage, member: ParsedBatchMember,
   const sortTime = Number.isFinite(parsedTime) ? parsedTime : undefined;
   const content = stripDeliveryScaffolding(member.content);
   const detail = bodyGist(stripProvenanceMarkup(content));
-  if (member.sender.startsWith('user:')) {
-    if (!userAsNotice) return undefined;
+  const isAgentMember = /^(?:agent|session):/.test(member.sender);
+  if (nonAgentAsNotice && !isAgentMember) {
     const gist = detail || 'Substrate activity';
+    const semanticPresentation = activityPillPresentation({ kind: 'substrate', gist, content,
+      sender: member.sender, source: member.source, messageType: carrier.messageType });
+    const presentation: ActivityPillPresentation = semanticPresentation?.label === 'Notice'
+      ? semanticPresentation
+      : { label: 'Notice', tone: 'blue', icon: 'notice', text: detail || 'Notice received' };
     return { id, kind: 'substrate', runKey: '', anchorSeq: carrier.seq, position, gist,
       accessibleText: `Substrate: ${gist}`,
       originalContent: content,
-      presentation: activityPillPresentation({ kind: 'substrate', gist, content,
-        sender: member.sender, source: member.source, messageType: carrier.messageType }),
+      presentation,
       sortTime, historyBacked: true,
       semanticFoldKind: gatewayNoticeFoldKind(content) };
   }
+  if (member.sender.startsWith('user:')) return undefined;
   if (member.sender.startsWith('remedy:')) {
     const statute = member.sender.slice('remedy:'.length).trim();
     const gist = `Remedy ${statute || 'sent'} sent${detail ? ` — ${detail}` : ''}`;
@@ -411,11 +416,12 @@ export function buildActivityTrail(input: {
     if (batchMembers) {
       const hasAgentMember = batchMembers.some(member => /^(?:agent|session):/.test(member.sender));
       const isMixedBatch = hasAgentMember && batchMembers.some(member => !/^(?:agent|session):/.test(member.sender));
-      const userMembersAreNotices = hasAgentMember && isUnmarkedCanonicalProcessBatch(message as CanonicalMessage);
+      const nonAgentMembersAreNotices = hasAgentMember && isUnmarkedCanonicalProcessBatch(message as CanonicalMessage);
       for (const member of batchMembers) {
+        const isAgentMember = /^(?:agent|session):/.test(member.sender);
         const candidate = memberCandidate(message as CanonicalMessage, member,
-          senderDisplayNames.get(member.sender), isMixedBatch && /^(?:agent|session):/.test(member.sender),
-          userMembersAreNotices && member.sender.startsWith('user:'));
+          senderDisplayNames.get(member.sender), isMixedBatch && isAgentMember,
+          nonAgentMembersAreNotices && !isAgentMember);
         if (candidate) candidates.push(candidate);
       }
       continue;

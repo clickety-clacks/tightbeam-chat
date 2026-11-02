@@ -1063,9 +1063,10 @@ describe('conversation surface', () => {
   it('hides provenance markup in message and pill display without changing source text', () => {
     const sessionKey = 'provenance-display';
     const tag = '<engram-src id="123e4567-e89b-42d3-a456-426614174000"/>';
+    const unquotedTag = '<engram-src id=123e4567-e89b-42d3-a456-426614174000/>';
     const promptContent = `${tag}\n\nA normal message.`;
     const onBehalfContent = `${tag}\n\nA message shown on your behalf.`;
-    const agentContent = `${tag}\n\nAn agent update with useful detail.`;
+    const agentContent = `${tag}\n${unquotedTag}\n\nAn agent update with useful detail.`;
     const prompt = row(sessionKey, 'prompt', promptContent, {
       seq: 1, role: 'user', sender: 'user:person', messageType: 'chat', turnSeq: 1,
     });
@@ -1115,7 +1116,9 @@ describe('conversation surface', () => {
       .toBe('Research helper: An agent update with useful detail.');
     expect(pillRow.textContent).toContain('An agent update with useful detail.');
     expect(pillRow.textContent).not.toContain(tag);
+    expect(pillRow.textContent).not.toContain(unquotedTag);
     expect(pillRow.title).not.toContain(tag);
+    expect(pillRow.title).not.toContain(unquotedTag);
     const pillToggle = within(pillRow).getByRole('button', { name: /Show full message/ });
     fireEvent.click(pillToggle);
     expect(pillRow.querySelector('[data-activity-message-content]')?.textContent)

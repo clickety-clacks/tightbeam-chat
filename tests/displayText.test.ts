@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { stripProvenanceMarkup } from '../src/displayText';
 
 const tag = '<engram-src id="123e4567-e89b-42d3-a456-426614174000"/>';
+const unquotedTag = '<engram-src id=123e4567-e89b-42d3-a456-426614174000/>';
 
 describe('provenance display cleanup', () => {
   it('removes complete markup and keeps adjacent text natural', () => {
@@ -9,6 +10,11 @@ describe('provenance display cleanup', () => {
     expect(stripProvenanceMarkup(`Before ${tag} after`)).toBe('Before after');
     expect(stripProvenanceMarkup(`Before\n${tag}\nAfter`)).toBe('Before\nAfter');
     expect(stripProvenanceMarkup(`Before ${tag} ${tag} after`)).toBe('Before after');
+  });
+
+  it('removes adjacent quoted and unquoted markers without stripping other angle-bracket text', () => {
+    expect(stripProvenanceMarkup(`Before ${tag} ${unquotedTag} <example> after`))
+      .toBe('Before <example> after');
   });
 
   it('leaves malformed tags, literal mentions, and text without markup unchanged', () => {

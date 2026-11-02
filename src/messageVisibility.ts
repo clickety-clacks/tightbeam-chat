@@ -17,9 +17,7 @@ const canonicalBatchHeading = /^\[(\d+)\] source=([^\s]+) sender=(.+?) cause=([^
 const batchCountHeading = /^\[batched notices: ([1-9]\d*)\]$/;
 
 export function isUnmarkedCanonicalProcessBatch(record: CanonicalMessage): boolean {
-  const lines = record.content.split(/\r?\n/);
-  return record.isBatchCarrier !== true && record.sender === 'process:tightbeam' &&
-    lines[0] === '[from process:tightbeam]' && lines[1] === '';
+  return record.isBatchCarrier !== true && record.sender === 'process:tightbeam';
 }
 
 /** Parse only the delivered, indexed notice-batch form; unknown wrappers stay hidden. */
@@ -64,9 +62,9 @@ export function parseBatchMembers(record: CanonicalMessage): readonly ParsedBatc
   // Older decoders may omit isBatchCarrier. Use a sender-matched, complete
   // process envelope to recognize mixed batches, while leaving unmarked
   // process-only batches on their existing single-notice path.
-  if (!isCanonicalCarrier && hasProcessPreamble &&
-      (!isUnmarkedCanonicalProcessBatch(record) ||
-        !members.some(member => /^(?:agent|session):/.test(member.sender)))) return undefined;
+  const hasAgentMember = members.some(member => /^(?:agent|session):/.test(member.sender));
+  if (!isCanonicalCarrier && isUnmarkedCanonicalProcessBatch(record) && !hasAgentMember) return undefined;
+  if (!isCanonicalCarrier && hasProcessPreamble && !isUnmarkedCanonicalProcessBatch(record)) return undefined;
   return members;
 }
 

@@ -93,6 +93,14 @@ describe('principal-scoped message projection', () => {
       ].join('\n') });
 
     expect(projectMessages([batch], 'person', 'person').messages).toEqual([]);
+
+    const userOnlyBatch = message('user-only-unmarked-batch', { role: 'user', sender: 'process:tightbeam',
+      messageType: 'substrate', content: [
+        '[from process:tightbeam]', '', '[batched notices: 1]',
+        '[1] source=notification sender=user:person cause=notice class=fyi', 'A user notice', '',
+        'coalesced by notifications',
+      ].join('\n') });
+    expect(projectMessages([userOnlyBatch], 'person', 'person').messages).toEqual([]);
   });
 
   it('requires the complete direct turn relation and reclassifies when older parents arrive', () => {

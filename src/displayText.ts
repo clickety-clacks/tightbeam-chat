@@ -1,5 +1,4 @@
-const provenancePrefix = '<engram-src id="';
-const provenanceSuffix = '"/>';
+const provenancePrefix = '<engram-src id=';
 const uuidLength = 36;
 const whitespaceCharacter = /\s/;
 
@@ -15,7 +14,9 @@ function isHexDigit(character: string): boolean {
 
 function provenanceTagEnd(value: string, start: number): number | undefined {
   if (!value.startsWith(provenancePrefix, start)) return undefined;
-  const uuidStart = start + provenancePrefix.length;
+  const markerStart = start + provenancePrefix.length;
+  const quoted = value[markerStart] === '"';
+  const uuidStart = markerStart + (quoted ? 1 : 0);
   for (let index = 0; index < uuidLength; index++) {
     const character = value[uuidStart + index];
     if (index === 8 || index === 13 || index === 18 || index === 23) {
@@ -24,8 +25,9 @@ function provenanceTagEnd(value: string, start: number): number | undefined {
       return undefined;
     }
   }
-  const tagEnd = uuidStart + uuidLength + provenanceSuffix.length;
-  return value.startsWith(provenanceSuffix, uuidStart + uuidLength) ? tagEnd : undefined;
+  const suffix = quoted ? '"/>' : '/>';
+  const tagEnd = uuidStart + uuidLength + suffix.length;
+  return value.startsWith(suffix, uuidStart + uuidLength) ? tagEnd : undefined;
 }
 
 function isWhitespace(character: string): boolean {

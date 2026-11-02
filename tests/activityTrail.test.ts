@@ -394,6 +394,22 @@ describe('activity trail projection', () => {
     expect(plan.messageItems[0]?.kind).toBe('substrate');
   });
 
+  it('keeps an unmarked user-member batch with no agent on its original notice path', () => {
+    const carrier = message('user-only-carrier', 2, 'process:tightbeam', [
+      '[from process:tightbeam]', '', '[batched notices: 1]',
+      '[1] source=notification sender=user:person cause=notice class=fyi',
+      'A user wake notice', '', 'coalesced by notifications',
+    ].join('\n'), { messageType: 'substrate' });
+    const prompt = message('user-only-prompt', 1, 'user:person', 'A question', { role: 'user' });
+    const reply = message('user-only-reply', 3, 'assistant-service', 'Answer', { role: 'assistant' });
+
+    const plan = build({ records: [carrier], bubbles: [bubble(prompt, 'human'), bubble(reply, 'agent')] });
+
+    expect(plan.messageItems).toHaveLength(1);
+    expect(plan.messageItems[0]).toMatchObject({ id: 'message:user-only-carrier', kind: 'substrate',
+      presentation: { label: 'Notice' } });
+  });
+
   it('rebuilds the same activity pills and fold from retained history after reload', () => {
     const prompt = message('history-prompt', 1, 'user:person', 'A question', {
       role: 'user', messageType: 'chat', turnSeq: 1,
