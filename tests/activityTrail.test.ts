@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildActivityTrail, placeToolCallsInMessageChronology, type ActivityBubble, type ActivityFold, type ActivityLine,
+import { buildActivityTrail, type ActivityBubble, type ActivityFold, type ActivityLine,
   type MessageActivityItem } from '../src/activityTrail';
 import { decodePublic019Message } from '../src/public019';
 import type { CanonicalMessage, CanonicalTransition, HistoryRailDenial, LiveRailDenial, ToolCallRecord } from '../src/types';
@@ -182,35 +182,6 @@ describe('activity trail projection', () => {
     expect((readFold as ActivityFold).lines.map(line => line.call?.toolName)).toEqual(['Read', 'Read']);
     expect(plan.toolItems.get('bash')?.kind).toBe('tool');
     expect(plan.toolItems.get('grep')?.kind).toBe('tool');
-  });
-
-  it('places tool rows after the latest earlier message and starts a new group at the next message', () => {
-    const prompt = message('prompt', 1, 'user:person', 'Question', {
-      role: 'user', createdAt: new Date(1_000).toISOString(),
-    });
-    const firstReply = message('first-reply', 2, 'assistant-service', 'First answer', {
-      role: 'assistant', createdAt: new Date(2_000).toISOString(),
-    });
-    const followUp = message('follow-up', 3, 'user:person', 'More detail', {
-      role: 'user', createdAt: new Date(4_000).toISOString(),
-    });
-    const finalReply = message('final-reply', 4, 'assistant-service', 'Final answer', {
-      role: 'assistant', createdAt: new Date(6_000).toISOString(),
-    });
-    const calls = [
-      { ...tool('read-one', 101, 'in_progress'), startedAt: 2_500 },
-      { ...tool('read-two', 102, 'in_progress'), startedAt: 3_000 },
-      { ...tool('read-three', 103, 'in_progress'), startedAt: 5_000 },
-    ];
-    const positioned = placeToolCallsInMessageChronology(calls, [prompt, firstReply, followUp, finalReply]);
-    expect(positioned.map(call => call.afterMessageSeq)).toEqual([2, 2, 3]);
-
-    const plan = build({ bubbles: [bubble(prompt, 'human'), bubble(firstReply, 'agent'),
-      bubble(followUp, 'human'), bubble(finalReply, 'agent')], tools: positioned });
-    const firstRun = plan.toolItems.get('read-one');
-    expect(firstRun?.kind).toBe('fold');
-    expect(plan.toolItems.get('read-two')).toBe(firstRun);
-    expect(plan.toolItems.get('read-three')?.kind).toBe('tool');
   });
 
   it('folds an entire long homogeneous run before applying the display history cap', () => {

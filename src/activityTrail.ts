@@ -280,32 +280,6 @@ function historyDenialAnchor(denial: HistoryRailDenial, records: readonly {
 const comparePosition = (left: Position, right: Position): number =>
   left.sequence - right.sequence || left.phase - right.phase || left.order - right.order;
 
-/** Advance a tool's transcript anchor when a later message is known to predate the tool start. */
-export function placeToolCallsInMessageChronology(calls: readonly ToolCallRecord[],
-  records: readonly Pick<CanonicalMessage | CanonicalTransition, 'seq' | 'createdAt'>[]): ToolCallRecord[] {
-  const timedRecords = records.flatMap(record => {
-    const time = record.createdAt ? Date.parse(record.createdAt) : Number.NaN;
-    return Number.isFinite(time) ? [{ time, seq: record.seq }] : [];
-  }).sort((left, right) => left.time - right.time || left.seq - right.seq);
-
-  return calls.map(call => {
-    if (!Number.isFinite(call.startedAt)) return call;
-    let low = 0;
-    let high = timedRecords.length;
-    while (low < high) {
-      const middle = low + Math.floor((high - low) / 2);
-      if (timedRecords[middle].time < call.startedAt) low = middle + 1;
-      else high = middle;
-    }
-    const preceding = timedRecords[low - 1];
-    // Keep the source anchor as the baseline; only cross a later transcript
-    // row when its timestamp proves it existed before this tool began.
-    return preceding && preceding.seq > call.afterMessageSeq
-      ? { ...call, afterMessageSeq: preceding.seq }
-      : call;
-  });
-}
-
 function bubbleEvents(bubbles: readonly ActivityBubble[]): BubbleEvent[] {
   const ordered = [...bubbles].sort((left, right) => left.record.seq - right.record.seq ||
     (left.record.id === right.record.id ? (left.member?.index ?? 0) - (right.member?.index ?? 0) : 0) ||
