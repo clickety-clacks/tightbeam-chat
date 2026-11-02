@@ -1063,9 +1063,10 @@ describe('conversation surface', () => {
   it('hides provenance markup in message and pill display without changing source text', () => {
     const sessionKey = 'provenance-display';
     const tag = '<engram-src id="123e4567-e89b-42d3-a456-426614174000"/>';
+    const unquotedTag = '<engram-src id=123e4567-e89b-42d3-a456-426614174000/>';
     const promptContent = `${tag}\n\nA normal message.`;
     const onBehalfContent = `${tag}\n\nA message shown on your behalf.`;
-    const agentContent = `${tag}\n\nAn agent update with useful detail.`;
+    const agentContent = `${tag}\n${unquotedTag}\n\nAn agent update with useful detail.`;
     const prompt = row(sessionKey, 'prompt', promptContent, {
       seq: 1, role: 'user', sender: 'user:person', messageType: 'chat', turnSeq: 1,
     });
@@ -1115,7 +1116,9 @@ describe('conversation surface', () => {
       .toBe('Research helper: An agent update with useful detail.');
     expect(pillRow.textContent).toContain('An agent update with useful detail.');
     expect(pillRow.textContent).not.toContain(tag);
+    expect(pillRow.textContent).not.toContain(unquotedTag);
     expect(pillRow.title).not.toContain(tag);
+    expect(pillRow.title).not.toContain(unquotedTag);
     const pillToggle = within(pillRow).getByRole('button', { name: /Show full message/ });
     fireEvent.click(pillToggle);
     expect(pillRow.querySelector('[data-activity-message-content]')?.textContent)
@@ -1142,7 +1145,7 @@ describe('conversation surface', () => {
   it('keeps direct agent names accessible and leaves message text visible on narrow screens', () => {
     const sessionKey = 'direct-agent-pill-label';
     const tag = '<engram-src id="123e4567-e89b-42d3-a456-426614174000"/>';
-    const agentContent = `${tag}\n\nA direct agent update.`;
+    const agentContent = `[from agent:helper]\n\n[assignment: review task]\n\n${tag}\n\nA direct agent update.`;
     const senderDisplayName = 'Review — helper with a deliberately long display name';
     const prompt = row(sessionKey, 'prompt', 'Please review this.', {
       seq: 1, role: 'user', sender: 'user:person', messageType: 'chat', turnSeq: 1,
@@ -1184,6 +1187,8 @@ describe('conversation surface', () => {
       expect(pill.querySelector('.tb-chat-activity-pill-meta')).toBeNull();
       expect(pill.querySelector('.tb-chat-activity-pill-text')?.textContent).toBe('A direct agent update.');
       expect(pill.textContent).not.toContain(tag);
+      expect(pill.textContent).not.toContain('assignment:');
+      expect(pill.title).not.toContain('[from agent:');
 
       fireEvent.click(within(pill).getByRole('button', { name: /Show full message/ }));
       expect(pill.querySelector('[data-activity-message-content]')?.textContent).toBe('A direct agent update.');

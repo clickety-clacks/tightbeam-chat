@@ -1,7 +1,7 @@
 import type { CanonicalMessage, CanonicalTransition, HistoryRailDenial, LiveRailDenial, ToolCallRecord } from './types';
-import { parseBatchMembers, type HumanMember, type ParsedBatchMember } from './messageVisibility';
+import { isUnmarkedCanonicalProcessBatch, parseBatchMembers, type HumanMember, type ParsedBatchMember } from './messageVisibility';
 import { activityPillPresentation, type ActivityPillPresentation } from './activityPresentation';
-import { stripProvenanceMarkup } from './displayText';
+import { stripDeliveryScaffolding, stripProvenanceMarkup } from './displayText';
 import { sameRailDenial } from './railDenials';
 
 export type ActivityKind = 'tool' | 'agent' | 'substrate' | 'rail';
@@ -79,6 +79,8 @@ interface Candidate extends ActivityLine {
   readonly recordEventNotice?: boolean;
   /** Present only when the source text identifies a stable foldable notice kind. */
   readonly semanticFoldKind?: string;
+  /** Agent entries in mixed batches keep their individual delivery position and pill. */
+  readonly separatePill?: boolean;
 }
 
 interface BubbleEvent extends Position {
@@ -144,7 +146,7 @@ function knownSenderDisplayNames(records: readonly {
   return new Map([...latest].map(([sender, value]) => [sender, value.displayName]));
 }
 
-function messageCandidate(message: CanonicalMessage): Candidate | undefined {
+function messageCandidate(message: CanonicalMessage, senderDisplayName?: string): Candidate | undefined {
   const sender = message.sender ?? '';
   if (message.recordEventIds?.length) {
     const gist = bodyGist(message.content) || 'Record notice';
@@ -187,49 +189,67 @@ function messageCandidate(message: CanonicalMessage): Candidate | undefined {
       semanticFoldKind: gatewayNoticeFoldKind(message.content) };
   }
   if (message.messageType === 'agent' || sender.startsWith('agent:') || sender.startsWith('session:')) {
-    const name = rawDisplayName(message) ?? 'Another agent';
-    const detail = bodyGist(stripProvenanceMarkup(message.content));
+    const displayName = rawDisplayName(message) ?? senderDisplayName?.trim();
+    const name = displayName || 'Another agent';
+    const content = stripDeliveryScaffolding(message.content);
+    const detail = bodyGist(stripProvenanceMarkup(content));
     const gist = detail ? `${name} — ${detail}` : name;
     return { id, kind: 'agent', runKey: '', anchorSeq: message.seq,
       position: { sequence: message.seq, phase: 1, order: 0 }, gist,
       accessibleText: `Other agent: ${gist}`,
-      originalContent: message.content,
-      presentation: activityPillPresentation({ kind: 'agent', gist, content: message.content, sender,
-        senderDisplayName: rawDisplayName(message) }), sortTime,
+      originalContent: content,
+      presentation: activityPillPresentation({ kind: 'agent', gist, content, sender,
+        senderDisplayName: displayName }), sortTime,
       historyBacked: true };
   }
   return undefined;
 }
 
 function memberCandidate(carrier: CanonicalMessage, member: ParsedBatchMember,
-  senderDisplayName?: string): Candidate | undefined {
-  if (member.sender.startsWith('user:')) return undefined;
+  senderDisplayName?: string, separatePill = false, nonAgentAsNotice = false): Candidate | undefined {
   // The carrier's turnSeq belongs to the batching turn, not this notice member.
   const id = `member:${member.sourceId}`;
   const position = { sequence: carrier.seq, phase: 1, order: member.index };
   const parsedTime = carrier.createdAt ? Date.parse(carrier.createdAt) : Number.NaN;
   const sortTime = Number.isFinite(parsedTime) ? parsedTime : undefined;
-  const detail = bodyGist(stripProvenanceMarkup(member.content));
+  const content = stripDeliveryScaffolding(member.content);
+  const detail = bodyGist(stripProvenanceMarkup(content));
+  const isAgentMember = /^(?:agent|session):/.test(member.sender);
+  if (nonAgentAsNotice && !isAgentMember) {
+    const gist = detail || 'Substrate activity';
+    const semanticPresentation = activityPillPresentation({ kind: 'substrate', gist, content,
+      sender: member.sender, source: member.source, messageType: carrier.messageType });
+    const presentation: ActivityPillPresentation = semanticPresentation?.label === 'Notice'
+      ? semanticPresentation
+      : { label: 'Notice', tone: 'blue', icon: 'notice', text: detail || 'Notice received' };
+    return { id, kind: 'substrate', runKey: '', anchorSeq: carrier.seq, position, gist,
+      accessibleText: `Substrate: ${gist}`,
+      originalContent: content,
+      presentation,
+      sortTime, historyBacked: true,
+      semanticFoldKind: gatewayNoticeFoldKind(content) };
+  }
+  if (member.sender.startsWith('user:')) return undefined;
   if (member.sender.startsWith('remedy:')) {
     const statute = member.sender.slice('remedy:'.length).trim();
     const gist = `Remedy ${statute || 'sent'} sent${detail ? ` — ${detail}` : ''}`;
     return { id, kind: 'rail', runKey: '', anchorSeq: carrier.seq, position, gist,
       accessibleText: `Rail: ${gist}`,
-      originalContent: member.content,
-      presentation: activityPillPresentation({ kind: 'rail', gist, content: member.content, sender: member.sender,
+      originalContent: content,
+      presentation: activityPillPresentation({ kind: 'rail', gist, content, sender: member.sender,
         source: member.source }),
       sortTime, historyBacked: true };
   }
   if (member.sender.startsWith('process:')) {
     const gist = detail || 'Substrate activity';
-    const presentation = activityPillPresentation({ kind: 'substrate', gist, content: member.content,
+    const presentation = activityPillPresentation({ kind: 'substrate', gist, content,
       sender: member.sender, source: member.source, messageType: carrier.messageType });
     return { id, kind: 'substrate', runKey: '', anchorSeq: carrier.seq, position, gist,
       accessibleText: `Substrate: ${gist}`,
-      originalContent: member.content,
+      originalContent: content,
       presentation,
       sortTime, historyBacked: true,
-      semanticFoldKind: gatewayNoticeFoldKind(member.content) };
+      semanticFoldKind: gatewayNoticeFoldKind(content) };
   }
   if (member.sender.startsWith('agent:') || member.sender.startsWith('session:')) {
     const displayName = senderDisplayName?.trim();
@@ -237,9 +257,10 @@ function memberCandidate(carrier: CanonicalMessage, member: ParsedBatchMember,
     const gist = detail ? `${label} — ${detail}` : label;
     return { id, kind: 'agent', runKey: '', anchorSeq: carrier.seq, position, gist,
       accessibleText: `Other agent: ${gist}`,
-      originalContent: member.content,
-      presentation: activityPillPresentation({ kind: 'agent', gist, content: member.content, sender: member.sender,
+      originalContent: content,
+      presentation: activityPillPresentation({ kind: 'agent', gist, content, sender: member.sender,
         senderDisplayName: displayName }),
+      ...(separatePill ? { separatePill: true } : {}),
       sortTime, historyBacked: true };
   }
   return undefined;
@@ -336,7 +357,7 @@ function belongsToOwnerConversation(candidate: Candidate, precedingBubble: Bubbl
 function lineWithRun(candidate: Candidate, runKey: string, includeToolDetails = true): ActivityLine {
   const { liveTailEligibleAtArrival: _eligibleAtArrival,
     historyBacked: _historyBacked,
-    semanticFoldKind: _semanticFoldKind, ...line } = candidate;
+    semanticFoldKind: _semanticFoldKind, separatePill: _separatePill, ...line } = candidate;
   if (candidate.kind === 'tool' && candidate.call) {
     if (!includeToolDetails) return { ...line, runKey, gist: '', accessibleText: '' };
     const call = candidate.call;
@@ -393,14 +414,19 @@ export function buildActivityTrail(input: {
     }
     const batchMembers = parseBatchMembers(message as CanonicalMessage);
     if (batchMembers) {
+      const hasAgentMember = batchMembers.some(member => /^(?:agent|session):/.test(member.sender));
+      const isMixedBatch = hasAgentMember && batchMembers.some(member => !/^(?:agent|session):/.test(member.sender));
+      const nonAgentMembersAreNotices = hasAgentMember && isUnmarkedCanonicalProcessBatch(message as CanonicalMessage);
       for (const member of batchMembers) {
+        const isAgentMember = /^(?:agent|session):/.test(member.sender);
         const candidate = memberCandidate(message as CanonicalMessage, member,
-          senderDisplayNames.get(member.sender));
+          senderDisplayNames.get(member.sender), isMixedBatch && isAgentMember,
+          nonAgentMembersAreNotices && !isAgentMember);
         if (candidate) candidates.push(candidate);
       }
       continue;
     }
-    const candidate = messageCandidate(message as CanonicalMessage);
+    const candidate = messageCandidate(message as CanonicalMessage, senderDisplayNames.get(message.sender ?? ''));
     if (candidate) candidates.push(candidate);
     else if (message.role === 'assistant') continue;
   }
@@ -582,7 +608,7 @@ export function buildActivityTrail(input: {
     const foldGroupCounts = new Map<string, number>();
     const foldGroupIdentity = (candidate: Candidate) => {
       if (candidate.kind === 'tool') return 'tool';
-      if (candidate.kind === 'agent') return 'agent';
+      if (candidate.kind === 'agent') return candidate.separatePill ? `agent-member:${candidate.id}` : 'agent';
       if (candidate.kind === 'substrate' && candidate.semanticFoldKind) {
         return `gateway:${candidate.semanticFoldKind}`;
       }

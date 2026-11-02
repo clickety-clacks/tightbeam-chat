@@ -313,6 +313,103 @@ describe('activity trail projection', () => {
     expect(fold.lines[0].originalContent).toBe('First helper update');
   });
 
+  it('renders sender-indexed mixed batches without the optional carrier flag and hides delivery scaffolding', () => {
+    const directSender = 'agent:review helper';
+    const firstBatchSender = 'agent:research helper';
+    const secondBatchSender = 'agent:writing helper';
+    const provenance = '<engram-src id="123e4567-e89b-42d3-a456-426614174000"/>';
+    const decode = (row: Record<string, unknown>): CanonicalMessage => {
+      const record = decodePublic019Message({ sessionKey: 'session', rowVersion: 1,
+        role: 'user', at: 1_000, attachments: [], ...row }, 'session');
+      if (record.kind !== 'message') throw new Error('Expected a decoded message');
+      return record;
+    };
+    const direct = decode({ id: 'direct-agent', seq: 2, sender: directSender, messageType: 'agent', content: [
+        `[from ${directSender}]`, '', '[assignment: review task]',
+        '', provenance, '', 'Direct update',
+      ].join('\n') });
+    const carrier = decode({ id: 'mixed-carrier', seq: 3, sender: 'process:tightbeam', messageType: 'substrate',
+      content: [
+        '[from process:tightbeam]', '', '[batched notices: 4]',
+        'batchId=batch-example wake=wake-example token=example rule=notifications-v1 r2',
+        'release=idle provenanceSha256=12345678',
+        `[1] source=notification sender=${firstBatchSender} cause=notice class=update`,
+        '[assignment: review task]', '', provenance, '', 'First batch update', '',
+        '[2] source=notification sender=process:notifications cause=notice class=update',
+        '[assignment: maintenance task]', '', 'A notice in the batch', '',
+        '[3] source=notification sender=user:person cause=notice class=update',
+        'A user notice in the batch', '',
+        `[4] source=notification sender=${secondBatchSender} cause=notice class=update`,
+        '', provenance, '', 'Second batch update', '',
+        'coalesced by notifications',
+      ].join('\n') });
+    const prompt = message('prompt', 1, 'user:person', 'A question', { role: 'user' });
+    const reply = message('reply', 4, 'assistant-service', 'Answer', { role: 'assistant' });
+
+    expect(carrier.isBatchCarrier).toBeUndefined();
+    expect(carrier.raw.sender).toBe('process:tightbeam');
+    const plan = build({ records: [direct, carrier], senderDisplayNames: new Map([
+      [directSender, 'Review helper'],
+      [firstBatchSender, 'Research helper'], [secondBatchSender, 'Writing helper'],
+    ]), bubbles: [bubble(prompt, 'human'), bubble(reply, 'agent')] });
+    const lines = plan.messageItems.flatMap(item => item.kind === 'fold' ? item.lines
+      : item.kind === 'overflow' ? [] : [item]);
+
+    expect(lines.map(line => line.id)).toEqual([
+      'message:direct-agent', 'member:mixed-carrier:member:1', 'member:mixed-carrier:member:2',
+      'member:mixed-carrier:member:3', 'member:mixed-carrier:member:4',
+    ]);
+    expect(lines.map(line => line.kind)).toEqual(['agent', 'agent', 'substrate', 'substrate', 'agent']);
+    expect(lines[0]).toMatchObject({ accessibleText: 'Other agent: Review helper — Direct update',
+      originalContent: 'Direct update', presentation: { label: 'Review helper', text: 'Direct update',
+        icon: 'message', summaryText: 'Direct update' } });
+    expect(lines[1]).toMatchObject({ accessibleText: 'Other agent: Research helper — First batch update',
+      originalContent: 'First batch update', presentation: { label: 'Research helper', text: 'First batch update',
+        icon: 'message', summaryText: 'First batch update' } });
+    expect(lines[2]).toMatchObject({ accessibleText: 'Substrate: A notice in the batch',
+      originalContent: 'A notice in the batch', presentation: { label: 'Notice', text: 'A notice in the batch' } });
+    expect(lines[3]).toMatchObject({ accessibleText: 'Substrate: A user notice in the batch',
+      originalContent: 'A user notice in the batch', presentation: { label: 'Notice', text: 'A user notice in the batch' } });
+    expect(lines[4]).toMatchObject({ accessibleText: 'Other agent: Writing helper — Second batch update',
+      originalContent: 'Second batch update', presentation: { label: 'Writing helper', text: 'Second batch update',
+        icon: 'message' } });
+    expect(lines.map(line => `${line.presentation?.text ?? ''} ${line.originalContent ?? ''}`).join(' '))
+      .not.toMatch(/batchId|provenanceSha256|assignment:|coalesced by|engram-src|sender=|cause=/i);
+  });
+
+  it('keeps an unmarked process-only batch on its existing single-notice path', () => {
+    const carrier = message('process-only-carrier', 2, 'process:notifications', [
+      '[from process:notifications]', '', '[batched notices: 1]', 'batchId=batch-example',
+      'release=idle provenanceSha256=12345678',
+      '[1] source=notification sender=process:notifications cause=notice class=update',
+      'A process-only notice', '', 'coalesced by notifications',
+    ].join('\n'), { messageType: 'substrate' });
+    const prompt = message('process-only-prompt', 1, 'user:person', 'A question', { role: 'user' });
+    const reply = message('process-only-reply', 3, 'assistant-service', 'Answer', { role: 'assistant' });
+
+    const plan = build({ records: [carrier], bubbles: [bubble(prompt, 'human'), bubble(reply, 'agent')] });
+
+    expect(plan.messageItems).toHaveLength(1);
+    expect(plan.messageItems[0]?.id).toBe('message:process-only-carrier');
+    expect(plan.messageItems[0]?.kind).toBe('substrate');
+  });
+
+  it('keeps an unmarked user-member batch with no agent on its original notice path', () => {
+    const carrier = message('user-only-carrier', 2, 'process:tightbeam', [
+      '[from process:tightbeam]', '', '[batched notices: 1]',
+      '[1] source=notification sender=user:person cause=notice class=fyi',
+      'A user wake notice', '', 'coalesced by notifications',
+    ].join('\n'), { messageType: 'substrate' });
+    const prompt = message('user-only-prompt', 1, 'user:person', 'A question', { role: 'user' });
+    const reply = message('user-only-reply', 3, 'assistant-service', 'Answer', { role: 'assistant' });
+
+    const plan = build({ records: [carrier], bubbles: [bubble(prompt, 'human'), bubble(reply, 'agent')] });
+
+    expect(plan.messageItems).toHaveLength(1);
+    expect(plan.messageItems[0]).toMatchObject({ id: 'message:user-only-carrier', kind: 'substrate',
+      presentation: { label: 'Notice' } });
+  });
+
   it('rebuilds the same activity pills and fold from retained history after reload', () => {
     const prompt = message('history-prompt', 1, 'user:person', 'A question', {
       role: 'user', messageType: 'chat', turnSeq: 1,

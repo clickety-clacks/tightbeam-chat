@@ -1,5 +1,4 @@
-const provenancePrefix = '<engram-src id="';
-const provenanceSuffix = '"/>';
+const provenancePrefix = '<engram-src id=';
 const uuidLength = 36;
 const whitespaceCharacter = /\s/;
 
@@ -15,7 +14,9 @@ function isHexDigit(character: string): boolean {
 
 function provenanceTagEnd(value: string, start: number): number | undefined {
   if (!value.startsWith(provenancePrefix, start)) return undefined;
-  const uuidStart = start + provenancePrefix.length;
+  const markerStart = start + provenancePrefix.length;
+  const quoted = value[markerStart] === '"';
+  const uuidStart = markerStart + (quoted ? 1 : 0);
   for (let index = 0; index < uuidLength; index++) {
     const character = value[uuidStart + index];
     if (index === 8 || index === 13 || index === 18 || index === 23) {
@@ -24,8 +25,9 @@ function provenanceTagEnd(value: string, start: number): number | undefined {
       return undefined;
     }
   }
-  const tagEnd = uuidStart + uuidLength + provenanceSuffix.length;
-  return value.startsWith(provenanceSuffix, uuidStart + uuidLength) ? tagEnd : undefined;
+  const suffix = quoted ? '"/>' : '/>';
+  const tagEnd = uuidStart + uuidLength + suffix.length;
+  return value.startsWith(suffix, uuidStart + uuidLength) ? tagEnd : undefined;
 }
 
 function isWhitespace(character: string): boolean {
@@ -89,4 +91,19 @@ export function stripProvenanceMarkup(value: string): string {
   }
   result.push(value.slice(cursor));
   return result.join('');
+}
+
+const deliveryScaffoldingLine = (line: string): boolean =>
+  /^\[from (?:agent|session|process):[^\]]+\]$/i.test(line) ||
+  /^\[batched notices:\s*\d+\]$/i.test(line) ||
+  /^\[\d+\]\s+source=\S+\s+sender=.+\s+cause=\S+\s+class=\S+\]$/i.test(line) ||
+  /^(?:batchId|release|provenanceSha256)=/i.test(line) ||
+  /^\[assignment:\s*[^\]]+\]$/i.test(line) ||
+  /^coalesced by\s+\S/i.test(line);
+
+/** Remove transport-only lines from a delivered activity message without changing retained history. */
+export function stripDeliveryScaffolding(value: string): string {
+  return stripProvenanceMarkup(value.split(/\r?\n/)
+    .filter(line => !deliveryScaffoldingLine(line.trim()))
+    .join('\n')).trim();
 }
