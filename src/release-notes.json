@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.80",
+    "items": [
+      {
+        "title": "Keep agent messages clear in mixed notice groups",
+        "description": "Chat hides valid message markers even when they appear without quotation marks. In mixed notice groups, agent updates appear individually while the other notices retain their usual display."
+      }
+    ]
+  },
+  {
     "version": "v0.1.79",
     "items": [
       {
