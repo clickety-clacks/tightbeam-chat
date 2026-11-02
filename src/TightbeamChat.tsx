@@ -18,6 +18,7 @@ import { firstAfterTime, getIndex, indexValues, putIndex, type RecordIndex } fro
 import { getHostComposerSnapshot, HostComposerBridge, subscribeHostComposer } from './hostComposer';
 import { ReleaseNotesDialog, type ChatOverlay } from './ReleaseNotesDialog';
 import { CHAT_RELEASE_VERSION, RELEASE_NOTES, recordSeenReleaseVersion, releaseNotesForBuild, unseenReleaseNotes } from './releaseNotes';
+import { MarkdownImagePreview } from './MessageAttachments';
 import { isSettingsCommand } from './settingsCommand';
 import { stripProvenanceMarkup } from './displayText';
 import './style.css';
@@ -459,8 +460,8 @@ const markdownComponents = {
     <div className="tb-chat-code-scroll"><pre {...props}>{children}</pre></div>,
   table: ({ children, ...props }: TableHTMLAttributes<HTMLTableElement>) =>
     <div className="tb-chat-table-scroll"><table {...props}>{children}</table></div>,
-  img: ({ alt }: ImgHTMLAttributes<HTMLImageElement>) =>
-    <span className="tb-chat-image-alt">{alt ? `[Image: ${alt}]` : '[Image]'}</span>,
+  img: ({ src, alt }: ImgHTMLAttributes<HTMLImageElement>) =>
+    <MarkdownImagePreview src={src} alt={alt} />,
 };
 
 function markdownBody(content: string): ReactNode {
