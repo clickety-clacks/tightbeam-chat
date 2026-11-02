@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.79",
+    "items": [
+      {
+        "title": "Keep drafts, prompts, and tool activity easy to follow",
+        "description": "Restoring a draft keeps its text and attachments together, and Markdown image links appear as thumbnails you can enlarge. Prompt previews follow your reading position, stay dismissed until another prompt, and hide when the original prompt is visible; tall replies keep part of the answered prompt in view. Consecutive tool calls fold into expandable summaries with a count and newest title, whether names are present or not; messages and other activity remain separate."
+      }
+    ]
+  },
+  {
     "version": "v0.1.78",
     "items": [
       {
