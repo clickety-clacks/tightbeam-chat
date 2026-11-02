@@ -1,6 +1,7 @@
 import type { SessionRecordEvent, RecordEventPage } from './types';
 import {
   AuthorizationError,
+  AttachmentUploadError,
   InvalidCursorError,
   SessionNotFoundError,
   UnsupportedTargetError,
@@ -8,6 +9,7 @@ import {
   type ChangeConnection,
   type ChangeCallbacks,
   type ToolCallRecord,
+  type AttachmentReference,
   type ChangeNotice,
   type CanonicalTurn,
   type ChatTransport,
@@ -818,7 +820,37 @@ export function createPublic019Transport(config: Public019Config): { transport: 
       }
       return Object.freeze([...calls.values()].sort((a, b) => a.afterMessageSeq - b.afterMessageSeq || a.seq - b.seq));
     },
-    async sendHuman(submission: HumanSubmission, signal: AbortSignal): Promise<HumanSendResult> {
+    async uploadAttachment(input, signal) {
+      const body = new FormData();
+      body.append('file', input.bytes, input.filename);
+      const response = await config.host.fetch(`${baseUrl}/upload`, { method: 'POST', body, signal });
+      if (!response.ok) {
+        let code = `http-${response.status}`;
+        try {
+          const error = await response.json();
+          if (typeof error?.code === 'string') code = error.code;
+          else if (typeof error?.error === 'string') code = error.error;
+        } catch { /* Some upstream failures have no JSON body. */ }
+        throw new AttachmentUploadError(code, `Attachment upload failed (HTTP ${response.status}): ${code}`);
+      }
+      const wire = await response.json();
+      if (!wire || typeof wire.asset_id !== 'string' || !wire.asset_id ||
+          typeof wire.mime_type !== 'string' || !wire.mime_type || !Number.isSafeInteger(wire.size) ||
+          wire.size !== input.bytes.size || wire.mime_type !== (input.bytes.type || 'application/octet-stream')) {
+        throw new AttachmentUploadError('reference-mismatch', 'Attachment upload returned a different type or byte count.');
+      }
+      return Object.freeze({ assetId: wire.asset_id, mimeType: wire.mime_type,
+        filename: input.filename, size: wire.size }) as AttachmentReference;
+    },
+    async readAttachment(reference, signal) {
+      const response = await config.host.fetch(`${baseUrl}/download/${encodeURIComponent(reference.assetId)}`,
+        { method: 'GET', signal, cache: 'no-store' });
+      if (!response.ok) throw new Error(`Attachment retrieval failed (HTTP ${response.status}).`);
+      const bytes = await response.blob();
+      if (bytes.size !== reference.size) throw new Error('Attachment retrieval returned an incomplete file.');
+      return bytes;
+    },
+    async sendHuman(submission: HumanSubmission, signal: AbortSignal, onSubmitted?: () => void): Promise<HumanSendResult> {
       const submittingIdentity = config.host.currentIdentity();
       if (!submission.clientMessageId.startsWith('c_')) {
         return { outcome: 'refused', reason: 'invalid_message_id' };
@@ -867,8 +899,10 @@ export function createPublic019Transport(config: Public019Config): { transport: 
         else if (!settled) {
           try {
             channel.send({ type: 'message', id: submission.clientMessageId,
-              sessionKey: submission.sessionKey, content: submission.content });
-          } catch { finish({ outcome: 'retryable', reason: 'Human send connection closed before acknowledgement.' }); }
+              sessionKey: submission.sessionKey, content: submission.content,
+              ...(submission.attachments ? { attachments: submission.attachments } : {}) });
+            onSubmitted?.();
+          } catch { finish({ outcome: 'unreachable', reason: 'Human send connection closed before submission.' }); }
         }
       });
     },
