@@ -59,7 +59,8 @@ export function parseBatchMembers(record: CanonicalMessage): readonly ParsedBatc
   // process envelope to recognize mixed batches, while leaving unmarked
   // process-only batches on their existing single-notice path.
   if (!isCanonicalCarrier && hasProcessPreamble &&
-      !members.some(member => /^(?:agent|session):/.test(member.sender))) return undefined;
+      (processPreamble?.[1] !== 'process:tightbeam' ||
+        !members.some(member => /^(?:agent|session):/.test(member.sender)))) return undefined;
   return members;
 }
 

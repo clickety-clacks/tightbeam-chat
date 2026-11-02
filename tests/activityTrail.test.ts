@@ -328,9 +328,9 @@ describe('activity trail projection', () => {
         `[from ${directSender}]`, '', '[assignment: review task]',
         '', provenance, '', 'Direct update',
       ].join('\n') });
-    const carrier = decode({ id: 'mixed-carrier', seq: 3, sender: 'process:notifications', messageType: 'substrate',
+    const carrier = decode({ id: 'mixed-carrier', seq: 3, sender: 'process:tightbeam', messageType: 'substrate',
       content: [
-        '[from process:notifications]', '', '[batched notices: 3]',
+        '[from process:tightbeam]', '', '[batched notices: 3]',
         'batchId=batch-example wake=wake-example token=example rule=notifications-v1 r2',
         'release=idle provenanceSha256=12345678',
         `[1] source=notification sender=${firstBatchSender} cause=notice class=update`,
@@ -345,7 +345,7 @@ describe('activity trail projection', () => {
     const reply = message('reply', 4, 'assistant-service', 'Answer', { role: 'assistant' });
 
     expect(carrier.isBatchCarrier).toBeUndefined();
-    expect(carrier.raw.sender).toBe('process:notifications');
+    expect(carrier.raw.sender).toBe('process:tightbeam');
     const plan = build({ records: [direct, carrier], senderDisplayNames: new Map([
       [directSender, 'Review helper'],
       [firstBatchSender, 'Research helper'], [secondBatchSender, 'Writing helper'],
