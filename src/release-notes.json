@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.75",
+    "items": [
+      {
+        "title": "Explain prompt size refusals and keep your draft",
+        "description": "Chat no longer applies its own prompt-size cutoff. If the server refuses a prompt because it is too large, Chat explains the refusal and keeps the complete draft available for editing or retry."
+      }
+    ]
+  },
+  {
     "version": "v0.1.74",
     "items": [
       {
