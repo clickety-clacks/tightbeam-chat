@@ -2162,6 +2162,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   const hasToolHistoryStatus = state.toolCallsEnabled === true &&
     (state.toolCallsLoading || visibleToolCallsError !== undefined);
   const showToolHistoryStatusInNotice = hasToolHistoryStatus && !state.loadingOlder && !!(state.historyError || localNotice);
+  const reserveRuntimeNotice = showRuntimeNotice && !state.loadingOlder;
   useLayoutEffect(() => {
     const box = viewport.current;
     const content = reading.content.current;
@@ -2296,7 +2297,11 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
         const time = localTimestamp(send.submittedAt);
         const hostManaged = send.hostSend !== undefined;
         const refused = send.status === 'failed' && !send.reconciled;
-        const retryAvailable = !hostManaged && refused;
+        const uncertain = send.status === 'uncertain' && !send.reconciled;
+        const retryableUncertainty = uncertain && (send.reason === 'connection-closed-before-acknowledgement' ||
+          send.reason === 'connection-unconfirmed');
+        const retryAvailable = !hostManaged && (refused || retryableUncertainty);
+        const uncertaintyCopy = "We couldn't confirm whether this message was sent. Check the conversation before trying again.";
         const refusalCopy = refused
           ? send.reason === 'payload_too_large'
             ? 'The server refused this prompt because it is too large. Shorten it and try again.'
@@ -2310,23 +2315,29 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
             ? refusalCopy
               ? `Your message was not sent. ${refusalCopy}`
               : `Your message was not sent. Reason: ${send.reason || 'The message was refused.'}`
-            : 'Your message is sending.';
+            : uncertain
+              ? uncertaintyCopy
+              : 'Your message is sending.';
         const targetKey = `local-${send.clientMessageId}`;
         return <article ref={element => reading.registerRow(targetKey, element)}
           id={`${promptTargetPrefix}-${encodeURIComponent(`local-${send.clientMessageId}`)}`}
           className="tb-chat-bubble tb-chat-bubble-human tb-chat-local" key={send.clientMessageId}
           data-record-key={targetKey} data-scroll-key={targetKey}
           aria-label={announcement}
-          data-send-state={send.reconciled ? 'solid' : refused ? 'refused' : 'ghosted'}>
+          data-send-state={send.reconciled ? 'solid' : refused ? 'refused' : uncertain ? 'uncertain' : 'ghosted'}>
           <div className="tb-chat-bubble-body">{markdownBody(stripProvenanceMarkup(send.content))}</div>
           {refusalCopy && <p className="tb-chat-send-refusal" aria-hidden="true">{refusalCopy}</p>}
+          {uncertain && <p className="tb-chat-send-uncertainty" aria-hidden="true">{uncertaintyCopy}</p>}
           {!send.reconciled && <div className="tb-chat-send-indicator" data-send-status={send.status} aria-hidden="true">
-            {refused ? <span className="tb-chat-send-error">!</span> : <span className="tb-chat-send-spinner" />}
+            {refused ? <span className="tb-chat-send-error">!</span> : uncertain
+              ? <span className="tb-chat-send-uncertain-mark">?</span> : <span className="tb-chat-send-spinner" />}
           </div>}
           <span className="tb-chat-sr-only" role={refused ? 'alert' : 'status'} aria-atomic="true">{announcement}</span>
           {retryAvailable && <div className="tb-chat-send-actions">
             <button type="button" disabled={state.status === 'unauthorized'}
-              onClick={() => void runtime.retrySend(send.clientMessageId)}>Retry message</button>
+              onClick={() => void runtime.retrySend(send.clientMessageId)}>
+              {retryableUncertainty ? 'Check and retry' : 'Retry message'}
+            </button>
             {state.status === 'unauthorized' && <span>Access to this conversation is unavailable.</span>}
             <button type="button" onClick={() => composer.current?.restore(send.content)}>Restore text to the composer</button>
           </div>}
@@ -2370,7 +2381,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
           {renderToolHistoryStatus()}
         </div>}
       </div>}
-      <div className={`tb-chat-message-content${showToolHistoryStatusInNotice ? ' tb-chat-runtime-notice-reserved' : ''}`} ref={reading.content}>
+      <div className={`tb-chat-message-content${reserveRuntimeNotice ? ' tb-chat-runtime-notice-reserved' : ''}`} ref={reading.content}>
       <TranscriptRenderBoundary resetKey={state.generation} onRetry={retryTranscript}
         onRecovered={reading.reconcileViewportLayout} fallback={retry => <div
           className="tb-chat-render-failure tb-chat-render-failure-transcript tb-chat-caption tb-chat-caption-danger"

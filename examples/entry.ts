@@ -3,6 +3,7 @@ export interface ChatTarget {
   readonly sessionKey: string;
   readonly principalKey: string;
   readonly deviceId: string;
+  readonly readMarkerRoute?: 'gateway-user-device';
 }
 
 export interface RequestedChatTarget {
@@ -15,6 +16,7 @@ export interface ConfiguredChatTarget {
   readonly sessionKey?: string;
   readonly principalKey?: string;
   readonly deviceId?: string;
+  readonly readMarkerRoute?: 'gateway-user-device';
 }
 
 /** Loads the deployment-owned, nonsecret default from the same origin as the page. */
@@ -51,6 +53,7 @@ export async function loadConfiguredChatTarget(
     typeof config.sessionKey === 'string' ? config.sessionKey : undefined,
     typeof config.principalKey === 'string' ? config.principalKey : undefined,
     typeof config.deviceId === 'string' ? config.deviceId : undefined,
+    config.readMarkerRoute === 'gateway-user-device' ? 'gateway-user-device' : undefined,
   );
   if (!target) throw new Error('The Chat server returned an invalid default target.');
   return target;
@@ -85,14 +88,21 @@ function targetFrom(
   sessionKey: string | undefined,
   principalKey: string | undefined,
   deviceId: string | undefined,
+  readMarkerRoute: 'gateway-user-device' | undefined,
 ): ChatTarget | undefined {
   const normalizedGateway = canonicalGateway(gateway);
   if (!normalizedGateway || !sessionKey?.trim() || !principalKey?.trim() || !deviceId?.trim()) return undefined;
-  return { gateway: normalizedGateway, sessionKey, principalKey, deviceId };
+  return {
+    gateway: normalizedGateway,
+    sessionKey,
+    principalKey,
+    deviceId,
+    ...(readMarkerRoute ? { readMarkerRoute } : {}),
+  };
 }
 
 function configuredTarget(value: ConfiguredChatTarget | undefined): ChatTarget | undefined {
-  return targetFrom(value?.gateway, value?.sessionKey, value?.principalKey, value?.deviceId);
+  return targetFrom(value?.gateway, value?.sessionKey, value?.principalKey, value?.deviceId, value?.readMarkerRoute);
 }
 
 function wellFormedQuery(search: string): boolean {
@@ -141,9 +151,16 @@ export function resolveEntrySelection(
       canRecoverToConfigured: false,
     };
   }
+  const { readMarkerRoute, ...configuredIdentity } = fallback;
+  const target: ChatTarget = {
+    ...configuredIdentity,
+    gateway,
+    sessionKey,
+    ...(gateway === fallback.gateway && readMarkerRoute ? { readMarkerRoute } : {}),
+  };
   return {
     kind: 'selected',
-    target: { ...fallback, gateway, sessionKey },
+    target,
     source: 'link',
   };
 }

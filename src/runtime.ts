@@ -107,6 +107,10 @@ const noProvenance: readonly TurnProvenance[] = Object.freeze([]);
 const hostCorrelationPattern = /^c_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const humanSendRetryInitialDelayMs = 250;
 const humanSendRetryMaxDelayMs = 30_000;
+const humanSendMaxAutomaticAttempts = 3;
+const retryableUncertainSendReasons = new Set([
+  'connection-closed-before-acknowledgement', 'connection-unconfirmed',
+]);
 
 /** Pace only after a send socket has dropped; a live acknowledgement has no timeout. */
 function waitForHumanSendRetry(signal: AbortSignal, delayMs: number): Promise<boolean> {
@@ -146,6 +150,7 @@ class SessionRuntime implements ChatRuntime {
   private readonly activitySenderNameLookupGeneration = new Map<string, number>();
   private railArrivalOrder = 0;
   private readonly sendControllers = new Map<string, AbortController>();
+  private readonly retryingSends = new Set<string>();
   private readonly pendingReconciledIds = new Set<string>();
   private readonly hostSendObservers = new Map<string, Set<HostSendObserver>>();
   private readonly coverageReaders = new Set<ChangeNotice[]>();
@@ -1581,7 +1586,9 @@ class SessionRuntime implements ChatRuntime {
     try {
       let result: HumanSendResult;
       let retryDelayMs = humanSendRetryInitialDelayMs;
+      let attempts = 0;
       while (true) {
+        attempts++;
         try {
           result = await this.transport.sendHuman(submission, controller.signal);
         } catch (error) {
@@ -1598,14 +1605,16 @@ class SessionRuntime implements ChatRuntime {
         const shouldReask = result.outcome === 'retryable' || result.outcome === 'unreachable';
         if (!shouldReask) break;
         // A send socket may fail before posting or drop after the Gateway has
-        // accepted the post. Keep showing a nonterminal connection notice and
-        // re-ask with the identical ID/content until the server answers or
-        // canonical history settles it. A capped backoff paces reconnects; it
-        // never ends a live acknowledgement wait or turns disconnection into a
-        // final delivery failure.
+        // accepted the post. Re-ask with identical ID/content only when the
+        // target advertises dedupe, and stop after a small bounded number of
+        // attempts. Exhaustion is unconfirmed, never a delivery failure.
         if (this.state.status === 'unauthorized') return;
         if (!this.profile.capabilities.humanSendDedupe) {
           result = { outcome: 'uncertain', reason: 'retry-unavailable' };
+          break;
+        }
+        if (attempts >= humanSendMaxAutomaticAttempts) {
+          result = { outcome: 'uncertain', reason: 'connection-unconfirmed' };
           break;
         }
         if (result.outcome === 'unreachable') {
@@ -1627,6 +1636,9 @@ class SessionRuntime implements ChatRuntime {
         retryDelayMs = Math.min(retryDelayMs * 2, humanSendRetryMaxDelayMs);
       }
       if (!this.checkIdentity() || controller.signal.aborted) return;
+      if (result.outcome === 'uncertain' && !this.profile.capabilities.humanSendDedupe) {
+        result = { outcome: 'uncertain', reason: 'retry-unavailable' };
+      }
       this.updateSend(submission.clientMessageId, (send) => {
         if (send.reconciled) return send;
         return result.outcome === 'accepted'
@@ -1670,19 +1682,26 @@ class SessionRuntime implements ChatRuntime {
     if (this.disposed || !this.checkIdentity()) return;
     if (this.state.status === 'unauthorized') return;
     const send = this.state.sends.find((item) => item.clientMessageId === clientMessageId);
-    if (!send || send.status !== 'failed' || send.reconciled ||
-        !this.profile.capabilities.humanSendDedupe) return;
-    void this.markReadPosition();
-    // Rebuild/query first. Absence from a bounded tail does not mean rejection.
-    await this.rebuild();
-    if (this.disposed || !this.checkIdentity() || (this.state.status as RuntimeState['status']) === 'unauthorized') return;
-    const current = this.state.sends.find((item) => item.clientMessageId === clientMessageId);
-    if (!current || current.reconciled || current.status !== 'failed') return;
-    this.updateSend(clientMessageId, (item) => ({ ...item, status: 'pending', reason: undefined }));
-    await this.post({
-      sessionKey: send.sessionKey, deviceId: send.deviceId,
-      clientMessageId: send.clientMessageId, content: send.content,
-    });
+    const mayRetry = (item: LocalSend) => item.status === 'failed' ||
+      (item.status === 'uncertain' && retryableUncertainSendReasons.has(item.reason ?? ''));
+    if (!send || !mayRetry(send) || send.reconciled || !this.profile.capabilities.humanSendDedupe ||
+        this.retryingSends.has(clientMessageId) || this.sendControllers.has(clientMessageId)) return;
+    this.retryingSends.add(clientMessageId);
+    try {
+      void this.markReadPosition();
+      // Rebuild/query first. Absence from a bounded tail does not mean rejection.
+      await this.rebuild();
+      if (this.disposed || !this.checkIdentity() || (this.state.status as RuntimeState['status']) === 'unauthorized') return;
+      const current = this.state.sends.find((item) => item.clientMessageId === clientMessageId);
+      if (!current || !mayRetry(current) || current.reconciled) return;
+      this.updateSend(clientMessageId, (item) => ({ ...item, status: 'pending', reason: undefined }));
+      await this.post({
+        sessionKey: current.sessionKey, deviceId: current.deviceId,
+        clientMessageId: current.clientMessageId, content: current.content,
+      });
+    } finally {
+      this.retryingSends.delete(clientMessageId);
+    }
   };
 
   refreshHostSend = async (clientMessageId: string): Promise<'found' | 'absent' | 'unavailable'> => {

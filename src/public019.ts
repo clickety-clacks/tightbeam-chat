@@ -862,7 +862,7 @@ export function createPublic019Transport(config: Public019Config): { transport: 
           } catch { finish({ outcome: 'retryable', reason: 'Malformed human response.' }); }
         }, (event) => finish(event?.code === 1009
           ? { outcome: 'refused', reason: 'payload_too_large' }
-          : { outcome: 'retryable', reason: 'Human socket closed before acknowledgement.' }));
+          : { outcome: 'uncertain', reason: 'connection-closed-before-acknowledgement' }));
         if (signal.aborted) onAbort();
         else if (!settled) {
           try {

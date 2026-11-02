@@ -1434,13 +1434,37 @@ describe('framework-independent runtime', () => {
     expect(refusalAttempts).toHaveLength(2);
     expect(refusalAttempts[1]).toEqual(refusalAttempts[0]);
 
-    transport.nextSend = async () => ({ outcome: 'uncertain', reason: 'ack lost' });
+    transport.nextSend = async () => ({ outcome: 'uncertain', reason: 'connection-closed-before-acknowledgement' });
     const uncertain = runtime.send('retry unchanged')!;
     await vi.waitFor(() => expect(runtime.getSnapshot().sends.find((send) => send.clientMessageId === uncertain)?.status).toBe('uncertain'));
     transport.nextSend = async () => ({ outcome: 'accepted' });
     await runtime.retrySend(uncertain);
+    await vi.waitFor(() => expect(runtime.getSnapshot().sends.find((send) => send.clientMessageId === uncertain)?.status).toBe('accepted'));
     const attempts = transport.submissions.filter((submission) => submission.clientMessageId === uncertain);
-    expect(attempts).toHaveLength(1);
+    expect(attempts).toHaveLength(2);
+    expect(attempts[1]).toEqual(attempts[0]);
+    runtime.dispose();
+  });
+
+  it('reconciles a late accepted message before an explicit uncertain-send retry', async () => {
+    const transport = new ControlledTransport();
+    transport.nextSend = async () => ({ outcome: 'uncertain', reason: 'connection-closed-before-acknowledgement' });
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await runtime.rebuild();
+
+    const id = runtime.send('accepted after the socket closed')!;
+    await vi.waitFor(() => expect(runtime.getSnapshot().sends[0]).toMatchObject({ status: 'uncertain', reconciled: false }));
+    const sent = transport.submissions[0];
+    transport.rows.push(message(9, { clientMessageId: id, deviceId: transport.identity.deviceId,
+      content: sent.content, role: 'user' }));
+
+    await runtime.retrySend(id);
+
+    expect(runtime.getSnapshot().sends.find((send) => send.clientMessageId === id))
+      .toMatchObject({ status: 'accepted', reconciled: true });
+    expect(transport.submissions.filter((submission) => submission.clientMessageId === id)).toHaveLength(1);
+    expect(runtime.getSnapshot().records.filter((record) => record.kind === 'message' && record.clientMessageId === id))
+      .toHaveLength(1);
     runtime.dispose();
   });
 
@@ -1568,6 +1592,37 @@ describe('framework-independent runtime', () => {
       expect(attempts[1]).toEqual(attempts[0]);
       expect(attempts[2]).toEqual(attempts[0]);
       expect(signals).toEqual([{ kind: 'accepted' }]);
+    } finally {
+      runtime.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it('ends repeated connection failures as uncertain after a bounded number of exact retries', async () => {
+    const transport = new ControlledTransport();
+    transport.nextSend = async () => ({ outcome: 'unreachable', reason: 'Not connected to the server.' });
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await runtime.rebuild();
+    vi.useFakeTimers();
+    try {
+      const id = runtime.send('Keep the full draft while delivery is unconfirmed')!;
+      const signals: unknown[] = [];
+      runtime.observeHostSend(id, (signal) => signals.push(signal));
+      expect(transport.submissions).toHaveLength(1);
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(250);
+      expect(transport.submissions).toHaveLength(2);
+      await vi.advanceTimersByTimeAsync(500);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(transport.submissions).toHaveLength(3);
+      expect(transport.submissions[1]).toEqual(transport.submissions[0]);
+      expect(transport.submissions[2]).toEqual(transport.submissions[0]);
+      expect(runtime.getSnapshot().sends.find((send) => send.clientMessageId === id)).toMatchObject({
+        content: 'Keep the full draft while delivery is unconfirmed', status: 'uncertain',
+        reason: 'connection-unconfirmed', reconciled: false,
+      });
+      expect(signals).toEqual([{ kind: 'uncertain', reason: 'ack-lost' }]);
     } finally {
       runtime.dispose();
       vi.useRealTimers();
