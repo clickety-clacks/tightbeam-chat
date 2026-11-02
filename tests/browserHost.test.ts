@@ -62,6 +62,21 @@ describe('Chat entry selection', () => {
     });
   });
 
+  it('keeps the configured marker route scoped to its Gateway', () => {
+    const withMarkers = { ...configured, principalKey: 'mike', readMarkerRoute: 'gateway-user-device' as const };
+    const sameGateway = resolveEntrySelection(
+      `?gateway=${encodeURIComponent(configured.gateway)}&session=${encodeURIComponent('agent:linked/chat')}`,
+      withMarkers,
+    );
+    expect(sameGateway.kind === 'selected' && sameGateway.target.readMarkerRoute).toBe('gateway-user-device');
+
+    const otherGateway = resolveEntrySelection(
+      `?gateway=${encodeURIComponent('https://other.example')}&session=${encodeURIComponent('agent:other/chat')}`,
+      withMarkers,
+    );
+    expect(otherGateway.kind === 'selected' && otherGateway.target.readMarkerRoute).toBeUndefined();
+  });
+
   it('rejects malformed, incomplete, duplicate, credential-bearing, and unrecognized query data safely', () => {
     const rejected = [
       '?gateway=ftp%3A%2F%2Fbad.example&session=private-session',
@@ -96,6 +111,23 @@ describe('Chat entry selection', () => {
 });
 
 describe('private browser entry and same-origin gateway bridge', () => {
+  it('exposes the configured marker route without forwarding browser credentials', async () => {
+    const fetchSpy = vi.fn<typeof fetch>().mockResolvedValue(new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchSpy);
+    const host = browserHost({ ...configured, principalKey: 'mike', readMarkerRoute: 'gateway-user-device' });
+
+    expect(host.readMarkerRoute).toBe('gateway-user-device');
+    await host.fetch('/__chat/agent/dispatch', {
+      method: 'POST',
+      headers: { authorization: 'Bearer browser-supplied-value', 'content-type': 'application/json' },
+      body: JSON.stringify({ verb: 'read-marker-set' }),
+    });
+
+    const [, init] = fetchSpy.mock.calls[0]!;
+    expect(new Headers(init?.headers).has('authorization')).toBe(false);
+    expect(init?.credentials).toBe('same-origin');
+  });
+
   it('keeps HTTPS fetch and WebSocket traffic on the selected Chat origin', () => {
     const page = 'https://chat.private.example/';
     const gateway = 'https://gateway.example:8443';

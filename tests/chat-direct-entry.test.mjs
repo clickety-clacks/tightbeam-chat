@@ -8,6 +8,7 @@ import { createChatServer } from '../server/chat-server.mjs';
 import { createPublic019Transport } from '../src/public019';
 
 const TOKEN = 'fixture-operator-credential';
+const MARKER_DEVICE_TOKEN = 'fixture-mike-device-credential';
 const SESSION = 'agent:example:chat?tab=1';
 const LINKED_SESSION = 'agent:example:linked-chat';
 const PRINCIPAL = 'example-user';
@@ -82,6 +83,12 @@ async function writeGatewayDescriptor(baseDir, gatewayOrigin, token, { advertise
 async function writeGatewayMap(root, gateways) {
   const filename = path.join(root, 'gateway-map.json');
   await fs.writeFile(filename, JSON.stringify({ version: 1, gateways }), { mode: 0o600 });
+  return filename;
+}
+
+async function writePrivateCredential(root, token) {
+  const filename = path.join(root, 'read-marker-device-credential');
+  await fs.writeFile(filename, token, { mode: 0o600 });
   return filename;
 }
 
@@ -261,6 +268,7 @@ describe('private direct-entry Chat service bridge', () => {
     const config = await configResponse.json();
     expect(config).toMatchObject({ gateway: gatewayOrigin, sessionKey: SESSION, principalKey: PRINCIPAL });
     expect(config.deviceId).toMatch(/^chat_[a-f0-9]{24}$/);
+    expect(config.readMarkerRoute).toBeUndefined();
     expect(JSON.stringify(config)).not.toContain(TOKEN);
 
     const chatReleaseResponse = await fetch(`${chatOrigin}/__chat/version`);
@@ -357,6 +365,113 @@ describe('private direct-entry Chat service bridge', () => {
     const unlisted = await fetch(`${toolBase}?limit=50&unlisted=value`, { headers: { origin: chatOrigin } });
     expect(unlisted.status).toBe(404);
     expect(seen).toHaveLength(11);
+  });
+
+  it('keeps the Mike device credential private and uses it only for read-marker-set dispatch', async () => {
+    const scopeKey = 'agent:example:chat with spaces:session-read-position';
+    const seen = [];
+    const gateway = http.createServer(async (request, response) => {
+      const chunks = [];
+      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      const body = Buffer.concat(chunks).toString('utf8');
+      seen.push({ method: request.method, url: request.url, authorization: request.headers.authorization, body });
+      response.setHeader('content-type', 'application/json');
+      if (request.method === 'GET' && request.url ===
+          `/api/read-markers/${encodeURIComponent(scopeKey)}?asUser=mike`) {
+        response.writeHead(200).end(JSON.stringify({ schemaVersion: 1, resource: 'read markers',
+          item: { userId: 'mike', scopeKey, marker: null } }));
+        return;
+      }
+      if (request.method === 'POST' && request.url === '/agent/dispatch') {
+        const value = JSON.parse(body);
+        if (value.verb !== 'read-marker-set') {
+          response.writeHead(404).end(JSON.stringify({ error: { code: 'not_found' } }));
+          return;
+        }
+        if (value.params.expectedCurrent === 'stale') {
+          response.writeHead(409).end(JSON.stringify({ error: { code: 'read_marker_conflict' } }));
+          return;
+        }
+        response.writeHead(200).end(JSON.stringify({ result: { changed: true } }));
+        return;
+      }
+      response.writeHead(404).end(JSON.stringify({ error: { code: 'not_found' } }));
+    });
+    const gatewayPort = await listen(gateway);
+    const gatewayOrigin = `http://127.0.0.1:${gatewayPort}`;
+    const chatPort = await unusedPort();
+    const chatOrigin = `http://127.0.0.1:${chatPort}`;
+    const { root, publicDir } = await temporaryDirectory();
+    const gatewayBaseDir = await writeGatewayDescriptor(path.join(root, 'gateway-base'), gatewayOrigin, TOKEN);
+    const markerCredentialFile = await writePrivateCredential(root, MARKER_DEVICE_TOKEN);
+    const chat = createChatServer({
+      rootDir: root,
+      publicDir,
+      releaseInfo: { tag: 'v0.1.2', sourceCommit: '1234567890abcdef1234567890abcdef12345678' },
+      environment: {
+        CHAT_PUBLIC_ORIGIN: chatOrigin,
+        CHAT_DEFAULT_GATEWAY_ORIGIN: gatewayOrigin,
+        CHAT_DEFAULT_SESSION_KEY: scopeKey.slice(0, -':session-read-position'.length),
+        CHAT_DEFAULT_PRINCIPAL_KEY: 'mike',
+        CHAT_READ_MARKER_DEVICE_CREDENTIAL_FILE: markerCredentialFile,
+        TIGHTBEAM_BASE_DIR: gatewayBaseDir,
+      },
+    });
+    await listen(chat, chatPort);
+
+    const configResponse = await fetch(`${chatOrigin}/chat-config.json`);
+    const configText = await configResponse.text();
+    expect(JSON.parse(configText)).toMatchObject({ readMarkerRoute: 'gateway-user-device', principalKey: 'mike' });
+    expect(configText).not.toContain(MARKER_DEVICE_TOKEN);
+    expect(configText).not.toContain(markerCredentialFile);
+
+    const encodedScopeKey = encodeURIComponent(scopeKey);
+    const markerRead = await fetch(`${chatOrigin}/__chat/api/read-markers/${encodedScopeKey}`, {
+      headers: { origin: chatOrigin },
+    });
+    expect(markerRead.status).toBe(200);
+    expect((await markerRead.json()).item).toEqual({ userId: 'mike', scopeKey, marker: null });
+
+    const initialSet = { verb: 'read-marker-set', params: { scopeKey, marker: '52', expectedCurrent: null } };
+    const setResponse = await fetch(`${chatOrigin}/__chat/agent/dispatch`, {
+      method: 'POST',
+      headers: { origin: chatOrigin, 'content-type': 'application/json' },
+      body: JSON.stringify(initialSet),
+    });
+    expect(setResponse.status).toBe(200);
+
+    const staleSet = { verb: 'read-marker-set', params: { scopeKey, marker: '53', expectedCurrent: 'stale' } };
+    const conflictResponse = await fetch(`${chatOrigin}/__chat/agent/dispatch`, {
+      method: 'POST',
+      headers: { origin: chatOrigin, 'content-type': 'application/json' },
+      body: JSON.stringify(staleSet),
+    });
+    expect(conflictResponse.status).toBe(409);
+    expect(await conflictResponse.json()).toEqual({ error: { code: 'read_marker_conflict' } });
+
+    const clearResponse = await fetch(`${chatOrigin}/__chat/agent/dispatch`, {
+      method: 'POST',
+      headers: { origin: chatOrigin, 'content-type': 'application/json' },
+      body: JSON.stringify({ verb: 'read-marker-clear', params: { scopeKey } }),
+    });
+    expect(clearResponse.status).toBe(404);
+
+    expect(seen).toEqual([
+      {
+        method: 'GET',
+        url: `/api/read-markers/${encodedScopeKey}?asUser=mike`,
+        authorization: `Bearer ${TOKEN}`,
+        body: '',
+      },
+      {
+        method: 'POST', url: '/agent/dispatch', authorization: `Bearer ${MARKER_DEVICE_TOKEN}`,
+        body: JSON.stringify(initialSet),
+      },
+      {
+        method: 'POST', url: '/agent/dispatch', authorization: `Bearer ${MARKER_DEVICE_TOKEN}`,
+        body: JSON.stringify(staleSet),
+      },
+    ]);
   });
 
   it('composes the canonical selected-history route with the real decoder across an agent reset', async () => {

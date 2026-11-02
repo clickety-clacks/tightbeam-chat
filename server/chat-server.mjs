@@ -137,6 +137,13 @@ function loadRuntimeConfig(environment) {
   const publicOrigin = canonicalOrigin(environment.CHAT_PUBLIC_ORIGIN);
   const configuredGateway = canonicalOrigin(environment.CHAT_DEFAULT_GATEWAY_ORIGIN);
   const gatewayMap = loadGatewayMap(environment, configuredGateway);
+  let markerDeviceToken = '';
+  if (typeof environment.CHAT_READ_MARKER_DEVICE_CREDENTIAL_FILE === 'string' &&
+      environment.CHAT_READ_MARKER_DEVICE_CREDENTIAL_FILE) {
+    try {
+      markerDeviceToken = fs.readFileSync(environment.CHAT_READ_MARKER_DEVICE_CREDENTIAL_FILE, 'utf8').trim();
+    } catch {}
+  }
   const gatewayOrigin = gatewayMap.valid && configuredGateway && gatewayMap.gateways.has(configuredGateway)
     ? configuredGateway
     : undefined;
@@ -154,6 +161,9 @@ function loadRuntimeConfig(environment) {
       gateway: gatewayOrigin,
       sessionKey,
       ...(principalKey ? { principalKey, deviceId } : {}),
+      ...(markerDeviceToken && principalKey === 'mike'
+        ? { readMarkerRoute: 'gateway-user-device' }
+        : {}),
     }
     : {};
 
@@ -166,6 +176,7 @@ function loadRuntimeConfig(environment) {
     sessionKey,
     principalKey,
     deviceId,
+    markerDeviceToken,
   };
 }
 
@@ -205,6 +216,16 @@ export function parseServiceHttpTarget(rawUrl, runtime) {
     if (attestId && routeParams.length === 0) {
       return { kind: 'detail', gatewayOrigin,
         path: `/api/attests/${encodeURIComponent(attestId)}?asUser=${encodeURIComponent(runtime.principalKey)}` };
+    }
+
+    const readMarker = /^\/__chat\/api\/read-markers\/([^/]+)$/.exec(request.pathname);
+    const readMarkerScope = readMarker && decodeSessionPath(readMarker[1]);
+    if (runtime.principalKey === 'mike' && readMarkerScope && routeParams.length === 0) {
+      return {
+        kind: 'read-marker',
+        gatewayOrigin,
+        path: `/api/read-markers/${encodeURIComponent(readMarkerScope)}?asUser=mike`,
+      };
     }
 
     const detail = /^\/__chat\/api\/sessions\/([^/]+)$/.exec(request.pathname);
@@ -404,6 +425,10 @@ function writeGatewayReply(response, reply) {
 }
 
 async function serviceHttp(request, response, runtime) {
+  if (request.method === 'POST' && request.url?.startsWith('/__chat/agent/dispatch')) {
+    await serviceMarkerDispatch(request, response, runtime);
+    return;
+  }
   if (request.method !== 'GET') {
     response.writeHead(405, { allow: 'GET', 'cache-control': 'no-store' }).end();
     return;
@@ -424,12 +449,83 @@ async function serviceHttp(request, response, runtime) {
   }
 
   try {
-    if (target.kind === 'version' || target.kind === 'detail' || target.kind === 'transcript') {
+    if (target.kind === 'version' || target.kind === 'detail' || target.kind === 'transcript' || target.kind === 'read-marker') {
       writeGatewayReply(response, await gatewayRequest(gateway, target.path, {
         authorize: target.kind !== 'version',
       }));
       return;
     }
+  } catch {
+    jsonResponse(response, 502, { error: { code: 'gateway_unavailable' } });
+  }
+}
+
+function parseServiceMarkerDispatchTarget(rawUrl, runtime) {
+  try {
+    const request = new URL(rawUrl, 'http://chat-service.invalid');
+    if (request.origin !== 'http://chat-service.invalid' || request.pathname !== '/__chat/agent/dispatch' ||
+        [...request.searchParams.keys()].some((name) => name !== 'gateway')) return undefined;
+    const gatewayOrigin = selectedGatewayOrigin(request.searchParams, runtime.gatewayOrigin);
+    if (!gatewayOrigin) return undefined;
+    const gateway = runtime.gateways.get(gatewayOrigin);
+    const configuredGateway = runtime.gateways.get(runtime.gatewayOrigin);
+    if (!gateway || gateway !== configuredGateway) return undefined;
+    return { gatewayOrigin, path: '/agent/dispatch' };
+  } catch {
+    return undefined;
+  }
+}
+
+async function serviceMarkerDispatch(request, response, runtime) {
+  if (!runtime.markerDeviceToken || runtime.principalKey !== 'mike') {
+    jsonResponse(response, 404, { error: { code: 'not_found' } });
+    return;
+  }
+  if (!serviceReady(runtime)) {
+    jsonResponse(response, 503, { error: { code: 'chat_service_unconfigured' } });
+    return;
+  }
+  const target = parseServiceMarkerDispatchTarget(request.url ?? '', runtime);
+  if (!target) {
+    jsonResponse(response, 404, { error: { code: 'not_found' } });
+    return;
+  }
+  const gateway = runtime.gateways.get(target.gatewayOrigin);
+  if (!gateway?.available) {
+    jsonResponse(response, 503, { error: { code: 'chat_gateway_unavailable' } });
+    return;
+  }
+
+  const chunks = [];
+  try {
+    for await (const chunk of request) chunks.push(Buffer.from(chunk));
+  } catch {
+    jsonResponse(response, 400, { error: { code: 'invalid_request' } });
+    return;
+  }
+  const body = Buffer.concat(chunks);
+  let value;
+  try { value = JSON.parse(body.toString('utf8')); }
+  catch {
+    jsonResponse(response, 400, { error: { code: 'invalid_request' } });
+    return;
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value) || value.verb !== 'read-marker-set') {
+    jsonResponse(response, 404, { error: { code: 'not_found' } });
+    return;
+  }
+
+  try {
+    writeGatewayReply(response, await gatewayRequest(gateway, target.path, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${runtime.markerDeviceToken}`,
+        'content-type': request.headers['content-type'] ?? 'application/json',
+        'content-length': String(body.length),
+      },
+      body,
+      authorize: false,
+    }));
   } catch {
     jsonResponse(response, 502, { error: { code: 'gateway_unavailable' } });
   }

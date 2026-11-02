@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { HostPage } from '../examples/HostPage';
 import { RuntimeEntry } from '../examples/RuntimeEntry';
+import { loadConfiguredChatTarget } from '../examples/entry';
 
 const defaultTarget = {
   gateway: 'https://gateway.example:8443',
@@ -19,6 +20,17 @@ afterEach(() => {
 });
 
 describe('direct browser entry', () => {
+  it('passes only the advertised marker-route capability from server configuration', async () => {
+    const mikeTarget = { ...defaultTarget, principalKey: 'mike' };
+    const load = async (readMarkerRoute: unknown) => loadConfiguredChatTarget(async () => new Response(
+      JSON.stringify({ ...mikeTarget, readMarkerRoute }), { status: 200 },
+    ));
+
+    expect((await load('gateway-user-device')).readMarkerRoute).toBe('gateway-user-device');
+    expect((await load('unexpected-route')).readMarkerRoute).toBeUndefined();
+    expect((await load(undefined)).readMarkerRoute).toBeUndefined();
+  });
+
   it('keeps Chat and sending available when conversation endpoints are unavailable', async () => {
     const fetchSpy = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
       error: { code: 'chat_gateway_unavailable' },
