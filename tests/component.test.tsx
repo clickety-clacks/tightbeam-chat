@@ -8,8 +8,9 @@ import { TightbeamChat, workingStateOpacity } from '../src/TightbeamChat';
 import type { RenderContext } from '../src/TightbeamChat';
 import { createTurnProvenance } from '../src/provenance';
 import { decodePublic019Message } from '../src/public019';
+import { AttachmentPreparationError } from '../src/types';
 import type {
-  ToolCallIndex, ToolCallRecord, CanonicalMessage, CanonicalTurn, ChatRuntime, ConversationRecord, LocalSend, RuntimeState,
+  AttachmentInput, ToolCallIndex, ToolCallRecord, CanonicalMessage, CanonicalTurn, ChatRuntime, ConversationRecord, LocalSend, RuntimeState,
   TightbeamAdapter, TurnProvenance,
 } from '../src/types';
 
@@ -18,7 +19,27 @@ afterEach(() => {
   document.querySelectorAll('style[data-chat-component-test]').forEach(style => style.remove());
   vi.useRealTimers();
   vi.unstubAllGlobals();
+  for (const restore of propertyRestores.splice(0)) restore();
 });
+
+const propertyRestores: Array<() => void> = [];
+
+function stubProperty(target: object, key: PropertyKey, value: unknown) {
+  const descriptor = Object.getOwnPropertyDescriptor(target, key);
+  Object.defineProperty(target, key, { configurable: true, writable: true, value });
+  propertyRestores.push(() => {
+    if (descriptor) Object.defineProperty(target, key, descriptor);
+    else Reflect.deleteProperty(target, key);
+  });
+}
+
+function mockObjectUrls(create: (blob: Blob) => string = () => 'blob:composer-preview') {
+  const createObjectURL = vi.fn(create);
+  const revokeObjectURL = vi.fn();
+  stubProperty(URL, 'createObjectURL', createObjectURL);
+  stubProperty(URL, 'revokeObjectURL', revokeObjectURL);
+  return { createObjectURL, revokeObjectURL };
+}
 
 function row(sessionKey: string, id: string, content: string, extra: Partial<CanonicalMessage> = {}): CanonicalMessage {
   return { kind: 'message', sessionKey, id, seq: 1, rowVersion: 1, role: 'assistant', content,
@@ -45,6 +66,8 @@ class FakeRuntime implements ChatRuntime {
   disposed = false;
   sent: string[] = [];
   sendResult: string | null = 'fixture-send';
+  attachmentSendResult: string | null = 'fixture-attachment-send';
+  attachmentSubmissions: Array<{ content: string; inputs: readonly { id: string; filename: string; bytes: Blob }[] }> = [];
   retried: string[] = [];
   loadOlderCalls = 0;
   rebuildCalls = 0;
@@ -78,6 +101,11 @@ class FakeRuntime implements ChatRuntime {
   };
   update = (patch: Partial<RuntimeState>) => { this.state = { ...this.state, ...patch }; this.publish(); };
   send = (text: string, clientMessageId?: string) => { this.sent.push(text); return clientMessageId ?? this.sendResult; };
+  prepareAttachmentInputs = async (inputs: readonly AttachmentInput[]) => inputs;
+  sendAttachments = (content: string, inputs: readonly { id: string; filename: string; bytes: Blob }[]) => {
+    this.attachmentSubmissions.push({ content, inputs });
+    return this.attachmentSendResult;
+  };
   retrySend = async (id: string) => { this.retried.push(id); };
   observeHostSend = () => () => {};
   refreshHostSend = async () => 'absent' as const;
@@ -105,6 +133,19 @@ function setDocumentVisibility(initial: DocumentVisibilityState) {
       else Reflect.deleteProperty(document, 'visibilityState');
     },
   };
+}
+
+function dispatchClipboardPaste(input: HTMLTextAreaElement, clipboardData: {
+  readonly items?: readonly { readonly kind: string; readonly type: string; getAsFile(): File | null }[];
+  readonly files?: readonly File[];
+  getData(type: string): string;
+}): Event {
+  const event = new Event('paste', { bubbles: true, cancelable: true });
+  Object.defineProperty(event, 'clipboardData', { value: {
+    items: clipboardData.items ?? [], files: clipboardData.files ?? [], getData: clipboardData.getData,
+  } });
+  act(() => { input.dispatchEvent(event); });
+  return event;
 }
 
 function installViewportLayout(viewport: HTMLElement, trailingSpace = 200,
@@ -2719,6 +2760,454 @@ describe('conversation surface', () => {
     expect(renderMessage.mock.calls.some(([record, context]) => record.raw.source === 'fixture' &&
       context.recordKey === 'B-human'))
       .toBe(true);
+  });
+
+  it('offers photo and file selection, shows previews and named file tiles, and retains the selected bytes', async () => {
+    mockObjectUrls(() => 'blob:photo-preview');
+    const runtime = new FakeRuntime('composer-attachments');
+    const view = render(<TightbeamChat sessionKey="composer-attachments" adapter={adapterFor(runtime)} />);
+    const composer = screen.getByRole('textbox', { name: 'Message to Research assistant' }) as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: 'draft text' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add attachment' }));
+    expect(screen.getByRole('group', { name: 'Add to message' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Photo' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'File' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Camera' })).toBeTruthy();
+
+    const photo = new File(['original photo bytes'], 'photo.png', { type: 'image/png' });
+    const pdf = new File(['original pdf bytes'], 'report.pdf', { type: 'application/pdf' });
+    const photoPicker = view.container.querySelector<HTMLInputElement>('input[type="file"][accept="image/*"]')!;
+    const filePicker = view.container.querySelectorAll<HTMLInputElement>('input[type="file"]')[1];
+    fireEvent.change(photoPicker, { target: { files: [photo] } });
+    expect(await screen.findByRole('img', { name: 'Preview of photo.png' })).toBeTruthy();
+    expect(screen.getByRole('img', { name: 'Preview of photo.png' }).getAttribute('src')).toBe('blob:photo-preview');
+    fireEvent.change(filePicker, { target: { files: [pdf] } });
+    await screen.findByRole('img', { name: 'Preview of photo.png' });
+    expect(screen.getByText('report.pdf')).toBeTruthy();
+    expect(screen.getByText('PDF file')).toBeTruthy();
+    expect(composer.value).toBe('draft text');
+
+    // A picker cancellation emits no selected files; existing draft content stays put.
+    fireEvent.change(photoPicker, { target: { files: [] } });
+    expect(screen.getByRole('button', { name: 'Remove photo.png' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Remove report.pdf' })).toBeTruthy();
+    expect(composer.value).toBe('draft text');
+
+    await screen.findByRole('img', { name: 'Preview of photo.png' });
+    fireEvent.error(screen.getByRole('img', { name: 'Preview of photo.png' }));
+    expect(screen.getByText(/Preview unavailable\. The converted image remains attached\./)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Remove photo.png' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove report.pdf' }));
+    expect(screen.queryByRole('button', { name: 'Remove report.pdf' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Remove photo.png' })).toBeTruthy();
+    expect(composer.value).toBe('draft text');
+    await screen.findByRole('img', { name: 'Preview of photo.png' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    expect(runtime.attachmentSubmissions).toHaveLength(1);
+    expect(runtime.attachmentSubmissions[0].content).toBe('draft text');
+    expect(runtime.attachmentSubmissions[0].inputs).toHaveLength(1);
+    expect(runtime.attachmentSubmissions[0].inputs[0].bytes).toBe(photo);
+    expect(runtime.sent).toEqual([]);
+    expect(composer.value).toBe('');
+    expect(screen.queryByRole('button', { name: 'Remove photo.png' })).toBeNull();
+  });
+
+  it('preflights the ordered selection before enabling Send and previews the exact prepared image bytes', async () => {
+    const previewed: Blob[] = [];
+    const objectUrls = mockObjectUrls(blob => {
+      previewed.push(blob);
+      return `blob:prepared-preview-${previewed.length}`;
+    });
+    const runtime = new FakeRuntime('prepared-composer-attachments');
+    const converted = new Blob(['converted jpeg bytes'], { type: 'image/jpeg' });
+    const image = new File(['source heic bytes'], 'camera.HEIC', { type: 'image/heic' });
+    const documentFile = new File(['original pdf bytes'], 'report.pdf', { type: 'application/pdf' });
+    const svg = new File(['<svg xmlns="http://www.w3.org/2000/svg"/>'], 'diagram.svg', { type: 'image/svg+xml' });
+    let resolvePreparation!: (items: readonly AttachmentInput[]) => void;
+    let selected: readonly AttachmentInput[] = [];
+    let preparedSnapshot: readonly AttachmentInput[] | null = null;
+    runtime.prepareAttachmentInputs = vi.fn((inputs: readonly AttachmentInput[]) => {
+      selected = inputs;
+      return new Promise<readonly AttachmentInput[]>(resolve => { resolvePreparation = resolve; });
+    });
+    const view = render(<TightbeamChat sessionKey="prepared-composer-attachments" adapter={adapterFor(runtime)} />);
+    const composer = screen.getByRole('textbox', { name: 'Message to Research assistant' }) as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: 'caption' } });
+    const filePicker = view.container.querySelectorAll<HTMLInputElement>('input[type="file"]')[1];
+    fireEvent.change(filePicker, { target: { files: [image, documentFile, svg] } });
+
+    const send = screen.getByRole('button', { name: 'Send message' });
+    expect(send).toHaveProperty('disabled', true);
+    await waitFor(() => expect(selected).toHaveLength(3));
+    expect(selected.map(item => item.filename)).toEqual(['camera.HEIC', 'report.pdf', 'diagram.svg']);
+    expect(screen.getByText('SVG file')).toBeTruthy();
+    expect(screen.queryByRole('img', { name: /diagram\.svg/ })).toBeNull();
+    expect(runtime.attachmentSubmissions).toEqual([]);
+
+    preparedSnapshot = Object.freeze(selected.map(item => item.filename === 'camera.HEIC'
+      ? Object.freeze({ ...item, filename: 'camera.jpg', bytes: converted }) : item));
+    resolvePreparation(preparedSnapshot);
+    const imagePreview = await screen.findByRole('img', { name: 'Preview of camera.jpg' });
+    expect(imagePreview.getAttribute('src')).toBe('blob:prepared-preview-1');
+    expect(objectUrls.createObjectURL).toHaveBeenCalledWith(converted);
+    expect(previewed).toEqual([converted]);
+    await waitFor(() => expect(send).toHaveProperty('disabled', false));
+
+    fireEvent.click(send);
+    expect(runtime.attachmentSubmissions).toHaveLength(1);
+    const sent = runtime.attachmentSubmissions[0].inputs;
+    expect(sent).toBe(preparedSnapshot);
+    expect(sent.map(item => item.filename)).toEqual(['camera.jpg', 'report.pdf', 'diagram.svg']);
+    expect(sent[0].bytes).toBe(converted);
+    expect(sent[1].bytes).toBe(documentFile);
+    expect(sent[2].bytes).toBe(svg);
+    expect(composer.value).toBe('');
+  });
+
+  it('shows an undecodable image before upload and lets the remaining ordered draft proceed after removal', async () => {
+    const runtime = new FakeRuntime('unreadable-composer-image');
+    const photo = new File(['unreadable image'], 'broken.heic', { type: 'image/heic' });
+    const documentFile = new File(['original document'], 'notes.pdf', { type: 'application/pdf' });
+    runtime.prepareAttachmentInputs = vi.fn(async (inputs: readonly AttachmentInput[]): Promise<readonly AttachmentInput[]> => {
+      const failedIndex = inputs.findIndex(item => item.filename === 'broken.heic');
+      if (failedIndex >= 0) throw new AttachmentPreparationError(failedIndex, 'image-unreadable',
+        'Cannot read broken.heic in its image format on this device.');
+      return inputs;
+    });
+    const view = render(<TightbeamChat sessionKey="unreadable-composer-image" adapter={adapterFor(runtime)} />);
+    const composer = screen.getByRole('textbox', { name: 'Message to Research assistant' }) as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: 'keep this text' } });
+    const filePicker = view.container.querySelectorAll<HTMLInputElement>('input[type="file"]')[1];
+    fireEvent.change(filePicker, { target: { files: [photo, documentFile] } });
+
+    expect(await screen.findByText(/Cannot read broken\.heic in its image format on this device/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Send message' })).toHaveProperty('disabled', true);
+    expect(runtime.attachmentSubmissions).toEqual([]);
+    expect(composer.value).toBe('keep this text');
+    expect(screen.getByRole('button', { name: 'Remove notes.pdf' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry attachment preparation' }));
+    await waitFor(() => expect(runtime.prepareAttachmentInputs).toHaveBeenCalledTimes(2));
+    expect(runtime.attachmentSubmissions).toEqual([]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove broken.heic' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send message' })).toHaveProperty('disabled', false));
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    expect(runtime.attachmentSubmissions).toHaveLength(1);
+    expect(runtime.attachmentSubmissions[0].inputs).toHaveLength(1);
+    expect(runtime.attachmentSubmissions[0].inputs[0].filename).toBe('notes.pdf');
+    expect(runtime.attachmentSubmissions[0].inputs[0].bytes).toBe(documentFile);
+  });
+
+  it('shows runtime-owned attachment progress and item errors, and retries the same send ID', async () => {
+    mockObjectUrls(() => 'blob:pending-send-preview');
+    const runtime = new FakeRuntime('attachment-send-progress');
+    const clientMessageId = 'c_attachment-send-progress';
+    const source = new File(['original bytes'], 'large-photo.png', { type: 'image/png' });
+    const makeSend = (status: LocalSend['status'], attachmentStatus: 'pending' | 'uploading' | 'ready' | 'failed',
+      reason?: string, itemError?: string, attachmentPhase?: 'preparing' | 'failed' | 'posted'): LocalSend => ({
+      sessionKey: 'attachment-send-progress', deviceId: 'device', clientMessageId,
+      content: 'photo caption', submittedAt: new Date().toISOString(), status, reconciled: false,
+      attachmentItems: [{ id: 'photo-item', filename: 'large-photo.png', bytes: source,
+        status: attachmentStatus, ...(itemError ? { error: itemError } : {}) }],
+      attachmentPhase: attachmentPhase ?? (status === 'failed' ? 'failed' : 'preparing'), ...(reason ? { reason } : {}),
+    } as unknown as LocalSend);
+    runtime.sendAttachments = (content, inputs) => {
+      runtime.attachmentSubmissions.push({ content, inputs });
+      runtime.update({ sends: [makeSend('pending', 'pending')] });
+      return clientMessageId;
+    };
+    render(<TightbeamChat sessionKey="attachment-send-progress" adapter={adapterFor(runtime)} />);
+    const composer = screen.getByRole('textbox', { name: 'Message to Research assistant' }) as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: 'photo caption' } });
+    fireEvent.change(document.querySelector<HTMLInputElement>('input[type="file"]')!, {
+      target: { files: [source] },
+    });
+    await screen.findByRole('img', { name: 'Preview of large-photo.png' });
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+
+    expect(await screen.findByText('Preparing attachments…')).toBeTruthy();
+    expect(screen.getByText('large-photo.png')).toBeTruthy();
+    expect(screen.getByText('Waiting to upload')).toBeTruthy();
+    expect(screen.queryByText(/^Sent$/)).toBeNull();
+    expect(composer.value).toBe('');
+    expect(runtime.attachmentSubmissions[0].inputs[0].bytes).toBe(source);
+
+    runtime.update({ sends: [makeSend('pending', 'ready', undefined, undefined, 'posted')] });
+    expect(await screen.findByText('Sending message…')).toBeTruthy();
+    expect(screen.getByText('Uploaded; message not confirmed')).toBeTruthy();
+    expect(screen.queryByText(/^Sent$/)).toBeNull();
+
+    const transportReason = 'HTTP 413: attachment exceeds the transport limit';
+    const submissionReason = 'Upload rejected by the current transport';
+    runtime.update({ sends: [makeSend('failed', 'failed', submissionReason, transportReason, 'failed')] });
+    expect(await screen.findByText('Attachment send failed')).toBeTruthy();
+    expect(screen.getByText(transportReason)).toBeTruthy();
+    expect(screen.getByText(`Submission reason: ${submissionReason}`)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Retry attachment send' }));
+    expect(runtime.retried).toEqual([clientMessageId]);
+  });
+
+  it('restores a failed attachment send with its original Blob and filename', async () => {
+    mockObjectUrls(() => 'blob:restored-failed-photo');
+    const sessionKey = 'restore-failed-attachment';
+    const source = new File(['original failed image bytes'], 'failed-photo.png', { type: 'image/png' });
+    const failedSend = {
+      sessionKey, deviceId: 'device', clientMessageId: 'failed-send-with-photo',
+      content: 'recover this photo', submittedAt: '2026-10-30T09:00:00.000Z',
+      status: 'failed', reconciled: false, reason: 'upload-failed', attachmentPhase: 'failed',
+      attachmentItems: [{ id: 'failed-photo-item', filename: 'failed-photo.png', bytes: source,
+        status: 'failed', error: 'HTTP 413: attachment exceeds the transport limit' }],
+    } as unknown as LocalSend;
+    const runtime = new FakeRuntime(sessionKey, { sends: [failedSend] });
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Restore draft to the composer' }));
+    const composer = screen.getByRole('textbox', { name: 'Message to Research assistant' }) as HTMLTextAreaElement;
+    expect(composer.value).toBe('recover this photo');
+    expect((await screen.findByRole('img', { name: 'Preview of failed-photo.png' })).getAttribute('src'))
+      .toBe('blob:restored-failed-photo');
+    expect(screen.getByRole('button', { name: 'Remove failed-photo.png' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    expect(runtime.attachmentSubmissions).toHaveLength(1);
+    expect(runtime.attachmentSubmissions[0].content).toBe('recover this photo');
+    expect(runtime.attachmentSubmissions[0].inputs).toHaveLength(1);
+    expect(runtime.attachmentSubmissions[0].inputs[0].filename).toBe('failed-photo.png');
+    expect(runtime.attachmentSubmissions[0].inputs[0].bytes).toBe(source);
+  });
+
+  it('preserves the current draft when restoring a failed attachment send into a nonempty composer', async () => {
+    const sessionKey = 'restore-failed-attachment-into-nonempty-draft';
+    const failedSource = new File(['failed attachment bytes'], 'failed-photo.png', { type: 'image/png' });
+    const currentSource = new File(['current attachment bytes'], 'current-draft.pdf', { type: 'application/pdf' });
+    const failedSend = {
+      sessionKey, deviceId: 'device', clientMessageId: 'failed-send-with-photo',
+      content: 'failed draft text', submittedAt: '2026-10-30T09:00:00.000Z',
+      status: 'failed', reconciled: false, reason: 'upload-failed', attachmentPhase: 'failed',
+      attachmentItems: [{ id: 'failed-photo-item', filename: 'failed-photo.png', bytes: failedSource,
+        status: 'failed', error: 'Upload failed' }],
+    } as unknown as LocalSend;
+    const runtime = new FakeRuntime(sessionKey, { sends: [failedSend] });
+    const view = render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+    const composer = screen.getByRole('textbox', { name: 'Message to Research assistant' }) as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: 'current draft text' } });
+    const filePicker = view.container.querySelectorAll<HTMLInputElement>('input[type="file"]')[1];
+    fireEvent.change(filePicker, { target: { files: [currentSource] } });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send message' })).toHaveProperty('disabled', false));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Restore draft to the composer' }));
+
+    expect(composer.value).toBe('current draft text');
+    expect(screen.getByRole('button', { name: 'Remove current-draft.pdf' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Remove failed-photo.png' })).toBeNull();
+    expect(screen.getByText(
+      'Clear the current draft before restoring this send. Both drafts are still preserved.',
+    ).getAttribute('role')).toBe('alert');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    expect(runtime.attachmentSubmissions).toHaveLength(1);
+    expect(runtime.attachmentSubmissions[0].content).toBe('current draft text');
+    expect(runtime.attachmentSubmissions[0].inputs).toHaveLength(1);
+    expect(runtime.attachmentSubmissions[0].inputs[0].filename).toBe('current-draft.pdf');
+    expect(runtime.attachmentSubmissions[0].inputs[0].bytes).toBe(currentSource);
+    expect(runtime.attachmentSubmissions[0].inputs.some(input => input.bytes === failedSource)).toBe(false);
+  });
+
+  it('preserves text and files when restoring a failed text-only send into a nonempty composer', async () => {
+    const sessionKey = 'restore-failed-text-with-current-attachment';
+    const currentSource = new File(['current attachment bytes'], 'current-draft.pdf', { type: 'application/pdf' });
+    const failedSend = {
+      sessionKey, deviceId: 'device', clientMessageId: 'failed-text-send',
+      content: 'failed text-only draft', submittedAt: '2026-10-30T09:00:00.000Z',
+      status: 'failed', reconciled: false, reason: 'refused',
+    } as unknown as LocalSend;
+    const runtime = new FakeRuntime(sessionKey, { sends: [failedSend] });
+    const view = render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+    const composer = screen.getByRole('textbox', { name: 'Message to Research assistant' }) as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: 'current draft text' } });
+    const filePicker = view.container.querySelectorAll<HTMLInputElement>('input[type="file"]')[1];
+    fireEvent.change(filePicker, { target: { files: [currentSource] } });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send message' })).toHaveProperty('disabled', false));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Restore text to the composer' }));
+
+    expect(composer.value).toBe('current draft text');
+    expect(screen.getByRole('button', { name: 'Remove current-draft.pdf' })).toBeTruthy();
+    expect(screen.getByText(
+      'Clear the current draft before restoring this send. Both drafts are still preserved.',
+    ).getAttribute('role')).toBe('alert');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    expect(runtime.attachmentSubmissions).toHaveLength(1);
+    expect(runtime.attachmentSubmissions[0].content).toBe('current draft text');
+    expect(runtime.attachmentSubmissions[0].inputs).toHaveLength(1);
+    expect(runtime.attachmentSubmissions[0].inputs[0].filename).toBe('current-draft.pdf');
+    expect(runtime.attachmentSubmissions[0].inputs[0].bytes).toBe(currentSource);
+  });
+
+  it('pastes image bytes with clipboard text, leaves ordinary text paste native, and reports unreadable clipboard images', async () => {
+    mockObjectUrls(() => 'blob:pasted-image');
+    const runtime = new FakeRuntime('paste-attachments');
+    render(<TightbeamChat sessionKey="paste-attachments" adapter={adapterFor(runtime)} />);
+    const composer = screen.getByRole('textbox', { name: 'Message to Research assistant' }) as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: 'hello' } });
+    composer.focus();
+    composer.setSelectionRange(5, 5);
+    const pastedImage = new File(['clipboard image bytes'], 'clipboard.png', { type: 'image/png' });
+
+    const combinedPaste = dispatchClipboardPaste(composer, {
+      items: [{ kind: 'file', type: 'image/png', getAsFile: () => pastedImage }],
+      files: [pastedImage],
+      getData: type => type === 'text/plain' ? ' world' : '',
+    });
+    expect(combinedPaste.defaultPrevented).toBe(true);
+    expect(composer.value).toBe('hello world');
+    expect(await screen.findByRole('img', { name: 'Preview of clipboard.png' })).toBeTruthy();
+
+    const unreadablePaste = dispatchClipboardPaste(composer, {
+      items: [{ kind: 'file', type: 'image/png', getAsFile: () => null }],
+      getData: type => type === 'text/plain' ? '!' : '',
+    });
+    expect(unreadablePaste.defaultPrevented).toBe(true);
+    expect(composer.value).toBe('hello world!');
+    expect(screen.getByRole('alert').textContent).toMatch(/Could not read the pasted image/);
+    expect(screen.getByRole('button', { name: 'Remove clipboard.png' })).toBeTruthy();
+
+    const plainTextPaste = dispatchClipboardPaste(composer, {
+      getData: type => type === 'text/plain' ? ' ordinary text' : '',
+    });
+    expect(plainTextPaste.defaultPrevented).toBe(false);
+    expect(runtime.attachmentSubmissions).toEqual([]);
+  });
+
+  it.each([
+    ['denied permission', Object.assign(new Error('Permission denied'), { name: 'NotAllowedError' }), /Camera access was denied/],
+    ['no camera', Object.assign(new Error('No device'), { name: 'NotFoundError' }), /No camera is available/],
+    ['camera API unavailable', null, /Camera capture is not available in this browser/],
+  ] as const)('keeps the draft recoverable when camera capture fails: %s', async (_label, reason, expected) => {
+    const runtime = new FakeRuntime('camera-failure');
+    const existingFile = new File(['keep this'], 'keep.txt', { type: 'text/plain' });
+    stubProperty(navigator, 'mediaDevices', reason === null
+      ? {}
+      : { getUserMedia: vi.fn().mockRejectedValue(reason) });
+    const view = render(<TightbeamChat sessionKey="camera-failure" adapter={adapterFor(runtime)} />);
+    const composer = screen.getByRole('textbox', { name: 'Message to Research assistant' }) as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: 'keep this draft' } });
+    fireEvent.change(view.container.querySelectorAll<HTMLInputElement>('input[type="file"]')[1], {
+      target: { files: [existingFile] },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Add attachment' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Camera' }));
+
+    expect(await screen.findByText(expected)).toBeTruthy();
+    expect(composer.value).toBe('keep this draft');
+    expect(screen.getByRole('button', { name: 'Remove keep.txt' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Try camera again' })).toBeTruthy();
+    expect(runtime.attachmentSubmissions).toEqual([]);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog', { name: 'Take a photo' })).toBeNull();
+    expect(composer.value).toBe('keep this draft');
+    expect(screen.getByRole('button', { name: 'Remove keep.txt' })).toBeTruthy();
+  });
+
+  it('captures a camera image as the submitted Blob and stops the camera when capture completes', async () => {
+    mockObjectUrls(() => 'blob:camera-preview');
+    const stopTrack = vi.fn();
+    const stream = { getTracks: () => [{ stop: stopTrack }] } as unknown as MediaStream;
+    const getUserMedia = vi.fn().mockResolvedValue(stream);
+    const capturedBytes = new Blob(['captured image bytes'], { type: 'image/jpeg' });
+    stubProperty(navigator, 'mediaDevices', { getUserMedia });
+    stubProperty(HTMLVideoElement.prototype, 'play', () => Promise.resolve());
+    stubProperty(HTMLCanvasElement.prototype, 'getContext', () => ({ drawImage: vi.fn() }));
+    stubProperty(HTMLCanvasElement.prototype, 'toBlob', (callback: BlobCallback) => callback(capturedBytes));
+
+    const runtime = new FakeRuntime('camera-capture');
+    render(<TightbeamChat sessionKey="camera-capture" adapter={adapterFor(runtime)} />);
+    const composer = screen.getByRole('textbox', { name: 'Message to Research assistant' }) as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: 'photo caption' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add attachment' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Camera' }));
+    const video = await screen.findByLabelText('Camera preview') as HTMLVideoElement;
+    Object.defineProperty(video, 'videoWidth', { configurable: true, value: 640 });
+    Object.defineProperty(video, 'videoHeight', { configurable: true, value: 480 });
+    await waitFor(() => expect(video.srcObject).toBe(stream));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Capture photo' }));
+    expect(await screen.findByRole('button', { name: /Remove camera-/ })).toBeTruthy();
+    expect(await screen.findByRole('img', { name: /Preview of camera-/ })).toBeTruthy();
+    expect(screen.queryByRole('dialog', { name: 'Take a photo' })).toBeNull();
+    expect(stopTrack).toHaveBeenCalledOnce();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    expect(runtime.attachmentSubmissions[0].content).toBe('photo caption');
+    expect(runtime.attachmentSubmissions[0].inputs[0].bytes).toBe(capturedBytes);
+  });
+
+  it('cancels an open camera without adding an item or changing the rest of the draft', async () => {
+    const stopTrack = vi.fn();
+    const stream = { getTracks: () => [{ stop: stopTrack }] } as unknown as MediaStream;
+    stubProperty(navigator, 'mediaDevices', { getUserMedia: vi.fn().mockResolvedValue(stream) });
+    stubProperty(HTMLVideoElement.prototype, 'play', () => Promise.resolve());
+    const runtime = new FakeRuntime('camera-cancel');
+    render(<TightbeamChat sessionKey="camera-cancel" adapter={adapterFor(runtime)} />);
+    const composer = screen.getByRole('textbox', { name: 'Message to Research assistant' }) as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: 'keep after camera cancel' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add attachment' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Camera' }));
+    await screen.findByLabelText('Camera preview');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog', { name: 'Take a photo' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /Remove camera-/ })).toBeNull();
+    expect(composer.value).toBe('keep after camera cancel');
+    expect(stopTrack).toHaveBeenCalledOnce();
+  });
+
+  it('retains the prepared image when local preview creation fails', async () => {
+    mockObjectUrls(() => { throw new Error('Preview blocked by browser'); });
+    const runtime = new FakeRuntime('preview-creation-failure');
+    const view = render(<TightbeamChat sessionKey="preview-creation-failure" adapter={adapterFor(runtime)} />);
+    const source = new File(['original'], 'preview-failure.png', { type: 'image/png' });
+    fireEvent.change(view.container.querySelector<HTMLInputElement>('input[type="file"][accept="image/*"]')!, {
+      target: { files: [source] },
+    });
+
+    expect(await screen.findByText(/Preview unavailable: Preview blocked by browser\. The converted image remains attached\./)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    expect(runtime.attachmentSubmissions[0].inputs[0].bytes).toBe(source);
+  });
+
+  it('keeps selected images and draft content when attachment delivery is unavailable or rejected', async () => {
+    mockObjectUrls(() => 'blob:retry-image');
+    const runtime = new FakeRuntime('attachment-rejected');
+    const view = render(<TightbeamChat sessionKey="attachment-rejected" adapter={adapterFor(runtime)} />);
+    const composer = screen.getByRole('textbox', { name: 'Message to Research assistant' }) as HTMLTextAreaElement;
+    const source = new File(['source bytes'], 'source.png', { type: 'image/png' });
+    fireEvent.change(composer, { target: { value: 'keep for retry' } });
+    fireEvent.change(view.container.querySelector<HTMLInputElement>('input[type="file"][accept="image/*"]')!, {
+      target: { files: [source] },
+    });
+    await screen.findByRole('img', { name: 'Preview of source.png' });
+
+    const availableMethod = runtime.sendAttachments;
+    (runtime as unknown as { sendAttachments?: typeof runtime.sendAttachments }).sendAttachments = undefined;
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    expect(screen.getByRole('alert').textContent).toMatch(/cannot send attachments with its current Chat runtime/);
+    expect(composer.value).toBe('keep for retry');
+    expect(screen.getByRole('button', { name: 'Remove source.png' })).toBeTruthy();
+    (runtime as unknown as { sendAttachments?: typeof runtime.sendAttachments }).sendAttachments = availableMethod;
+
+    runtime.attachmentSendResult = null;
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+
+    expect(screen.getByRole('alert').textContent).toMatch(/did not accept this attachment submission/);
+    expect(composer.value).toBe('keep for retry');
+    expect(screen.getByRole('button', { name: 'Remove source.png' })).toBeTruthy();
+    expect(runtime.attachmentSubmissions[0].inputs[0].bytes).toBe(source);
   });
 
   it('keeps submitted whitespace intact and allows local Settings while normal sends are locked', () => {

@@ -217,6 +217,15 @@ export function parseServiceHttpTarget(rawUrl, runtime) {
       return { kind: 'detail', gatewayOrigin,
         path: `/api/attests/${encodeURIComponent(attestId)}?asUser=${encodeURIComponent(runtime.principalKey)}` };
     }
+    if (request.pathname === '/__chat/upload' && routeParams.length === 0) {
+      return { kind: 'upload', gatewayOrigin, path: `/upload?asUser=${encodeURIComponent(runtime.principalKey)}` };
+    }
+    const download = /^\/__chat\/download\/([^/]+)$/.exec(request.pathname);
+    const assetId = download && decodeSessionPath(download[1]);
+    if (assetId && routeParams.length === 0) {
+      return { kind: 'download', gatewayOrigin,
+        path: `/download/${encodeURIComponent(assetId)}?asUser=${encodeURIComponent(runtime.principalKey)}` };
+    }
 
     const readMarker = /^\/__chat\/api\/read-markers\/([^/]+)$/.exec(request.pathname);
     const readMarkerScope = readMarker && decodeSessionPath(readMarker[1]);
@@ -429,10 +438,6 @@ async function serviceHttp(request, response, runtime) {
     await serviceMarkerDispatch(request, response, runtime);
     return;
   }
-  if (request.method !== 'GET') {
-    response.writeHead(405, { allow: 'GET', 'cache-control': 'no-store' }).end();
-    return;
-  }
   if (!serviceReady(runtime)) {
     jsonResponse(response, 503, { error: { code: 'chat_service_unconfigured' } });
     return;
@@ -442,12 +447,43 @@ async function serviceHttp(request, response, runtime) {
     jsonResponse(response, 404, { error: { code: 'not_found' } });
     return;
   }
+  const method = target.kind === 'upload' ? 'POST' : 'GET';
+  if (request.method !== method) {
+    response.writeHead(405, { allow: method, 'cache-control': 'no-store' }).end();
+    return;
+  }
   const gateway = runtime.gateways.get(target.gatewayOrigin);
   if (!gateway?.available) {
     jsonResponse(response, 503, { error: { code: 'chat_gateway_unavailable' } });
     return;
   }
 
+  if (target.kind === 'upload' || target.kind === 'download') {
+    // Forward original multipart bytes and streamed downloads under the existing
+    // service identity. The Gateway owns file/type/body limits and their errors.
+    const protocol = gateway.base.startsWith('https:') ? https : http;
+    const remote = protocol.request(gateway.base, { method, path: target.path,
+      headers: { authorization: `Bearer ${gateway.token}`,
+        ...(request.headers['content-type'] ? { 'content-type': request.headers['content-type'] } : {}),
+        ...(request.headers['content-length'] ? { 'content-length': request.headers['content-length'] } : {}) },
+    }, reply => {
+      response.writeHead(reply.statusCode ?? 502, {
+        'content-type': reply.headers['content-type'] ?? 'application/octet-stream',
+        'cache-control': 'no-store',
+        ...(reply.headers['content-length'] ? { 'content-length': reply.headers['content-length'] } : {}),
+      });
+      reply.on('error', () => response.destroy());
+      reply.pipe(response);
+    });
+    remote.on('error', () => {
+      if (!response.headersSent) jsonResponse(response, 502, { error: { code: 'gateway_unavailable' } });
+      else response.destroy();
+    });
+    request.on('aborted', () => remote.destroy());
+    response.on('close', () => remote.destroy());
+    request.pipe(remote);
+    return;
+  }
   try {
     if (target.kind === 'version' || target.kind === 'detail' || target.kind === 'transcript' || target.kind === 'read-marker') {
       writeGatewayReply(response, await gatewayRequest(gateway, target.path, {

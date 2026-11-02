@@ -1,12 +1,13 @@
 import { uncoveredRecordEvents, recordEventPresentation } from './sessionRecordEvents';
 import type { SessionRecordEvent } from './types';
 import { Component, forwardRef, memo, useCallback, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore,
-  type AnchorHTMLAttributes, type FormEvent, type HTMLAttributes, type ImgHTMLAttributes,
+  type AnchorHTMLAttributes, type ClipboardEvent as ReactClipboardEvent, type FormEvent, type HTMLAttributes, type ImgHTMLAttributes,
   type ErrorInfo, type ReactNode, type RefObject, type TableHTMLAttributes } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { AttachmentPreparationError } from './types';
 import { highlightRecognizedCode } from './markdownHighlight';
-import type { ChatRuntime, CanonicalMessage, CanonicalTransition, ToolCallRecord, ToolCallIndex, ConversationRecord, LocalSend, RuntimeState, TightbeamAdapter, TurnProvenance } from './types';
+import type { AttachmentInput, ChatRuntime, CanonicalMessage, CanonicalTransition, ToolCallRecord, ToolCallIndex, ConversationRecord, LocalSend, RuntimeState, TightbeamAdapter, TurnProvenance } from './types';
 import { projectMessages, type HumanMember } from './messageVisibility';
 import { ActivitySummaryProvider, useActivitySummary } from './ActivitySummaryView';
 import type { SummaryAnswer, ActivitySummaryTransport } from './activitySummaries';
@@ -915,8 +916,109 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, re
     previous.scrollKey === next.scrollKey;
 });
 
+type ComposerAttachmentInput = AttachmentInput;
+
+type AttachmentPreparationState = 'preparing' | 'ready' | 'failed' | 'blocked';
+
+interface DraftAttachment {
+  readonly input: ComposerAttachmentInput;
+  readonly preparationState: AttachmentPreparationState;
+  readonly preparationError?: string;
+  readonly previewUrl?: string;
+  readonly previewError?: string;
+}
+
+type PendingSendAttachmentStatus = 'pending' | 'uploading' | 'ready' | 'failed';
+
+interface PendingSendAttachment extends ComposerAttachmentInput {
+  readonly status: PendingSendAttachmentStatus;
+  readonly error?: string;
+}
+
+type AttachmentSendView = LocalSend & {
+  readonly attachmentItems?: readonly PendingSendAttachment[];
+  readonly attachmentPhase?: 'preparing' | 'failed' | 'posted';
+};
+
+function newAttachmentId(): string {
+  return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `attachment-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function isImageAttachment(input: ComposerAttachmentInput): boolean {
+  const mime = input.bytes.type.toLowerCase().split(';')[0];
+  const extension = input.filename.split('.').pop()?.toLowerCase();
+  if (mime === 'image/svg+xml' || extension === 'svg') return false;
+  return mime.startsWith('image/') ||
+    /\.(?:avif|bmp|gif|heic|heif|jpe?g|png|tiff?|webp)$/i.test(input.filename);
+}
+
+function attachmentTypeLabel(input: ComposerAttachmentInput): string {
+  const mime = input.bytes.type.toLowerCase();
+  const extension = input.filename.includes('.') ? input.filename.split('.').pop()?.toLowerCase() : undefined;
+  if (mime.split(';')[0] === 'image/svg+xml' || extension === 'svg') return 'SVG file';
+  if (mime.startsWith('image/')) {
+    const imageType = mime.slice('image/'.length).replace('jpeg', 'jpg').toUpperCase();
+    return `${imageType || 'Image'} image`;
+  }
+  if (extension && /^(?:avif|bmp|gif|heic|heif|jpe?g|png|svg|tiff?|webp)$/.test(extension)) {
+    return `${extension.replace('jpeg', 'jpg').toUpperCase()} image`;
+  }
+  if (mime === 'application/pdf' || extension === 'pdf') return 'PDF file';
+  if (mime.startsWith('text/')) return 'Text file';
+  if (extension) return `${extension.toUpperCase()} file`;
+  return mime ? `${mime} file` : 'File';
+}
+
+function pastedImageFilename(blob: Blob): string {
+  const extensionByMime: Record<string, string> = {
+    'image/avif': 'avif', 'image/bmp': 'bmp', 'image/gif': 'gif', 'image/heic': 'heic',
+    'image/heif': 'heif', 'image/jpeg': 'jpg', 'image/png': 'png', 'image/svg+xml': 'svg',
+    'image/tiff': 'tiff', 'image/webp': 'webp',
+  };
+  const extension = extensionByMime[blob.type.toLowerCase()] ?? 'img';
+  return `pasted-image-${Date.now()}.${extension}`;
+}
+
+function errorReason(error: unknown): string {
+  if (error instanceof Error && error.message.trim()) return error.message.trim();
+  if (typeof error === 'string' && error.trim()) return error.trim();
+  return 'the browser did not provide a reason';
+}
+
+function attachmentSendHeading(send: AttachmentSendView): string {
+  if (send.status === 'uncertain') return 'Attachment delivery is uncertain';
+  if (send.status === 'failed') return 'Attachment send failed';
+  if (send.attachmentPhase === 'posted') return 'Sending message…';
+  return 'Preparing attachments…';
+}
+
+function pendingAttachmentStatusText(item: PendingSendAttachment, send: AttachmentSendView): string {
+  if (item.status === 'pending') return 'Waiting to upload';
+  if (item.status === 'uploading') return 'Uploading';
+  if (item.status === 'failed') return 'Upload failed';
+  if (send.status === 'uncertain') return 'Uploaded; delivery uncertain';
+  if (send.status === 'failed') return 'Uploaded; message post failed';
+  return 'Uploaded; message not confirmed';
+}
+
+function cameraFailureMessage(error: unknown): string {
+  const name = error && typeof error === 'object' && 'name' in error ? String(error.name) : '';
+  if (name === 'NotAllowedError' || name === 'PermissionDeniedError' || name === 'SecurityError') {
+    return 'Camera access was denied. Allow camera access and try again, or choose a photo.';
+  }
+  if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+    return 'No camera is available on this device. Choose a photo or file instead.';
+  }
+  if (name === 'NotReadableError' || name === 'TrackStartError') {
+    return 'The camera could not be opened. It may be in use by another app; close that app and try again.';
+  }
+  return `Camera capture could not start: ${errorReason(error)}. Try again or choose a photo.`;
+}
+
 interface ComposerHandle {
-  restore(content: string): void;
+  restore(content: string, items?: readonly ComposerAttachmentInput[]): void;
   contains(target: EventTarget | null): boolean;
   focusAtEnd(): boolean;
   closeStatusPopup(): void;
@@ -943,7 +1045,12 @@ const Composer = forwardRef<ComposerHandle, {
   onSubmitted: () => void;
 }>(function Composer({ runtime, state, recoverySnapshot, agentName, root, suppressStatus, onSettings, onSubmitted }, ref) {
   const [draft, setDraft] = useState(recoverySnapshot.draft);
+  const [attachments, setAttachments] = useState<readonly DraftAttachment[]>([]);
+  const [acquisitionError, setAcquisitionError] = useState<string | null>(null);
+  const [attachmentOptionsOpen, setAttachmentOptionsOpen] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
+  const [cameraState, setCameraState] = useState<'closed' | 'opening' | 'ready' | 'failed'>('closed');
+  const [cameraError, setCameraError] = useState<string | null>(null);
   const nativeContentSizing = useRef<boolean | null>(null);
   if (nativeContentSizing.current === null) {
     nativeContentSizing.current = typeof CSS !== 'undefined' &&
@@ -952,8 +1059,21 @@ const Composer = forwardRef<ComposerHandle, {
   const input = useRef<HTMLTextAreaElement>(null);
   const pendingCaret = useRef<number | null>(null);
   const statusControl = useRef<HTMLButtonElement>(null);
+  const attachmentControl = useRef<HTMLButtonElement>(null);
   const sendControl = useRef<HTMLButtonElement>(null);
   const shell = useRef<HTMLFormElement>(null);
+  const photoInput = useRef<HTMLInputElement>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const cameraVideo = useRef<HTMLVideoElement>(null);
+  const cameraCaptureControl = useRef<HTMLButtonElement>(null);
+  const cameraCancelControl = useRef<HTMLButtonElement>(null);
+  const cameraStream = useRef<MediaStream | null>(null);
+  const cameraRequest = useRef(0);
+  const previewUrls = useRef(new Map<string, string>());
+  const attachmentsRef = useRef<readonly DraftAttachment[]>([]);
+  const preparedInputs = useRef<readonly ComposerAttachmentInput[] | null>(null);
+  const preparationController = useRef<AbortController | null>(null);
+  const preparationRevision = useRef(0);
   const titleId = useId();
   const statusName = statusText(state);
   const statusId = `${titleId}-status-details`;
@@ -961,12 +1081,292 @@ const Composer = forwardRef<ComposerHandle, {
     recoverySnapshot.draft = content;
     setDraft(content);
   }, [recoverySnapshot]);
+  const attachmentOptionsId = `${titleId}-attachment-options`;
+  const cameraTitleId = `${titleId}-camera-title`;
+  const attachmentSendStates = useMemo(() => state.sends
+    .map(send => send as AttachmentSendView)
+    .filter(send => !send.hostSend && !send.reconciled && send.status !== 'accepted' &&
+      Boolean(send.attachmentItems?.length) &&
+      (send.status === 'pending' || send.status === 'failed' || send.status === 'uncertain')),
+  [state.sends]);
+
+  const stopCameraStream = () => {
+    const stream = cameraStream.current;
+    cameraStream.current = null;
+    stream?.getTracks().forEach(track => track.stop());
+  };
+
+  const releasePreview = (id: string) => {
+    const url = previewUrls.current.get(id);
+    if (!url) return;
+    previewUrls.current.delete(id);
+    try { URL.revokeObjectURL(url); } catch { /* Preview cleanup cannot discard the source bytes. */ }
+  };
+
+  const publishAttachments = (next: readonly DraftAttachment[]) => {
+    attachmentsRef.current = next;
+    setAttachments(next);
+  };
+
+  const createDraftAttachment = (input: ComposerAttachmentInput): DraftAttachment => {
+    let previewUrl: string | undefined;
+    let previewError: string | undefined;
+    if (isImageAttachment(input)) {
+      try {
+        if (typeof URL.createObjectURL !== 'function') throw new Error('This browser cannot create a local image preview.');
+        previewUrl = URL.createObjectURL(input.bytes);
+        previewUrls.current.set(input.id, previewUrl);
+      } catch (error) {
+        previewError = `Preview unavailable: ${errorReason(error)}. The converted image remains attached.`;
+      }
+    }
+    return Object.freeze({ input, preparationState: 'ready', previewUrl, previewError });
+  };
+
+  const prepareDraftAttachments = (items: readonly DraftAttachment[]) => {
+    preparationController.current?.abort();
+    preparationController.current = null;
+    preparedInputs.current = null;
+    const revision = ++preparationRevision.current;
+    setAcquisitionError(null);
+    if (!items.length) {
+      publishAttachments([]);
+      return;
+    }
+
+    const pending = Object.freeze(items.map(item => Object.freeze({ ...item,
+      preparationState: 'preparing' as const, preparationError: undefined } satisfies DraftAttachment)));
+    publishAttachments(pending);
+    const prepare = runtime.prepareAttachmentInputs;
+    if (!prepare) {
+      publishAttachments(pending.map(item => Object.freeze({ ...item, preparationState: 'failed' as const,
+        preparationError: 'Attachment preparation is unavailable for this conversation.' })));
+      return;
+    }
+
+    const controller = new AbortController();
+    preparationController.current = controller;
+    const inputs = Object.freeze(pending.map(item => item.input));
+    void Promise.resolve().then(() => prepare.call(runtime, inputs, controller.signal)).then(prepared => {
+      if (controller.signal.aborted || preparationRevision.current !== revision) return;
+      if (prepared.length !== pending.length || prepared.some((item, index) => item.id !== pending[index].input.id)) {
+        throw new Error('Attachment preparation did not preserve the selected item order.');
+      }
+      const current = attachmentsRef.current;
+      if (current.length !== pending.length || current.some((item, index) => item.input.id !== pending[index].input.id)) return;
+      const ready = prepared.map((input, index) => {
+        const previous = current[index];
+        if (previous.previewUrl && !previous.previewError && previous.input.bytes === input.bytes &&
+            previous.input.filename === input.filename) {
+          return Object.freeze({ ...previous, input, preparationState: 'ready' as const, preparationError: undefined });
+        }
+        releasePreview(input.id);
+        return createDraftAttachment(input);
+      });
+      preparedInputs.current = prepared;
+      publishAttachments(Object.freeze(ready));
+    }).catch(error => {
+      if (controller.signal.aborted || preparationRevision.current !== revision) return;
+      const errorIndex = error instanceof AttachmentPreparationError ? error.attachmentIndex : -1;
+      const failedIndex = Number.isInteger(errorIndex) && errorIndex >= 0 && errorIndex < pending.length ? errorIndex : -1;
+      const reason = error instanceof AttachmentPreparationError
+        ? error.message : `Attachment preparation could not finish: ${errorReason(error)}.`;
+      publishAttachments(Object.freeze(pending.map((item, index) => Object.freeze({ ...item,
+        preparationState: failedIndex === index ? 'failed' as const : failedIndex >= 0 ? 'blocked' as const : 'failed' as const,
+        preparationError: failedIndex === index ? reason : failedIndex >= 0
+          ? 'Remove the unreadable attachment to prepare the remaining items.' : reason,
+      }))));
+    }).finally(() => {
+      if (preparationController.current === controller) preparationController.current = null;
+    });
+  };
+
+  const closeCamera = () => {
+    cameraRequest.current++;
+    stopCameraStream();
+    if (cameraVideo.current) cameraVideo.current.srcObject = null;
+    setCameraState('closed');
+    setCameraError(null);
+    attachmentControl.current?.focus();
+  };
+
+  const addAttachments = (items: readonly { readonly bytes: Blob; readonly filename: string }[]) => {
+    if (!items.length) return;
+    recoverySnapshot.editRevision++;
+    const additions = items.map(item => Object.freeze({
+      input: Object.freeze({ id: newAttachmentId(), filename: item.filename || 'Unnamed file', bytes: item.bytes }),
+      preparationState: 'preparing' as const,
+    }));
+    prepareDraftAttachments([...attachmentsRef.current, ...additions]);
+  };
+
+  const addAttachment = (bytes: Blob, filename: string) => {
+    addAttachments([{ bytes, filename }]);
+  };
+
+  const restoreDraft = (content: string, items: readonly ComposerAttachmentInput[] = []) => {
+    if (attachmentsRef.current.length > 0 || (items.length > 0 && draft.length > 0)) {
+      setAcquisitionError('Clear the current draft before restoring this send. Both drafts are still preserved.');
+      return;
+    }
+    const restoredAttachments = items.map(item => {
+      // Restored items belong to a new editable draft, so give them fresh UI IDs
+      // while retaining the exact prepared Blob and filename from the failed send.
+      const input = Object.freeze({ id: newAttachmentId(), filename: item.filename, bytes: item.bytes });
+      return Object.freeze({ input, preparationState: 'preparing' as const });
+    });
+    recoverySnapshot.editRevision++;
+    updateDraft(content);
+    if (restoredAttachments.length) prepareDraftAttachments(restoredAttachments);
+    else setAcquisitionError(null);
+  };
+
+  const addSelectedFiles = (files: FileList | readonly File[] | null) => {
+    if (!files?.length) return;
+    addAttachments(Array.from(files).map(file => ({ bytes: file, filename: file.name || 'Selected file' })));
+  };
+
+  const openFilePicker = (kind: 'photo' | 'file') => {
+    setAttachmentOptionsOpen(false);
+    const picker = kind === 'photo' ? photoInput.current : fileInput.current;
+    try {
+      if (!picker) throw new Error('The file picker is unavailable.');
+      picker.click();
+    } catch (error) {
+      setAcquisitionError(`${kind === 'photo' ? 'Photo' : 'File'} selection could not start: ${errorReason(error)}. Your draft is still here.`);
+    }
+  };
+
+  const removeAttachment = (id: string) => {
+    recoverySnapshot.editRevision++;
+    releasePreview(id);
+    prepareDraftAttachments(attachmentsRef.current.filter(item => item.input.id !== id));
+  };
+
+  const failImagePreview = (id: string) => {
+    releasePreview(id);
+    publishAttachments(attachmentsRef.current.map(item => item.input.id === id
+      ? Object.freeze({ ...item, previewUrl: undefined,
+        previewError: 'Preview unavailable. The converted image remains attached.' })
+      : item));
+  };
+
+  const startCamera = async () => {
+    setAttachmentOptionsOpen(false);
+    setCameraError(null);
+    setCameraState('opening');
+    const request = ++cameraRequest.current;
+    const mediaDevices = typeof navigator !== 'undefined' ? navigator.mediaDevices : undefined;
+    if (!mediaDevices || typeof mediaDevices.getUserMedia !== 'function') {
+      setCameraError('Camera capture is not available in this browser. Choose a photo or file instead.');
+      setCameraState('failed');
+      return;
+    }
+    try {
+      const stream = await mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false });
+      if (cameraRequest.current !== request) {
+        stream.getTracks().forEach(track => track.stop());
+        return;
+      }
+      cameraStream.current = stream;
+      setCameraState('ready');
+    } catch (error) {
+      if (cameraRequest.current !== request) return;
+      setCameraError(cameraFailureMessage(error));
+      setCameraState('failed');
+    }
+  };
+
+  const capturePhoto = () => {
+    const video = cameraVideo.current;
+    if (!video || !video.videoWidth || !video.videoHeight) {
+      setCameraError('The camera preview is not ready. Wait a moment and try again.');
+      return;
+    }
+    const request = cameraRequest.current;
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const context = canvas.getContext('2d');
+      if (!context) {
+        setCameraError('The camera image could not be prepared. Try again or choose a photo.');
+        return;
+      }
+      context.drawImage(video, 0, 0, canvas.width, canvas.height);
+      canvas.toBlob(blob => {
+        if (cameraRequest.current !== request) return;
+        if (!blob) {
+          setCameraError('The camera did not produce an image. Try again or choose a photo.');
+          return;
+        }
+        addAttachment(blob, `camera-${Date.now()}.jpg`);
+        closeCamera();
+      }, 'image/jpeg');
+    } catch (error) {
+      setCameraError(`The camera image could not be captured: ${errorReason(error)}. Try again.`);
+    }
+  };
+
+  useEffect(() => {
+    if (cameraState !== 'ready' || !cameraStream.current || !cameraVideo.current) return;
+    const video = cameraVideo.current;
+    video.srcObject = cameraStream.current;
+    let cancelled = false;
+    try {
+      void Promise.resolve(video.play()).catch(error => {
+        if (cancelled) return;
+        setCameraError(`The camera preview could not start: ${errorReason(error)}. Try again or choose a photo.`);
+        setCameraState('failed');
+        stopCameraStream();
+      });
+    } catch (error) {
+      setCameraError(`The camera preview could not start: ${errorReason(error)}. Try again or choose a photo.`);
+      setCameraState('failed');
+      stopCameraStream();
+    }
+    return () => { cancelled = true; };
+  }, [cameraState]);
+
+  useEffect(() => () => {
+    cameraRequest.current++;
+    stopCameraStream();
+    preparationRevision.current++;
+    preparationController.current?.abort();
+    preparationController.current = null;
+    for (const url of previewUrls.current.values()) {
+      try { URL.revokeObjectURL(url); } catch { /* The component is already being removed. */ }
+    }
+    previewUrls.current.clear();
+  }, []);
+
+  useEffect(() => {
+    if (!attachmentOptionsOpen) return;
+    const dismiss = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      setAttachmentOptionsOpen(false);
+      attachmentControl.current?.focus();
+    };
+    document.addEventListener('keydown', dismiss);
+    return () => document.removeEventListener('keydown', dismiss);
+  }, [attachmentOptionsOpen]);
+
+  useEffect(() => {
+    if (cameraState === 'closed') return;
+    if (cameraState === 'ready') cameraCaptureControl.current?.focus();
+    else cameraCancelControl.current?.focus();
+    const dismiss = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      closeCamera();
+    };
+    document.addEventListener('keydown', dismiss);
+    return () => document.removeEventListener('keydown', dismiss);
+  }, [cameraState]);
 
   useImperativeHandle(ref, () => ({
-    restore: (content) => {
-      recoverySnapshot.editRevision++;
-      updateDraft(content);
-    },
+    restore: restoreDraft,
     contains: (target) => target instanceof Node && Boolean(shell.current?.contains(target)),
     focusAtEnd: () => {
       const element = input.current;
@@ -977,7 +1377,7 @@ const Composer = forwardRef<ComposerHandle, {
       return document.activeElement === element;
     },
     closeStatusPopup: () => setStatusOpen(false),
-  }), [updateDraft]);
+  }), [restoreDraft]);
 
   const closeStatusPopup = () => {
     setStatusOpen(false);
@@ -1036,8 +1436,9 @@ const Composer = forwardRef<ComposerHandle, {
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!draft.trim()) return;
-    if (isSettingsCommand(draft)) {
+    if (!draft.trim() && !attachments.length) return;
+    if (attachments.some(item => item.preparationState !== 'ready')) return;
+    if (!attachments.length && isSettingsCommand(draft)) {
       recoverySnapshot.editRevision++;
       updateDraft('');
       setStatusOpen(false);
@@ -1045,21 +1446,154 @@ const Composer = forwardRef<ComposerHandle, {
       return;
     }
     if (state.status === 'unauthorized') return;
-    const sendId = runtime.send(draft);
-    if (sendId) {
+    let sendId: string | null;
+    if (attachments.length) {
+      const sendAttachments = runtime.sendAttachments;
+      if (!sendAttachments) {
+        setAcquisitionError('This conversation cannot send attachments with its current Chat runtime. Your draft is still here.');
+        return;
+      }
+      const snapshot = preparedInputs.current;
+      if (!snapshot || snapshot.length !== attachments.length ||
+          snapshot.some((item, index) => item !== attachments[index].input)) return;
+      try {
+        sendId = sendAttachments.call(runtime, draft, snapshot);
+      } catch (error) {
+        setAcquisitionError(`Attachments were not submitted: ${errorReason(error)}. Your draft is still here.`);
+        return;
+      }
+      if (!sendId) {
+        setAcquisitionError('The conversation did not accept this attachment submission. Check its connection status and try again; your draft is still here.');
+        return;
+      }
+      for (const item of attachments) releasePreview(item.input.id);
+      preparedInputs.current = null;
+      preparationRevision.current++;
+      preparationController.current?.abort();
+      preparationController.current = null;
+      publishAttachments([]);
       recoverySnapshot.submittedRevisions.set(sendId, recoverySnapshot.editRevision);
+      recoverySnapshot.editRevision++;
+      updateDraft('');
+    } else {
+      sendId = runtime.send(draft);
+      if (sendId) recoverySnapshot.submittedRevisions.set(sendId, recoverySnapshot.editRevision);
+    }
+    if (sendId) {
+      setAcquisitionError(null);
       onSubmitted();
     }
   };
 
-  return <form className="tb-chat-composer" onSubmit={submit} ref={shell}>
+  const pasteIntoDraft = (text: string) => {
+    if (!text) return;
+    const element = input.current;
+    const start = element?.selectionStart ?? draft.length;
+    const end = element?.selectionEnd ?? draft.length;
+    pendingCaret.current = start + text.length;
+    recoverySnapshot.editRevision++;
+    updateDraft(`${draft.slice(0, start)}${text}${draft.slice(end)}`);
+  };
+
+  const pasteClipboard = (event: ReactClipboardEvent<HTMLTextAreaElement>) => {
+    const clipboard = event.clipboardData;
+    const imageItems = Array.from(clipboard.items ?? []).filter(item => item.kind === 'file' && item.type.toLowerCase().startsWith('image/'));
+    const clipboardFileErrors: string[] = [];
+    const files = imageItems.length
+      ? imageItems.map(item => {
+        try { return item.getAsFile(); } catch (error) { clipboardFileErrors.push(errorReason(error)); return null; }
+      })
+      : Array.from(clipboard.files ?? []).filter(file => file.type.toLowerCase().startsWith('image/'));
+    if (!imageItems.length && !files.length) return;
+    event.preventDefault();
+    let textReadError: string | undefined;
+    try { pasteIntoDraft(clipboard.getData('text/plain')); }
+    catch (error) { textReadError = `Clipboard text could not be read: ${errorReason(error)}.`; }
+    let unreadable = 0;
+    const pasted: Array<{ readonly bytes: Blob; readonly filename: string }> = [];
+    for (const file of files) {
+      if (!file) unreadable++;
+      else pasted.push({ bytes: file, filename: file.name || pastedImageFilename(file) });
+    }
+    addAttachments(pasted);
+    if (unreadable || textReadError) {
+      const imageMessage = unreadable
+        ? `Could not read ${unreadable === 1 ? 'the pasted image' : `${unreadable} pasted images`}${clipboardFileErrors.length ? `: ${clipboardFileErrors.join('; ')}` : ''}.`
+        : '';
+      setAcquisitionError([imageMessage, textReadError,
+        'Any readable content was kept. Try pasting again or use Photo/File selection.'].filter(Boolean).join(' '));
+    }
+  };
+
+  const hasDraft = Boolean(draft.trim() || attachments.length);
+  const attachmentsPrepared = attachments.every(item => item.preparationState === 'ready');
+
+  return <form className={`tb-chat-composer${cameraState !== 'closed' ? ' tb-chat-composer-camera-open' : ''}`} onSubmit={submit} ref={shell}>
     <label className="tb-chat-sr-only" htmlFor={`${titleId}-input`}>Message to {agentName || 'the selected agent'}</label>
-    <div className="tb-chat-input-shell">
+    {acquisitionError && <p className="tb-chat-composer-error" role="alert">{acquisitionError}</p>}
+    {attachmentSendStates.length > 0 && <section className="tb-chat-attachment-send-states" aria-label="Attachment send status">
+      {attachmentSendStates.map(send => {
+        const attachmentItems = send.attachmentItems ?? [];
+        const itemErrors = new Set(attachmentItems.flatMap(item => item.error ? [item.error] : []));
+        const submissionReason = send.reason && !itemErrors.has(send.reason) ? send.reason : undefined;
+        const failed = send.status === 'failed' || send.status === 'uncertain';
+        const retryUnavailable = send.reason === 'retry-unavailable';
+        return <div className="tb-chat-attachment-send" key={send.clientMessageId}>
+          <p className="tb-chat-attachment-send-heading" role={failed ? 'alert' : 'status'}>
+            {attachmentSendHeading(send)}
+          </p>
+          <ul className="tb-chat-attachment-send-items" aria-label="Files in this attachment send">
+            {attachmentItems.map(item => <li className="tb-chat-attachment-send-item" key={item.id}>
+              <span className="tb-chat-attachment-send-name">{item.filename}</span>
+              <span className="tb-chat-attachment-send-item-status">{pendingAttachmentStatusText(item, send)}</span>
+              {item.error && <span className="tb-chat-attachment-send-item-error" role="alert">{item.error}</span>}
+            </li>)}
+          </ul>
+          {submissionReason && <p className="tb-chat-attachment-send-reason" role={failed ? 'alert' : 'status'}>
+            Submission reason: {submissionReason}
+          </p>}
+          {failed && !retryUnavailable && <button type="button" className="tb-chat-attachment-send-retry"
+            disabled={state.status === 'unauthorized'} onClick={() => void runtime.retrySend(send.clientMessageId)}>
+            Retry attachment send
+          </button>}
+        </div>;
+      })}
+    </section>}
+    {attachments.length > 0 && <ul className="tb-chat-draft-attachments" aria-label="Attachments in this draft">
+      {attachments.map(item => {
+        const image = isImageAttachment(item.input);
+        const type = attachmentTypeLabel(item.input);
+        const preparedPreview = image && item.preparationState === 'ready' && item.previewUrl;
+        return <li className="tb-chat-draft-attachment" key={item.input.id}>
+          <div className="tb-chat-draft-attachment-preview">
+            {preparedPreview
+              ? <img src={item.previewUrl} alt={`Preview of ${item.input.filename}`} onError={() => failImagePreview(item.input.id)} />
+              : <span aria-hidden="true" className="tb-chat-draft-attachment-kind">
+                {image ? item.preparationState === 'preparing' ? 'Preparing…' : 'Image' : type.split(' ')[0]}
+              </span>}
+          </div>
+          <span className="tb-chat-draft-attachment-details">
+            <span className="tb-chat-draft-attachment-name">{item.input.filename}</span>
+            <span className="tb-chat-draft-attachment-type">{type}</span>
+            {item.preparationState === 'preparing' && <span className="tb-chat-draft-attachment-type" role="status">Preparing attachment…</span>}
+            {item.preparationError && <span className="tb-chat-draft-attachment-error" role="alert">{item.preparationError}</span>}
+            {item.previewError && <span className="tb-chat-draft-attachment-error" role="alert">{item.previewError}</span>}
+          </span>
+          <button type="button" className="tb-chat-draft-attachment-remove"
+            aria-label={`Remove ${item.input.filename}`} onClick={() => removeAttachment(item.input.id)}>×</button>
+        </li>;
+      })}
+    </ul>}
+    {attachments.some(item => item.preparationState === 'failed') && <button type="button"
+      className="tb-chat-attachment-send-retry" aria-label="Retry attachment preparation"
+      onClick={() => prepareDraftAttachments(attachmentsRef.current)}>Retry preparation</button>}
+    <div className={`tb-chat-input-shell${suppressStatus ? ' tb-chat-input-shell-no-status' : ''}`}>
       <textarea ref={input} id={`${titleId}-input`} value={draft}
         onChange={(event) => {
           recoverySnapshot.editRevision++;
           updateDraft(event.target.value);
         }}
+        onPaste={pasteClipboard}
         onKeyDown={(event) => {
           if (event.key !== 'Enter') return;
           if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
@@ -1087,6 +1621,14 @@ const Composer = forwardRef<ComposerHandle, {
         aria-expanded={statusOpen} aria-controls={statusId} onClick={() => setStatusOpen((open) => !open)}>
         <StatusIcon state={state} />
       </button>}
+      <button ref={attachmentControl} type="button" className="tb-chat-attachment-control"
+        aria-label="Add attachment" aria-expanded={attachmentOptionsOpen} aria-controls={attachmentOptionsId}
+        onClick={() => setAttachmentOptionsOpen(open => !open)}><span aria-hidden="true">+</span></button>
+      {attachmentOptionsOpen && <div className="tb-chat-attachment-options" id={attachmentOptionsId} role="group" aria-label="Add to message">
+        <button type="button" onClick={() => openFilePicker('photo')}>Photo</button>
+        <button type="button" onClick={() => openFilePicker('file')}>File</button>
+        <button type="button" onClick={() => void startCamera()}>Camera</button>
+      </div>}
       {!suppressStatus && statusOpen && <div className="tb-chat-status-popup" id={statusId} role="dialog" aria-label="Connection details">
         <div className="tb-chat-popup-heading"><StatusIcon state={state} />
           <button type="button" aria-label="Close connection details" onClick={closeStatusPopup}>×</button>
@@ -1107,11 +1649,45 @@ const Composer = forwardRef<ComposerHandle, {
           <button type="button" onClick={() => void runtime.rebuild({ restart: true })}>Reconnect</button>}
       </div>}
       <button ref={sendControl} type="submit" className="tb-chat-send-button" aria-label="Send message"
-        disabled={!draft.trim() || (state.status === 'unauthorized' && !isSettingsCommand(draft))}>
+        disabled={!hasDraft || !attachmentsPrepared || (state.status === 'unauthorized' && !(draft && isSettingsCommand(draft) && !attachments.length))}>
         <span className="tb-chat-send-button-disc" aria-hidden="true" />
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5m0 0L6 11m6-6 6 6" /></svg>
       </button>
     </div>
+    <input ref={photoInput} type="file" accept="image/*" multiple hidden aria-label="Choose photos"
+      onChange={event => { addSelectedFiles(event.currentTarget.files); event.currentTarget.value = ''; }} />
+    <input ref={fileInput} type="file" multiple hidden aria-label="Choose files"
+      onChange={event => { addSelectedFiles(event.currentTarget.files); event.currentTarget.value = ''; }} />
+    {cameraState !== 'closed' && <div className="tb-chat-camera-backdrop">
+      <section className="tb-chat-camera-dialog" role="dialog" aria-modal="true" aria-labelledby={cameraTitleId}
+        onKeyDown={event => {
+          if (event.key !== 'Tab') return;
+          const controls = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'));
+          const first = controls[0];
+          const last = controls[controls.length - 1];
+          if (!first || !last) return;
+          if (!event.currentTarget.contains(document.activeElement)) {
+            event.preventDefault();
+            (event.shiftKey ? last : first).focus();
+          } else if (event.shiftKey && document.activeElement === first) {
+            event.preventDefault();
+            last.focus();
+          } else if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault();
+            first.focus();
+          }
+        }}>
+        <h2 id={cameraTitleId}>Take a photo</h2>
+        {cameraState === 'opening' && <p role="status">Opening camera…</p>}
+        {cameraState === 'ready' && <video ref={cameraVideo} className="tb-chat-camera-preview" aria-label="Camera preview" autoPlay muted playsInline />}
+        {cameraError && <p className="tb-chat-camera-error" role="alert">{cameraError}</p>}
+        <div className="tb-chat-camera-actions">
+          {cameraState === 'ready' && <button ref={cameraCaptureControl} type="button" onClick={capturePhoto}>Capture photo</button>}
+          {cameraState === 'failed' && <button type="button" onClick={() => void startCamera()}>Try camera again</button>}
+          <button ref={cameraCancelControl} type="button" onClick={closeCamera}>Cancel</button>
+        </div>
+      </section>
+    </div>}
   </form>;
 });
 
@@ -2368,11 +2944,14 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
         const { send } = item;
         const time = localTimestamp(send.submittedAt);
         const hostManaged = send.hostSend !== undefined;
+        const attachmentItems = (send as AttachmentSendView).attachmentItems ?? [];
+        const retryUnavailable = send.reason === 'retry-unavailable';
         const refused = send.status === 'failed' && !send.reconciled;
         const uncertain = send.status === 'uncertain' && !send.reconciled;
-        const retryableUncertainty = uncertain && (send.reason === 'connection-closed-before-acknowledgement' ||
-          send.reason === 'connection-unconfirmed');
-        const retryAvailable = !hostManaged && (refused || retryableUncertainty);
+        const retryableUncertainty = uncertain && !retryUnavailable && (attachmentItems.length > 0 ||
+          send.reason === 'connection-closed-before-acknowledgement' || send.reason === 'connection-unconfirmed');
+        const retryAvailable = !hostManaged && !retryUnavailable && (refused || retryableUncertainty);
+        const restoreLabel = attachmentItems.length > 0 ? 'Restore draft to the composer' : 'Restore text to the composer';
         const uncertaintyCopy = "We couldn't confirm whether this message was sent. Check the conversation before trying again.";
         const refusalCopy = refused
           ? send.reason === 'payload_too_large'
@@ -2411,7 +2990,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
               {retryableUncertainty ? 'Check and retry' : 'Retry message'}
             </button>
             {state.status === 'unauthorized' && <span>Access to this conversation is unavailable.</span>}
-            <button type="button" onClick={() => composer.current?.restore(send.content)}>Restore text to the composer</button>
+            <button type="button" onClick={() => composer.current?.restore(send.content, attachmentItems)}>{restoreLabel}</button>
           </div>}
           <time className="tb-chat-time" dateTime={time.dateTime}>{time.text}</time>
         </article>;

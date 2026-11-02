@@ -190,11 +190,62 @@ export interface TargetProfile extends TargetObservation {
   readonly label: string;
 }
 
+/** Canonical asset reference returned in transcript history. */
+export interface AttachmentReference {
+  readonly assetId: string;
+  readonly mimeType: string;
+  readonly filename: string;
+  readonly size: number;
+}
+
+/** Acquired bytes, or the exact shared-preparer output used for both preview and upload. */
+export interface AttachmentInput {
+  readonly id: string;
+  readonly filename: string;
+  readonly bytes: Blob;
+}
+
+export interface AttachmentSubmissionContext {
+  readonly expectedSessionKey: string;
+  readonly clientMessageId: string;
+  readonly hostSend?: HostSendContext;
+}
+
+/** Only restrictions actually supplied by the selected transport are advertised. */
+export interface AttachmentImageTargets {
+  /** Recorded agent-route byte budgets, not file-upload rejection limits. */
+  readonly maxInlineImageBytes?: number;
+  readonly maxInlineImageTotalBytes?: number;
+}
+
+export interface AttachmentCapabilities extends AttachmentImageTargets {
+  readonly mediaTypes?: readonly string[];
+  readonly maxAttachmentBytes?: number;
+  readonly maxAttachments?: number;
+  readonly maxTotalBytes?: number;
+}
+
+export class AttachmentPreparationError extends Error {
+  constructor(readonly attachmentIndex: number, readonly code: 'image-unreadable', message: string) { super(message); }
+}
+
+export class AttachmentUploadError extends Error {
+  constructor(readonly code: string, message: string, readonly attachmentIndex?: number) { super(message); }
+}
+
+export interface AttachmentItem extends AttachmentInput {
+  readonly status: 'pending' | 'uploading' | 'ready' | 'failed';
+  readonly reference?: AttachmentReference;
+  readonly error?: string;
+  readonly errorCode?: string;
+}
+
 export interface HumanSubmission {
   readonly sessionKey: string;
   readonly deviceId: string;
   readonly clientMessageId: string;
   readonly content: string;
+  readonly attachments?: readonly AttachmentReference[];
 }
 
 /** A session message position that Chat may record when Mike opens its conversation. */
@@ -253,6 +304,9 @@ export interface ChangeCallbacks {
  */
 export interface ChatTransport {
   currentIdentity(): HostIdentity;
+  attachmentCapabilities?(sessionKey: string): AttachmentCapabilities | undefined;
+  uploadAttachment?(input: AttachmentInput, signal: AbortSignal): Promise<AttachmentReference>;
+  readAttachment?(reference: AttachmentReference, signal: AbortSignal): Promise<Blob>;
   inspectTarget(signal: AbortSignal): Promise<TargetObservation>;
   openChanges(sessionKey: string, callbacks: ChangeCallbacks, signal: AbortSignal): Promise<ChangeConnection>;
   /** Separate category connection so toggling tools does not interrupt messages or sends. */
@@ -278,8 +332,8 @@ export interface ChatTransport {
   readonly targetGateway?: string;
   /** Establishes the elected target's snapshot/notice coverage rule. */
   proveCoverage(session: SessionRecord, page: ConversationPage, buffered: readonly ChangeNotice[]): boolean;
-  /** Separate authenticated human /ws post, resolved by ack/refusal, bounded retry, or uncertainty. */
-  sendHuman(submission: HumanSubmission, signal: AbortSignal): Promise<HumanSendResult>;
+  /** Separate authenticated human /ws post, resolved by ack/refusal, retry, or uncertainty. */
+  sendHuman(submission: HumanSubmission, signal: AbortSignal, onSubmitted?: () => void): Promise<HumanSendResult>;
 }
 
 export type RuntimeStatus = 'loading' | 'ready' | 'stale' | 'unsupported' | 'unauthorized' | 'error';
@@ -287,6 +341,14 @@ export type LiveConnectionState = 'connecting' | 'connected' | 'reconnecting' | 
 export type SendStatus = 'pending' | 'accepted' | 'failed' | 'uncertain';
 
 export interface LocalSend extends HumanSubmission {
+  /** Ordered recovery inputs, retained separately from the frozen posted references. */
+  readonly attachmentItems?: readonly AttachmentItem[];
+  /** Every item has completed image preparation before the first upload. */
+  readonly attachmentsPrepared?: boolean;
+  readonly attachmentPhase?: 'preparing' | 'ready' | 'failed' | 'posted' | 'recovering';
+  /** True only after the transport submitted a frame (or received its ack). */
+  readonly postSubmitted?: boolean;
+  readonly attachmentFailure?: { readonly reason: 'upload-failed' | 'image-unreadable'; readonly detail: string; readonly attachmentIndex?: number };
   readonly submittedAt: string;
   readonly status: SendStatus;
   readonly reason?: string;
@@ -298,8 +360,8 @@ export interface LocalSend extends HumanSubmission {
 export type HostSendSignal =
   | { readonly kind: 'accepted' }
   | { readonly kind: 'reconciled' }
-  | { readonly kind: 'failed'; readonly reason: 'refused' | 'retry-unavailable'; readonly detail?: string }
-  | { readonly kind: 'uncertain'; readonly reason: 'ack-lost' | 'accepted-unreconciled' };
+  | { readonly kind: 'failed'; readonly reason: 'refused' | 'retry-unavailable' | 'upload-failed' | 'image-unreadable'; readonly detail?: string; readonly attachmentIndex?: number }
+  | { readonly kind: 'uncertain'; readonly reason: 'ack-lost' | 'accepted-unreconciled' | 'retry-unavailable' | 'lifetime-ended' };
 export type HostSendObserver = (signal: HostSendSignal) => void;
 
 export interface RuntimeState {
@@ -395,6 +457,17 @@ export interface ChatRuntime {
   retryToolCalls?(): void;
   retryRecordEvents?(): void;
   send(content: string, clientMessageId?: string, hostSend?: HostSendContext): string | null;
+  /** Prepare the whole selection before enabling Send; preview and submit the exact returned list. */
+  prepareAttachmentInputs?(inputs: readonly AttachmentInput[], signal: AbortSignal): Promise<readonly AttachmentInput[]>;
+  sendAttachments?(content: string, inputs: readonly AttachmentInput[], context?: AttachmentSubmissionContext): string | null;
+  getAttachmentCapabilities?(): AttachmentCapabilities | undefined;
+  /** Retry retained upload bytes by ID; callers cannot replace the frozen manifest. */
+  retryAttachmentSend?(clientMessageId: string, context?: AttachmentSubmissionContext): Promise<void>;
+  /** New-lifetime retries inspect history, and never upload without demonstrated attachment dedupe. */
+  recoverAttachmentSend?(content: string, inputs: readonly AttachmentInput[], context: AttachmentSubmissionContext): Promise<void>;
+  /** The host calls this before detaching; disposal/unloading never emits an attempt outcome. */
+  endAttachmentLifetime?(lifetimeId: string, reason: 'target-changed' | 'identity-changed' | 'disposed' | 'unloading'): void;
+  readAttachment?(reference: AttachmentReference, signal: AbortSignal): Promise<Blob>;
   retrySend(clientMessageId: string): Promise<void>;
   /** Subscribe before a host-correlated send so ack and reconciliation order is preserved. */
   observeHostSend(clientMessageId: string, observer: HostSendObserver): () => void;
