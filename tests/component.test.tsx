@@ -3080,19 +3080,11 @@ describe('conversation surface', () => {
 
 describe('tool-call and transition display', () => {
   it('animates only capped earlier activity into view while keeping the reader anchor and reduced-motion path', () => {
-    let index: ToolCallIndex | undefined;
-    const names = ['Bash', 'Read', 'Grep', 'Edit', 'Search', 'Write', 'Copy', 'Move'];
-    for (let seq = 1; seq <= names.length; seq++) {
-      const toolName = names[seq - 1];
-      const call: ToolCallRecord = { id: `group-${seq}`, seq, sessionKey: 'tool-groups', turnSeq: 1,
-        afterMessageSeq: 1, harnessToolCallId: `call-${seq}`, title: `${toolName} ${seq}`, kind: 'read', toolName,
-        status: 'completed', rawInput: null, rawOutput: null, content: null, truncated: [], startedAt: seq,
-        endedAt: seq + 1, rowVersion: 1 };
-      const group = putIndex(getIndex(index, call.afterMessageSeq), call.seq, call, call.startedAt);
-      index = putIndex(index, call.afterMessageSeq, group, group.maxTime);
-    }
-    const human = row('tool-groups', 'human', 'A question', { seq: 1, role: 'user', sender: 'user:person' });
-    const answer = row('tool-groups', 'answer', 'The answer', {
+    const sessionKey = 'activity-overflow';
+    const notices = Array.from({ length: 8 }, (_, index) => row(sessionKey, `event-${index + 1}`,
+      `Unclassified event ${index + 1}`, { seq: index + 2, sender: 'process:events', messageType: 'substrate', turnSeq: 1 }));
+    const human = row(sessionKey, 'human', 'A question', { seq: 1, role: 'user', sender: 'user:person', turnSeq: 1 });
+    const answer = row(sessionKey, 'answer', 'The answer', {
       seq: 10, sender: 'assistant-service', messageType: 'assistant', replyToMessageId: human.id, turnSeq: 1,
     });
     const resize = installResizeObserverMock();
@@ -3103,21 +3095,21 @@ describe('tool-call and transition display', () => {
         let layout: ReturnType<typeof installViewportLayout> | undefined;
         let view: ReturnType<typeof render> | undefined;
         try {
-          const runtime = new FakeRuntime('tool-groups', { records: [human, answer], toolCallsEnabled: true, toolCallIndex: index });
-          view = render(<TightbeamChat sessionKey="tool-groups" adapter={adapterFor(runtime)} />);
+          const runtime = new FakeRuntime(sessionKey, { records: [human, ...notices, answer] });
+          view = render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
           const viewport = screen.getByRole('log');
           const content = viewport.querySelector<HTMLElement>('.tb-chat-message-content')!;
           layout = installViewportLayout(viewport, 200, rowElement => {
             if (rowElement.matches('.tb-chat-activity-overflow')) return 24;
-            if (rowElement.matches('.tb-chat-activity-tool')) return 48;
+            if (rowElement.matches('.tb-chat-activity-substrate')) return 48;
             return undefined;
           });
 
-          const visibleRows = () => view!.container.querySelectorAll('details.tb-chat-activity-line.tb-chat-activity-tool');
+          const visibleRows = () => view!.container.querySelectorAll('.tb-chat-activity-line.tb-chat-activity-substrate');
           expect(view!.container.querySelectorAll('.tb-chat-activity-overflow')).toHaveLength(1);
           expect(visibleRows()).toHaveLength(5);
           expect([...visibleRows()].map(element => element.getAttribute('data-record-key')))
-            .toEqual(['tool-group-4', 'tool-group-5', 'tool-group-6', 'tool-group-7', 'tool-group-8']);
+            .toEqual(['message:event-4', 'message:event-5', 'message:event-6', 'message:event-7', 'message:event-8']);
           const anchor = screen.getByText('The answer').closest('article') as HTMLElement;
           fireEvent.wheel(viewport, { deltaY: 1 });
           layout.setScrollTop(200);
@@ -3129,9 +3121,9 @@ describe('tool-call and transition display', () => {
           fireEvent.click(screen.getByRole('button', { name: 'Show earlier activity' }));
           expect(view!.container.querySelectorAll('.tb-chat-activity-overflow')).toHaveLength(0);
           expect(visibleRows()).toHaveLength(8);
-          const revealedRows = ['tool-group-1', 'tool-group-2', 'tool-group-3'];
+          const revealedRows = ['message:event-1', 'message:event-2', 'message:event-3'];
           expect([...visibleRows()].map(element => element.getAttribute('data-record-key')))
-            .toEqual([...revealedRows, 'tool-group-4', 'tool-group-5', 'tool-group-6', 'tool-group-7', 'tool-group-8']);
+            .toEqual([...revealedRows, 'message:event-4', 'message:event-5', 'message:event-6', 'message:event-7', 'message:event-8']);
           const revealAnimations = animations.animations.slice(animationStart);
           if (reduced) expect(revealAnimations).toHaveLength(0);
           else {
@@ -3168,7 +3160,7 @@ describe('tool-call and transition display', () => {
             }
           }
           expect(visibleRows()).toHaveLength(8);
-          expect([...view!.container.querySelectorAll<HTMLElement>('.tb-chat-activity-tool')]
+          expect([...view!.container.querySelectorAll<HTMLElement>('.tb-chat-activity-substrate')]
             .filter(element => !revealedRows.includes(element.dataset.recordKey ?? ''))).toHaveLength(5);
         } finally {
           view?.unmount();
@@ -3239,7 +3231,53 @@ describe('tool-call and transition display', () => {
     expect(view.container.querySelectorAll('details.tb-chat-activity-line.tb-chat-activity-tool')).toHaveLength(2001);
   });
 
-  it('keeps each collapsed tool group titled by its newest call as calls arrive', () => {
+  it('folds unnamed Codex-style calls with the yellow summary and grey member styling', () => {
+    const sessionKey = 'unnamed-codex-tools';
+    let index: ToolCallIndex | undefined;
+    const calls: ToolCallRecord[] = [
+      { id: 'codex-1', seq: 201, sessionKey, turnSeq: 1, afterMessageSeq: 1, harnessToolCallId: 'call-1',
+        title: 'Read the project', kind: 'read', toolName: null, status: 'completed', rawInput: null,
+        rawOutput: null, content: null, truncated: [], startedAt: 201, endedAt: 202, rowVersion: 1 },
+      { id: 'codex-2', seq: 202, sessionKey, turnSeq: 1, afterMessageSeq: 1, harnessToolCallId: 'call-2',
+        title: 'Run the checks', kind: 'command', toolName: null, status: 'in_progress', rawInput: null,
+        rawOutput: null, content: null, truncated: [], startedAt: 202, endedAt: null, rowVersion: 1 },
+      { id: 'codex-3', seq: 203, sessionKey, turnSeq: 1, afterMessageSeq: 1, harnessToolCallId: 'call-3',
+        title: 'Inspect the result', kind: 'read', toolName: null, status: 'completed', rawInput: null,
+        rawOutput: null, content: null, truncated: [], startedAt: 203, endedAt: 204, rowVersion: 1 },
+    ];
+    for (const call of calls) {
+      const group = putIndex(getIndex(index, call.afterMessageSeq), call.seq, call, call.startedAt);
+      index = putIndex(index, call.afterMessageSeq, group, group.maxTime);
+    }
+    const human = row(sessionKey, 'human', 'Review the result', {
+      seq: 1, role: 'user', sender: 'user:person',
+    });
+    const runtime = new FakeRuntime(sessionKey, { records: [human], toolCallsEnabled: true, toolCallIndex: index });
+    const view = render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+
+    const foldedRun = screen.getByRole('button', {
+      name: /3 entries\. Latest: Inspect the result · done/,
+    });
+    const foldKey = foldedRun.closest('[data-activity-fold]')?.getAttribute('data-record-key');
+    expect(foldedRun.querySelector('.tb-chat-activity-run-count')?.textContent).toBe('×3');
+    expect(foldedRun.classList.contains('tb-chat-activity-tool-run-toggle')).toBe(true);
+    expect(foldedRun.querySelector('svg.tb-chat-tool-terminal-icon rect')?.getAttribute('fill')).toBe('currentColor');
+    expect(view.container.querySelectorAll('.tb-chat-activity-run.tb-chat-activity-tool')).toHaveLength(1);
+
+    fireEvent.click(foldedRun);
+    const memberRows = view.container.querySelectorAll<HTMLElement>(
+      `[data-activity-fold][data-record-key="${foldKey}"] .tb-chat-activity-run-rows details.tb-chat-activity-tool`,
+    );
+    expect(memberRows).toHaveLength(3);
+    expect([...memberRows].map(member => member.querySelector('.tb-chat-activity-gist')?.textContent)).toEqual([
+      'Read the project · done', 'Run the checks · running', 'Inspect the result · done',
+    ]);
+    for (const member of memberRows) {
+      expect(member.querySelector('svg.tb-chat-tool-terminal-icon rect')?.getAttribute('fill')).toBe('currentColor');
+    }
+  });
+
+  it('folds mixed-name tool calls and keeps the run titled by its newest call', () => {
     let index: ToolCallIndex | undefined;
     const insert = (seq: number, title: string, toolName = 'read_file') => {
       const call: ToolCallRecord = { id: `title-${seq}`, seq, sessionKey: 'latest-tool-title', turnSeq: 1,
@@ -3250,7 +3288,7 @@ describe('tool-call and transition display', () => {
       index = putIndex(index, call.afterMessageSeq, group, group.maxTime);
     };
     insert(201, 'Read first file');
-    insert(202, 'Read second file');
+    insert(202, 'Run command', 'bash');
 
     const human = row('latest-tool-title', 'human', 'Keep this message visible', {
       role: 'user', sender: 'user:person', seq: 1,
@@ -3260,44 +3298,78 @@ describe('tool-call and transition display', () => {
     });
     const view = render(<TightbeamChat sessionKey="latest-tool-title" adapter={adapterFor(runtime)} />);
     const foldedRun = screen.getByRole('button', {
-      name: /2 entries\. Latest: Read second file · running/,
+      name: /2 entries\. Latest: Run command · running/,
     });
     const foldKey = foldedRun.closest('[data-activity-fold]')?.getAttribute('data-record-key');
-    expect(foldedRun.querySelector('.tb-chat-activity-gist')?.textContent).toBe('Read second file · running');
+    expect(foldedRun.querySelector('.tb-chat-activity-gist')?.textContent).toBe('Run command · running');
     expect(foldedRun.getAttribute('aria-expanded')).toBe('false');
     expect(foldedRun.firstElementChild?.matches('svg.tb-chat-tool-terminal-icon')).toBe(true);
     expect(foldedRun.querySelector('.tb-chat-activity-bullet')).toBeNull();
     expect(foldedRun.querySelectorAll('.tb-chat-activity-run-chevron')).toHaveLength(1);
 
-    insert(203, 'Read third file');
+    insert(203, 'Search files', 'grep');
     act(() => runtime.update({ toolCallIndex: index }));
     const updatedFold = screen.getByRole('button', {
-      name: /3 entries\. Latest: Read third file · running/,
+      name: /3 entries\. Latest: Search files · running/,
     });
     expect(updatedFold.closest('[data-activity-fold]')?.getAttribute('data-record-key')).toBe(foldKey);
-    expect(updatedFold.querySelector('.tb-chat-activity-gist')?.textContent).toBe('Read third file · running');
+    expect(updatedFold.querySelector('.tb-chat-activity-gist')?.textContent).toBe('Search files · running');
 
     insert(204, 'List files', 'list_files');
     act(() => runtime.update({ toolCallIndex: index }));
-    const readFoldAfterBoundary = screen.getByRole('button', { name: /3 entries\. Latest: Read third file · running/ });
-    expect(readFoldAfterBoundary.closest('[data-activity-fold]')?.getAttribute('data-record-key')).toBe(foldKey);
+    const mixedFoldAfterAppend = screen.getByRole('button', { name: /4 entries\. Latest: List files · running/ });
+    expect(mixedFoldAfterAppend.closest('[data-activity-fold]')?.getAttribute('data-record-key')).toBe(foldKey);
     expect(view.container.querySelectorAll('.tb-chat-activity-run.tb-chat-activity-tool')).toHaveLength(1);
-    expect(view.container.querySelectorAll('details.tb-chat-activity-line.tb-chat-activity-tool')).toHaveLength(1);
+    expect(view.container.querySelectorAll('details.tb-chat-activity-line.tb-chat-activity-tool')).toHaveLength(0);
 
-    fireEvent.click(updatedFold);
-    expect(updatedFold.getAttribute('aria-expanded')).toBe('true');
+    fireEvent.click(mixedFoldAfterAppend);
+    expect(mixedFoldAfterAppend.getAttribute('aria-expanded')).toBe('true');
     const expandedRun = view.container.querySelector<HTMLElement>(
       `[data-activity-fold][data-record-key="${foldKey}"]`,
     );
     expect(expandedRun?.getAttribute('data-run-expanded')).toBe('true');
+    expect(expandedRun?.querySelectorAll('.tb-chat-activity-run-rows details.tb-chat-activity-tool')).toHaveLength(4);
     expect([...view.container.querySelectorAll(
       `[data-activity-fold][data-record-key="${foldKey}"] .tb-chat-activity-run-rows .tb-chat-activity-gist`,
     )]
       .map(element => element.textContent)).toEqual([
-      'Read first file · running', 'Read second file · running', 'Read third file · running',
+      'Read first file · running', 'Run command · running', 'Search files · running', 'List files · running',
     ]);
-    expect(screen.getByText('List files · running')).toBeTruthy();
+    expect(screen.getAllByText('List files · running')).toHaveLength(2);
     expect(within(screen.getByRole('log')).getByText('Keep this message visible')).toBeTruthy();
+  });
+
+  it('keeps a tool run split around a durable non-tool row', () => {
+    const sessionKey = 'tool-run-record-event-boundary';
+    const first: ToolCallRecord = { id: 'before-event', seq: 201, sessionKey, turnSeq: 1,
+      afterMessageSeq: 1, harnessToolCallId: 'call-1', title: 'Read first', kind: 'read', toolName: 'read_file',
+      status: 'completed', rawInput: null, rawOutput: null, content: null, truncated: [],
+      startedAt: 2_000, endedAt: 2_100, rowVersion: 1 };
+    const second: ToolCallRecord = { id: 'after-event', seq: 202, sessionKey, turnSeq: 1,
+      afterMessageSeq: 1, harnessToolCallId: 'call-2', title: 'Run second', kind: 'command', toolName: 'bash',
+      status: 'completed', rawInput: null, rawOutput: null, content: null, truncated: [],
+      startedAt: 4_000, endedAt: 4_100, rowVersion: 1 };
+    let index: ToolCallIndex | undefined;
+    for (const call of [first, second]) {
+      const group = putIndex(getIndex(index, call.afterMessageSeq), call.seq, call, call.startedAt);
+      index = putIndex(index, call.afterMessageSeq, group, group.maxTime);
+    }
+    const human = row(sessionKey, 'human', 'Question', { seq: 1, role: 'user', sender: 'user:person',
+      createdAt: new Date(1_000).toISOString() });
+    const reply = row(sessionKey, 'reply', 'Answer', { seq: 2, createdAt: new Date(5_000).toISOString() });
+    const event = { eventId: 'work_item.filed:between-tools', sessionKey, at: 3_000, kind: 'work_item.filed',
+      record: { type: 'work item', id: 'between-tools', detail: 'A background update' },
+      actorSessionKey: sessionKey, tiedAs: ['creator'], cause: { turnSeq: 1, messageId: null }, noticeMessageIds: [] };
+    const runtime = new FakeRuntime(sessionKey, { records: [human, reply], recordEvents: [event],
+      toolCallsEnabled: true, toolCallIndex: index });
+    const view = render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+    const keys = [...view.container.querySelectorAll<HTMLElement>('[data-record-key]')]
+      .map(element => element.dataset.recordKey);
+
+    expect(keys.indexOf('tool-before-event')).toBeLessThan(keys.indexOf('record-event:' + event.eventId));
+    expect(keys.indexOf('record-event:' + event.eventId)).toBeLessThan(keys.indexOf('tool-after-event'));
+    expect(view.container.querySelectorAll('.tb-chat-activity-tool-run-toggle')).toHaveLength(0);
+    expect(view.container.querySelectorAll('details.tb-chat-activity-line.tb-chat-activity-tool')).toHaveLength(2);
   });
 
   it('keeps an unmatched send at submission time among tools, then uses its canonical anchor with the same scroll key', () => {

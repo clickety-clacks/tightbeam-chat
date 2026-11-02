@@ -1634,6 +1634,8 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     const time = Date.parse(send.submittedAt);
     return Number.isFinite(time) ? [time] : [];
   }), [localSends]);
+  const recordEventTimes = useMemo(() => uncoveredRecordEvents(state.recordEvents ?? [], state.records)
+    .map(event => event.at), [state.recordEvents, state.records]);
   const tools = useMemo(() => {
     if (!state.toolCallsEnabled) return undefined;
     if (state.toolCallIndex) return state.toolCallIndex;
@@ -1661,6 +1663,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     bubbles,
     transitions,
     localSendTimes,
+    recordEventTimes,
     tools: toolRecords,
     toolsEnabled: Boolean(state.toolCallsEnabled),
     turnStateAvailable: state.activityTurnStateAvailable === true,
@@ -1674,7 +1677,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     historyRailDenials: state.historyRailDenials ?? [],
     shownRuns,
     expandedRuns,
-  }), [activityRecords, bubbles, transitions, localSendTimes, expandedRuns, shownRuns, state.activityTurnStateAvailable, state.activeTurn,
+  }), [activityRecords, bubbles, transitions, localSendTimes, recordEventTimes, expandedRuns, shownRuns, state.activityTurnStateAvailable, state.activeTurn,
     state.liveRailDenials, state.historyRailDenials, state.sessionKey, state.activitySenderDisplayNames,
     state.toolCallsEnabled, toolRecords]);
   const activityFoldIds = useMemo(() => new Set([
