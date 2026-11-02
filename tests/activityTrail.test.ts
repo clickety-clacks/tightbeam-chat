@@ -330,14 +330,16 @@ describe('activity trail projection', () => {
       ].join('\n') });
     const carrier = decode({ id: 'mixed-carrier', seq: 3, sender: 'process:tightbeam', messageType: 'substrate',
       content: [
-        '[from process:tightbeam]', '', '[batched notices: 3]',
+        '[from process:tightbeam]', '', '[batched notices: 4]',
         'batchId=batch-example wake=wake-example token=example rule=notifications-v1 r2',
         'release=idle provenanceSha256=12345678',
         `[1] source=notification sender=${firstBatchSender} cause=notice class=update`,
         '[assignment: review task]', '', provenance, '', 'First batch update', '',
         '[2] source=notification sender=process:notifications cause=notice class=update',
         '[assignment: maintenance task]', '', 'A notice in the batch', '',
-        `[3] source=notification sender=${secondBatchSender} cause=notice class=update`,
+        '[3] source=notification sender=user:person cause=notice class=update',
+        'A user notice in the batch', '',
+        `[4] source=notification sender=${secondBatchSender} cause=notice class=update`,
         '', provenance, '', 'Second batch update', '',
         'coalesced by notifications',
       ].join('\n') });
@@ -355,9 +357,9 @@ describe('activity trail projection', () => {
 
     expect(lines.map(line => line.id)).toEqual([
       'message:direct-agent', 'member:mixed-carrier:member:1', 'member:mixed-carrier:member:2',
-      'member:mixed-carrier:member:3',
+      'member:mixed-carrier:member:3', 'member:mixed-carrier:member:4',
     ]);
-    expect(lines.map(line => line.kind)).toEqual(['agent', 'agent', 'substrate', 'agent']);
+    expect(lines.map(line => line.kind)).toEqual(['agent', 'agent', 'substrate', 'substrate', 'agent']);
     expect(lines[0]).toMatchObject({ accessibleText: 'Other agent: Review helper — Direct update',
       originalContent: 'Direct update', presentation: { label: 'Review helper', text: 'Direct update',
         icon: 'message', summaryText: 'Direct update' } });
@@ -366,7 +368,9 @@ describe('activity trail projection', () => {
         icon: 'message', summaryText: 'First batch update' } });
     expect(lines[2]).toMatchObject({ accessibleText: 'Substrate: A notice in the batch',
       originalContent: 'A notice in the batch', presentation: { label: 'Notice', text: 'A notice in the batch' } });
-    expect(lines[3]).toMatchObject({ accessibleText: 'Other agent: Writing helper — Second batch update',
+    expect(lines[3]).toMatchObject({ accessibleText: 'Substrate: A user notice in the batch',
+      originalContent: 'A user notice in the batch', presentation: { label: 'Notice', text: 'A user notice in the batch' } });
+    expect(lines[4]).toMatchObject({ accessibleText: 'Other agent: Writing helper — Second batch update',
       originalContent: 'Second batch update', presentation: { label: 'Writing helper', text: 'Second batch update',
         icon: 'message' } });
     expect(lines.map(line => `${line.presentation?.text ?? ''} ${line.originalContent ?? ''}`).join(' '))

@@ -83,6 +83,18 @@ describe('principal-scoped message projection', () => {
     expect(projectMessages([unmarked], 'person', 'person').messages).toEqual([]);
   });
 
+  it('keeps user members of unmarked mixed Tightbeam batches in the notice trail', () => {
+    const batch = message('mixed-user-agent', { role: 'user', sender: 'process:tightbeam', messageType: 'substrate',
+      content: [
+        '[from process:tightbeam]', '', '[batched notices: 2]',
+        '[1] source=notification sender=user:person cause=notice class=fyi', 'A user notice', '',
+        '[2] source=agent:helper sender=agent:helper cause=notice class=fyi', 'A helper update', '',
+        'coalesced by notifications',
+      ].join('\n') });
+
+    expect(projectMessages([batch], 'person', 'person').messages).toEqual([]);
+  });
+
   it('requires the complete direct turn relation and reclassifies when older parents arrive', () => {
     const human = message('human', { turnSeq: 1 });
     const agent = message('agent', { sender: 'agent:helper', turnSeq: 2 });

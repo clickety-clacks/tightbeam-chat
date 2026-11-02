@@ -16,6 +16,12 @@ const batchHeading = /^\[(\d+)\] source=([^\s]+) sender=([^\s]+) cause=([^\s]+) 
 const canonicalBatchHeading = /^\[(\d+)\] source=([^\s]+) sender=(.+?) cause=([^\s]+) class=([^\s]+)$/;
 const batchCountHeading = /^\[batched notices: ([1-9]\d*)\]$/;
 
+export function isUnmarkedTightbeamCarrier(record: CanonicalMessage): boolean {
+  const lines = record.content.split(/\r?\n/);
+  return record.isBatchCarrier !== true && record.sender === 'process:tightbeam' &&
+    lines[0] === '[from process:tightbeam]' && lines[1] === '';
+}
+
 /** Parse only the delivered, indexed notice-batch form; unknown wrappers stay hidden. */
 export function parseBatchMembers(record: CanonicalMessage): readonly ParsedBatchMember[] | undefined {
   const isCanonicalCarrier = record.isBatchCarrier === true;
@@ -59,7 +65,7 @@ export function parseBatchMembers(record: CanonicalMessage): readonly ParsedBatc
   // process envelope to recognize mixed batches, while leaving unmarked
   // process-only batches on their existing single-notice path.
   if (!isCanonicalCarrier && hasProcessPreamble &&
-      (processPreamble?.[1] !== 'process:tightbeam' ||
+      (!isUnmarkedTightbeamCarrier(record) ||
         !members.some(member => /^(?:agent|session):/.test(member.sender)))) return undefined;
   return members;
 }
@@ -114,12 +120,16 @@ export function projectMessages(records: readonly ConversationRecord[], principa
     const classification = classifyMessage(record, principalKey);
     const members = parseBatchMembers(record);
     if (members && record.isBatchCarrier !== true) {
+      const preserveNotices = isUnmarkedTightbeamCarrier(record) &&
+        members.some(member => /^(?:agent|session):/.test(member.sender));
       for (const member of members) {
         if (member.sender.startsWith('user:')) {
-          messages.push({ key: `${record.id}:member:${member.index}`, source: record, side: 'human',
-            senderLabel: member.sender === `user:${principalKey}` ? 'You' : 'User',
-            provenancePending: false, member: Object.freeze({ index: member.index, sourceId: member.sourceId,
-              sender: member.sender, content: member.content }) });
+          if (!preserveNotices) {
+            messages.push({ key: `${record.id}:member:${member.index}`, source: record, side: 'human',
+              senderLabel: member.sender === `user:${principalKey}` ? 'You' : 'User',
+              provenancePending: false, member: Object.freeze({ index: member.index, sourceId: member.sourceId,
+                sender: member.sender, content: member.content }) });
+          }
         }
       }
     } else if (classification === 'human') {

@@ -1,5 +1,5 @@
 import type { CanonicalMessage, CanonicalTransition, HistoryRailDenial, LiveRailDenial, ToolCallRecord } from './types';
-import { parseBatchMembers, type HumanMember, type ParsedBatchMember } from './messageVisibility';
+import { isUnmarkedTightbeamCarrier, parseBatchMembers, type HumanMember, type ParsedBatchMember } from './messageVisibility';
 import { activityPillPresentation, type ActivityPillPresentation } from './activityPresentation';
 import { stripDeliveryScaffolding, stripProvenanceMarkup } from './displayText';
 import { sameRailDenial } from './railDenials';
@@ -206,8 +206,7 @@ function messageCandidate(message: CanonicalMessage, senderDisplayName?: string)
 }
 
 function memberCandidate(carrier: CanonicalMessage, member: ParsedBatchMember,
-  senderDisplayName?: string, separatePill = false): Candidate | undefined {
-  if (member.sender.startsWith('user:')) return undefined;
+  senderDisplayName?: string, separatePill = false, userAsNotice = false): Candidate | undefined {
   // The carrier's turnSeq belongs to the batching turn, not this notice member.
   const id = `member:${member.sourceId}`;
   const position = { sequence: carrier.seq, phase: 1, order: member.index };
@@ -215,6 +214,17 @@ function memberCandidate(carrier: CanonicalMessage, member: ParsedBatchMember,
   const sortTime = Number.isFinite(parsedTime) ? parsedTime : undefined;
   const content = stripDeliveryScaffolding(member.content);
   const detail = bodyGist(stripProvenanceMarkup(content));
+  if (member.sender.startsWith('user:')) {
+    if (!userAsNotice) return undefined;
+    const gist = detail || 'Substrate activity';
+    return { id, kind: 'substrate', runKey: '', anchorSeq: carrier.seq, position, gist,
+      accessibleText: `Substrate: ${gist}`,
+      originalContent: content,
+      presentation: activityPillPresentation({ kind: 'substrate', gist, content,
+        sender: member.sender, source: member.source, messageType: carrier.messageType }),
+      sortTime, historyBacked: true,
+      semanticFoldKind: gatewayNoticeFoldKind(content) };
+  }
   if (member.sender.startsWith('remedy:')) {
     const statute = member.sender.slice('remedy:'.length).trim();
     const gist = `Remedy ${statute || 'sent'} sent${detail ? ` — ${detail}` : ''}`;
@@ -401,9 +411,11 @@ export function buildActivityTrail(input: {
     if (batchMembers) {
       const hasAgentMember = batchMembers.some(member => /^(?:agent|session):/.test(member.sender));
       const isMixedBatch = hasAgentMember && batchMembers.some(member => !/^(?:agent|session):/.test(member.sender));
+      const userMembersAreNotices = hasAgentMember && isUnmarkedTightbeamCarrier(message as CanonicalMessage);
       for (const member of batchMembers) {
         const candidate = memberCandidate(message as CanonicalMessage, member,
-          senderDisplayNames.get(member.sender), isMixedBatch && /^(?:agent|session):/.test(member.sender));
+          senderDisplayNames.get(member.sender), isMixedBatch && /^(?:agent|session):/.test(member.sender),
+          userMembersAreNotices && member.sender.startsWith('user:'));
         if (candidate) candidates.push(candidate);
       }
       continue;
