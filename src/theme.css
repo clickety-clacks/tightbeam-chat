@@ -24,6 +24,7 @@
   --tb-chat-idle: #5C5854;
   --tb-chat-placeholder: #53504C;
   --tb-chat-glass: rgba(250,246,238,0.74);
+  --tb-chat-composer-glass: rgba(250,246,238,0.94);
   --tb-chat-glass-edge: rgba(60,45,30,0.10);
   --tb-chat-shadow: rgb(60,45,30);
   --tb-chat-composer-shadow-alpha: 12%;
@@ -55,6 +56,7 @@
     --tb-chat-idle: #9E9992;
     --tb-chat-placeholder: #D2CDC6;
     --tb-chat-glass: rgba(46,42,37,0.74);
+    --tb-chat-composer-glass: rgba(46,42,37,0.94);
     --tb-chat-glass-edge: rgba(240,230,215,0.10);
     --tb-chat-shadow: #000000;
     --tb-chat-composer-shadow-alpha: 35%;
