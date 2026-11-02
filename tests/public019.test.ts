@@ -1196,6 +1196,41 @@ describe('Gateway wire mapping and behavior checks', () => {
     expect(await third).toMatchObject({ outcome: 'retryable' });
   });
 
+  it('sends the complete prompt once and maps a Gateway size refusal by matching ID', async () => {
+    const content = 'Keep this complete prompt unchanged.';
+    const submission = { sessionKey, deviceId: 'device-1', clientMessageId: 'c_size_refusal', content };
+
+    const refused = setup();
+    const refusedResult = refused.transport.sendHuman(submission, new AbortController().signal);
+    await vi.waitFor(() => expect(refused.human.sent).toHaveLength(1));
+    expect(refused.human.sent[0]).toEqual({ type: 'message', id: 'c_size_refusal', sessionKey, content });
+    refused.human.emit({ type: 'error', code: 'payload_too_large', messageId: 'c_size_refusal' });
+    await expect(refusedResult).resolves.toEqual({ outcome: 'refused', reason: 'payload_too_large' });
+    expect(refused.human.sent).toHaveLength(1);
+  });
+
+  it('maps a too-large WebSocket close to a size refusal without retrying the send', async () => {
+    const candidate = setup();
+    const result = candidate.transport.sendHuman({ sessionKey, deviceId: 'device-1',
+      clientMessageId: 'c_frame_too_large', content: 'Keep the complete prompt.' }, new AbortController().signal);
+    await vi.waitFor(() => expect(candidate.human.sent).toHaveLength(1));
+
+    candidate.human.disconnect({ code: 1009 });
+    await expect(result).resolves.toEqual({ outcome: 'refused', reason: 'payload_too_large' });
+    expect(candidate.human.sent).toHaveLength(1);
+  });
+
+  it('refuses a malformed client message ID separately before opening the human socket', async () => {
+    const candidate = setup();
+    const open = vi.spyOn(candidate.host, 'openAuthenticatedHuman');
+
+    await expect(candidate.transport.sendHuman({ sessionKey, deviceId: 'device-1',
+      clientMessageId: 'invalid', content: 'hello' }, new AbortController().signal))
+      .resolves.toEqual({ outcome: 'refused', reason: 'invalid_message_id' });
+    expect(open).not.toHaveBeenCalled();
+    expect(candidate.human.sent).toHaveLength(0);
+  });
+
   it('keeps waiting for a human acknowledgement beyond the general response timeout', async () => {
     vi.useFakeTimers();
     try {

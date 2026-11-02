@@ -820,9 +820,8 @@ export function createPublic019Transport(config: Public019Config): { transport: 
     },
     async sendHuman(submission: HumanSubmission, signal: AbortSignal): Promise<HumanSendResult> {
       const submittingIdentity = config.host.currentIdentity();
-      if (!submission.clientMessageId.startsWith('c_') ||
-          new TextEncoder().encode(submission.content).byteLength > 64 * 1024) {
-        return { outcome: 'refused', reason: 'Invalid Gateway human message ID or content length.' };
+      if (!submission.clientMessageId.startsWith('c_')) {
+        return { outcome: 'refused', reason: 'invalid_message_id' };
       }
       if (submittingIdentity.deviceId !== submission.deviceId) {
         return { outcome: 'refused', reason: 'Host device identity changed.' };
@@ -861,7 +860,9 @@ export function createPublic019Transport(config: Public019Config): { transport: 
               finish({ outcome: 'refused', reason: String(frame.code ?? 'refused') });
             }
           } catch { finish({ outcome: 'retryable', reason: 'Malformed human response.' }); }
-        }, () => finish({ outcome: 'retryable', reason: 'Human socket closed before acknowledgement.' }));
+        }, (event) => finish(event?.code === 1009
+          ? { outcome: 'refused', reason: 'payload_too_large' }
+          : { outcome: 'retryable', reason: 'Human socket closed before acknowledgement.' }));
         if (signal.aborted) onAbort();
         else if (!settled) {
           try {

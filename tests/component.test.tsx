@@ -2797,6 +2797,31 @@ describe('conversation surface', () => {
     expect(accepted?.querySelector('.tb-chat-send-spinner')).toBeNull();
   });
 
+  it('shows a plain size refusal and keeps the complete draft available for editing or retry', () => {
+    const sessionKey = 'size-refusal';
+    const content = 'The complete prompt remains available after the server rejects it.';
+    const runtime = new FakeRuntime(sessionKey);
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+    const composer = screen.getByRole('textbox', { name: 'Message to Research assistant' }) as HTMLTextAreaElement;
+
+    fireEvent.change(composer, { target: { value: content } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    expect(runtime.sent).toEqual([content]);
+    fireEvent.change(composer, { target: { value: 'An edit made while the send is pending' } });
+    act(() => runtime.update({ sends: [{ sessionKey, deviceId: 'device', clientMessageId: 'fixture-send',
+      content, submittedAt: new Date().toISOString(), status: 'failed', reconciled: false,
+      reason: 'payload_too_large' }] }));
+
+    const refused = screen.getByText(content).closest('article');
+    expect(refused?.getAttribute('data-send-state')).toBe('refused');
+    expect(refused?.getAttribute('aria-label')).toBe('Your message was not sent. The server refused this prompt because it is too large. Shorten it and try again.');
+    expect(within(refused!).getByText('The server refused this prompt because it is too large. Shorten it and try again.')).toBeTruthy();
+    expect(composer.value).toBe('An edit made while the send is pending');
+    fireEvent.click(within(refused!).getByRole('button', { name: 'Restore text to the composer' }));
+    expect(composer.value).toBe(content);
+    expect(within(refused!).getByRole('button', { name: 'Retry message' })).toBeTruthy();
+  });
+
   it('keeps an unconfirmed send ghosted when safe re-asking is unavailable', () => {
     const sessionKey = 'unsupported-send-recovery';
     const runtime = new FakeRuntime(sessionKey, { status: 'ready', sends: [{
