@@ -90,3 +90,18 @@ export function stripProvenanceMarkup(value: string): string {
   result.push(value.slice(cursor));
   return result.join('');
 }
+
+const deliveryScaffoldingLine = (line: string): boolean =>
+  /^\[from (?:agent|session|process):[^\]]+\]$/i.test(line) ||
+  /^\[batched notices:\s*\d+\]$/i.test(line) ||
+  /^\[\d+\]\s+source=\S+\s+sender=.+\s+cause=\S+\s+class=\S+\]$/i.test(line) ||
+  /^(?:batchId|release|provenanceSha256)=/i.test(line) ||
+  /^\[assignment:\s*[^\]]+\]$/i.test(line) ||
+  /^coalesced by\s+\S/i.test(line);
+
+/** Remove transport-only lines from a delivered activity message without changing retained history. */
+export function stripDeliveryScaffolding(value: string): string {
+  return stripProvenanceMarkup(value.split(/\r?\n/)
+    .filter(line => !deliveryScaffoldingLine(line.trim()))
+    .join('\n')).trim();
+}

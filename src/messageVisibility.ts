@@ -24,8 +24,10 @@ export function parseBatchMembers(record: CanonicalMessage): readonly ParsedBatc
   // Keep the count-first form already in use while recognizing the process
   // preamble used by current canonical carriers.
   const countFirst = batchCountHeading.test(lines[0] ?? '');
-  const hasProcessPreamble = /^\[from process:[^\]]+\]$/.test(lines[0] ?? '') && lines[1] === '';
-  const countLineIndex = countFirst ? 0 : isCanonicalCarrier && hasProcessPreamble ? 2 : -1;
+  const processPreamble = /^\[from (process:[^\]]+)\]$/.exec(lines[0] ?? '');
+  const hasProcessPreamble = !!processPreamble && lines[1] === '' &&
+    (isCanonicalCarrier || processPreamble[1] === record.sender);
+  const countLineIndex = countFirst ? 0 : hasProcessPreamble ? 2 : -1;
   if (countLineIndex < 0) return undefined;
   const countMatch = batchCountHeading.exec(lines[countLineIndex] ?? '');
   if (!countMatch) return undefined;
@@ -33,17 +35,18 @@ export function parseBatchMembers(record: CanonicalMessage): readonly ParsedBatc
   if (!Number.isSafeInteger(declaredCount)) return undefined;
 
   const headers = lines.flatMap((line, lineIndex) => {
-    const match = (isCanonicalCarrier ? canonicalBatchHeading : batchHeading).exec(line);
+    const match = (isCanonicalCarrier || hasProcessPreamble ? canonicalBatchHeading : batchHeading).exec(line);
     return match ? [{ lineIndex, index: Number(match[1]), source: match[2], sender: match[3] }] : [];
   });
+  const canonicalHeaders = isCanonicalCarrier || hasProcessPreamble;
   const validIndexes = headers.every((header, index) => Number.isSafeInteger(header.index) && header.index > 0 &&
-    (isCanonicalCarrier ? index === 0 || header.index > headers[index - 1].index : header.index === index + 1));
+    (canonicalHeaders ? index === 0 || header.index > headers[index - 1].index : header.index === index + 1));
   if (!headers.length || headers.length !== declaredCount || !validIndexes ||
     headers.some(header => header.lineIndex <= countLineIndex)) return undefined;
   const footerIndex = lines.reduce((found, line, index) => /^coalesced by\s+\S/.test(line) ? index : found, -1);
   if (footerIndex <= headers.at(-1)!.lineIndex) return undefined;
 
-  return headers.map((header, index) => {
+  const members = headers.map((header, index) => {
     const bodyStart = header.lineIndex + 1;
     const boundary = headers[index + 1]?.lineIndex ?? footerIndex;
     let bodyEnd = boundary;
@@ -52,6 +55,12 @@ export function parseBatchMembers(record: CanonicalMessage): readonly ParsedBatc
     return Object.freeze({ index: header.index, sourceId: `${record.id}:member:${header.index}`,
       source: header.source, sender: header.sender, content: lines.slice(bodyStart, bodyEnd).join('\n') });
   });
+  // Older decoders may omit isBatchCarrier. Use a sender-matched, complete
+  // process envelope to recognize mixed batches, while leaving unmarked
+  // process-only batches on their existing single-notice path.
+  if (!isCanonicalCarrier && hasProcessPreamble &&
+      !members.some(member => /^(?:agent|session):/.test(member.sender))) return undefined;
+  return members;
 }
 
 const nonhumanTypes = new Set(['substrate', 'agent', 'process', 'marker']);

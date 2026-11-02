@@ -1142,7 +1142,7 @@ describe('conversation surface', () => {
   it('keeps direct agent names accessible and leaves message text visible on narrow screens', () => {
     const sessionKey = 'direct-agent-pill-label';
     const tag = '<engram-src id="123e4567-e89b-42d3-a456-426614174000"/>';
-    const agentContent = `${tag}\n\nA direct agent update.`;
+    const agentContent = `[from agent:helper]\n\n[assignment: review task]\n\n${tag}\n\nA direct agent update.`;
     const senderDisplayName = 'Review — helper with a deliberately long display name';
     const prompt = row(sessionKey, 'prompt', 'Please review this.', {
       seq: 1, role: 'user', sender: 'user:person', messageType: 'chat', turnSeq: 1,
@@ -1184,6 +1184,8 @@ describe('conversation surface', () => {
       expect(pill.querySelector('.tb-chat-activity-pill-meta')).toBeNull();
       expect(pill.querySelector('.tb-chat-activity-pill-text')?.textContent).toBe('A direct agent update.');
       expect(pill.textContent).not.toContain(tag);
+      expect(pill.textContent).not.toContain('assignment:');
+      expect(pill.title).not.toContain('[from agent:');
 
       fireEvent.click(within(pill).getByRole('button', { name: /Show full message/ }));
       expect(pill.querySelector('[data-activity-message-content]')?.textContent).toBe('A direct agent update.');
