@@ -500,9 +500,39 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
 @supports (field-sizing: content) {
   .tb-chat-input-shell textarea { field-sizing: content; }
 }
+.tb-chat-input-shell-empty textarea {
+  field-sizing: fixed;
+  height: var(--tb-chat-control-size);
+  max-height: var(--tb-chat-control-size);
+  overflow: hidden;
+}
+.tb-chat-empty-title {
+  position: absolute;
+  z-index: 1;
+  inset: .35rem .32rem;
+  display: none;
+  align-items: center;
+  padding: .425rem 3.55rem .425rem 5.35rem;
+  overflow: hidden;
+  color: var(--tb-chat-placeholder);
+  font-size: 16px;
+  line-height: 1.5;
+  pointer-events: none;
+}
+.tb-chat-input-shell-empty .tb-chat-empty-title { display: flex; }
+.tb-chat-empty-title > span {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.tb-chat-input-shell-no-status .tb-chat-empty-title { padding-left: 3rem; }
 .tb-chat-input-shell-no-status textarea { padding-left: 3rem; }
 .tb-chat-input-shell textarea:focus-visible { outline: none; }
 .tb-chat-input-shell textarea::placeholder { color: var(--tb-chat-placeholder); opacity: 1; }
+.tb-chat-input-shell-empty textarea::placeholder { color: transparent; }
 .tb-chat-status-control, .tb-chat-send-button {
   position: absolute;
   top: auto;

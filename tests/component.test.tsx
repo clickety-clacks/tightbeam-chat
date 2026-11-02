@@ -3421,6 +3421,23 @@ describe('conversation surface', () => {
     expect(scrollHeightReads).toBe(0);
   });
 
+  it('keeps the conversation title available as an accessible empty-state placeholder', () => {
+    const runtime = new FakeRuntime('empty-title');
+    render(<TightbeamChat sessionKey="empty-title" adapter={adapterFor(runtime)} />);
+    const composer = screen.getByRole('textbox', { name: 'Message to Research assistant' }) as HTMLTextAreaElement;
+    const shell = composer.parentElement;
+    const title = composer.parentElement?.querySelector('.tb-chat-empty-title');
+
+    expect(composer.placeholder).toBe('Research assistant');
+    expect(shell?.classList.contains('tb-chat-input-shell-empty')).toBe(true);
+    expect(title?.textContent).toBe('Research assistant');
+    expect(title?.getAttribute('aria-hidden')).toBe('true');
+
+    fireEvent.change(composer, { target: { value: 'A typed draft' } });
+    expect(composer.value).toBe('A typed draft');
+    expect(shell?.classList.contains('tb-chat-input-shell-empty')).toBe(false);
+  });
+
   it.each([
     ['Shift+Return', { shiftKey: true }],
     ['Ctrl+Return', { ctrlKey: true }],
