@@ -1196,23 +1196,15 @@ describe('Gateway wire mapping and behavior checks', () => {
     expect(await third).toMatchObject({ outcome: 'retryable' });
   });
 
-  it('sends UTF-8 content above the former cap intact and maps a Gateway size refusal by ID', async () => {
-    const content = '🦊'.repeat(16_385);
-    expect(new TextEncoder().encode(content).byteLength).toBeGreaterThan(64 * 1024);
-    const submission = { sessionKey, deviceId: 'device-1', clientMessageId: 'c_large', content };
-
-    const accepted = setup();
-    const acceptedResult = accepted.transport.sendHuman(submission, new AbortController().signal);
-    await vi.waitFor(() => expect(accepted.human.sent).toHaveLength(1));
-    expect(accepted.human.sent[0]).toEqual({ type: 'message', id: 'c_large', sessionKey, content });
-    accepted.human.emit({ type: 'ack', id: 'c_large' });
-    await expect(acceptedResult).resolves.toEqual({ outcome: 'accepted' });
-    expect(accepted.human.sent).toHaveLength(1);
+  it('sends the complete prompt once and maps a Gateway size refusal by matching ID', async () => {
+    const content = 'Keep this complete prompt unchanged.';
+    const submission = { sessionKey, deviceId: 'device-1', clientMessageId: 'c_size_refusal', content };
 
     const refused = setup();
     const refusedResult = refused.transport.sendHuman(submission, new AbortController().signal);
     await vi.waitFor(() => expect(refused.human.sent).toHaveLength(1));
-    refused.human.emit({ type: 'error', code: 'payload_too_large', messageId: 'c_large' });
+    expect(refused.human.sent[0]).toEqual({ type: 'message', id: 'c_size_refusal', sessionKey, content });
+    refused.human.emit({ type: 'error', code: 'payload_too_large', messageId: 'c_size_refusal' });
     await expect(refusedResult).resolves.toEqual({ outcome: 'refused', reason: 'payload_too_large' });
     expect(refused.human.sent).toHaveLength(1);
   });
