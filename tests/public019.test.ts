@@ -1209,6 +1209,17 @@ describe('Gateway wire mapping and behavior checks', () => {
     expect(refused.human.sent).toHaveLength(1);
   });
 
+  it('maps a too-large WebSocket close to a size refusal without retrying the send', async () => {
+    const candidate = setup();
+    const result = candidate.transport.sendHuman({ sessionKey, deviceId: 'device-1',
+      clientMessageId: 'c_frame_too_large', content: 'Keep the complete prompt.' }, new AbortController().signal);
+    await vi.waitFor(() => expect(candidate.human.sent).toHaveLength(1));
+
+    candidate.human.disconnect({ code: 1009 });
+    await expect(result).resolves.toEqual({ outcome: 'refused', reason: 'payload_too_large' });
+    expect(candidate.human.sent).toHaveLength(1);
+  });
+
   it('refuses a malformed client message ID separately before opening the human socket', async () => {
     const candidate = setup();
     const open = vi.spyOn(candidate.host, 'openAuthenticatedHuman');
