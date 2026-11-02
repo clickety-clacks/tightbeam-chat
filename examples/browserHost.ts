@@ -106,6 +106,7 @@ export function browserHost(target: ChatTarget): Public019Host {
 
   return {
     currentIdentity: () => identity,
+    ...(target.readMarkerRoute ? { readMarkerRoute: target.readMarkerRoute } : {}),
     fetch: (input, init) => {
       let url: URL;
       try { url = new URL(input, window.location.origin); }
