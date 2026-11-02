@@ -54,6 +54,12 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
 .tb-chat-host-composer-hidden .tb-chat-viewport {
   padding-bottom: calc(clamp(1rem, 3.5vw, 2rem) + 4rem + env(safe-area-inset-bottom));
 }
+.tb-chat-viewport:not([data-latest-control-visible]) {
+  padding-bottom: calc(var(--tb-chat-composer-height, 5rem) + 3rem + env(safe-area-inset-bottom));
+}
+.tb-chat-host-composer-hidden .tb-chat-viewport:not([data-latest-control-visible]) {
+  padding-bottom: calc(clamp(1rem, 3.5vw, 2rem) + env(safe-area-inset-bottom));
+}
 .tb-chat-message-content {
   --tb-chat-active-caption-height: 1.1rem;
   position: relative;
