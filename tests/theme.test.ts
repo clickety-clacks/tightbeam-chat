@@ -228,7 +228,9 @@ describe('Nordic theme', () => {
     expect(rule(componentCss, '.tb-chat-activity-agent')).toContain('color: var(--tb-chat-fjord)');
     expect(rule(componentCss, '.tb-chat-activity-substrate')).toContain('color: var(--tb-chat-muted)');
     expect(rule(componentCss, '.tb-chat-activity-tool')).toContain('color: var(--tb-chat-muted)');
-    expect(rule(componentCss, '.tb-chat-activity-tool-run-toggle')).toContain('color: var(--tb-chat-caution)');
+    // The summary button must outscore the base `.tb-chat button` color rule.
+    expect(rule(componentCss, '.tb-chat button')).toContain('color: inherit');
+    expect(rule(componentCss, '.tb-chat .tb-chat-activity-tool-run-toggle')).toContain('color: var(--tb-chat-caution)');
     expect(rule(componentCss, '.tb-chat-activity-rail')).toContain('color: var(--tb-chat-caution)');
     const boundary = rule(componentCss, '.tb-chat-transition-marker');
     expect(boundary).toContain('color: var(--tb-chat-transition)');
