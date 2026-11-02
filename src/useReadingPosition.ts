@@ -6,6 +6,7 @@ const bottomTolerance = 1;
 const arrivalDuration = 240;
 const arrivalEasing = 'cubic-bezier(0.2, 0, 0, 1)';
 const arrivalTopInset = 40;
+const arrivalVisibleTail = 16;
 type Anchor = { key: string; top: number };
 type MessageRow = { key: string; scrollKey: string; role: string; prompt: boolean; isFromReader: boolean };
 type IncomingMessageArrival = {
@@ -245,18 +246,17 @@ export function useReadingPosition(
       const topInset = Math.min(arrivalTopInset, Math.max(12, visibleHeight / 4));
       const anchorRow = arrival.anchorScrollKey ? registeredRows.current.get(arrival.anchorScrollKey) : undefined;
       if (anchorRow && anchorRow !== row) {
-        const anchorBounds = anchorRow.getBoundingClientRect();
-        const previousRow = row.previousElementSibling instanceof HTMLElement ? row.previousElementSibling : undefined;
-        const previousBounds = previousRow?.getBoundingClientRect();
-        const rowGap = previousBounds ? Math.max(0, rowBounds.top - previousBounds.bottom) : 0;
-        const promptTailStrip = Math.max(8, topInset - rowGap);
-        // Keep the answered prompt's tail in the open area; intervening rows
-        // then take their natural place between it and the arriving reply.
-        destination = box.scrollTop + anchorBounds.bottom - (bounds.top + promptTailStrip);
+        // The message row also contains its timestamp and padding. Anchor the
+        // visible message body so those trailing elements cannot leave its text
+        // just above the viewport when a tall reply arrives.
+        const anchorBody = anchorRow.querySelector<HTMLElement>('.tb-chat-bubble-body') ?? anchorRow;
+        const anchorBodyBounds = anchorBody.getBoundingClientRect();
+        const visibleTailBottom = bounds.top + arrivalVisibleTail;
+        destination = box.scrollTop + anchorBodyBounds.bottom - visibleTailBottom;
         const viewportBounds = box.getBoundingClientRect();
         topAnchoredPrompt.current = arrival.answeredPromptScrollKey
           ? { scrollKey: arrival.answeredPromptScrollKey,
-            bottomOffset: bounds.top + promptTailStrip - viewportBounds.top }
+            bottomOffset: visibleTailBottom - viewportBounds.top }
           : undefined;
       } else {
         topAnchoredPrompt.current = undefined;

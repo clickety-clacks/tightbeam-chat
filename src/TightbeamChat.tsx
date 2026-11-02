@@ -111,6 +111,27 @@ function userPrompts(timeline: readonly TimelineItem[]): UserPrompt[] {
   return prompts;
 }
 
+const dismissedPromptStoragePrefix = 'tb-chat:dismissed-prompt:';
+
+function dismissedPromptStorageKey(sessionKey: string): string {
+  return `${dismissedPromptStoragePrefix}${encodeURIComponent(sessionKey)}`;
+}
+
+function readDismissedPrompt(sessionKey: string): boolean {
+  if (typeof window === 'undefined') return false;
+  try { return window.localStorage.getItem(dismissedPromptStorageKey(sessionKey)) === 'true'; }
+  catch { return false; }
+}
+
+function storeDismissedPrompt(sessionKey: string, dismissed: boolean): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const key = dismissedPromptStorageKey(sessionKey);
+    if (dismissed) window.localStorage.setItem(key, 'true');
+    else window.localStorage.removeItem(key);
+  } catch { /* Storage may be unavailable. */ }
+}
+
 function nearestPromptAboveLine(prompts: readonly UserPrompt[], viewport: HTMLElement,
   getRow: (key: string) => HTMLElement | undefined, thresholdTop?: number): UserPrompt | undefined {
   const viewportRect = viewport.getBoundingClientRect();
@@ -1558,6 +1579,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   const promptHandoffAnimation = useRef<Animation | null>(null);
   const promptHandoffAnimationKey = useRef<string | null>(null);
   const promptHandoffSource = useRef<{ identity: string; row: HTMLElement; visibility: string } | null>(null);
+  const returnedPromptHandoffIdentity = useRef<string | undefined>(undefined);
   const promptHandoffMotionStart = useRef<{ identity: string; rect: PromptHandoffRect } | null>(null);
   const composer = useRef<ComposerHandle>(null);
   const [overlay, setOverlay] = useState<ChatOverlay | null>(null);
@@ -1778,17 +1800,28 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   const [stickyPromptIdentity, setStickyPromptIdentity] = useState<string | undefined>(undefined);
   const stickyPrompt = stickyPromptIdentity ? promptsByIdentity.get(stickyPromptIdentity) : undefined;
   const [overlappingPromptIdentity, setOverlappingPromptIdentity] = useState<string | undefined>(undefined);
+  const [visibleOriginalPromptIdentities, setVisibleOriginalPromptIdentities] = useState<ReadonlySet<string>>(() => new Set());
   const [promptHandoff, setPromptHandoff] = useState<PromptHandoffState | null>(null);
-  const [latestPromptDismissed, setLatestPromptDismissed] = useState(false);
+  const [promptDismissal, setPromptDismissal] = useState(() => ({
+    sessionKey: state.sessionKey,
+    dismissed: readDismissedPrompt(state.sessionKey),
+  }));
+  const latestPromptDismissed = promptDismissal.sessionKey === state.sessionKey && promptDismissal.dismissed;
   const [suppressOlderStickyPrompt, setSuppressOlderStickyPrompt] = useState(false);
   // Transcript refreshes can change the latest row; only a new submission clears dismissal.
-  const observedPromptSubmissions = useRef<Set<string> | null>(null);
-  if (!observedPromptSubmissions.current) {
-    observedPromptSubmissions.current = new Set(state.sends
-      .filter(send => send.sessionKey === state.sessionKey).map(sendIdentity));
+  const observedPromptSubmissions = useRef<{ sessionKey: string; identities: Set<string> } | null>(null);
+  if (observedPromptSubmissions.current?.sessionKey !== state.sessionKey) {
+    observedPromptSubmissions.current = {
+      sessionKey: state.sessionKey,
+      identities: new Set(state.sends.filter(send => send.sessionKey === state.sessionKey).map(sendIdentity)),
+    };
   }
   useLayoutEffect(() => {
-    const observed = observedPromptSubmissions.current!;
+    setPromptDismissal(current => current.sessionKey === state.sessionKey
+      ? current : { sessionKey: state.sessionKey, dismissed: readDismissedPrompt(state.sessionKey) });
+  }, [state.sessionKey]);
+  useLayoutEffect(() => {
+    const observed = observedPromptSubmissions.current!.identities;
     let newSubmission = false;
     for (const send of state.sends) {
       if (send.sessionKey !== state.sessionKey) continue;
@@ -1797,7 +1830,10 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
       observed.add(identity);
       newSubmission = true;
     }
-    if (newSubmission) setLatestPromptDismissed(false);
+    if (newSubmission) {
+      storeDismissedPrompt(state.sessionKey, false);
+      setPromptDismissal({ sessionKey: state.sessionKey, dismissed: false });
+    }
   }, [state.sends, state.sessionKey]);
   const transcript = useMemo(() => transcriptIndex(timeline), [timeline]);
   const eventPositions = useMemo(() => eventPlacements(
@@ -1841,6 +1877,24 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     const prompt = box
       ? nearestPromptAboveLine(promptCandidates, box, reading.getRow, bubbleBottom)
       : undefined;
+    const visibilityCandidates = new Set([prompt?.identity, stickyPromptIdentity, promptHandoff?.identity,
+      returnedPromptHandoffIdentity.current]
+      .filter((identity): identity is string => !!identity));
+    const visibleOriginalIdentities = new Set<string>();
+    for (const identity of visibilityCandidates) {
+      const candidate = promptsByIdentity.get(identity);
+      const row = candidate ? reading.getRow(candidate.scrollKey) : undefined;
+      const bounds = row?.getBoundingClientRect();
+      if (row && bounds && viewportBounds && Number.isFinite(bounds.top) && Number.isFinite(bounds.bottom) &&
+        bounds.bottom > viewportBounds.top && bounds.top < viewportBounds.bottom) {
+        visibleOriginalIdentities.add(identity);
+      }
+    }
+    if (returnedPromptHandoffIdentity.current && !visibleOriginalIdentities.has(returnedPromptHandoffIdentity.current)) {
+      returnedPromptHandoffIdentity.current = undefined;
+    }
+    setVisibleOriginalPromptIdentities(current => current.size === visibleOriginalIdentities.size &&
+      [...current].every(identity => visibleOriginalIdentities.has(identity)) ? current : visibleOriginalIdentities);
     const overlappingPrompt = measuredBubble && measuredBubble.height > 0
       ? latestPromptIntersectingBubble(promptCandidates, bubbleTop, bubbleBottom, reading.getRow)
       : undefined;
@@ -1864,12 +1918,13 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
       ? current : overlappingPrompt?.identity);
     if (stickyPromptIdentity === identity) reading.reconcileReducedMotionTopAnchor();
     else setStickyPromptIdentity(identity);
-  }, [promptCandidates, reading.getRow, reading.getTopAnchoredPromptScrollKey,
-    reading.reconcileReducedMotionTopAnchor, stickyPromptIdentity]);
+  }, [promptCandidates, promptsByIdentity, reading.getRow, reading.getTopAnchoredPromptScrollKey,
+    reading.reconcileReducedMotionTopAnchor, stickyPromptIdentity, promptHandoff?.identity]);
   const restorePromptHandoffSource = useCallback(() => {
     const source = promptHandoffSource.current;
     if (!source) return;
     if (source.row.style.visibility === 'hidden') source.row.style.visibility = source.visibility;
+    if (source.visibility !== 'hidden') returnedPromptHandoffIdentity.current = source.identity;
     promptHandoffSource.current = null;
   }, []);
   const cancelPromptHandoffAnimation = useCallback(() => {
@@ -1888,9 +1943,21 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     row.style.visibility = 'hidden';
     return row;
   }, [promptsByIdentity, reading.getRow, restorePromptHandoffSource]);
+  const originalPromptHiddenForHandoff = useCallback((identity: string) => promptHandoff?.identity === identity &&
+    (promptHandoff.phase === 'entering' || promptHandoff.phase === 'pinned' || promptHandoff.phase === 'leaving') &&
+    promptHandoffSource.current?.identity === identity && promptHandoffSource.current.row.style.visibility === 'hidden',
+    [promptHandoff]);
+  const isOriginalPromptVisible = useCallback((identity: string) => {
+    const visible = visibleOriginalPromptIdentities.has(identity);
+    const hiddenForHandoff = originalPromptHiddenForHandoff(identity);
+    return visible && !hiddenForHandoff;
+  }, [originalPromptHiddenForHandoff, visibleOriginalPromptIdentities]);
   useLayoutEffect(() => {
     const isEligible = (identity: string) => identity === stickyPromptIdentity &&
       !latestPromptDismissed && !suppressOlderStickyPrompt &&
+      (!isOriginalPromptVisible(identity) ||
+        ((promptHandoff?.phase === 'entering' || !promptHandoff) && overlappingPromptIdentity === identity &&
+          promptHandoffSource.current?.identity !== identity && returnedPromptHandoffIdentity.current !== identity)) &&
       (!overlappingPromptIdentity || overlappingPromptIdentity === identity);
     const active = promptHandoff;
     if (!active) {
@@ -1975,7 +2042,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
       setPromptHandoff(current => current?.identity === active.identity && current.phase === 'leaving' ? null : current);
     };
   }, [cancelPromptHandoffAnimation, hidePromptHandoffSource, latestPromptDismissed,
-    overlappingPromptIdentity, promptHandoff, promptsByIdentity, reading.getRow,
+    isOriginalPromptVisible, overlappingPromptIdentity, promptHandoff, promptsByIdentity, reading.getRow,
     restorePromptHandoffSource, stickyPromptIdentity, suppressOlderStickyPrompt]);
   useEffect(() => () => {
     cancelPromptHandoffAnimation();
@@ -2187,7 +2254,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
       window.visualViewport?.removeEventListener('scroll', updateStickyPrompt);
     };
   }, [promptCandidates, showRuntimeNotice, showToolHistoryStatusInNotice, state.loadingOlder, state.historyError, localNotice,
-    updateStickyPrompt, reading.content, stickyPromptIdentity, overlappingPromptIdentity,
+    updateStickyPrompt, reading.content, stickyPromptIdentity, overlappingPromptIdentity, visibleOriginalPromptIdentities,
     promptHandoff?.identity, promptHandoff?.phase, latestPromptDismissed, suppressOlderStickyPrompt]);
   const overlappingPrompt = overlappingPromptIdentity ? promptsByIdentity.get(overlappingPromptIdentity) : undefined;
   const handoffPrompt = promptHandoff ? promptsByIdentity.get(promptHandoff.identity) : undefined;
@@ -2197,8 +2264,13 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   const displayedPromptTargetId = displayedPrompt
     ? `${promptTargetPrefix}-${encodeURIComponent(displayedPrompt.targetKey)}` : undefined;
   const activeHandoffVisible = !!handoffPrompt && !latestPromptDismissed && !suppressOlderStickyPrompt &&
+    (!isOriginalPromptVisible(promptHandoff!.identity) ||
+      (promptHandoff?.phase === 'entering' && overlappingPromptIdentity === promptHandoff?.identity &&
+        promptHandoffSource.current?.identity !== promptHandoff?.identity &&
+        returnedPromptHandoffIdentity.current !== promptHandoff?.identity)) &&
     (!overlappingPromptIdentity || overlappingPromptIdentity === promptHandoff?.identity);
   const candidatePromptVisible = !!stickyPrompt && !latestPromptDismissed && !suppressOlderStickyPrompt &&
+    !isOriginalPromptVisible(stickyPromptIdentity!) &&
     (!overlappingPromptIdentity || overlappingPromptIdentity === stickyPromptIdentity);
   const showStickyPrompt = promptHandoff ? activeHandoffVisible : candidatePromptVisible;
   const jumpToStickyPrompt = () => {
@@ -2418,7 +2490,10 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
         <span className="tb-chat-latest-user-prompt-text">{displayedPrompt.content}</span>
       </button>
       <button type="button" className="tb-chat-latest-user-prompt-dismiss" aria-label="Dismiss user prompt preview"
-        onClick={() => setLatestPromptDismissed(true)}>×</button>
+        onClick={() => {
+          storeDismissedPrompt(state.sessionKey, true);
+          setPromptDismissal({ sessionKey: state.sessionKey, dismissed: true });
+        }}>×</button>
     </div>}
     {reading.showLatest && <button type="button" className="tb-chat-scroll-latest" data-scroll-latest="true"
       aria-label={reading.unseenButtonLabel} onMouseDown={(event) => event.preventDefault()} onClick={() => {

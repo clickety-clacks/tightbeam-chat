@@ -104,6 +104,9 @@ let scrollHeightRowCountOverride: number | undefined;
 // Model the stylesheet's tail padding (composer 60px, 16px/rem, no safe-area inset).
 let extraBottomSpace = 0;
 const rowHeightOverrides = new Map<string, number>();
+const messageBodyTailSpace = 29;
+const expectedReplyTopInset = 57;
+const expectedVisibleMessageTail = 16;
 let latestPromptOverlayHeight = 0;
 let scrollTo: ReturnType<typeof vi.fn>;
 let reducedMotion = false;
@@ -198,6 +201,15 @@ beforeEach(() => {
       const composerHidden = this.parentElement?.classList.contains('tb-chat-host-composer-hidden');
       return rect(renderedViewportHeight() - (composerHidden ? 60 : 120), 40);
     }
+    if (this.classList.contains('tb-chat-bubble-body')) {
+      const row = this.closest<HTMLElement>('article[data-record-key]');
+      if (row) {
+        const rowBounds = row.getBoundingClientRect();
+        const bodyTop = rowBounds.top + 12;
+        const bodyBottom = rowBounds.bottom - messageBodyTailSpace;
+        return rect(bodyTop, Math.max(0, bodyBottom - bodyTop));
+      }
+    }
     if (this.classList.contains('tb-chat-composer')) return rect(renderedViewportHeight() - 60, 60);
     const index = this.dataset.testPosition === undefined ? rows().indexOf(this) : Number(this.dataset.testPosition);
     if (index >= 0) {
@@ -244,6 +256,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   cleanup();
+  window.localStorage.removeItem('tb-chat:dismissed-prompt:reading');
   for (const frame of animationFrames.values()) clearTimeout(frame.timer);
   animationFrames.clear();
   restoreVisualViewport?.();
@@ -412,7 +425,9 @@ describe('conversation reading position', () => {
     const previousRow = box.querySelector<HTMLElement>('[data-scroll-key="message-19"]')!;
     advanceNextFrame(performance.now() + 300);
 
-    expect(firstRow.getBoundingClientRect().top).toBeCloseTo(box.getBoundingClientRect().top + 40);
+    expect(firstRow.getBoundingClientRect().top).toBeCloseTo(box.getBoundingClientRect().top + expectedReplyTopInset);
+    expect(previousRow.querySelector<HTMLElement>('.tb-chat-bubble-body')!.getBoundingClientRect().bottom)
+      .toBeCloseTo(box.getBoundingClientRect().top + expectedVisibleMessageTail);
     expect(previousRow.getBoundingClientRect().bottom).toBeGreaterThan(box.getBoundingClientRect().top);
     expect(previousRow.getBoundingClientRect().bottom).toBeLessThan(firstRow.getBoundingClientRect().top);
     expect(screen.getByRole('button', { name: 'Scroll to bottom' })).toBeTruthy();
@@ -421,7 +436,9 @@ describe('conversation reading position', () => {
     const laterMessages = [receivedMessage(21), receivedMessage(22), receivedMessage(23), receivedMessage(24)];
     act(() => runtime.publish({ records: [...runtime.state.records, ...laterMessages] }));
     expect(box.scrollTop).toBe(anchoredScrollTop);
-    expect(firstRow.getBoundingClientRect().top).toBeCloseTo(box.getBoundingClientRect().top + 40);
+    expect(firstRow.getBoundingClientRect().top).toBeCloseTo(box.getBoundingClientRect().top + expectedReplyTopInset);
+    expect(previousRow.querySelector<HTMLElement>('.tb-chat-bubble-body')!.getBoundingClientRect().bottom)
+      .toBeCloseTo(box.getBoundingClientRect().top + expectedVisibleMessageTail);
     expect(screen.getByRole('button', { name: /^[1-9]\d* unseen messages?$/ })).toBeTruthy();
   });
 
@@ -443,14 +460,30 @@ describe('conversation reading position', () => {
     const viewportBounds = box.getBoundingClientRect();
     const promptBounds = prompt.getBoundingClientRect();
     const replyBounds = firstReply.getBoundingClientRect();
-    const visibleBottom = screen.getByRole('button', { name: 'Scroll to bottom' }).getBoundingClientRect().top;
     const unobscuredTop = runtimeNoticeVisible ? chat.querySelector<HTMLElement>('.tb-chat-runtime-notice')!.getBoundingClientRect().bottom
       : viewportBounds.top;
-    const expectedInset = Math.min(40, Math.max(12, (visibleBottom - unobscuredTop) / 4));
     expect(chip).toBeNull();
-    expect(promptBounds.bottom).toBeGreaterThan(unobscuredTop);
+    const promptBody = prompt.querySelector<HTMLElement>('.tb-chat-bubble-body')!;
+    expect(promptBody.getBoundingClientRect().bottom).toBeCloseTo(unobscuredTop + expectedVisibleMessageTail);
     expect(promptBounds.bottom).toBeLessThan(replyBounds.top);
-    expect(replyBounds.top).toBeCloseTo(unobscuredTop + expectedInset);
+    expect(replyBounds.top).toBeCloseTo(unobscuredTop + expectedReplyTopInset);
+  });
+
+  it('keeps the answered prompt text tail visible when a tall reply is anchored', () => {
+    extraBottomSpace = 178;
+    const history = initialRows.slice(-2);
+    const { runtime, box } = setup(history);
+    rowHeightOverrides.set('message-20', 320);
+    const reply = { ...message(20), role: 'assistant' as const, sender: 'assistant' };
+    act(() => runtime.publish({ records: [...history, reply] }));
+    advanceNextFrame(performance.now() + 300);
+
+    const viewportBounds = box.getBoundingClientRect();
+    const prompt = box.querySelector<HTMLElement>('[data-scroll-key="message-19"]')!;
+    const promptBody = prompt.querySelector<HTMLElement>('.tb-chat-bubble-body')!;
+    const replyRow = box.querySelector<HTMLElement>('[data-scroll-key="message-20"]')!;
+    expect(promptBody.getBoundingClientRect().bottom).toBeCloseTo(viewportBounds.top + expectedVisibleMessageTail);
+    expect(replyRow.getBoundingClientRect().top).toBeCloseTo(viewportBounds.top + expectedReplyTopInset);
   });
 
   it('suppresses an older prompt chip during top anchoring while keeping the answered prompt tail visible', () => {
@@ -473,9 +506,10 @@ describe('conversation reading position', () => {
     const promptTail = box.querySelector<HTMLElement>('[data-scroll-key="message-19"]')!;
     const firstReply = box.querySelector<HTMLElement>('[data-scroll-key="message-20"]')!;
     const viewportBounds = box.getBoundingClientRect();
-    expect(promptTail.getBoundingClientRect().bottom).toBeGreaterThan(viewportBounds.top);
+    expect(promptTail.querySelector<HTMLElement>('.tb-chat-bubble-body')!.getBoundingClientRect().bottom)
+      .toBeCloseTo(viewportBounds.top + expectedVisibleMessageTail);
     expect(promptTail.getBoundingClientRect().bottom).toBeLessThan(firstReply.getBoundingClientRect().top);
-    expect(firstReply.getBoundingClientRect().top).toBeCloseTo(viewportBounds.top + 40);
+    expect(firstReply.getBoundingClientRect().top).toBeCloseTo(viewportBounds.top + expectedReplyTopInset);
   });
 
   it('keeps the answered prompt visible without an older chip during reduced-motion anchoring', async () => {
@@ -490,7 +524,7 @@ describe('conversation reading position', () => {
 
     advanceNextFrame(performance.now() + 300);
     const firstReply = box.querySelector<HTMLElement>('[data-scroll-key="message-20"]')!;
-    expect(firstReply.getBoundingClientRect().top).toBeCloseTo(box.getBoundingClientRect().top + 40);
+    expect(firstReply.getBoundingClientRect().top).toBeCloseTo(box.getBoundingClientRect().top + expectedReplyTopInset);
     expect(animationFrames.size).toBe(0);
 
     latestPromptOverlayHeight = 60;
@@ -502,8 +536,9 @@ describe('conversation reading position', () => {
 
     const promptTail = box.querySelector<HTMLElement>('[data-scroll-key="message-19"]')!;
     const viewportBounds = box.getBoundingClientRect();
-    expect(promptTail.getBoundingClientRect().bottom).toBeGreaterThan(viewportBounds.top);
-    expect(firstReply.getBoundingClientRect().top).toBeCloseTo(viewportBounds.top + 40);
+    expect(promptTail.querySelector<HTMLElement>('.tb-chat-bubble-body')!.getBoundingClientRect().bottom)
+      .toBeCloseTo(viewportBounds.top + expectedVisibleMessageTail);
+    expect(firstReply.getBoundingClientRect().top).toBeCloseTo(viewportBounds.top + expectedReplyTopInset);
     expect(animationFrames.size).toBe(0);
     expect(scrollTo).toHaveBeenNthCalledWith(1, { top: expect.any(Number), behavior: 'instant' });
     expect(scrollTo).toHaveBeenCalledTimes(1);
@@ -523,7 +558,7 @@ describe('conversation reading position', () => {
     advanceNextFrame(performance.now() + 300);
 
     if (shouldTopAnchor) {
-      expect(row.getBoundingClientRect().top).toBeCloseTo(box.getBoundingClientRect().top + 40);
+      expect(row.getBoundingClientRect().top).toBeCloseTo(box.getBoundingClientRect().top + expectedReplyTopInset);
     } else {
       expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight);
       expect(row.getBoundingClientRect().bottom).toBeLessThan(
@@ -554,7 +589,7 @@ describe('conversation reading position', () => {
     const row = box.querySelector<HTMLElement>('[data-scroll-key="message-20"]')!;
     const anchoredTop = row.getBoundingClientRect().top;
     const anchoredScrollTop = box.scrollTop;
-    expect(anchoredTop).toBeCloseTo(box.getBoundingClientRect().top + 40);
+    expect(anchoredTop).toBeCloseTo(box.getBoundingClientRect().top + expectedReplyTopInset);
 
     rowHeightOverrides.set('message-20', 420);
     act(() => runtime.publish({ records: [...initialRows, { ...reply, content: 'The reply continues growing' }] }));
@@ -577,7 +612,7 @@ describe('conversation reading position', () => {
     const row = box.querySelector<HTMLElement>('[data-scroll-key="message-20"]')!;
     expect(animate).not.toHaveBeenCalled();
     expect(scrollTo).toHaveBeenLastCalledWith({ top: box.scrollTop, behavior: 'instant' });
-    expect(row.getBoundingClientRect().top).toBeCloseTo(box.getBoundingClientRect().top + 40);
+    expect(row.getBoundingClientRect().top).toBeCloseTo(box.getBoundingClientRect().top + expectedReplyTopInset);
   });
 
   it('starts a fresh arrival after a short reply settles and leaves later arrivals unseen after anchoring tall', () => {
@@ -609,7 +644,7 @@ describe('conversation reading position', () => {
       advanceNextFrame(performance.now() + 300 + frame * 300);
     }
     const tallReplyRow = box.querySelector<HTMLElement>('[data-scroll-key="message-22"]')!;
-    expect(tallReplyRow.getBoundingClientRect().top).toBeCloseTo(box.getBoundingClientRect().top + 40);
+    expect(tallReplyRow.getBoundingClientRect().top).toBeCloseTo(box.getBoundingClientRect().top + expectedReplyTopInset);
 
     const anchoredScrollTop = box.scrollTop;
     const laterReply = { ...message(23), role: 'assistant' as const, sender: 'assistant' };
@@ -641,7 +676,7 @@ describe('conversation reading position', () => {
     advanceNextFrame(performance.now() + 300);
 
     if (shouldAnchor) {
-      expect(firstRow.getBoundingClientRect().top).toBeCloseTo(top + 40);
+      expect(firstRow.getBoundingClientRect().top).toBeCloseTo(top + expectedReplyTopInset);
     } else {
       expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight);
     }
@@ -1994,23 +2029,26 @@ describe('conversation reading position', () => {
       if (index >= 0) return rect(16 + index * 92 - scrollTop, 80);
       return rect(0, 50);
     });
-    const { box } = setup();
+    const sparseHistory = initialRows.map((record, index) => index === 0 || index === 6
+      ? record : { ...record, role: 'assistant' as const, sender: 'assistant' });
+    const { box } = setup(sparseHistory);
 
     expect(screen.queryByRole('button', { name: 'Jump to user prompt' })).toBeNull();
 
     layoutAvailable = true;
     readAt(box, 579);
     expect(screen.getByRole('button', { name: 'Jump to user prompt' }).textContent).toBe('Message 6');
+    expect(box.querySelector<HTMLElement>('[data-scroll-key="message-6"]')?.style.visibility).toBe('hidden');
+
+    readAt(box, 650);
+    expect(screen.getByRole('button', { name: 'Jump to user prompt' }).textContent).toBe('Message 6');
     const target = targetForPreview()!;
-    expect(target.getBoundingClientRect().bottom).toBeLessThanOrEqual(
-      box.parentElement!.querySelector<HTMLElement>('.tb-chat-latest-user-prompt-measurement')!.getBoundingClientRect().bottom);
+    expect(target.getBoundingClientRect().bottom).toBeLessThanOrEqual(box.getBoundingClientRect().top);
 
     box.scrollTop = 1500;
     fireEvent.scroll(box);
-    expect(screen.getByRole('button', { name: 'Jump to user prompt' }).textContent).toBe('Message 16');
-    expect(targetForPreview()?.dataset.recordKey).toBe('message-16');
-    expect(targetForPreview()!.getBoundingClientRect().bottom).toBeLessThanOrEqual(
-      box.parentElement!.querySelector<HTMLElement>('.tb-chat-latest-user-prompt-measurement')!.getBoundingClientRect().bottom);
+    expect(screen.getByRole('button', { name: 'Jump to user prompt' }).textContent).toBe('Message 6');
+    expect(targetForPreview()?.dataset.recordKey).toBe('message-6');
   });
 
   it('pins a prompt at the preview bottom line and animates it back when it crosses down', () => {
@@ -2060,11 +2098,9 @@ describe('conversation reading position', () => {
 
     box.scrollTop = 579;
     fireEvent.scroll(box);
-    expect(screen.getByRole('button', { name: 'Jump to user prompt' }).textContent).toBe('Message 6');
-    expect(crossingPrompt.style.visibility).toBe('hidden');
-    expect(animate).toHaveBeenCalledTimes(3);
-    act(() => animate.mock.results[2].value.onfinish());
-    expect(crossingPrompt.style.visibility).toBe('hidden');
+    expect(screen.queryByRole('button', { name: 'Jump to user prompt' })).toBeNull();
+    expect(crossingPrompt.style.visibility).not.toBe('hidden');
+    expect(animate).toHaveBeenCalledTimes(2);
   });
 
   it('moves the prompt instantly with reduced motion enabled', () => {
@@ -2085,8 +2121,34 @@ describe('conversation reading position', () => {
     expect(animate).not.toHaveBeenCalled();
   });
 
-  it('keeps a dismissed preview hidden while selection changes and restores it only after a new submission', () => {
-    const { runtime, box } = setup();
+  it('hides the sticky copy when its represented original remains visible', () => {
+    latestPromptOverlayHeight = 60;
+    const answer = (id: number): CanonicalMessage => ({ ...message(id), role: 'assistant', sender: 'assistant' });
+    const history = [message(1), message(2), ...Array.from({ length: 12 }, (_, index) => answer(index + 3))];
+    const { box } = setup(history);
+    readAt(box, 132);
+
+    const preview = screen.getByRole('button', { name: 'Jump to user prompt' });
+    const original = targetForPreview()!;
+    expect(preview.textContent).toBe('Message 2');
+    expect(original.getBoundingClientRect().bottom).toBeGreaterThan(box.getBoundingClientRect().top);
+    expect(original.getBoundingClientRect().top).toBeLessThan(box.getBoundingClientRect().bottom);
+    act(() => animate.mock.results[0].value.onfinish());
+    box.scrollTop = 0;
+    fireEvent.scroll(box);
+    expect(screen.queryByRole('button', { name: 'Jump to user prompt' })).toBeNull();
+    expect(original.style.visibility).not.toBe('hidden');
+
+    box.scrollTop = 120;
+    fireEvent.scroll(box);
+    expect(original.getBoundingClientRect().bottom).toBeGreaterThan(box.getBoundingClientRect().top);
+    expect(original.style.visibility).not.toBe('hidden');
+    expect(screen.queryByRole('button', { name: 'Jump to user prompt' })).toBeNull();
+  });
+
+  it('persists a dismissed preview through reload and restores it only after a new submission', () => {
+    const { runtime, box: initialBox } = setup();
+    let box = initialBox;
     readAt(box, 600);
     expect(targetForPreview()?.dataset.recordKey).toBe('message-5');
     scrollTo.mockClear();
@@ -2097,6 +2159,13 @@ describe('conversation reading position', () => {
     expect(scrollTo).not.toHaveBeenCalled();
     expect(box.querySelector('[data-record-key="message-5"]')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Jump to user prompt' })).toBeNull();
+
+    cleanup();
+    render(<TightbeamChat sessionKey="reading" adapter={{ open: () => runtime }} />);
+    box = screen.getByRole('log');
+    readAt(box, 600);
+    expect(screen.queryByRole('button', { name: 'Jump to user prompt' })).toBeNull();
+
     act(() => runtime.publish({ agentDisplayName: 'Updated assistant' }));
     expect(screen.queryByRole('button', { name: 'Jump to user prompt' })).toBeNull();
     box.scrollTop = 950;

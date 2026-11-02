@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.78",
+    "items": [
+      {
+        "title": "Keep prompt context visible with long replies",
+        "description": "Dismissing a prompt preview keeps it hidden until you send another prompt, and Chat hides the preview while its prompt is visible in the conversation. When a reply is tall, Chat keeps the end of the prompt it answers in view."
+      }
+    ]
+  },
+  {
     "version": "v0.1.77",
     "items": [
       {
