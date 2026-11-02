@@ -83,7 +83,7 @@ describe('principal-scoped message projection', () => {
     expect(projectMessages([unmarked], 'person', 'person').messages).toEqual([]);
   });
 
-  it('keeps user members of unmarked mixed Tightbeam batches in the notice trail', () => {
+  it('keeps user members of unmarked mixed process batches in the notice trail', () => {
     const batch = message('mixed-user-agent', { role: 'user', sender: 'process:tightbeam', messageType: 'substrate',
       content: [
         '[from process:tightbeam]', '', '[batched notices: 2]',

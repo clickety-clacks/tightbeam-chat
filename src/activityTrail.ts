@@ -1,5 +1,5 @@
 import type { CanonicalMessage, CanonicalTransition, HistoryRailDenial, LiveRailDenial, ToolCallRecord } from './types';
-import { isUnmarkedTightbeamCarrier, parseBatchMembers, type HumanMember, type ParsedBatchMember } from './messageVisibility';
+import { isUnmarkedCanonicalProcessBatch, parseBatchMembers, type HumanMember, type ParsedBatchMember } from './messageVisibility';
 import { activityPillPresentation, type ActivityPillPresentation } from './activityPresentation';
 import { stripDeliveryScaffolding, stripProvenanceMarkup } from './displayText';
 import { sameRailDenial } from './railDenials';
@@ -411,7 +411,7 @@ export function buildActivityTrail(input: {
     if (batchMembers) {
       const hasAgentMember = batchMembers.some(member => /^(?:agent|session):/.test(member.sender));
       const isMixedBatch = hasAgentMember && batchMembers.some(member => !/^(?:agent|session):/.test(member.sender));
-      const userMembersAreNotices = hasAgentMember && isUnmarkedTightbeamCarrier(message as CanonicalMessage);
+      const userMembersAreNotices = hasAgentMember && isUnmarkedCanonicalProcessBatch(message as CanonicalMessage);
       for (const member of batchMembers) {
         const candidate = memberCandidate(message as CanonicalMessage, member,
           senderDisplayNames.get(member.sender), isMixedBatch && /^(?:agent|session):/.test(member.sender),

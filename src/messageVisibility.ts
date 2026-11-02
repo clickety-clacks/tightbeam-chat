@@ -16,7 +16,7 @@ const batchHeading = /^\[(\d+)\] source=([^\s]+) sender=([^\s]+) cause=([^\s]+) 
 const canonicalBatchHeading = /^\[(\d+)\] source=([^\s]+) sender=(.+?) cause=([^\s]+) class=([^\s]+)$/;
 const batchCountHeading = /^\[batched notices: ([1-9]\d*)\]$/;
 
-export function isUnmarkedTightbeamCarrier(record: CanonicalMessage): boolean {
+export function isUnmarkedCanonicalProcessBatch(record: CanonicalMessage): boolean {
   const lines = record.content.split(/\r?\n/);
   return record.isBatchCarrier !== true && record.sender === 'process:tightbeam' &&
     lines[0] === '[from process:tightbeam]' && lines[1] === '';
@@ -65,7 +65,7 @@ export function parseBatchMembers(record: CanonicalMessage): readonly ParsedBatc
   // process envelope to recognize mixed batches, while leaving unmarked
   // process-only batches on their existing single-notice path.
   if (!isCanonicalCarrier && hasProcessPreamble &&
-      (!isUnmarkedTightbeamCarrier(record) ||
+      (!isUnmarkedCanonicalProcessBatch(record) ||
         !members.some(member => /^(?:agent|session):/.test(member.sender)))) return undefined;
   return members;
 }
@@ -120,7 +120,7 @@ export function projectMessages(records: readonly ConversationRecord[], principa
     const classification = classifyMessage(record, principalKey);
     const members = parseBatchMembers(record);
     if (members && record.isBatchCarrier !== true) {
-      const preserveNotices = isUnmarkedTightbeamCarrier(record) &&
+      const preserveNotices = isUnmarkedCanonicalProcessBatch(record) &&
         members.some(member => /^(?:agent|session):/.test(member.sender));
       for (const member of members) {
         if (member.sender.startsWith('user:')) {
