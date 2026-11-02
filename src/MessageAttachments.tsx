@@ -248,6 +248,16 @@ function InlineImageAttachment({ attachment }: { readonly attachment: ImageAttac
     onImageError={() => setFailedSrc(attachment.src)} />;
 }
 
+export function MarkdownImagePreview({ src, alt }: {
+  readonly src?: string;
+  readonly alt?: string;
+}) {
+  const label = alt?.trim() ? alt : 'Image';
+  return <span className="tb-chat-markdown-image">
+    <InlineImageAttachment attachment={{ src, alt: label }} />
+  </span>;
+}
+
 function ImageAttachmentView({ attachment, readAttachment }: {
   readonly attachment: ImageAttachment;
   readonly readAttachment?: ReadImageAttachment;

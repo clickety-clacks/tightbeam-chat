@@ -813,6 +813,80 @@ describe('conversation surface', () => {
     expect(liveActivity.map(row => row.record)).toContain('member:batch-trigger:member:2');
   });
 
+  it('renders Markdown image links through the shared enlarge view while keeping raw HTML inert', () => {
+    const sessionKey = 'markdown-image-preview';
+    const imageUrl = 'https://images.example/chart.png';
+    const content = [
+      `![A chart](${imageUrl})`,
+      '',
+      '<script>window.markdownImageCompromised = true</script>',
+      '<img src="https://images.example/raw-html.png" onerror="window.markdownImageCompromised = true">',
+    ].join('\n');
+    const message = row(sessionKey, 'markdown-image', content, {
+      role: 'user', sender: 'user:person', messageType: 'chat',
+    });
+    const runtime = new FakeRuntime(sessionKey, { records: [message] });
+
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+
+    const log = screen.getByRole('log');
+    const thumbnail = within(log).getByRole('img', { name: 'A chart' }) as HTMLImageElement;
+    expect(thumbnail.getAttribute('src')).toBe(imageUrl);
+    const frame = thumbnail.closest('.tb-chat-markdown-image');
+    const bubble = thumbnail.closest('.tb-chat-bubble');
+    const layout = installViewportLayout(log);
+    try {
+      layout.setScrollTop(52);
+      fireEvent.load(thumbnail);
+      expect(layout.scrollTop).toBe(52);
+      expect(thumbnail.closest('.tb-chat-markdown-image')).toBe(frame);
+      expect(thumbnail.closest('.tb-chat-bubble')).toBe(bubble);
+    } finally {
+      layout.restore();
+    }
+
+    const enlarge = screen.getByRole('button', { name: 'Enlarge A chart' });
+    fireEvent.click(enlarge);
+    expect(screen.getByRole('dialog', { name: 'A chart' }).querySelector('img')?.getAttribute('src')).toBe(imageUrl);
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.activeElement).toBe(enlarge);
+
+    expect(log.querySelector('script')).toBeNull();
+    expect(log.querySelector('img[src="https://images.example/raw-html.png"]')).toBeNull();
+    expect((window as Window & { markdownImageCompromised?: boolean }).markdownImageCompromised).toBeUndefined();
+  });
+
+  it('shows a broken-image fallback labeled with Markdown alt text after the image fails', async () => {
+    const sessionKey = 'markdown-image-failure';
+    const message = row(sessionKey, 'markdown-image-failure', '![A broken chart](https://images.example/missing.png)', {
+      role: 'user', sender: 'user:person', messageType: 'chat',
+    });
+    const runtime = new FakeRuntime(sessionKey, { records: [message] });
+
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+
+    const log = screen.getByRole('log');
+    const thumbnail = within(log).getByRole('img', { name: 'A broken chart' });
+    const frame = thumbnail.closest('.tb-chat-markdown-image');
+    const bubble = thumbnail.closest('.tb-chat-bubble');
+    const layout = installViewportLayout(log);
+    try {
+      layout.setScrollTop(52);
+      fireEvent.error(thumbnail);
+
+      const unavailable = await within(log).findByRole('img', {
+        name: 'A broken chart; preview unavailable',
+      });
+      expect(within(log).getByText('Preview unavailable')).toBeTruthy();
+      expect(layout.scrollTop).toBe(52);
+      expect(unavailable.closest('.tb-chat-markdown-image')).toBe(frame);
+      expect(unavailable.closest('.tb-chat-bubble')).toBe(bubble);
+    } finally {
+      layout.restore();
+    }
+  });
+
   it('opens complete pill messages in place for standalone and grouped rows', () => {
     const sessionKey = 'activity-pill-details';
     const prompt = row(sessionKey, 'prompt', 'Question', {

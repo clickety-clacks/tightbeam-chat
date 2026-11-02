@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 const themeCss = readFileSync(resolve(process.cwd(), 'src/theme.css'), 'utf8');
 const componentCss = readFileSync(resolve(process.cwd(), 'src/style.css'), 'utf8');
+const imageCss = readFileSync(resolve(process.cwd(), 'src/messageAttachments.css'), 'utf8');
 const siteCss = readFileSync(resolve(process.cwd(), 'examples/site.css'), 'utf8');
 const hostComposerCss = readFileSync(resolve(process.cwd(), 'examples/hostComposer.css'), 'utf8');
 const componentSource = readFileSync(resolve(process.cwd(), 'src/TightbeamChat.tsx'), 'utf8');
@@ -169,6 +170,20 @@ describe('Nordic theme', () => {
     expect(rule(componentCss, '.tb-chat-send-spinner')).toContain('animation: tb-chat-send-spin .8s linear infinite');
     expect(rule(componentCss, '.tb-chat-send-error')).toContain('color: var(--tb-chat-danger)');
     expect(rule(componentCss, '.tb-chat-send-actions span')).toContain('color: var(--tb-chat-muted)');
+  });
+
+  it('reserves an inline image frame while its URL loads or fails', () => {
+    const markdownImage = rule(imageCss, '.tb-chat-markdown-image');
+    expect(markdownImage).toContain('width: min(100%, 22rem)');
+    expect(markdownImage).toContain('max-width: 100%');
+    const frame = rule(imageCss, '.tb-chat-image-frame');
+    expect(frame).toContain('width: 100%');
+    expect(frame).toContain('aspect-ratio: 4 / 3');
+    expect(frame).toContain('min-height: 5rem');
+    expect(frame).toContain('max-height: 22rem');
+    const preview = rule(imageCss, '.tb-chat-image-preview');
+    expect(preview).toContain('width: 100%');
+    expect(preview).toContain('height: 100%');
   });
 
   it('keeps the floating latest-prompt miniature aligned with the human bubble color and three-line limit', () => {

@@ -12,6 +12,12 @@
   max-width: min(100%, 22rem);
   margin: 0;
 }
+.tb-chat-markdown-image {
+  display: inline-block;
+  width: min(100%, 22rem);
+  max-width: 100%;
+  vertical-align: middle;
+}
 .tb-chat-image-frame {
   box-sizing: border-box;
   width: 100%;
