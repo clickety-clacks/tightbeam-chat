@@ -14,7 +14,7 @@
 }
 .tb-chat-markdown-image {
   display: inline-block;
-  width: min(100%, 22rem);
+  width: 22rem;
   max-width: 100%;
   vertical-align: middle;
 }

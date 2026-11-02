@@ -174,7 +174,7 @@ describe('Nordic theme', () => {
 
   it('reserves an inline image frame while its URL loads or fails', () => {
     const markdownImage = rule(imageCss, '.tb-chat-markdown-image');
-    expect(markdownImage).toContain('width: min(100%, 22rem)');
+    expect(markdownImage).toContain('width: 22rem');
     expect(markdownImage).toContain('max-width: 100%');
     const frame = rule(imageCss, '.tb-chat-image-frame');
     expect(frame).toContain('width: 100%');
