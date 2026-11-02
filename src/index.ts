@@ -19,3 +19,4 @@ export * from './types';
 
 export { createActivitySummaryTransport } from './activitySummaries';
 export type { ActivitySummaryTransport, SummarySource, SummaryAnswer } from './activitySummaries';
+export { prepareAttachmentInputs } from './attachmentPreparation';
