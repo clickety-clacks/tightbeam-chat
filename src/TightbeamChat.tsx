@@ -157,6 +157,21 @@ function nearestPromptAboveLine(prompts: readonly UserPrompt[], viewport: HTMLEl
   return low > 0 ? prompts[low - 1] : undefined;
 }
 
+function promptPreviewSelectionHeight(element: HTMLElement | null): number | undefined {
+  if (!element) return undefined;
+  const rootFontSize = Number.parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+  const value = getComputedStyle(element).getPropertyValue('--tb-chat-prompt-selection-height').trim();
+  const amount = Number.parseFloat(value);
+  if (!Number.isFinite(amount)) return 3.75 * rootFontSize;
+  if (value.endsWith('rem')) {
+    return amount * rootFontSize;
+  }
+  if (value.endsWith('em')) {
+    return amount * (Number.parseFloat(getComputedStyle(element).fontSize) || 16);
+  }
+  return amount;
+}
+
 function latestPromptIntersectingBubble(prompts: readonly UserPrompt[], top: number, bottom: number,
   getRow: (key: string) => HTMLElement | undefined): UserPrompt | undefined {
   if (bottom <= top) return undefined;
@@ -2452,8 +2467,12 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
       ? measuredBubble.top : viewportBounds?.top ?? 0;
     const bubbleBottom = measuredBubble && measuredBubble.height > 0
       ? measuredBubble.bottom : viewportBounds?.top ?? 0;
+    const selectionHeight = measuredBubble && measuredBubble.height > 0
+      ? promptPreviewSelectionHeight(stickyPromptMeasurement.current ?? null) : undefined;
+    const selectionLine = selectionHeight !== undefined
+      ? bubbleTop + selectionHeight : viewportBounds?.top ?? 0;
     const prompt = box
-      ? nearestPromptAboveLine(promptCandidates, box, reading.getRow, bubbleBottom)
+      ? nearestPromptAboveLine(promptCandidates, box, reading.getRow, selectionLine)
       : undefined;
     const visibilityCandidates = new Set([prompt?.identity, stickyPromptIdentity, promptHandoff?.identity,
       returnedPromptHandoffIdentity.current]

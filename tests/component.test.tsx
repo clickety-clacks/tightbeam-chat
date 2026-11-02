@@ -2388,8 +2388,9 @@ describe('conversation surface', () => {
     }
   });
 
-  it('keeps prompt preview measurement stable when an overlapping history prompt has a different height', () => {
-    const sessionKey = 'prompt-preview-history-measurement';
+  it.each([100, 110, 120, 130])(
+    'keeps sticky prompt selection stable across a shorter prompt preview at scrollTop %i', (scrollTop) => {
+    const sessionKey = `prompt-preview-history-measurement-${scrollTop}`;
     const promptA = row(sessionKey, 'prompt-a', `Long prompt A ${'earlier context '.repeat(18)}`, {
       seq: 1, role: 'user', sender: 'user:person', messageType: 'chat', turnSeq: 1,
     });
@@ -2409,18 +2410,20 @@ describe('conversation surface', () => {
       const key = (element as HTMLElement).dataset.recordKey;
       if (key === 'prompt-a') return 92;
       if (key === 'reply-a') return 48;
+      if (key === 'prompt-b') return 32;
       return 92;
     }, false, { width: 390, height: 180, top: 100 });
 
     try {
       fireEvent.wheel(log, { deltaY: -1 });
-      layout.setScrollTop(96);
+      layout.setScrollTop(scrollTop);
       fireEvent.scroll(log);
       const promptARow = within(log).getByText(/Long prompt A/).closest<HTMLElement>('[data-scroll-key]')!;
       const promptBRow = within(log).getByText('Short prompt B').closest<HTMLElement>('[data-scroll-key]')!;
       expect(promptARow.getBoundingClientRect().bottom).toBeLessThanOrEqual(110);
-      expect(promptBRow.getBoundingClientRect().top).toBeGreaterThanOrEqual(140);
-      expect(promptBRow.getBoundingClientRect().top).toBeLessThan(180);
+      expect(promptBRow.getBoundingClientRect().bottom).toBe(276 - scrollTop);
+      expect(promptBRow.getBoundingClientRect().bottom).toBeGreaterThan(140);
+      expect(promptBRow.getBoundingClientRect().bottom).toBeLessThanOrEqual(180);
       const measurement = log.parentElement?.querySelector<HTMLElement>('.tb-chat-latest-user-prompt-measurement');
       expect(measurement).toBeTruthy();
       const measuredPrompts: string[] = [];
@@ -2435,8 +2438,10 @@ describe('conversation surface', () => {
       expect(screen.queryByText('The conversation could not be displayed. Its history is still available.')).toBeNull();
       expect(screen.queryByRole('log')).toBeTruthy();
       expect(measuredPrompts.length).toBeGreaterThan(0);
-      expect(measuredPrompts.every(prompt => prompt === 'A')).toBe(true);
-      expect(screen.queryByRole('button', { name: 'Jump to user prompt' })).toBeNull();
+      expect(measuredPrompts.length).toBeLessThan(10);
+      const measurementChanges = measuredPrompts.slice(1)
+        .filter((prompt, index) => prompt !== measuredPrompts[index]).length;
+      expect(measurementChanges).toBeLessThanOrEqual(1);
     } finally {
       layout.restore();
     }
