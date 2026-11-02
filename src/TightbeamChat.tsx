@@ -1516,8 +1516,9 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     const box = viewport.current;
     if (!box) return;
     const bottom = Math.max(0, box.scrollHeight - box.clientHeight);
+    // The browser clamps an offset if recovered history has become shorter.
     box.scrollTop = recoverySnapshot.followLatest
-      ? bottom : Math.max(0, Math.min(recoverySnapshot.scrollTop, bottom));
+      ? bottom : recoverySnapshot.scrollTop;
     readingOnScroll.current();
     rememberReadingPosition();
   }, [recoverySnapshot, rememberReadingPosition, viewport]);
