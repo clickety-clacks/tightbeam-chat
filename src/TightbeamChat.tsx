@@ -2161,6 +2161,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   const hasToolHistoryStatus = state.toolCallsEnabled === true &&
     (state.toolCallsLoading || visibleToolCallsError !== undefined);
   const showToolHistoryStatusInNotice = hasToolHistoryStatus && !state.loadingOlder && !!(state.historyError || localNotice);
+  const reserveRuntimeNotice = showRuntimeNotice && !state.loadingOlder;
   useLayoutEffect(() => {
     const box = viewport.current;
     const content = reading.content.current;
@@ -2369,7 +2370,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
           {renderToolHistoryStatus()}
         </div>}
       </div>}
-      <div className={`tb-chat-message-content${showToolHistoryStatusInNotice ? ' tb-chat-runtime-notice-reserved' : ''}`} ref={reading.content}>
+      <div className={`tb-chat-message-content${reserveRuntimeNotice ? ' tb-chat-runtime-notice-reserved' : ''}`} ref={reading.content}>
       <TranscriptRenderBoundary resetKey={state.generation} onRetry={retryTranscript}
         onRecovered={reading.reconcileViewportLayout} fallback={retry => <div
           className="tb-chat-render-failure tb-chat-render-failure-transcript tb-chat-caption tb-chat-caption-danger"

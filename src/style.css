@@ -620,7 +620,7 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
     width: 100%;
   }
   .tb-chat-message-content.tb-chat-runtime-notice-reserved {
-    padding-block-start: var(--tb-chat-runtime-notice-height, 0px);
+    padding-block-start: calc(var(--tb-chat-runtime-notice-height, 0px) + .65rem);
   }
   .tb-chat-message-content.tb-chat-runtime-notice-reserved > .tb-chat-tool-history-status-placeholder {
     display: none;

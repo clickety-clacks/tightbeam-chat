@@ -283,7 +283,7 @@ describe('Nordic theme', () => {
     expect(phoneToolHistory).toContain('grid-row: 2');
     expect(phoneToolHistory).toContain('width: 100%');
     const phoneNoticeReserve = phoneLayout.match(/\.tb-chat-message-content\.tb-chat-runtime-notice-reserved\s*\{([^}]*)\}/)?.[1] ?? '';
-    expect(phoneNoticeReserve).toContain('padding-block-start: var(--tb-chat-runtime-notice-height, 0px)');
+    expect(phoneNoticeReserve).toContain('padding-block-start: calc(var(--tb-chat-runtime-notice-height, 0px) + .65rem)');
     const phoneHistoryPlaceholder = phoneLayout.match(/\.tb-chat-message-content\.tb-chat-runtime-notice-reserved > \.tb-chat-tool-history-status-placeholder\s*\{([^}]*)\}/)?.[1] ?? '';
     expect(phoneHistoryPlaceholder).toContain('display: none');
     const tabletNotice = componentCss.match(/@media \(min-width: 541px\) and \(max-width: 767px\)\s*\{\s*\.tb-chat-caption\.tb-chat-runtime-notice\s*\{([^}]*)\}/)?.[1] ?? '';
