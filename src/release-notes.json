@@ -1,5 +1,18 @@
 [
   {
+    "version": "v0.1.81",
+    "items": [
+      {
+        "title": "Keep the latest reply in view",
+        "description": "When another reply arrives before the previous bottom movement finishes, Chat retargets to the newest reply and lets it settle while you are following the conversation."
+      },
+      {
+        "title": "Keep the latest message clear of the composer",
+        "description": "When the composer grows, the complete latest message remains visible above it, including any delivery warning or retry control. The normal spacing above a one-line composer stays the same."
+      }
+    ]
+  },
+  {
     "version": "v0.1.80",
     "items": [
       {
