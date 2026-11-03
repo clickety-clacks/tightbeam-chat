@@ -61,6 +61,7 @@ export function useReadingPosition(
   const seenArrivalRows = useRef(new Set<string>());
   const knownRowKeys = useRef(new Set<string>());
   const newlyRegisteredRowKeys = useRef(new Set<string>());
+  const historyLayoutPending = useRef(false);
   const heldHistoryRows = useRef(new Map<string, { element: HTMLElement; display: string }>());
   const arrivalScopeRef = useRef(arrivalScope);
   const messageRows = useRef<ReadonlyMap<string, MessageRow>>(new Map());
@@ -79,6 +80,7 @@ export function useReadingPosition(
     newlyRegisteredRowKeys.current.clear();
     for (const held of heldHistoryRows.current.values()) held.element.style.display = held.display;
     heldHistoryRows.current.clear();
+    historyLayoutPending.current = false;
     unseenMessages.current.clear();
     messageBaselineReady.current = false;
     arrivalScopeRef.current = arrivalScope;
@@ -510,7 +512,7 @@ export function useReadingPosition(
   };
 
   const holdNewHistoryRows = (box: HTMLElement) => {
-    if (!content.current || newlyRegisteredRowKeys.current.size === 0) return;
+    if (!historyLayoutPending.current || !content.current || newlyRegisteredRowKeys.current.size === 0) return;
     const scrollBase = heldPositionScrollTop.current ?? box.scrollTop;
     const visible = anchors.current.filter(anchor => anchor.top + anchor.height > scrollBase &&
       anchor.top < scrollBase + box.clientHeight && registeredRows.current.has(anchor.key));
@@ -768,6 +770,7 @@ export function useReadingPosition(
       incomingMessageArrival.current = undefined;
     }
     capture();
+    if (heldPositionCount.current === 0) historyLayoutPending.current = false;
     // Evaluate offscreen positions only after compensating prepended content.
     // Otherwise that temporary displacement could admit rows still in view.
     if (!following.current && revealOffscreenHistoryRows(box)) updateLayout();
@@ -915,15 +918,22 @@ export function useReadingPosition(
     interrupt();
     if (heldPositionCount.current === 0) heldPositionScrollTop.current = viewport.current?.scrollTop;
     heldPositionCount.current++;
+    historyLayoutPending.current = true;
     let released = false;
     return () => {
       if (released) return;
       released = true;
       heldPositionCount.current = Math.max(0, heldPositionCount.current - 1);
-      if (heldPositionCount.current === 0) heldPositionScrollTop.current = undefined;
+      if (heldPositionCount.current === 0) {
+        heldPositionScrollTop.current = undefined;
+        // React may commit the published history after the request settles.
+        historyLayoutPending.current = true;
+      }
     };
   };
   const preserveVisiblePosition = () => {
+    // Explicit folding controls should reveal their content immediately.
+    historyLayoutPending.current = false;
     const box = viewport.current;
     if (!box) return;
     initialSettlePending.current = false;

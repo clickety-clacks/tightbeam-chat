@@ -1235,8 +1235,8 @@ describe('conversation reading position', () => {
     expect(box.scrollTop).toBe(previousTop + 60 + 2 * 92);
   });
 
-  it.each(['above', 'below', 'latest'] as const)(
-    'holds interleaved history activity and dividers until their spot is %s', direction => {
+  it.each(['above', 'below', 'latest', 'explicit expansion', 'settled request'] as const)(
+    'preserves interleaved history layout: %s', direction => {
     extraBottomSpace = 2000;
     let reading: ReturnType<typeof useReadingPosition> | undefined;
     type Entry = { key: string; kind: string; height: number };
@@ -1303,8 +1303,16 @@ describe('conversation reading position', () => {
     const before = new Map(stableKeys.map(key => [key, offset(key)]));
     // Three flex gaps and two dividers, rather than one absorbable margin.
     expect(offset('lower-message') - offset('upper-message') - 60).toBeCloseTo(95.296, 3);
+    if (direction === 'explicit expansion') {
+      reading!.holdPosition()();
+      reading!.preserveVisiblePosition();
+      view.rerender(<History page={1} />);
+      for (const entry of activity) expect(row(entry.key).style.display).toBe('');
+      return;
+    }
     for (const page of [1, 2]) {
       const release = reading!.holdPosition();
+      if (direction === 'settled request') release();
       view.rerender(<History page={page} />);
       release();
       for (const key of stableKeys) expect(offset(key)).toBeCloseTo(before.get(key)!, 5);
@@ -1315,7 +1323,7 @@ describe('conversation reading position', () => {
     // A harmless commit/ref reattachment must not drop held content.
     view.rerender(<History page={2} />);
     expect(row(divider.key).style.display).toBe('none');
-    if (direction === 'latest') {
+    if (direction === 'latest' || direction === 'settled request') {
       act(() => reading!.scrollToLatest());
     } else {
       // Above: keep the lower bubble partially visible; below: only prefix is visible.
