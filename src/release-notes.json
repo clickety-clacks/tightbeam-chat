@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.84",
+    "items": [
+      {
+        "title": "See who sent each agent message",
+        "description": "Agent message pills show the sender's name before the message text, without repeating the name after it."
+      }
+    ]
+  },
+  {
     "version": "v0.1.83",
     "items": [
       {
