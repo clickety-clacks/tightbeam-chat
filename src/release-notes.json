@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.85",
+    "items": [
+      {
+        "title": "Keep read markers scoped to the Chat operator",
+        "description": "Read markers are available only for the configured Chat operator and remain unavailable when no operator is set. Chat recognizes user-originated turns while preserving the existing handling of agent and batched activity."
+      }
+    ]
+  },
+  {
     "version": "v0.1.84",
     "items": [
       {
