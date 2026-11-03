@@ -34,7 +34,7 @@ export interface CanonicalTurn {
   readonly status: string;
   readonly messageId?: string;
   readonly origin: string;
-  readonly triggerSource?: 'batch' | 'mike' | 'agent' | 'process' | 'other';
+  readonly triggerSource?: 'batch' | 'human' | 'agent' | 'process' | 'other';
   readonly batchMemberCount?: number;
   readonly raw: Readonly<Record<string, unknown>>;
 }
@@ -248,7 +248,7 @@ export interface HumanSubmission {
   readonly attachments?: readonly AttachmentReference[];
 }
 
-/** A session message position that Chat may record when Mike opens its conversation. */
+/** A session message position that Chat may record for the configured operator. */
 export interface ReadMarkerCandidate {
   readonly userId: string;
   readonly scopeKey: string;
@@ -304,6 +304,8 @@ export interface ChangeCallbacks {
  */
 export interface ChatTransport {
   currentIdentity(): HostIdentity;
+  /** Deployment-configured principal allowed to use optional read markers. */
+  readonly readMarkerOperatorPrincipalKey?: string;
   attachmentCapabilities?(sessionKey: string): AttachmentCapabilities | undefined;
   uploadAttachment?(input: AttachmentInput, signal: AbortSignal): Promise<AttachmentReference>;
   readAttachment?(reference: AttachmentReference, signal: AbortSignal): Promise<Blob>;

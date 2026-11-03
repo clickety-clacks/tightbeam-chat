@@ -16,7 +16,7 @@ export function createTurnProvenance(
     row.kind === 'message' && row.sessionKey === turn.sessionKey && row.turnSeq === turn.seq &&
       (isHumanMessage(row, principalKey) || (classifyMessage(row, principalKey) === 'assistant' && scopedHumanFlag(row, principalKey, ownerUserId) === true)));
   let sourceKind: TurnSourceKind = 'unknown';
-  if (turn.triggerSource === 'mike' || (turn.triggerSource === 'batch' && turn.batchMemberCount === 1 && human)) {
+  if (turn.triggerSource === 'human' || (turn.triggerSource === 'batch' && turn.batchMemberCount === 1 && human)) {
     sourceKind = 'human';
   } else if (turn.triggerSource === 'agent') sourceKind = 'agent';
   else if (turn.triggerSource === 'process') sourceKind = 'substrate';

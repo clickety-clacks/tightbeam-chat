@@ -856,7 +856,7 @@ describe('conversation reading position', () => {
     const activity = setup();
     const activeOwnerTurn = createTurnProvenance({
       seq: 20, sessionKey: 'reading', messageId: initialRows.at(-1)!.id, origin: 'user:person',
-      status: 'running', triggerSource: 'mike', raw: { seq: 20, origin: 'user:person' },
+      status: 'running', triggerSource: 'human', raw: { seq: 20, origin: 'user:person' },
     }, [initialRows.at(-1)!], 'person', 'person');
     const first = { ...message(20), id: 'activity-1', sender: 'process:events', messageType: 'substrate',
       content: 'Quiet for 3 h · Assignment Alpha' };
@@ -1550,7 +1550,7 @@ describe('conversation reading position', () => {
     readAt(box, 500);
     const activeOwnerTurn = createTurnProvenance({
       seq: 20, sessionKey: 'reading', messageId: initialRows.at(-1)!.id, origin: 'user:person',
-      status: 'running', triggerSource: 'mike', raw: { seq: 20, origin: 'user:person' },
+      status: 'running', triggerSource: 'human', raw: { seq: 20, origin: 'user:person' },
     }, [initialRows.at(-1)!], 'person', 'person');
     const activityRows = [
       { ...message(20), id: 'activity-1', sender: 'process:events', messageType: 'substrate', content: 'Quiet for 3 h' },

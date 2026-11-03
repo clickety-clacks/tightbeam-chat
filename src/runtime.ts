@@ -321,15 +321,17 @@ class SessionRuntime implements ChatRuntime {
   markReadPosition = async (): Promise<void> => {
     const readReadMarker = this.transport.readReadMarker;
     const writeReadMarker = this.transport.writeReadMarker;
+    const operatorPrincipalKey = this.transport.readMarkerOperatorPrincipalKey;
     if (!readReadMarker || !writeReadMarker || this.disposed || this.state.identityChanged ||
-        this.state.session?.sessionKey !== this.sessionKey || this.identity.principalKey !== 'mike' ||
+        !operatorPrincipalKey || this.state.session?.sessionKey !== this.sessionKey ||
+        this.identity.principalKey !== operatorPrincipalKey ||
         !this.checkIdentity()) return;
 
     const newestMessageSeq = this.messageSeqIndex?.max;
     if (newestMessageSeq === undefined) return;
 
     const candidate = {
-      userId: 'mike',
+      userId: operatorPrincipalKey,
       scopeKey: `${this.sessionKey}:session-read-position`,
       sequence: newestMessageSeq.toString(10),
     };

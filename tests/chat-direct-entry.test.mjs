@@ -9,10 +9,11 @@ import { createChatServer } from '../server/chat-server.mjs';
 import { createPublic019Transport } from '../src/public019';
 
 const TOKEN = 'fixture-operator-credential';
-const MARKER_DEVICE_TOKEN = 'fixture-mike-device-credential';
+const MARKER_DEVICE_TOKEN = 'fixture-device-credential';
 const SESSION = 'agent:example:chat?tab=1';
 const LINKED_SESSION = 'agent:example:linked-chat';
 const PRINCIPAL = 'example-user';
+const OPERATOR_PRINCIPAL = 'configured-operator';
 const createdServers = [];
 const temporaryRoots = [];
 
@@ -368,7 +369,7 @@ describe('private direct-entry Chat service bridge', () => {
     expect(seen).toHaveLength(11);
   });
 
-  it('keeps the Mike device credential private and uses it only for read-marker-set dispatch', async () => {
+  it('keeps the configured operator credential private and uses it only for read-marker-set dispatch', async () => {
     const scopeKey = 'agent:example:chat with spaces:session-read-position';
     const seen = [];
     const gateway = http.createServer(async (request, response) => {
@@ -378,9 +379,9 @@ describe('private direct-entry Chat service bridge', () => {
       seen.push({ method: request.method, url: request.url, authorization: request.headers.authorization, body });
       response.setHeader('content-type', 'application/json');
       if (request.method === 'GET' && request.url ===
-          `/api/read-markers/${encodeURIComponent(scopeKey)}?asUser=mike`) {
+          `/api/read-markers/${encodeURIComponent(scopeKey)}?asUser=${encodeURIComponent(OPERATOR_PRINCIPAL)}`) {
         response.writeHead(200).end(JSON.stringify({ schemaVersion: 1, resource: 'read markers',
-          item: { userId: 'mike', scopeKey, marker: null } }));
+          item: { userId: OPERATOR_PRINCIPAL, scopeKey, marker: null } }));
         return;
       }
       if (request.method === 'POST' && request.url === '/agent/dispatch') {
@@ -413,7 +414,7 @@ describe('private direct-entry Chat service bridge', () => {
         CHAT_PUBLIC_ORIGIN: chatOrigin,
         CHAT_DEFAULT_GATEWAY_ORIGIN: gatewayOrigin,
         CHAT_DEFAULT_SESSION_KEY: scopeKey.slice(0, -':session-read-position'.length),
-        CHAT_DEFAULT_PRINCIPAL_KEY: 'mike',
+        CHAT_DEFAULT_PRINCIPAL_KEY: OPERATOR_PRINCIPAL,
         CHAT_READ_MARKER_DEVICE_CREDENTIAL_FILE: markerCredentialFile,
         TIGHTBEAM_BASE_DIR: gatewayBaseDir,
       },
@@ -422,7 +423,7 @@ describe('private direct-entry Chat service bridge', () => {
 
     const configResponse = await fetch(`${chatOrigin}/chat-config.json`);
     const configText = await configResponse.text();
-    expect(JSON.parse(configText)).toMatchObject({ readMarkerRoute: 'gateway-user-device', principalKey: 'mike' });
+    expect(JSON.parse(configText)).toMatchObject({ readMarkerRoute: 'gateway-user-device', principalKey: OPERATOR_PRINCIPAL });
     expect(configText).not.toContain(MARKER_DEVICE_TOKEN);
     expect(configText).not.toContain(markerCredentialFile);
 
@@ -431,7 +432,7 @@ describe('private direct-entry Chat service bridge', () => {
       headers: { origin: chatOrigin },
     });
     expect(markerRead.status).toBe(200);
-    expect((await markerRead.json()).item).toEqual({ userId: 'mike', scopeKey, marker: null });
+    expect((await markerRead.json()).item).toEqual({ userId: OPERATOR_PRINCIPAL, scopeKey, marker: null });
 
     const initialSet = { verb: 'read-marker-set', params: { scopeKey, marker: '52', expectedCurrent: null } };
     const setResponse = await fetch(`${chatOrigin}/__chat/agent/dispatch`, {
@@ -460,7 +461,7 @@ describe('private direct-entry Chat service bridge', () => {
     expect(seen).toEqual([
       {
         method: 'GET',
-        url: `/api/read-markers/${encodedScopeKey}?asUser=mike`,
+        url: `/api/read-markers/${encodedScopeKey}?asUser=${encodeURIComponent(OPERATOR_PRINCIPAL)}`,
         authorization: `Bearer ${TOKEN}`,
         body: '',
       },
@@ -473,6 +474,46 @@ describe('private direct-entry Chat service bridge', () => {
         body: JSON.stringify(staleSet),
       },
     ]);
+  });
+
+  it('leaves read-marker access unsupported when the configured operator principal is unset', async () => {
+    const gateway = http.createServer((_request, response) => response.writeHead(404).end());
+    const gatewayPort = await listen(gateway);
+    const gatewayOrigin = `http://127.0.0.1:${gatewayPort}`;
+    const chatPort = await unusedPort();
+    const chatOrigin = `http://127.0.0.1:${chatPort}`;
+    const { root, publicDir } = await temporaryDirectory();
+    const gatewayBaseDir = await writeGatewayDescriptor(path.join(root, 'gateway-base'), gatewayOrigin, TOKEN);
+    const markerCredentialFile = await writePrivateCredential(root, MARKER_DEVICE_TOKEN);
+    const chat = createChatServer({
+      rootDir: root,
+      publicDir,
+      releaseInfo: { tag: 'v0.1.2', sourceCommit: '1234567890abcdef1234567890abcdef12345678' },
+      environment: {
+        CHAT_PUBLIC_ORIGIN: chatOrigin,
+        CHAT_DEFAULT_GATEWAY_ORIGIN: gatewayOrigin,
+        CHAT_DEFAULT_SESSION_KEY: SESSION,
+        CHAT_READ_MARKER_DEVICE_CREDENTIAL_FILE: markerCredentialFile,
+        TIGHTBEAM_BASE_DIR: gatewayBaseDir,
+      },
+    });
+    await listen(chat, chatPort);
+
+    const config = await (await fetch(`${chatOrigin}/chat-config.json`)).json();
+    expect(config.readMarkerRoute).toBeUndefined();
+    expect(config.principalKey).toBeUndefined();
+
+    const markerRead = await fetch(`${chatOrigin}/__chat/api/read-markers/${encodeURIComponent(SESSION)}`, {
+      headers: { origin: chatOrigin },
+    });
+    expect(markerRead.status).toBe(503);
+    expect((await markerRead.json()).error.code).toBe('chat_service_unconfigured');
+    const markerWrite = await fetch(`${chatOrigin}/__chat/agent/dispatch`, {
+      method: 'POST',
+      headers: { origin: chatOrigin, 'content-type': 'application/json' },
+      body: JSON.stringify({ verb: 'read-marker-set', params: { scopeKey: SESSION, marker: '9' } }),
+    });
+    expect(markerWrite.status).toBe(404);
   });
 
   it('composes the canonical selected-history route with the real decoder across an agent reset', async () => {

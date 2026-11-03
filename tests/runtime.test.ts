@@ -47,6 +47,7 @@ class ControlledTransport implements ChatTransport {
   coverage = true;
   readReadMarker?: ChatTransport['readReadMarker'];
   writeReadMarker?: ChatTransport['writeReadMarker'];
+  readMarkerOperatorPrincipalKey?: string;
   tailPage?: ConversationPage;
   railDenials?: readonly HistoryRailDenial[];
   afterHook?: (cursor: string) => ConversationPage | Promise<ConversationPage>;
@@ -131,10 +132,11 @@ class ControlledTransport implements ChatTransport {
 async function settle() { await vi.waitFor(() => {}, { timeout: 50 }); }
 
 describe('framework-independent runtime', () => {
-  it('records only Mike’s newest loaded message under the exact full session key when opened', async () => {
+  it('records only the configured operator’s newest loaded message under the exact full session key when opened', async () => {
     const fullSessionKey = 'agent:sample assistant with space';
     const transport = new ControlledTransport();
-    transport.identity = { principalKey: 'mike', deviceId: 'fixture-device' };
+    transport.identity = { principalKey: 'configured-operator', deviceId: 'fixture-device' };
+    transport.readMarkerOperatorPrincipalKey = 'configured-operator';
     transport.rows = [message(18, { sessionKey: fullSessionKey }), message(21, { sessionKey: fullSessionKey }),
       { ...switchAt(25, 'model'), sessionKey: fullSessionKey }];
     transport.readSession = async (key = fullSessionKey) => ({ sessionKey: key, rowVersion: 1,
@@ -152,14 +154,15 @@ describe('framework-independent runtime', () => {
 
     const scopeKey = `${fullSessionKey}:session-read-position`;
     expect(read).toHaveBeenCalledWith(scopeKey, expect.any(AbortSignal));
-    expect(write).toHaveBeenCalledWith({ userId: 'mike', scopeKey, sequence: '21', expectedCurrent: null },
+    expect(write).toHaveBeenCalledWith({ userId: 'configured-operator', scopeKey, sequence: '21', expectedCurrent: null },
       expect.any(AbortSignal));
     runtime.dispose();
   });
 
   it('keeps the newest canonical message lookup current through paging, deletion, and reset', async () => {
     const transport = new ControlledTransport();
-    transport.identity = { principalKey: 'mike', deviceId: 'fixture-device' };
+    transport.identity = { principalKey: 'configured-operator', deviceId: 'fixture-device' };
+    transport.readMarkerOperatorPrincipalKey = 'configured-operator';
     transport.rows = [...Array.from({ length: 12 }, (_, index) => message(index + 1)), switchAt(13, 'model')];
     let storedMarker: string | null = null;
     const read = vi.fn(async () => ({ supported: true as const, marker: storedMarker }));
@@ -174,13 +177,13 @@ describe('framework-independent runtime', () => {
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
     while (runtime.getSnapshot().hasOlder) await runtime.loadOlder();
     await runtime.markReadPosition?.();
-    expect(write).toHaveBeenLastCalledWith({ userId: 'mike', scopeKey: `${sessionKey}:session-read-position`,
+    expect(write).toHaveBeenLastCalledWith({ userId: 'configured-operator', scopeKey: `${sessionKey}:session-read-position`,
       sequence: '12', expectedCurrent: null }, expect.any(AbortSignal));
 
     const newest = message(14);
     transport.emit(newest);
     await runtime.markReadPosition?.();
-    expect(write).toHaveBeenLastCalledWith({ userId: 'mike', scopeKey: `${sessionKey}:session-read-position`,
+    expect(write).toHaveBeenLastCalledWith({ userId: 'configured-operator', scopeKey: `${sessionKey}:session-read-position`,
       sequence: '14', expectedCurrent: '12' }, expect.any(AbortSignal));
 
     transport.callbacks?.onNotice({ operation: 'delete', sessionKey, id: newest.id, rowVersion: 2 });
@@ -197,7 +200,7 @@ describe('framework-independent runtime', () => {
     expect(read).toHaveBeenCalledTimes(readsBeforeReset);
     expect(write).toHaveBeenCalledTimes(writesBeforeReset);
     await runtime.markReadPosition?.();
-    expect(write).toHaveBeenLastCalledWith({ userId: 'mike', scopeKey: `${sessionKey}:session-read-position`,
+    expect(write).toHaveBeenLastCalledWith({ userId: 'configured-operator', scopeKey: `${sessionKey}:session-read-position`,
       sequence: '15', expectedCurrent: '14' }, expect.any(AbortSignal));
 
     transport.callbacks?.onNotice({ operation: 'delete', sessionKey, id: afterReset.id, rowVersion: 2 });
@@ -209,7 +212,7 @@ describe('framework-independent runtime', () => {
 
     transport.emit(message(16));
     await runtime.markReadPosition?.();
-    expect(write).toHaveBeenLastCalledWith({ userId: 'mike', scopeKey: `${sessionKey}:session-read-position`,
+    expect(write).toHaveBeenLastCalledWith({ userId: 'configured-operator', scopeKey: `${sessionKey}:session-read-position`,
       sequence: '16', expectedCurrent: '15' }, expect.any(AbortSignal));
     runtime.dispose();
   });
@@ -217,7 +220,8 @@ describe('framework-independent runtime', () => {
   it('records accepted sends and user-requested retries, while reply arrival alone stays passive', async () => {
     const fullSessionKey = 'agent:sample assistant with space';
     const transport = new ControlledTransport();
-    transport.identity = { principalKey: 'mike', deviceId: 'fixture-device' };
+    transport.identity = { principalKey: 'configured-operator', deviceId: 'fixture-device' };
+    transport.readMarkerOperatorPrincipalKey = 'configured-operator';
     transport.rows = [message(18, { sessionKey: fullSessionKey }), message(21, { sessionKey: fullSessionKey })];
     transport.readSession = async (key = fullSessionKey) => ({ sessionKey: key, rowVersion: 1,
       displayName: 'Fixture agent', raw: {}, activity: 'idle' });
@@ -244,7 +248,7 @@ describe('framework-independent runtime', () => {
     expect(clientMessageId).toBeTruthy();
     await vi.waitFor(() => expect(runtime.getSnapshot().sends[0]?.status).toBe('failed'));
     await vi.waitFor(() => expect(write).toHaveBeenCalledTimes(1));
-    expect(write).toHaveBeenLastCalledWith({ userId: 'mike',
+    expect(write).toHaveBeenLastCalledWith({ userId: 'configured-operator',
       scopeKey: `${fullSessionKey}:session-read-position`, sequence: '21', expectedCurrent: null },
     expect.any(AbortSignal));
 
@@ -258,7 +262,7 @@ describe('framework-independent runtime', () => {
     await runtime.retrySend(clientMessageId!);
     await vi.waitFor(() => expect(runtime.getSnapshot().sends[0]?.status).toBe('accepted'));
     await vi.waitFor(() => expect(write).toHaveBeenCalledTimes(2));
-    expect(write).toHaveBeenLastCalledWith({ userId: 'mike',
+    expect(write).toHaveBeenLastCalledWith({ userId: 'configured-operator',
       scopeKey: `${fullSessionKey}:session-read-position`, sequence: '22', expectedCurrent: '21' },
     expect.any(AbortSignal));
     runtime.dispose();
@@ -266,6 +270,7 @@ describe('framework-independent runtime', () => {
 
   it('does not access read markers for a different authenticated principal', async () => {
     const transport = new ControlledTransport();
+    transport.readMarkerOperatorPrincipalKey = 'configured-operator';
     const read = vi.fn(async () => ({ supported: true as const, marker: null }));
     const write = vi.fn(async () => 'written' as const);
     transport.readReadMarker = read;
@@ -322,7 +327,7 @@ describe('framework-independent runtime', () => {
     expectDeprecatedFieldsAbsent();
 
     const runningTurn: CanonicalTurn = { seq: 81, sessionKey, status: 'running', messageId: 'm9',
-      origin: 'user:person', triggerSource: 'mike', raw: { rowVersion: 1 } };
+      origin: 'user:person', triggerSource: 'human', raw: { rowVersion: 1 } };
     transport.callbacks?.onNotice({ operation: 'turn', turn: runningTurn });
     const runningActivity = message(11, { sender: 'session:worker', messageType: undefined });
     transport.emit(runningActivity);
@@ -336,7 +341,7 @@ describe('framework-independent runtime', () => {
   it('treats retained rows as history after opening a replacement live subscription', async () => {
     const transport = new ControlledTransport();
     const settledTurn: CanonicalTurn = { seq: 80, sessionKey, status: 'completed', messageId: 'm8',
-      origin: 'user:person', triggerSource: 'mike', raw: { rowVersion: 1 } };
+      origin: 'user:person', triggerSource: 'human', raw: { rowVersion: 1 } };
     transport.tailHook = () => transport.callbacks?.onNotice({ operation: 'turn', turn: settledTurn });
     const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
     await runtime.rebuild();
@@ -357,7 +362,7 @@ describe('framework-independent runtime', () => {
       const transport = new ControlledTransport();
       transport.rows[7] = message(8, { role: 'user', sender: 'user:person', turnSeq: 90 });
       const running: CanonicalTurn = { seq: 90, sessionKey, status: 'running', messageId: 'm8',
-        origin: 'user:person', triggerSource: 'mike', raw: { rowVersion: 1 } };
+        origin: 'user:person', triggerSource: 'human', raw: { rowVersion: 1 } };
       const queued: CanonicalTurn = { ...running, seq: 91, status: 'queued' };
       const emit = (turn: CanonicalTurn) => transport.callbacks?.onNotice({ operation: 'turn', turn });
       if (arrival !== 'live') transport.tailHook = () => {
@@ -432,7 +437,7 @@ describe('framework-independent runtime', () => {
     const transport = new ControlledTransport();
     transport.rows[7] = message(8, { role: 'user', sender: 'user:person', turnSeq: 90 });
     const active: CanonicalTurn = { seq: 90, sessionKey, status: 'running', messageId: 'm8',
-      origin: 'user:someone-else', triggerSource: 'mike', raw: { rowVersion: 1 } };
+      origin: 'user:someone-else', triggerSource: 'human', raw: { rowVersion: 1 } };
     transport.tailHook = () => transport.callbacks?.onNotice({ operation: 'turn', turn: active });
     const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
     await runtime.rebuild();

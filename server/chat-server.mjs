@@ -153,6 +153,7 @@ function loadRuntimeConfig(environment) {
   const principalKey = typeof environment.CHAT_DEFAULT_PRINCIPAL_KEY === 'string'
     ? environment.CHAT_DEFAULT_PRINCIPAL_KEY.trim()
     : '';
+  const operatorPrincipalKey = principalKey;
   const deviceId = gatewayOrigin && principalKey && sessionKey.trim()
     ? `chat_${crypto.createHash('sha256').update(`${gatewayOrigin}\0${principalKey}\0${sessionKey}`).digest('hex').slice(0, 24)}`
     : '';
@@ -161,7 +162,7 @@ function loadRuntimeConfig(environment) {
       gateway: gatewayOrigin,
       sessionKey,
       ...(principalKey ? { principalKey, deviceId } : {}),
-      ...(markerDeviceToken && principalKey === 'mike'
+      ...(markerDeviceToken && operatorPrincipalKey
         ? { readMarkerRoute: 'gateway-user-device' }
         : {}),
     }
@@ -170,6 +171,7 @@ function loadRuntimeConfig(environment) {
   return {
     publicOrigin,
     configuredTarget,
+    operatorPrincipalKey,
     gatewayOrigin,
     gatewayMapValid: gatewayMap.valid,
     gateways: gatewayMap.gateways,
@@ -229,11 +231,11 @@ export function parseServiceHttpTarget(rawUrl, runtime) {
 
     const readMarker = /^\/__chat\/api\/read-markers\/([^/]+)$/.exec(request.pathname);
     const readMarkerScope = readMarker && decodeSessionPath(readMarker[1]);
-    if (runtime.principalKey === 'mike' && readMarkerScope && routeParams.length === 0) {
+    if (runtime.operatorPrincipalKey && readMarkerScope && routeParams.length === 0) {
       return {
         kind: 'read-marker',
         gatewayOrigin,
-        path: `/api/read-markers/${encodeURIComponent(readMarkerScope)}?asUser=mike`,
+        path: `/api/read-markers/${encodeURIComponent(readMarkerScope)}?asUser=${encodeURIComponent(runtime.operatorPrincipalKey)}`,
       };
     }
 
@@ -513,7 +515,7 @@ function parseServiceMarkerDispatchTarget(rawUrl, runtime) {
 }
 
 async function serviceMarkerDispatch(request, response, runtime) {
-  if (!runtime.markerDeviceToken || runtime.principalKey !== 'mike') {
+  if (!runtime.markerDeviceToken || !runtime.operatorPrincipalKey) {
     jsonResponse(response, 404, { error: { code: 'not_found' } });
     return;
   }
