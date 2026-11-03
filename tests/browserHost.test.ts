@@ -63,7 +63,7 @@ describe('Chat entry selection', () => {
   });
 
   it('keeps the configured marker route scoped to its Gateway', () => {
-    const withMarkers = { ...configured, principalKey: 'mike', readMarkerRoute: 'gateway-user-device' as const };
+    const withMarkers = { ...configured, principalKey: 'fixture-principal', readMarkerRoute: 'gateway-user-device' as const };
     const sameGateway = resolveEntrySelection(
       `?gateway=${encodeURIComponent(configured.gateway)}&session=${encodeURIComponent('agent:linked/chat')}`,
       withMarkers,
@@ -114,7 +114,7 @@ describe('private browser entry and same-origin gateway bridge', () => {
   it('exposes the configured marker route without forwarding browser credentials', async () => {
     const fetchSpy = vi.fn<typeof fetch>().mockResolvedValue(new Response('{}', { status: 200 }));
     vi.stubGlobal('fetch', fetchSpy);
-    const host = browserHost({ ...configured, principalKey: 'mike', readMarkerRoute: 'gateway-user-device' });
+    const host = browserHost({ ...configured, principalKey: 'fixture-principal', readMarkerRoute: 'gateway-user-device' });
 
     expect(host.readMarkerRoute).toBe('gateway-user-device');
     await host.fetch('/__chat/agent/dispatch', {
