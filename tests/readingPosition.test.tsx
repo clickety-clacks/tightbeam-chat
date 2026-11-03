@@ -615,6 +615,35 @@ describe('conversation reading position', () => {
     expect(row.getBoundingClientRect().top).toBeCloseTo(box.getBoundingClientRect().top + expectedReplyTopInset);
   });
 
+  it('retargets an active bottom glide when a separate short reply arrives before it settles', () => {
+    extraBottomSpace = 178;
+    const { runtime, box } = setup();
+    const firstReply = { ...message(20), role: 'assistant' as const, sender: 'assistant' };
+    const activeTurn = createTurnProvenance({
+      seq: 20, sessionKey: 'reading', messageId: initialRows.at(-1)!.id, origin: 'agent:other',
+      status: 'running', triggerSource: 'agent', raw: { seq: 20, origin: 'agent:other' },
+    }, [initialRows.at(-1)!], 'person', 'person');
+    act(() => runtime.publish({ activityTurnStateAvailable: true, activeTurn, records: [...initialRows, firstReply] }));
+
+    advanceNextFrame(performance.now() + 100);
+    const firstBottom = box.scrollHeight - box.clientHeight;
+    expect(box.scrollTop).toBeGreaterThan(0);
+    expect(box.scrollTop).toBeLessThan(firstBottom);
+
+    // The first turn settles before its scroll glide completes. That locks the
+    // first reply's target while leaving the arrival animation in flight.
+    act(() => runtime.publish({ activeTurn: undefined }));
+    const secondReply = { ...message(21), role: 'assistant' as const, sender: 'assistant' };
+    act(() => runtime.publish({ records: [...runtime.state.records, secondReply] }));
+    const secondBottom = box.scrollHeight - box.clientHeight;
+    expect(box.scrollTop).toBeLessThan(secondBottom);
+
+    for (let frame = 0; frame < 8 && animationFrames.size > 0; frame++) {
+      advanceNextFrame(performance.now() + 300 + frame * 300);
+    }
+    expect(box.scrollTop).toBe(secondBottom);
+  });
+
   it('starts a fresh arrival after a short reply settles and leaves later arrivals unseen after anchoring tall', () => {
     extraBottomSpace = 178;
     const { runtime, box } = setup();
