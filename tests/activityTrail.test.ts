@@ -127,11 +127,30 @@ describe('activity trail projection', () => {
       message('agent-2', 3, 'agent:helper', 'Helper finished', { messageType: 'agent' }),
     ], bubbles: [bubble(prompt, 'human'), bubble(message('agent-reply', 4, 'assistant-service', 'Answer',
       { role: 'assistant' }), 'agent')] });
-    const agentRows = agents.messageItems.filter((item): item is ActivityLine => item.kind === 'agent');
-    expect(agentRows.map(line => line.id)).toEqual(['message:agent-1', 'message:agent-2']);
-    expect(agentRows.map(line => line.gist)).toEqual([
-      'Agent helper — Helper started', 'Agent helper — Helper finished',
-    ]);
+    expect(agents.messageItems).toHaveLength(1);
+    const agentFold = agents.messageItems[0] as ActivityFold;
+    expect(agentFold).toMatchObject({ kind: 'fold', activityKind: 'agent',
+      lines: [
+        { id: 'message:agent-1', gist: 'Agent helper — Helper started' },
+        { id: 'message:agent-2', gist: 'Agent helper — Helper finished' },
+      ] });
+  });
+
+  it('groups consecutive direct agent messages only when the sender matches', () => {
+    const plan = build({ records: [
+      message('agent-first', 1, 'agent:helper', 'First update', { messageType: 'agent' }),
+      message('agent-second', 2, 'agent:helper', 'Second update', { messageType: 'agent' }),
+      message('agent-other', 3, 'agent:reviewer', 'Reviewer update', { messageType: 'agent' }),
+      message('agent-helper-again', 4, 'agent:helper', 'Later helper update', { messageType: 'agent' }),
+    ], bubbles: [], activeOwnerTurnRunning: false, activeTurnRunning: false });
+
+    expect(plan.messageItems.map(item => item.kind)).toEqual(['fold', 'agent', 'agent']);
+    const [sameSenderFold, differentSender, laterHelper] = plan.messageItems;
+    expect(sameSenderFold).toMatchObject({ kind: 'fold', activityKind: 'agent', lines: [
+      { id: 'message:agent-first' }, { id: 'message:agent-second' },
+    ] });
+    expect(differentSender).toMatchObject({ id: 'message:agent-other', kind: 'agent' });
+    expect(laterHelper).toMatchObject({ id: 'message:agent-helper-again', kind: 'agent' });
   });
 
   it('shows each uncleared direct agent message once in order outside owner spans', () => {

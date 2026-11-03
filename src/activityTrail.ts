@@ -83,6 +83,8 @@ interface Candidate extends ActivityLine {
   readonly separatePill?: boolean;
   /** Direct agent-origin history rows do not require an owner prompt/reply span. */
   readonly standaloneAgentMessage?: boolean;
+  /** Direct agent rows may fold together only when their source sender matches. */
+  readonly standaloneAgentSender?: string;
 }
 
 interface BubbleEvent extends Position {
@@ -204,7 +206,7 @@ function messageCandidate(message: CanonicalMessage, senderDisplayName?: string,
       originalContent: content,
       presentation: activityPillPresentation({ kind: 'agent', gist, content, sender,
         senderDisplayName: displayName }), sortTime,
-      historyBacked: true, standaloneAgentMessage: true };
+      historyBacked: true, standaloneAgentMessage: true, standaloneAgentSender: sender };
   }
   return undefined;
 }
@@ -362,7 +364,8 @@ function lineWithRun(candidate: Candidate, runKey: string, includeToolDetails = 
   const { liveTailEligibleAtArrival: _eligibleAtArrival,
     historyBacked: _historyBacked,
     semanticFoldKind: _semanticFoldKind, separatePill: _separatePill,
-    standaloneAgentMessage: _standaloneAgentMessage, ...line } = candidate;
+    standaloneAgentMessage: _standaloneAgentMessage,
+    standaloneAgentSender: _standaloneAgentSender, ...line } = candidate;
   if (candidate.kind === 'tool' && candidate.call) {
     if (!includeToolDetails) return { ...line, runKey, gist: '', accessibleText: '' };
     const call = candidate.call;
@@ -496,6 +499,7 @@ export function buildActivityTrail(input: {
   };
 
   let previousBubble: BubbleEvent | undefined;
+  let standaloneAgentRun: { sender: string; runKey: string } | undefined;
   let pending: CandidateEvent[] = [];
   const closeGap = (nextBubble?: BubbleEvent) => {
     if (!previousBubble?.spanKey) { pending = []; return; }
@@ -544,17 +548,25 @@ export function buildActivityTrail(input: {
 
   for (const event of events) {
     if (event.kind === 'candidate') {
-      // A stamped notice is the durable event's visible representation even
-      // outside a human reply span. Keep the complete canonical notice once.
-      if (event.candidate.recordEventNotice) add(event.candidate, `notice:${event.candidate.id}`);
-      else if (event.candidate.standaloneAgentMessage) {
+      if (event.candidate.standaloneAgentMessage) {
         // Direct agent messages belong to retained history even when no owner
-        // prompt/reply span surrounds them. Keep each row separate and uncapped.
-        add(event.candidate, `agent:${event.candidate.id}`, false);
+        // prompt/reply span surrounds them. Consecutive messages from one
+        // sender share the existing collapsed activity-row treatment.
+        const sender = event.candidate.standaloneAgentSender || event.candidate.id;
+        if (standaloneAgentRun?.sender !== sender) {
+          standaloneAgentRun = { sender, runKey: `agent:${event.candidate.id}` };
+        }
+        add(event.candidate, standaloneAgentRun.runKey, false);
+      } else {
+        standaloneAgentRun = undefined;
+        // A stamped notice is the durable event's visible representation even
+        // outside a human reply span. Keep the complete canonical notice once.
+        if (event.candidate.recordEventNotice) add(event.candidate, `notice:${event.candidate.id}`);
+        else pending.push(event);
       }
-      else pending.push(event);
     }
     else {
+      standaloneAgentRun = undefined;
       closeGap(event);
       previousBubble = event;
     }
@@ -621,7 +633,12 @@ export function buildActivityTrail(input: {
     const foldGroupCounts = new Map<string, number>();
     const foldGroupIdentity = (candidate: Candidate) => {
       if (candidate.kind === 'tool') return 'tool';
-      if (candidate.kind === 'agent') return candidate.separatePill ? `agent-member:${candidate.id}` : 'agent';
+      if (candidate.kind === 'agent') {
+        if (candidate.standaloneAgentMessage) {
+          return `agent:${candidate.standaloneAgentSender || candidate.id}`;
+        }
+        return candidate.separatePill ? `agent-member:${candidate.id}` : 'agent';
+      }
       if (candidate.kind === 'substrate' && candidate.semanticFoldKind) {
         return `gateway:${candidate.semanticFoldKind}`;
       }
