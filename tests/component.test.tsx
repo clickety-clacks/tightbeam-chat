@@ -436,7 +436,7 @@ function expectVisibilityMix(log: HTMLElement, prefix: string): void {
   expect(batchBubble?.classList.contains('tb-chat-bubble-human')).toBe(true);
   expect(batchBubble?.textContent).not.toContain('coalesced by');
   for (const label of [
-    `Hidden assistant substrate marker ${prefix}`, `Hidden agent wake ${prefix}`,
+    `Hidden assistant substrate marker ${prefix}`,
     `Hidden process notice ${prefix}`,
   ]) {
     const renderedAsBubble = [...log.querySelectorAll<HTMLElement>('.tb-chat-bubble')]
@@ -444,6 +444,10 @@ function expectVisibilityMix(log: HTMLElement, prefix: string): void {
     expect(renderedAsBubble).toBe(false);
     expect(within(log).queryByText(label)).toBeNull();
   }
+  const agentRow = log.querySelector<HTMLElement>(`[data-record-key="message:${prefix}-agent-wake"]`);
+  expect(agentRow?.classList.contains('tb-chat-activity-agent')).toBe(true);
+  expect(agentRow?.closest('.tb-chat-bubble')).toBeNull();
+  expect(agentRow?.textContent).toContain(`Hidden agent wake ${prefix}`);
   for (const label of [
     `Hidden reply to agent wake ${prefix}`, `Hidden reply to process notice ${prefix}`,
   ]) expect(within(log).queryByText(label)).toBeNull();
@@ -857,7 +861,9 @@ describe('conversation surface', () => {
     expect(within(log).getByText('Answer to the batch question')).toBeTruthy();
     expect(within(log).queryByText('A system event marker')).toBeNull();
     expect(within(log).queryByText('A non-owner system marker after the owner exchange')).toBeNull();
-    expect(within(log).queryByText('An agent sent a wake')).toBeNull();
+    const agentRow = log.querySelector<HTMLElement>('[data-record-key="message:other-trigger"]');
+    expect(agentRow?.classList.contains('tb-chat-activity-agent')).toBe(true);
+    expect(agentRow?.closest('.tb-chat-bubble')).toBeNull();
     expectActivityText(log, 'A process notice in the batch');
     expect(within(log).queryByText('Must remain hidden')).toBeNull();
     const unmarkedBubble = within(log).getByText('A user row with no sender stays visible').closest('article');
@@ -1234,7 +1240,7 @@ describe('conversation surface', () => {
     const log = screen.getByRole('log');
     expectVisibilityMix(log, 'first-page');
     expect(within(log).queryByText('Hidden assistant substrate marker first-page')).toBeNull();
-    expect(within(log).queryByText('Hidden agent wake first-page')).toBeNull();
+    expect(log.querySelector('[data-record-key="message:first-page-agent-wake"]')).toBeTruthy();
     expect(within(log).queryByText('Hidden process notice first-page')).toBeNull();
     expect(within(log).queryByText('An unproven assistant reply')).toBeNull();
     expect(within(log).getByText('A selected reply without a provable trigger')).toBeTruthy();
@@ -1313,7 +1319,8 @@ describe('conversation surface', () => {
 
     await waitFor(() => expect(runtime.getSnapshot().hasOlder).toBe(false));
     expect(runtime.loadOlderCalls).toBe(1);
-    expect(within(log).queryByText('An older agent wake')).toBeNull();
+    const agentRow = log.querySelector<HTMLElement>('[data-record-key="message:older-agent-trigger"]');
+    expect(agentRow?.classList.contains('tb-chat-activity-agent')).toBe(true);
     expect(within(log).queryByText('A reply whose parent is not loaded')).toBeNull();
     expect(within(log).getByText('A human message with a null sender')).toBeTruthy();
     expect(within(log).getByText('An absent sender stays visible without identity proof')).toBeTruthy();
@@ -1393,9 +1400,10 @@ describe('conversation surface', () => {
       expect(runtime.getSnapshot().records).toContain(reply);
 
       if (excluded && !visibleOlder) {
-        // The newly visible provisional row is removed when its nonhuman parent arrives.
-        // Compensating space preserves the reading anchor when scrollTop is clamped.
-        expect(topSpace()).toBeGreaterThan(0);
+        // The direct agent row replaces the provisional reply, so the row count
+        // stays level and does not need compensating space.
+        expect(log.querySelector('[data-record-key="message:parent"]')).toBeTruthy();
+        expect(topSpace()).toBe(0);
         // A later visible page can be read without reclassifying shown content.
         runtime.olderPages.push({ records: [human('earlier')], provenance: [], hasOlder: false });
         act(() => runtime.update({ hasOlder: true }));
@@ -2410,7 +2418,7 @@ describe('conversation surface', () => {
     expect(screen.queryByRole('button', { name: /load earlier/i })).toBeNull();
   });
 
-  it('stops paging when the remaining history contains only hidden rows and reaches its start', async () => {
+  it('stops paging once an older agent message becomes a visible row', async () => {
     const sessionKey = 'history-start';
     const hiddenFirst = row(sessionKey, 'hidden-first', 'Earlier activity', {
       role: 'user', sender: 'agent:other', messageType: 'agent', turnSeq: 1,
@@ -2428,11 +2436,11 @@ describe('conversation surface', () => {
     ];
 
     render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
-    await waitFor(() => expect(runtime.getSnapshot().hasOlder).toBe(false));
-    expect(runtime.loadOlderCalls).toBe(2);
-    expect(screen.queryByText('Earlier activity')).toBeNull();
+    await waitFor(() => expect(runtime.loadOlderCalls).toBe(1));
+    expect(runtime.getSnapshot().hasOlder).toBe(true);
+    expect(screen.getByRole('log').querySelector('[data-record-key="message:hidden-first"]')).toBeTruthy();
     expect(screen.queryByText('Earlier reply')).toBeNull();
-    expect(screen.queryByText('Oldest activity')).toBeNull();
+    expect(runtime.getSnapshot().records.some(record => record.id === 'older-activity')).toBe(false);
   });
 
   it('prefetches older history before the reader reaches the top and holds the visible row', async () => {

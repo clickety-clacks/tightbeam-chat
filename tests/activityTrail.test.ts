@@ -23,6 +23,7 @@ const tool = (id: string, seq: number, status: ToolCallRecord['status'], toolNam
 
 function build(input: {
   records?: readonly CanonicalMessage[];
+  clearedThroughSeq?: number;
   senderDisplayNames?: ReadonlyMap<string, string>;
   bubbles?: readonly ActivityBubble[];
   transitions?: readonly CanonicalTransition[];
@@ -43,7 +44,8 @@ function build(input: {
   const activeOwnerPrompt = [...(input.bubbles ?? [])].reverse().find(candidate =>
     candidate.side === 'human' && candidate.ownerScoped);
   return buildActivityTrail({
-    sessionKey: 'session', records: input.records ?? [], bubbles: input.bubbles ?? [], transitions: input.transitions ?? [],
+    sessionKey: 'session', clearedThroughSeq: input.clearedThroughSeq,
+    records: input.records ?? [], bubbles: input.bubbles ?? [], transitions: input.transitions ?? [],
     senderDisplayNames: input.senderDisplayNames,
     localSendTimes: input.localSendTimes,
     recordEventTimes: input.recordEventTimes,
@@ -125,9 +127,58 @@ describe('activity trail projection', () => {
       message('agent-2', 3, 'agent:helper', 'Helper finished', { messageType: 'agent' }),
     ], bubbles: [bubble(prompt, 'human'), bubble(message('agent-reply', 4, 'assistant-service', 'Answer',
       { role: 'assistant' }), 'agent')] });
-    const agentFold = agents.messageItems.find((item): item is ActivityFold => item.kind === 'fold');
-    expect(agentFold?.lines.map(line => line.id)).toEqual(['message:agent-1', 'message:agent-2']);
-    expect(agentFold?.summary.gist).toBe('Agent helper — Helper finished');
+    expect(agents.messageItems).toHaveLength(1);
+    const agentFold = agents.messageItems[0] as ActivityFold;
+    expect(agentFold).toMatchObject({ kind: 'fold', activityKind: 'agent',
+      lines: [
+        { id: 'message:agent-1', gist: 'Agent helper — Helper started' },
+        { id: 'message:agent-2', gist: 'Agent helper — Helper finished' },
+      ] });
+  });
+
+  it('groups consecutive direct agent messages only when the sender matches', () => {
+    const plan = build({ records: [
+      message('agent-first', 1, 'agent:helper', 'First update', { messageType: 'agent' }),
+      message('agent-second', 2, 'agent:helper', 'Second update', { messageType: 'agent' }),
+      message('agent-other', 3, 'agent:reviewer', 'Reviewer update', { messageType: 'agent' }),
+      message('agent-helper-again', 4, 'agent:helper', 'Later helper update', { messageType: 'agent' }),
+    ], bubbles: [], activeOwnerTurnRunning: false, activeTurnRunning: false });
+
+    expect(plan.messageItems.map(item => item.kind)).toEqual(['fold', 'agent', 'agent']);
+    const [sameSenderFold, differentSender, laterHelper] = plan.messageItems;
+    expect(sameSenderFold).toMatchObject({ kind: 'fold', activityKind: 'agent', lines: [
+      { id: 'message:agent-first' }, { id: 'message:agent-second' },
+    ] });
+    expect(differentSender).toMatchObject({ id: 'message:agent-other', kind: 'agent' });
+    expect(laterHelper).toMatchObject({ id: 'message:agent-helper-again', kind: 'agent' });
+  });
+
+  it('shows each uncleared direct agent message once in order outside owner spans', () => {
+    const beforeClear = message('agent-before-clear', 3, 'agent:helper', 'Hidden update', { messageType: 'agent' });
+    const atClear = message('agent-at-clear', 4, 'agent:helper', 'Also hidden', { messageType: 'agent' });
+    const first = message('agent-first', 5, 'agent:helper', 'First update', { messageType: 'agent' });
+    const notice = message('notice-batch', 6, 'process:notifications',
+      '[from process:notifications]\n\n[batched notices: 1]\nA delivered notice', {
+        messageType: 'substrate', isBatchCarrier: true, recordEventIds: ['notice-event'],
+      });
+    const second = message('agent-second', 7, 'agent:helper', 'Second update', { messageType: 'agent' });
+    const previousMembership = new Map([
+      ['message:agent-first', 'run:old-owner-prompt'], ['message:agent-second', 'run:old-owner-prompt'],
+    ]);
+    const plan = build({ records: [beforeClear, atClear, first, notice, second], bubbles: [], clearedThroughSeq: 4,
+      shownRuns: previousMembership, activeOwnerTurnRunning: false, activeTurnRunning: false });
+
+    expect(plan.messageItems.map(item => item.id)).toEqual([
+      'message:agent-first', 'message:notice-batch', 'message:agent-second',
+    ]);
+    expect(plan.messageItems.map(item => item.kind)).toEqual(['agent', 'substrate', 'agent']);
+    const agentRows = plan.messageItems.filter((item): item is ActivityLine => item.kind === 'agent');
+    expect(agentRows.map(line => line.position.sequence)).toEqual([5, 7]);
+    expect(new Set(agentRows.map(line => line.runKey)).size).toBe(2);
+    expect(agentRows[0].gist).toBe('Agent helper — First update');
+    expect(agentRows[0].presentation).toMatchObject({ label: 'Agent helper', text: 'First update', icon: 'message' });
+    expect(plan.membership.has('message:agent-before-clear')).toBe(false);
+    expect(plan.membership.has('message:agent-at-clear')).toBe(false);
   });
 
   it('leaves same-kind activity lines separate when a transition falls between them', () => {
@@ -542,7 +593,7 @@ describe('activity trail projection', () => {
     expect(endedWithoutReply.messageItems.map(item => item.id)).not.toContain('message:interim-gap-activity');
   });
 
-  it('matches live and reloaded pills while excluding non-owner activity on every page', () => {
+  it('matches live and reloaded pills while retaining direct agent messages on every page', () => {
     const storeRow = (id: string, seq: number, role: string, sender: string, content: string,
       messageType: string, extra: Record<string, unknown> = {}) => ({
       id, sessionKey: 'session', seq, rowVersion: 1, role, sender, content, messageType,
@@ -606,18 +657,27 @@ describe('activity trail projection', () => {
     expect(afterReload.messageItems).toEqual(beforeLeave.messageItems);
     expect(beforeLeave.messageItems.some(item => item.id.includes('member:history-older-non-owner'))).toBe(false);
     const renderedIds = beforeLeave.messageItems.flatMap(item => item.kind === 'fold' ? item.lines.map(line => line.id) : [item.id]);
-    for (const hiddenId of ['history-older-page-process', 'history-older-non-owner', 'history-other-agent-wake',
+    for (const hiddenId of ['history-older-page-process', 'history-older-non-owner',
       'history-process-notice', 'history-external-reply', 'history-unrelated-marker', 'history-owner-gap']) {
       expect(renderedIds.some(id => id.includes(hiddenId))).toBe(false);
     }
-    expect(afterReturn.messageItems).toMatchObject([
-      { kind: 'fold', id: 'member:history-gap-first:member:3', runKey: 'run:history-prompt-one',
-        lines: [{ id: 'member:history-gap-first:member:3' }, { id: 'member:history-gap-second:member:5567' }],
-        summary: { presentation: { text: 'No recent activity · Background build', metadata: 'asg_abcd' } } },
-      { kind: 'fold', id: 'member:history-tail-first:member:5569', runKey: 'run:history-prompt-two',
-        lines: [{ id: 'member:history-tail-first:member:5569' }, { id: 'member:history-tail-second:member:5570' }],
-        summary: { presentation: { text: 'No recent activity · Background build', metadata: 'asg_aaaa' } } },
+    const agentRows = beforeLeave.messageItems.filter((item): item is ActivityLine => item.kind === 'agent');
+    expect(agentRows.filter(line => line.id === 'message:history-other-agent-wake')).toHaveLength(1);
+    expect(agentRows.find(line => line.id === 'message:history-other-agent-wake')?.position.sequence).toBe(8);
+    expect(afterReturn.messageItems.map(item => item.id)).toEqual([
+      'member:history-gap-first:member:3', 'message:history-other-agent-wake',
+      'member:history-tail-first:member:5569',
     ]);
+    expect(afterReturn.messageItems.find(item => item.id === 'member:history-gap-first:member:3')).toMatchObject({
+      kind: 'fold', runKey: 'run:history-prompt-one',
+      lines: [{ id: 'member:history-gap-first:member:3' }, { id: 'member:history-gap-second:member:5567' }],
+      summary: { presentation: { text: 'No recent activity · Background build', metadata: 'asg_abcd' } },
+    });
+    expect(afterReturn.messageItems.find(item => item.id === 'member:history-tail-first:member:5569')).toMatchObject({
+      kind: 'fold', runKey: 'run:history-prompt-two',
+      lines: [{ id: 'member:history-tail-first:member:5569' }, { id: 'member:history-tail-second:member:5570' }],
+      summary: { presentation: { text: 'No recent activity · Background build', metadata: 'asg_aaaa' } },
+    });
     expect(afterReturn.messageItems.some(item => item.id.startsWith('member:history-older-non-owner'))).toBe(false);
   });
 
@@ -672,17 +732,16 @@ describe('activity trail projection', () => {
     expect(withLater.messageItems.some(item => item.kind === 'overflow' && item.runKey === secondRun)).toBe(false);
   });
 
-  it('keeps the five-entry cap when a gap contains more than five distinct display groups', () => {
+  it('keeps the five-entry cap for non-agent activity groups in an owner gap', () => {
     const prompt = message('prompt', 1, 'user:person', 'A question', { role: 'user' });
     const reply = message('reply', 10, 'assistant-service', 'Answer', { role: 'assistant' });
     const records = Array.from({ length: 6 }, (_, index) => {
-      const agent = index % 2 === 1;
-      return message(`activity-${index + 1}`, index + 2, agent ? 'agent:helper' : 'process:events',
-        `Activity ${index + 1}`, { messageType: agent ? 'agent' : 'substrate' });
+      return message(`activity-${index + 1}`, index + 2, 'process:events',
+        `Activity ${index + 1}`, { messageType: 'substrate' });
     });
     const plan = build({ records, bubbles: [bubble(prompt, 'human'), bubble(reply, 'agent')] });
 
-    expect(plan.messageItems.map(item => item.kind)).toEqual(['overflow', 'agent', 'substrate', 'agent', 'substrate', 'agent']);
+    expect(plan.messageItems.map(item => item.kind)).toEqual(['overflow', 'substrate', 'substrate', 'substrate', 'substrate', 'substrate']);
     expect(plan.messageItems[0].id).toBe('overflow:run:prompt');
     expect(plan.messageItems.map(item => item.id).slice(1)).toEqual([
       'message:activity-2', 'message:activity-3', 'message:activity-4', 'message:activity-5', 'message:activity-6',
@@ -844,7 +903,7 @@ describe('activity trail projection', () => {
     expect(reloadedWhileNewTurnRuns.messageItems).toEqual([]);
   });
 
-  it('does not admit unrelated activity just because another turn is running', () => {
+  it('keeps direct agent history while excluding unrelated process activity', () => {
     const prompt = message('prompt', 1, 'user:person', 'Question', { role: 'user', turnSeq: 1 });
     const unrelated = [
       message('other-agent-wake', 2, 'agent:helper', '[woke: fallback deadline]\nUnrelated wake', {
@@ -864,7 +923,8 @@ describe('activity trail projection', () => {
     const afterReturn = build({ records: unrelated, bubbles, turnStateAvailable: true,
       activeTurnRunning: false, activeOwnerTurnRunning: false });
 
-    expect(whileOtherTurnRuns.messageItems).toEqual([]);
+    expect(whileOtherTurnRuns.messageItems.map(item => item.id)).toEqual(['message:other-agent-wake']);
+    expect(whileOtherTurnRuns.messageItems[0].kind).toBe('agent');
     expect(afterReturn.messageItems).toEqual(whileOtherTurnRuns.messageItems);
   });
 
@@ -917,14 +977,15 @@ describe('activity trail projection', () => {
       position: { sequence: 1, phase: 3 }, gist: 'send refused by owner-policy' });
   });
 
-  it('excludes a session-addressed agent message without owner-turn evidence both live and after reload', () => {
+  it('keeps a session-addressed agent message without owner-turn evidence both live and after reload', () => {
     const prompt = message('prompt', 1, 'user:person');
     const activity = message('session-message', 2, 'session:helper', 'Helper is working');
     const live = build({ records: [activity], bubbles: [bubble(prompt, 'human')], turnStateAvailable: false,
       activeTurnRunning: false });
     const afterReload = build({ records: [activity], bubbles: [bubble(prompt, 'human')], turnStateAvailable: false,
       activeTurnRunning: false });
-    expect(live.messageItems).toEqual([]);
+    expect(live.messageItems.map(item => item.id)).toEqual(['message:session-message']);
+    expect(live.messageItems[0].kind).toBe('agent');
     expect(afterReload.messageItems).toEqual(live.messageItems);
   });
 });

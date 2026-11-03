@@ -2285,6 +2285,8 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   const transitions = useMemo(() => state.records.filter((record): record is CanonicalTransition => record.kind === 'transition'), [state.records]);
   const activityPlan = useMemo(() => buildActivityTrail({
     sessionKey: state.sessionKey,
+    clearedThroughSeq: state.session?.sessionKey === state.sessionKey
+      ? state.session.clearedThroughSeq : undefined,
     records: activityRecords,
     senderDisplayNames: state.activitySenderDisplayNames,
     bubbles,
@@ -2306,6 +2308,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     expandedRuns,
   }), [activityRecords, bubbles, transitions, localSendTimes, recordEventTimes, expandedRuns, shownRuns, state.activityTurnStateAvailable, state.activeTurn,
     state.liveRailDenials, state.historyRailDenials, state.sessionKey, state.activitySenderDisplayNames,
+    state.session?.sessionKey, state.session?.clearedThroughSeq,
     state.toolCallsEnabled, toolRecords]);
   const activityFoldIds = useMemo(() => new Set([
     ...activityPlan.messageItems.filter((item): item is ActivityFold => item.kind === 'fold').map(item => item.id),
