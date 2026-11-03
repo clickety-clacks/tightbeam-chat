@@ -2179,7 +2179,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
       const height = `${element.getBoundingClientRect().height}px`;
       if (container.style.getPropertyValue('--tb-chat-composer-height') === height) return;
       container.style.setProperty('--tb-chat-composer-height', height);
-      reading.reconcileViewportLayout();
+      if (typeof reading.viewport.current?.scrollTo === 'function') reading.reconcileViewportLayout();
     };
     const observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(update);
     observer?.observe(element);
