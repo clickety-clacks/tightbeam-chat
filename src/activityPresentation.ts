@@ -28,6 +28,23 @@ export interface ActivityPillSource {
 }
 
 const normalize = (value: string): string => value.replace(/\s+/g, ' ').trim();
+
+/** Prefer a supplied display name; otherwise keep a known sender identifiable. */
+export function activitySenderLabel(sender?: string, displayName?: string): string | undefined {
+  const name = displayName?.trim();
+  const key = sender?.trim() ?? '';
+  const senderKind = /^(agent|session):/i.exec(key);
+  if (!senderKind) return name || undefined;
+  if (name && name.toLowerCase() !== 'another agent') return name;
+
+  const kind = senderKind[1].toLowerCase() === 'session' ? 'Session' : 'Agent';
+  const sessionId = /(?:^|\s)(s_[a-z0-9-]+)$/i.exec(key)?.[1];
+  if (sessionId) return kind === 'Agent' ? `${kind} · session ${sessionId.slice(2)}`
+    : `${kind} · ${sessionId.slice(2)}`;
+  const identity = key.slice(senderKind[0].length).trim();
+  return identity ? `${kind} ${identity}` : undefined;
+}
+
 const lines = (value: string): string[] => value.split(/\r?\n/).map(normalize).filter(Boolean);
 const transportLine = (line: string): boolean =>
   /^\[from [^\]]+\]$/i.test(line) || /^\[batched notices:\s*\d+\]$/i.test(line) ||
@@ -398,8 +415,10 @@ export function activityPillPresentation(source: ActivityPillSource): ActivityPi
   let presentation: ActivityPillPresentation;
   if (source.kind === 'agent') {
     const separator = source.gist.indexOf(' — ');
-    const sender = separator >= 0 ? source.gist.slice(0, separator) : 'Another agent';
-    const displayName = source.senderDisplayName?.trim() || (sender === 'Another agent' ? undefined : sender);
+    const sender = separator >= 0 ? source.gist.slice(0, separator) : undefined;
+    const suppliedName = source.senderDisplayName?.trim();
+    const displayName = (suppliedName && suppliedName.toLowerCase() !== 'another agent' ? suppliedName : undefined) ??
+      (sender && sender !== 'Another agent' ? sender : undefined) ?? activitySenderLabel(source.sender);
     const senderPrefix = displayName ? `${displayName} — ` : undefined;
     const text = senderPrefix && source.gist.startsWith(senderPrefix)
       ? source.gist.slice(senderPrefix.length)
