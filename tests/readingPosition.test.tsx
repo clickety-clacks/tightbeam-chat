@@ -1235,28 +1235,35 @@ describe('conversation reading position', () => {
     expect(box.scrollTop).toBe(previousTop + 60 + 2 * 92);
   });
 
-  it('fits newly revealed activity runs into an existing gap without moving messages or dividers', () => {
-    extraBottomSpace = 500;
+  it.each(['above', 'below', 'latest'] as const)(
+    'holds interleaved history activity and dividers until their spot is %s', direction => {
+    extraBottomSpace = 2000;
     let reading: ReturnType<typeof useReadingPosition> | undefined;
-    const initialRows: Array<{ key: string; kind: string; height: number; marginTop?: number }> = [
+    type Entry = { key: string; kind: string; height: number };
+    const initial: Entry[] = [
+      { key: 'prefix', kind: 'message', height: 400 },
       { key: 'upper-message', kind: 'message', height: 60 },
-      { key: 'compaction-one', kind: 'divider', height: 10, marginTop: 95.265625 },
-      { key: 'compaction-two', kind: 'divider', height: 10, marginTop: 35 },
-      { key: 'lower-message', kind: 'message', height: 60, marginTop: 35 },
+      { key: 'compaction-one', kind: 'divider', height: 28.448 },
+      { key: 'compaction-two', kind: 'divider', height: 28.448 },
+      { key: 'lower-message', kind: 'message', height: 60 },
+      { key: 'tail', kind: 'message', height: 800 },
     ];
-    const activityRows: Array<{ key: string; kind: string; height: number; marginTop?: number }> = [
-      { key: 'tool-run-one', kind: 'activity', height: 30.421875 },
-      { key: 'tool-run-two', kind: 'activity', height: 30.421875 },
-      { key: 'tool-run-three', kind: 'activity', height: 30.421875 },
-    ];
+    const activity: Entry[] = [1, 2, 3].map(n => ({ key: `tool-run-${n}`, kind: 'activity', height: 24.021875 }));
+    const divider: Entry = { key: 'new-divider', kind: 'divider', height: 28.448 };
+    const outside: Entry[] = ['above', 'below'].map(side =>
+      ({ key: `outside-${side}`, kind: 'activity', height: 324.021875 }));
+    const gap = 12.8;
     const layout = vi.mocked(HTMLElement.prototype.getBoundingClientRect);
     const fallbackMeasure = layout.getMockImplementation();
     layout.mockImplementation(function (this: HTMLElement) {
       if (this.dataset.testLayoutRow !== undefined) {
-        const content = this.parentElement!;
+        if (this.style.display === 'none') return rect(0, 0);
         let cursor = 16;
-        for (const child of content.children) {
+        let count = 0;
+        for (const child of this.parentElement!.children) {
           const row = child as HTMLElement;
+          if (row.style.display === 'none') continue;
+          if (count++) cursor += gap;
           const top = cursor + (Number.parseFloat(row.style.marginTop) || 0);
           const height = Number.parseFloat(row.dataset.testHeight ?? '0');
           if (row === this) return rect(top - scrollTop, height);
@@ -1266,36 +1273,68 @@ describe('conversation reading position', () => {
       return fallbackMeasure?.call(this) ?? rect(0, 50);
     });
 
-    function History({ revealActivity }: { revealActivity: boolean }) {
-      const entries = revealActivity
-        ? [initialRows[0], ...activityRows, ...initialRows.slice(1)]
-        : initialRows;
+    function History({ page }: { page: number }) {
+      const entries = page === 0 ? initial
+        : [outside[0], initial[0], initial[1], activity[0], initial[2], activity[1],
+          ...(page === 2 ? [divider] : []), initial[3], activity[2], ...initial.slice(4), outside[1]];
       const position = useReadingPosition(true, entries.map(entry => entry.key));
       reading = position;
       return <div ref={position.viewport} className="tb-chat-viewport" onScroll={position.onScroll}
         onWheel={event => { if (event.deltaY !== 0) position.noteUserScroll(); }}>
-        <div ref={position.content}>{entries.map(entry => <div key={entry.key}
-          ref={element => position.registerRow(entry.key, element)} data-scroll-key={entry.key}
-          data-test-layout-row="true" data-test-height={entry.height}
-          data-activity-run={entry.kind === 'activity' ? entry.key : undefined}
-          style={entry.marginTop === undefined ? undefined : { marginTop: `${entry.marginTop}px` }} />)}</div>
+        <div ref={position.content} style={{ display: 'flex', flexDirection: 'column', gap: '12.8px' }}>
+          {entries.map(entry => <div key={entry.key}
+            ref={element => position.registerRow(entry.key, element)} data-scroll-key={entry.key}
+            className={entry.kind === 'divider' ? 'tb-chat-transition-marker' : undefined}
+            data-test-layout-row="true" data-test-height={entry.height}
+            data-activity-run={entry.kind === 'activity' ? entry.key : undefined}
+            style={entry.kind === 'activity' ? { marginTop: '-3.2px', marginBottom: '-3.2px' } : undefined}>
+            {entry.key}
+          </div>)}
+        </div>
       </div>;
     }
 
-    const view = render(<History revealActivity={false} />);
+    const view = render(<History page={0} />);
     const box = document.querySelector<HTMLElement>('.tb-chat-viewport')!;
-    readAt(box, 0);
-    const stableKeys = ['upper-message', 'compaction-one', 'compaction-two', 'lower-message'];
-    const offset = (key: string) => box.querySelector<HTMLElement>(`[data-scroll-key="${key}"]`)!.getBoundingClientRect().top;
+    readAt(box, 420);
+    const row = (key: string) => box.querySelector<HTMLElement>(`[data-scroll-key="${key}"]`)!;
+    const offset = (key: string) => row(key).getBoundingClientRect().top;
+    const stableKeys = ['upper-message', 'compaction-one', 'compaction-two', 'lower-message', 'tail'];
     const before = new Map(stableKeys.map(key => [key, offset(key)]));
-    const releasePosition = reading!.holdPosition();
-
-    view.rerender(<History revealActivity />);
-    releasePosition();
-
-    for (const key of stableKeys) expect(offset(key)).toBeCloseTo(before.get(key)!, 2);
-    const lastRun = box.querySelector<HTMLElement>('[data-scroll-key="tool-run-three"]')!;
-    expect(lastRun.style.marginBottom).toMatch(/-/);
+    // Three flex gaps and two dividers, rather than one absorbable margin.
+    expect(offset('lower-message') - offset('upper-message') - 60).toBeCloseTo(95.296, 3);
+    for (const page of [1, 2]) {
+      const release = reading!.holdPosition();
+      view.rerender(<History page={page} />);
+      release();
+      for (const key of stableKeys) expect(offset(key)).toBeCloseTo(before.get(key)!, 5);
+      for (const entry of activity) expect(row(entry.key).style.display).toBe('none');
+      for (const entry of outside) expect(row(entry.key).style.display).toBe('');
+    }
+    expect(row(divider.key).style.display).toBe('none');
+    // A harmless commit/ref reattachment must not drop held content.
+    view.rerender(<History page={2} />);
+    expect(row(divider.key).style.display).toBe('none');
+    if (direction === 'latest') {
+      act(() => reading!.scrollToLatest());
+    } else {
+      // Above: keep the lower bubble partially visible; below: only prefix is visible.
+      fireEvent.wheel(box, { deltaY: direction === 'above' ? 300 : -300 });
+      box.scrollTop = direction === 'above' ? 940 : 400;
+      const anchorKey = direction === 'above' ? 'lower-message' : 'prefix';
+      const anchorTop = offset(anchorKey);
+      fireEvent.scroll(box);
+      expect(offset(anchorKey)).toBeCloseTo(anchorTop, 5);
+    }
+    for (const entry of [...activity, divider]) expect(row(entry.key).style.display).toBe('');
+    const ordered = [...box.querySelectorAll<HTMLElement>('[data-scroll-key]')];
+    expect(ordered.map(element => element.textContent)).toEqual([
+      'outside-above', 'prefix', 'upper-message', 'tool-run-1', 'compaction-one', 'tool-run-2',
+      'new-divider', 'compaction-two', 'tool-run-3', 'lower-message', 'tail', 'outside-below',
+    ]);
+    for (let i = 1; i < ordered.length; i++) {
+      expect(ordered[i].getBoundingClientRect().top).toBeGreaterThanOrEqual(ordered[i - 1].getBoundingClientRect().bottom);
+    }
   });
 
   it('does not treat browser clamping after rows shrink as reader movement', () => {

@@ -61,7 +61,7 @@ export function useReadingPosition(
   const seenArrivalRows = useRef(new Set<string>());
   const knownRowKeys = useRef(new Set<string>());
   const newlyRegisteredRowKeys = useRef(new Set<string>());
-  const activityGapMargins = useRef(new WeakMap<HTMLElement, { baseMarginBottom: number; amount: number }>());
+  const heldHistoryRows = useRef(new Map<string, { element: HTMLElement; display: string }>());
   const arrivalScopeRef = useRef(arrivalScope);
   const messageRows = useRef<ReadonlyMap<string, MessageRow>>(new Map());
   const knownMessages = useRef(new Set<string>());
@@ -77,7 +77,8 @@ export function useReadingPosition(
     knownMessages.current.clear();
     knownRowKeys.current.clear();
     newlyRegisteredRowKeys.current.clear();
-    activityGapMargins.current = new WeakMap();
+    for (const held of heldHistoryRows.current.values()) held.element.style.display = held.display;
+    heldHistoryRows.current.clear();
     unseenMessages.current.clear();
     messageBaselineReady.current = false;
     arrivalScopeRef.current = arrivalScope;
@@ -107,6 +108,11 @@ export function useReadingPosition(
       if (!knownRowKeys.current.has(key)) newlyRegisteredRowKeys.current.add(key);
       knownRowKeys.current.add(key);
       registeredRows.current.set(key, element);
+      const held = heldHistoryRows.current.get(key);
+      if (held) {
+        held.element = element;
+        element.style.display = 'none';
+      }
     }
     else registeredRows.current.delete(key);
   }, []);
@@ -443,7 +449,10 @@ export function useReadingPosition(
     pendingLayoutRestoreOffsets.current.some(offset => Math.abs(offset - scrollTop) < 1);
   const capture = () => {
     const box = viewport.current;
-    const children = content.current?.children;
+    const allChildren = content.current?.children;
+    const children = heldHistoryRows.current.size && allChildren
+      ? Array.from(allChildren).filter(row => !heldHistoryRows.current.has((row as HTMLElement).dataset.scrollKey ?? ''))
+      : allChildren;
     if (!box || !children) return;
     const bounds = following.current ? undefined : box.getBoundingClientRect();
     if (box.clientHeight > 0) viewportHeight.current = box.clientHeight;
@@ -500,68 +509,66 @@ export function useReadingPosition(
     }
   };
 
-  const fitNewActivityRowsIntoVisibleGaps = (box: HTMLElement) => {
-    const contentElement = content.current;
-    if (!contentElement || anchors.current.length < 2 || newlyRegisteredRowKeys.current.size === 0) return;
-    const anchorKeys = new Set(anchors.current.map(anchor => anchor.key));
-    let viewportTop: number | undefined;
-    const contentTop = (row: HTMLElement, bounds = row.getBoundingClientRect()) => {
-      viewportTop ??= box.getBoundingClientRect().top;
-      return bounds.top - viewportTop + box.scrollTop;
-    };
-
-    for (let index = 0; index < anchors.current.length - 1; index++) {
-      const previousAnchor = anchors.current[index];
-      const nextAnchor = anchors.current[index + 1];
-      const previousRow = registeredRows.current.get(previousAnchor.key);
-      const nextRow = registeredRows.current.get(nextAnchor.key);
-      if (!previousRow || !nextRow || previousRow.parentElement !== contentElement || nextRow.parentElement !== contentElement) continue;
-
-      const insertedRuns: HTMLElement[] = [];
-      let hasOtherUnanchoredRow = false;
-      let row = previousRow.nextElementSibling as HTMLElement | null;
-      while (row && row !== nextRow) {
-        const key = row.dataset.scrollKey;
-        if (key !== undefined && !anchorKeys.has(key)) {
-          if (newlyRegisteredRowKeys.current.has(key) && row.dataset.activityRun !== undefined) insertedRuns.push(row);
-          else hasOtherUnanchoredRow = true;
-        }
-        row = row.nextElementSibling as HTMLElement | null;
+  const holdNewHistoryRows = (box: HTMLElement) => {
+    if (!content.current || newlyRegisteredRowKeys.current.size === 0) return;
+    const scrollBase = heldPositionScrollTop.current ?? box.scrollTop;
+    const visible = anchors.current.filter(anchor => anchor.top + anchor.height > scrollBase &&
+      anchor.top < scrollBase + box.clientHeight && registeredRows.current.has(anchor.key));
+    if (visible.length < 2) return;
+    const first = registeredRows.current.get(visible[0].key)!;
+    const last = registeredRows.current.get(visible[visible.length - 1].key)!;
+    // Extra flex children cannot fit between visible rows without moving one.
+    // Keep only newly eligible history activity/separators out of layout; the
+    // mounted content and timeline order remain intact.
+    for (let row = first.nextElementSibling; row && row !== last; row = row.nextElementSibling) {
+      if (!(row instanceof HTMLElement)) continue;
+      const key = row.dataset.scrollKey;
+      if (key === undefined || !newlyRegisteredRowKeys.current.has(key) ||
+        !(row.dataset.activityRun !== undefined || row.classList.contains('tb-chat-transition-marker'))) continue;
+      if (!heldHistoryRows.current.has(key)) {
+        heldHistoryRows.current.set(key, { element: row, display: row.style.display });
+        row.style.display = 'none';
       }
-      if (row !== nextRow || hasOtherUnanchoredRow || insertedRuns.length === 0) continue;
-
-      const oldGap = nextAnchor.top - (previousAnchor.top + previousAnchor.height);
-      if (oldGap <= 0) continue;
-      // Keep the original gap only when the newly indexed rows fit fully inside it.
-      const previousBounds = previousRow.getBoundingClientRect();
-      const nextBounds = nextRow.getBoundingClientRect();
-      if (Math.abs(previousBounds.height - previousAnchor.height) > .5 ||
-          Math.abs(nextBounds.height - nextAnchor.height) > .5) continue;
-
-      const previousTop = contentTop(previousRow, previousBounds);
-      const nextTop = contentTop(nextRow, nextBounds);
-      const growth = nextTop - (previousTop + previousBounds.height) - oldGap;
-      if (growth <= .5 || growth > oldGap + .5) continue;
-
-      const firstRunBounds = insertedRuns[0].getBoundingClientRect();
-      const lastRun = insertedRuns[insertedRuns.length - 1];
-      const lastRunBounds = lastRun.getBoundingClientRect();
-      const previousBottom = previousTop + previousBounds.height;
-      if (contentTop(insertedRuns[0], firstRunBounds) < previousBottom - .5 ||
-          contentTop(lastRun, lastRunBounds) + lastRunBounds.height > previousBottom + oldGap + .5) continue;
-
-      const priorCorrection = activityGapMargins.current.get(lastRun);
-      const baseMarginBottom = priorCorrection?.baseMarginBottom ??
-        (Number.parseFloat(getComputedStyle(lastRun).marginBottom) || 0);
-      const amount = (priorCorrection?.amount ?? 0) + growth;
-      lastRun.style.marginBottom = `${baseMarginBottom - amount}px`;
-      activityGapMargins.current.set(lastRun, { baseMarginBottom, amount });
     }
+  };
+
+  const revealOffscreenHistoryRows = (box: HTMLElement, revealAll = false) => {
+    if (heldHistoryRows.current.size === 0) return false;
+    const reveal: string[] = [];
+    const bounds = box.getBoundingClientRect();
+    for (const [key, held] of heldHistoryRows.current) {
+      if (!registeredRows.current.has(key)) {
+        heldHistoryRows.current.delete(key);
+        continue;
+      }
+      const neighbor = (direction: 'previousElementSibling' | 'nextElementSibling') => {
+        let row = held.element[direction] as HTMLElement | null;
+        while (row && heldHistoryRows.current.has(row.dataset.scrollKey ?? '')) {
+          row = row[direction] as HTMLElement | null;
+        }
+        return row;
+      };
+      const previous = neighbor('previousElementSibling');
+      const next = neighbor('nextElementSibling');
+      // Above: all inserted space precedes the first visible row and the normal
+      // anchor restore compensates it. Below: no visible row can follow it.
+      if (revealAll || (next && next.getBoundingClientRect().top <= bounds.top) ||
+        (previous && previous.getBoundingClientRect().bottom >= bounds.bottom)) {
+        reveal.push(key);
+      }
+    }
+    for (const key of reveal) {
+      const held = heldHistoryRows.current.get(key)!;
+      held.element.style.display = held.display;
+      heldHistoryRows.current.delete(key);
+    }
+    return reveal.length > 0;
   };
 
   const moveToLatest = (smooth: boolean): boolean => {
     const box = viewport.current;
     if (!box) return false;
+    revealOffscreenHistoryRows(box, true);
     const bottom = Math.max(0, box.scrollHeight - box.clientHeight);
     following.current = true;
     if (Math.abs(box.scrollTop - bottom) <= bottomTolerance) {
@@ -579,7 +586,7 @@ export function useReadingPosition(
     return true;
   };
 
-  const updateLayout = () => {
+  const updateLayout = (): void => {
     const box = viewport.current;
     if (!box) return;
     const previousTail = previousTailRow.current;
@@ -719,7 +726,7 @@ export function useReadingPosition(
         animating.current = false;
         target.current = undefined;
       }
-      fitNewActivityRowsIntoVisibleGaps(box);
+      holdNewHistoryRows(box);
       const rows = registeredRows.current;
       const survivor = anchors.current.find(anchor => rows.has(anchor.key));
       if (survivor) {
@@ -761,6 +768,9 @@ export function useReadingPosition(
       incomingMessageArrival.current = undefined;
     }
     capture();
+    // Evaluate offscreen positions only after compensating prepended content.
+    // Otherwise that temporary displacement could admit rows still in view.
+    if (!following.current && revealOffscreenHistoryRows(box)) updateLayout();
   };
   const currentUpdate = useRef(updateLayout);
   currentUpdate.current = updateLayout;
@@ -877,6 +887,7 @@ export function useReadingPosition(
     }
     updateLatestControl(box);
     capture();
+    if (revealOffscreenHistoryRows(box, following.current)) updateLayout();
   };
 
   const interrupt = () => {
