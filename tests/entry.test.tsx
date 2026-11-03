@@ -21,9 +21,9 @@ afterEach(() => {
 
 describe('direct browser entry', () => {
   it('passes only the advertised marker-route capability from server configuration', async () => {
-    const mikeTarget = { ...defaultTarget, principalKey: 'mike' };
+    const fixtureTarget = { ...defaultTarget, principalKey: 'fixture-principal' };
     const load = async (readMarkerRoute: unknown) => loadConfiguredChatTarget(async () => new Response(
-      JSON.stringify({ ...mikeTarget, readMarkerRoute }), { status: 200 },
+      JSON.stringify({ ...fixtureTarget, readMarkerRoute }), { status: 200 },
     ));
 
     expect((await load('gateway-user-device')).readMarkerRoute).toBe('gateway-user-device');
