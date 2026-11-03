@@ -1054,12 +1054,10 @@ const Composer = forwardRef<ComposerHandle, {
   state: RuntimeState;
   recoverySnapshot: ChatRecoverySnapshot;
   agentName: string;
-  root: RefObject<HTMLElement | null>;
-  onComposerHeightChange: () => void;
   suppressStatus: boolean;
   onSettings: () => void;
   onSubmitted: () => void;
-}>(function Composer({ runtime, state, recoverySnapshot, agentName, root, onComposerHeightChange, suppressStatus, onSettings, onSubmitted }, ref) {
+}>(function Composer({ runtime, state, recoverySnapshot, agentName, suppressStatus, onSettings, onSubmitted }, ref) {
   const [draft, setDraft] = useState(recoverySnapshot.draft);
   const [attachments, setAttachments] = useState<readonly DraftAttachment[]>([]);
   const [acquisitionError, setAcquisitionError] = useState<string | null>(null);
@@ -1438,22 +1436,6 @@ const Composer = forwardRef<ComposerHandle, {
       }
     }
   }, [recoverySnapshot, state.sends, updateDraft]);
-
-  useLayoutEffect(() => {
-    const element = shell.current;
-    const container = root.current;
-    if (!element || !container) return;
-    const update = () => {
-      const height = `${element.getBoundingClientRect().height}px`;
-      if (container.style.getPropertyValue('--tb-chat-composer-height') === height) return;
-      container.style.setProperty('--tb-chat-composer-height', height);
-      onComposerHeightChange();
-    };
-    const observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(update);
-    observer?.observe(element);
-    update();
-    return () => observer?.disconnect();
-  }, [onComposerHeightChange, root]);
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -2188,6 +2170,22 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     overlayRef.current = next;
     setOverlay(next);
   }, []);
+
+  useLayoutEffect(() => {
+    const container = root.current;
+    const element = container?.querySelector<HTMLElement>('.tb-chat-composer');
+    if (!container || !element) return;
+    const update = () => {
+      const height = `${element.getBoundingClientRect().height}px`;
+      if (container.style.getPropertyValue('--tb-chat-composer-height') === height) return;
+      container.style.setProperty('--tb-chat-composer-height', height);
+      reading.reconcileViewportLayout();
+    };
+    const observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(update);
+    observer?.observe(element);
+    update();
+    return () => observer?.disconnect();
+  }, [host.composerHidden, reading.reconcileViewportLayout]);
   const recordWhatsNewSeen = useCallback(() => {
     if (!CHAT_RELEASE_VERSION || typeof window === 'undefined') return;
     try { recordSeenReleaseVersion(window.localStorage, CHAT_RELEASE_VERSION); } catch { /* Storage may be unavailable. */ }
@@ -3114,7 +3112,6 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     </button>}
     {!host.composerHidden && <Composer ref={composer} runtime={runtime} state={state}
       recoverySnapshot={recoverySnapshot} agentName={agentName}
-      root={root} onComposerHeightChange={reading.reconcileViewportLayout}
       suppressStatus={host.optedIn} onSettings={openSettings} onSubmitted={reading.scrollToLatest} />}
     {overlay && <ReleaseNotesDialog overlay={overlay} entries={bundledNotes} onClose={closeOverlay}
       onOpenReleaseNotes={openReleaseNotes} onBack={backToSettings} />}
