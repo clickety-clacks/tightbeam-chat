@@ -127,7 +127,7 @@ describe('activity trail projection', () => {
       { role: 'assistant' }), 'agent')] });
     const agentFold = agents.messageItems.find((item): item is ActivityFold => item.kind === 'fold');
     expect(agentFold?.lines.map(line => line.id)).toEqual(['message:agent-1', 'message:agent-2']);
-    expect(agentFold?.summary.gist).toBe('Another agent — Helper finished');
+    expect(agentFold?.summary.gist).toBe('Agent helper — Helper finished');
   });
 
   it('leaves same-kind activity lines separate when a transition falls between them', () => {
@@ -261,7 +261,7 @@ describe('activity trail projection', () => {
     expect(toolFold.summary.gist).toBe('Tool running · running');
     const lines = ordered.slice(1) as ActivityLine[];
     expect(lines[0].accessibleText).toBe('Substrate: Assigned a task');
-    expect(lines[1].accessibleText).toBe('Other agent: Another agent — Started a helper task');
+    expect(lines[1].accessibleText).toBe('Other agent: Agent helper — Started a helper task');
 
     const hiddenReply = message('hidden-reply', 2, 'assistant-service', 'Must not become activity', {
       role: 'assistant', messageType: 'assistant', turnIncludesHuman: false,
@@ -271,7 +271,7 @@ describe('activity trail projection', () => {
 
   it('projects batch members with available sender names and folds across carriers without prior direct messages', () => {
     const sender = 'agent:helper:main session';
-    const unresolvedSender = 'agent:unknown:main session';
+    const unresolvedSender = 'agent:unknown:main s_12345678';
     const prompt = message('prompt', 1, 'user:person', 'A question', { role: 'user' });
     const carrier = (id: string, seq: number,
       members: Array<{ index: number; detail: string; sender?: string }>) => message(id, seq,
@@ -300,7 +300,7 @@ describe('activity trail projection', () => {
     } });
     expect(fold.lines.map(line => line.gist)).toEqual([
       'Research — helper — First helper update', 'Research — helper — Second helper update',
-      'Another agent — Unresolved helper update', 'Research — helper — Latest helper update',
+      'Agent · session 12345678 — Unresolved helper update', 'Research — helper — Latest helper update',
     ]);
     expect(fold.lines.map(line => line.id)).toEqual([
       'member:carrier-first:member:7', 'member:carrier-first:member:9',
@@ -308,7 +308,7 @@ describe('activity trail projection', () => {
     ]);
     expect(fold.lines.every(line => line.presentation !== undefined)).toBe(true);
     expect(fold.lines[0].presentation).toMatchObject({ label: 'Research — helper', text: 'First helper update', icon: 'message' });
-    expect(fold.lines[2].presentation).toMatchObject({ label: 'Another agent', text: 'Unresolved helper update' });
+    expect(fold.lines[2].presentation).toMatchObject({ label: 'Agent · session 12345678', text: 'Unresolved helper update' });
     expect(fold.lines[0].accessibleText).toBe('Other agent: Research — helper — First helper update');
     expect(fold.lines[0].originalContent).toBe('First helper update');
   });

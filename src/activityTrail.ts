@@ -1,6 +1,6 @@
 import type { CanonicalMessage, CanonicalTransition, HistoryRailDenial, LiveRailDenial, ToolCallRecord } from './types';
 import { isUnmarkedCanonicalProcessBatch, parseBatchMembers, type HumanMember, type ParsedBatchMember } from './messageVisibility';
-import { activityPillPresentation, type ActivityPillPresentation } from './activityPresentation';
+import { activityPillPresentation, activitySenderLabel, type ActivityPillPresentation } from './activityPresentation';
 import { stripDeliveryScaffolding, stripProvenanceMarkup } from './displayText';
 import { sameRailDenial } from './railDenials';
 
@@ -189,7 +189,7 @@ function messageCandidate(message: CanonicalMessage, senderDisplayName?: string)
       semanticFoldKind: gatewayNoticeFoldKind(message.content) };
   }
   if (message.messageType === 'agent' || sender.startsWith('agent:') || sender.startsWith('session:')) {
-    const displayName = rawDisplayName(message) ?? senderDisplayName?.trim();
+    const displayName = activitySenderLabel(sender, rawDisplayName(message) ?? senderDisplayName);
     const name = displayName || 'Another agent';
     const content = stripDeliveryScaffolding(message.content);
     const detail = bodyGist(stripProvenanceMarkup(content));
@@ -252,7 +252,7 @@ function memberCandidate(carrier: CanonicalMessage, member: ParsedBatchMember,
       semanticFoldKind: gatewayNoticeFoldKind(content) };
   }
   if (member.sender.startsWith('agent:') || member.sender.startsWith('session:')) {
-    const displayName = senderDisplayName?.trim();
+    const displayName = activitySenderLabel(member.sender, senderDisplayName);
     const label = displayName || 'Another agent';
     const gist = detail ? `${label} — ${detail}` : label;
     return { id, kind: 'agent', runKey: '', anchorSeq: carrier.seq, position, gist,

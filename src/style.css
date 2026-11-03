@@ -1024,8 +1024,9 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
   letter-spacing: .01em;
   line-height: 1;
 }
-.tb-chat-activity-pill-sender { flex: 0 1 auto; min-width: 0; }
+.tb-chat-activity-pill-sender { flex: 0 0 auto; min-width: 0; }
 .tb-chat-activity-pill-sender-name {
+  max-width: min(32vw, 18rem);
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;

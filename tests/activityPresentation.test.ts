@@ -161,6 +161,21 @@ describe('activity pill presentation', () => {
       .toMatchObject({ label: 'Activity', tone: 'slate', text: 'Unclassified activity' });
   });
 
+  it('identifies a known agent sender when no display name is available', () => {
+    const fullSender = 'agent:agent:main:clawline:mike:main s_6f3b51ed';
+    expect(activityPillPresentation({ kind: 'agent', gist: 'Another agent — Review complete',
+      content: 'Review complete', sender: fullSender })).toMatchObject({
+      label: 'Agent · session 6f3b51ed', tone: 'indigo', icon: 'message', text: 'Review complete', senderLabel: true,
+    });
+    expect(activityPillPresentation({ kind: 'agent', gist: 'Another agent — Update ready',
+      content: 'Update ready', sender: 'agent:helper', senderDisplayName: 'Another agent' })).toMatchObject({
+      label: 'Agent helper', text: 'Update ready', icon: 'message',
+    });
+    expect(activityPillPresentation(source('agent', 'Update ready'))).toMatchObject({
+      label: 'Another agent', text: 'Update ready', icon: 'message',
+    });
+  });
+
   it('keeps message detail separate when a sender display name contains the gist separator', () => {
     expect(activityPillPresentation({ kind: 'agent', gist: 'Review — helper — The report is ready',
       content: 'The report is ready', senderDisplayName: 'Review — helper' })).toMatchObject({
