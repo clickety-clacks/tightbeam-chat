@@ -7,7 +7,7 @@ const arrivalDuration = 240;
 const arrivalEasing = 'cubic-bezier(0.2, 0, 0, 1)';
 const arrivalTopInset = 40;
 const arrivalVisibleTail = 16;
-type Anchor = { key: string; top: number };
+type Anchor = { key: string; top: number; height: number };
 type MessageRow = { key: string; scrollKey: string; role: string; prompt: boolean; isFromReader: boolean };
 type IncomingMessageArrival = {
   readonly scrollKey: string;
@@ -59,6 +59,10 @@ export function useReadingPosition(
   const topAnchoredPrompt = useRef<{ readonly scrollKey: string; readonly bottomOffset: number } | undefined>(undefined);
   const arrivalStreamingRef = useRef(arrivalStreaming);
   const seenArrivalRows = useRef(new Set<string>());
+  const knownRowKeys = useRef(new Set<string>());
+  const newlyRegisteredRowKeys = useRef(new Set<string>());
+  const historyLayoutPending = useRef(false);
+  const heldHistoryRows = useRef(new Map<string, { element: HTMLElement; display: string }>());
   const arrivalScopeRef = useRef(arrivalScope);
   const messageRows = useRef<ReadonlyMap<string, MessageRow>>(new Map());
   const knownMessages = useRef(new Set<string>());
@@ -72,6 +76,11 @@ export function useReadingPosition(
     incomingMessageArrival.current = undefined;
     topAnchoredPrompt.current = undefined;
     knownMessages.current.clear();
+    knownRowKeys.current.clear();
+    newlyRegisteredRowKeys.current.clear();
+    for (const held of heldHistoryRows.current.values()) held.element.style.display = held.display;
+    heldHistoryRows.current.clear();
+    historyLayoutPending.current = false;
     unseenMessages.current.clear();
     messageBaselineReady.current = false;
     arrivalScopeRef.current = arrivalScope;
@@ -97,7 +106,16 @@ export function useReadingPosition(
   const anchors = useRef<Anchor[]>([]);
   const registeredRows = useRef(new Map<string, HTMLElement>());
   const registerRow = useCallback((key: string, element: HTMLElement | null) => {
-    if (element) registeredRows.current.set(key, element);
+    if (element) {
+      if (!knownRowKeys.current.has(key)) newlyRegisteredRowKeys.current.add(key);
+      knownRowKeys.current.add(key);
+      registeredRows.current.set(key, element);
+      const held = heldHistoryRows.current.get(key);
+      if (held) {
+        held.element = element;
+        element.style.display = 'none';
+      }
+    }
     else registeredRows.current.delete(key);
   }, []);
   const getRow = useCallback((key: string) => registeredRows.current.get(key), []);
@@ -433,7 +451,10 @@ export function useReadingPosition(
     pendingLayoutRestoreOffsets.current.some(offset => Math.abs(offset - scrollTop) < 1);
   const capture = () => {
     const box = viewport.current;
-    const children = content.current?.children;
+    const allChildren = content.current?.children;
+    const children = heldHistoryRows.current.size && allChildren
+      ? Array.from(allChildren).filter(row => !heldHistoryRows.current.has((row as HTMLElement).dataset.scrollKey ?? ''))
+      : allChildren;
     if (!box || !children) return;
     const bounds = following.current ? undefined : box.getBoundingClientRect();
     if (box.clientHeight > 0) viewportHeight.current = box.clientHeight;
@@ -443,6 +464,7 @@ export function useReadingPosition(
     const unseenBounds = unseenMessages.current.size > 0 ? bounds ?? box.getBoundingClientRect() : bounds;
     refreshUnseenMessages(unseenBounds, measuredRows, true);
     anchors.current = [];
+    newlyRegisteredRowKeys.current.clear();
     if (following.current) return;
     const anchorBounds = bounds ?? box.getBoundingClientRect();
     const measureRow = (row: HTMLElement) => {
@@ -462,36 +484,93 @@ export function useReadingPosition(
       if (measureRow(children[middle] as HTMLElement).bottom <= anchorBounds.top) low = middle + 1;
       else high = middle;
     }
-    const remember = (row: HTMLElement, top: number) => {
+    const remember = (row: HTMLElement, measured: DOMRect) => {
       const key = row.dataset.scrollKey;
       if (key !== undefined && !remembered.has(key)) {
         remembered.add(key);
-        anchors.current.push({ key, top: top - anchorBounds.top + box.scrollTop });
+        anchors.current.push({ key, top: measured.top - anchorBounds.top + box.scrollTop, height: measured.height });
       }
     };
     for (let i = low; i < children.length; i++) {
       const row = children[i] as HTMLElement;
       const rect = measureRow(row);
-      remember(row, rect.top);
+      remember(row, rect);
       if (rect.top >= anchorBounds.bottom) break;
     }
     if (low > 0) {
       const previous = children[low - 1] as HTMLElement;
-      remember(previous, measureRow(previous).top);
+      remember(previous, measureRow(previous));
     }
     // If filtering removes every row around the reader, retain a distant
     // survivor so its old position can keep the transcript from collapsing.
     for (let i = children.length - 1; i >= 0; i--) {
       const lastRow = children[i] as HTMLElement;
       if (lastRow.dataset.scrollKey === undefined) continue;
-      remember(lastRow, measureRow(lastRow).top);
+      remember(lastRow, measureRow(lastRow));
       break;
     }
+  };
+
+  const holdNewHistoryRows = (box: HTMLElement) => {
+    if (!historyLayoutPending.current || !content.current || newlyRegisteredRowKeys.current.size === 0) return;
+    const scrollBase = heldPositionScrollTop.current ?? box.scrollTop;
+    const visible = anchors.current.filter(anchor => anchor.top + anchor.height > scrollBase &&
+      anchor.top < scrollBase + box.clientHeight && registeredRows.current.has(anchor.key));
+    if (visible.length < 2) return;
+    const first = registeredRows.current.get(visible[0].key)!;
+    const last = registeredRows.current.get(visible[visible.length - 1].key)!;
+    // Extra flex children cannot fit between visible rows without moving one.
+    // Keep only newly eligible history activity/separators out of layout; the
+    // mounted content and timeline order remain intact.
+    for (let row = first.nextElementSibling; row && row !== last; row = row.nextElementSibling) {
+      if (!(row instanceof HTMLElement)) continue;
+      const key = row.dataset.scrollKey;
+      if (key === undefined || !newlyRegisteredRowKeys.current.has(key) ||
+        !(row.dataset.activityRun !== undefined || row.classList.contains('tb-chat-transition-marker'))) continue;
+      if (!heldHistoryRows.current.has(key)) {
+        heldHistoryRows.current.set(key, { element: row, display: row.style.display });
+        row.style.display = 'none';
+      }
+    }
+  };
+
+  const revealOffscreenHistoryRows = (box: HTMLElement, revealAll = false) => {
+    if (heldHistoryRows.current.size === 0) return false;
+    const reveal: string[] = [];
+    const bounds = box.getBoundingClientRect();
+    for (const [key, held] of heldHistoryRows.current) {
+      if (!registeredRows.current.has(key)) {
+        heldHistoryRows.current.delete(key);
+        continue;
+      }
+      const neighbor = (direction: 'previousElementSibling' | 'nextElementSibling') => {
+        let row = held.element[direction] as HTMLElement | null;
+        while (row && heldHistoryRows.current.has(row.dataset.scrollKey ?? '')) {
+          row = row[direction] as HTMLElement | null;
+        }
+        return row;
+      };
+      const previous = neighbor('previousElementSibling');
+      const next = neighbor('nextElementSibling');
+      // Above: all inserted space precedes the first visible row and the normal
+      // anchor restore compensates it. Below: no visible row can follow it.
+      if (revealAll || (next && next.getBoundingClientRect().top <= bounds.top) ||
+        (previous && previous.getBoundingClientRect().bottom >= bounds.bottom)) {
+        reveal.push(key);
+      }
+    }
+    for (const key of reveal) {
+      const held = heldHistoryRows.current.get(key)!;
+      held.element.style.display = held.display;
+      heldHistoryRows.current.delete(key);
+    }
+    return reveal.length > 0;
   };
 
   const moveToLatest = (smooth: boolean): boolean => {
     const box = viewport.current;
     if (!box) return false;
+    revealOffscreenHistoryRows(box, true);
     const bottom = Math.max(0, box.scrollHeight - box.clientHeight);
     following.current = true;
     if (Math.abs(box.scrollTop - bottom) <= bottomTolerance) {
@@ -509,7 +588,7 @@ export function useReadingPosition(
     return true;
   };
 
-  const updateLayout = () => {
+  const updateLayout = (): void => {
     const box = viewport.current;
     if (!box) return;
     const previousTail = previousTailRow.current;
@@ -649,6 +728,7 @@ export function useReadingPosition(
         animating.current = false;
         target.current = undefined;
       }
+      holdNewHistoryRows(box);
       const rows = registeredRows.current;
       const survivor = anchors.current.find(anchor => rows.has(anchor.key));
       if (survivor) {
@@ -690,6 +770,10 @@ export function useReadingPosition(
       incomingMessageArrival.current = undefined;
     }
     capture();
+    if (heldPositionCount.current === 0) historyLayoutPending.current = false;
+    // Evaluate offscreen positions only after compensating prepended content.
+    // Otherwise that temporary displacement could admit rows still in view.
+    if (!following.current && revealOffscreenHistoryRows(box)) updateLayout();
   };
   const currentUpdate = useRef(updateLayout);
   currentUpdate.current = updateLayout;
@@ -806,6 +890,7 @@ export function useReadingPosition(
     }
     updateLatestControl(box);
     capture();
+    if (revealOffscreenHistoryRows(box, following.current)) updateLayout();
   };
 
   const interrupt = () => {
@@ -833,15 +918,22 @@ export function useReadingPosition(
     interrupt();
     if (heldPositionCount.current === 0) heldPositionScrollTop.current = viewport.current?.scrollTop;
     heldPositionCount.current++;
+    historyLayoutPending.current = true;
     let released = false;
     return () => {
       if (released) return;
       released = true;
       heldPositionCount.current = Math.max(0, heldPositionCount.current - 1);
-      if (heldPositionCount.current === 0) heldPositionScrollTop.current = undefined;
+      if (heldPositionCount.current === 0) {
+        heldPositionScrollTop.current = undefined;
+        // React may commit the published history after the request settles.
+        historyLayoutPending.current = true;
+      }
     };
   };
   const preserveVisiblePosition = () => {
+    // Explicit folding controls should reveal their content immediately.
+    historyLayoutPending.current = false;
     const box = viewport.current;
     if (!box) return;
     initialSettlePending.current = false;
