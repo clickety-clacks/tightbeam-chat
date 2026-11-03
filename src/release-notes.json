@@ -1,5 +1,34 @@
 [
   {
+    "version": "v0.1.82",
+    "items": [
+      {
+        "title": "Keep prompt context and reading position steady",
+        "description": "Dismissed prompt previews stay hidden until another prompt and stay out of view while their prompt is visible. Tall replies keep the end of the answered prompt in view, and preview placement remains steady while you browse older messages."
+      },
+      {
+        "title": "Keep drafts and images together",
+        "description": "Restoring a draft keeps its text and attachments together. Markdown images appear as thumbnails you can enlarge."
+      },
+      {
+        "title": "Make sender updates and tool activity easier to scan",
+        "description": "Agent updates appear individually in mixed notice groups, with sender names and readable plain text. Consecutive tool calls can be folded into expandable summaries with a count and newest title, even when a call has no name; messages and other activity remain separate."
+      },
+      {
+        "title": "Keep the composer and latest message readable",
+        "description": "On phones, an empty composer title stays centered on one ellipsized line, and scrolled messages remain clear when blur is subtle while drafts keep their usual wrapping. As the composer grows, the complete latest message stays visible above it, including delivery warnings and retry controls; normal one-line spacing is unchanged."
+      },
+      {
+        "title": "Use read markers when a host configures them",
+        "description": "The example server can optionally expose requests to read or update a conversation's read position. When configured, the marker credential stays on the server and is not exposed in the browser."
+      },
+      {
+        "title": "Reach the newest reply without a late jump",
+        "description": "If a new reply arrives while Chat is still moving to the latest message, the scroll continues smoothly to the newest reply after the view settles. If you interrupt, the control for returning to the latest message comes back."
+      }
+    ]
+  },
+  {
     "version": "v0.1.81",
     "items": [
       {
