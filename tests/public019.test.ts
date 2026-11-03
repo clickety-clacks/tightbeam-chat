@@ -12,7 +12,8 @@ const sessionKey = 's-public';
 const identity = { principalKey: 'person-1', deviceId: 'device-1' };
 const operatorPrincipalKey = 'configured-operator';
 const otherPrincipalKey = 'other-principal';
-const gatewayHumanTrigger = 'human-trigger';
+const gatewayHumanTrigger = 'human';
+const unknownGatewayTrigger = 'future-trigger';
 const version = { server: 'tightbeam', version: '0.1.11', build: 3390, sha: '306f423d', protocolVersion: 1 };
 const laterPatch = { ...version, version: '0.1.12', build: 3402, sha: '7c4d2e11' };
 const item = {
@@ -141,17 +142,20 @@ describe('Gateway wire mapping and behavior checks', () => {
     expect(candidate.paths).toEqual([]);
   });
 
-  it('normalizes only unknown Gateway triggers with a user origin to the internal human value', () => {
+  it('normalizes the Gateway human trigger only with a user origin', () => {
     const userTurn = decodePublic019Turn({ seq: 4, sessionKey, status: 'running',
       origin: 'user:fixture-principal', triggerSource: gatewayHumanTrigger }, sessionKey);
     const nonUserTurn = decodePublic019Turn({ seq: 5, sessionKey, status: 'running',
       origin: 'process:events', triggerSource: gatewayHumanTrigger }, sessionKey);
-    const knownAgentTurn = decodePublic019Turn({ seq: 6, sessionKey, status: 'running',
+    const unknownUserTurn = decodePublic019Turn({ seq: 6, sessionKey, status: 'running',
+      origin: 'user:fixture-principal', triggerSource: unknownGatewayTrigger }, sessionKey);
+    const knownAgentTurn = decodePublic019Turn({ seq: 7, sessionKey, status: 'running',
       origin: 'agent:fixture-agent', triggerSource: 'agent' }, sessionKey);
 
     expect(userTurn.triggerSource).toBe('human');
-    expect(userTurn.raw.triggerSource).toBe(gatewayHumanTrigger);
+    expect(userTurn.raw.triggerSource).toBe('human');
     expect(nonUserTurn.triggerSource).toBeUndefined();
+    expect(unknownUserTurn.triggerSource).toBeUndefined();
     expect(knownAgentTurn.triggerSource).toBe('agent');
   });
 

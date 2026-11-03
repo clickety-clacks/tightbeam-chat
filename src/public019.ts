@@ -225,8 +225,8 @@ export function decodePublic019Turn(value: unknown, sessionKey: string): Canonic
     seq: positiveInteger(row, 'seq'), sessionKey, status: requiredString(row, 'status'),
     messageId: optionalString(row, 'messageId'), origin,
     triggerSource: knownTriggerSource ? triggerSource as CanonicalTurn['triggerSource']
-      : typeof triggerSource === 'string' && triggerSource.length > 0 &&
-        origin.startsWith('user:') && origin.length > 'user:'.length ? 'human' : undefined,
+      : triggerSource === 'human' && origin.startsWith('user:') &&
+        origin.length > 'user:'.length ? 'human' : undefined,
     batchMemberCount: optionalPositiveInteger(row, 'batchMemberCount'),
     raw: Object.freeze({ ...row }),
   });
