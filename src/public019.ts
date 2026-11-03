@@ -219,17 +219,23 @@ export function decodePublic019Turn(value: unknown, sessionKey: string): Canonic
   }
   const origin = requiredString(row, 'origin');
   const triggerSource = row.triggerSource;
-  const knownTriggerSource = triggerSource === 'batch' || triggerSource === 'agent' ||
-    triggerSource === 'process' || triggerSource === 'other';
   return Object.freeze({
     seq: positiveInteger(row, 'seq'), sessionKey, status: requiredString(row, 'status'),
     messageId: optionalString(row, 'messageId'), origin,
-    triggerSource: knownTriggerSource ? triggerSource as CanonicalTurn['triggerSource']
-      : triggerSource === 'human' && origin.startsWith('user:') &&
-        origin.length > 'user:'.length ? 'human' : undefined,
+    triggerSource: decodeTriggerSource(triggerSource, origin),
     batchMemberCount: optionalPositiveInteger(row, 'batchMemberCount'),
     raw: Object.freeze({ ...row }),
   });
+}
+
+function decodeTriggerSource(value: unknown, origin: string): CanonicalTurn['triggerSource'] {
+  if (value === 'batch' || value === 'agent' || value === 'process' || value === 'other') return value;
+  if (typeof value !== 'string' || !value || !origin.startsWith('user:')) return undefined;
+  const originPrincipal = origin.slice('user:'.length);
+  if (!originPrincipal) return undefined;
+  // Gateway 0.1.14 used the user-origin principal as its human trigger value.
+  // Newer Gateway data uses the explicit `human` value; unrelated unknown values stay unknown.
+  return value === 'human' || value === originPrincipal ? 'human' : undefined;
 }
 
 export function decodePublic019Session(value: unknown, sessionKey: string): SessionRecord {
