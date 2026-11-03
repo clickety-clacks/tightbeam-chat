@@ -2113,6 +2113,8 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   }, [recoverySnapshot, viewport]);
   const readingOnScroll = useRef(reading.onScroll);
   readingOnScroll.current = reading.onScroll;
+  const preserveReadingPositionRef = useRef(reading.preserveVisiblePosition);
+  preserveReadingPositionRef.current = reading.preserveVisiblePosition;
   useLayoutEffect(() => {
     if (!recoverySnapshot.hasReadingPosition) return;
     const box = viewport.current;
@@ -2121,13 +2123,13 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     // The browser clamps an offset if recovered history has become shorter.
     box.scrollTop = recoverySnapshot.followLatest
       ? bottom : recoverySnapshot.scrollTop;
+    // A restored older offset is settled reading state, not initial browser restoration.
+    if (!recoverySnapshot.followLatest) preserveReadingPositionRef.current();
     readingOnScroll.current();
     rememberReadingPosition();
   }, [recoverySnapshot, rememberReadingPosition, viewport]);
   useLayoutEffect(() => { rememberReadingPosition(); }, [host, rememberReadingPosition, state]);
   const retryTranscript = useCallback(() => { void runtime.rebuild({ restart: true }); }, [runtime]);
-  const preserveReadingPositionRef = useRef(reading.preserveVisiblePosition);
-  preserveReadingPositionRef.current = reading.preserveVisiblePosition;
   const preserveReadingPosition = useCallback(() => preserveReadingPositionRef.current(), []);
   useLayoutEffect(() => {
     previousArrivalContext.current = { sessionKey: state.sessionKey, generation: state.generation,
