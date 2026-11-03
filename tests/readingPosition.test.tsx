@@ -1235,6 +1235,69 @@ describe('conversation reading position', () => {
     expect(box.scrollTop).toBe(previousTop + 60 + 2 * 92);
   });
 
+  it('fits newly revealed activity runs into an existing gap without moving messages or dividers', () => {
+    extraBottomSpace = 500;
+    let reading: ReturnType<typeof useReadingPosition> | undefined;
+    const initialRows: Array<{ key: string; kind: string; height: number; marginTop?: number }> = [
+      { key: 'upper-message', kind: 'message', height: 60 },
+      { key: 'compaction-one', kind: 'divider', height: 10, marginTop: 95.265625 },
+      { key: 'compaction-two', kind: 'divider', height: 10, marginTop: 35 },
+      { key: 'lower-message', kind: 'message', height: 60, marginTop: 35 },
+    ];
+    const activityRows: Array<{ key: string; kind: string; height: number; marginTop?: number }> = [
+      { key: 'tool-run-one', kind: 'activity', height: 30.421875 },
+      { key: 'tool-run-two', kind: 'activity', height: 30.421875 },
+      { key: 'tool-run-three', kind: 'activity', height: 30.421875 },
+    ];
+    const layout = vi.mocked(HTMLElement.prototype.getBoundingClientRect);
+    const fallbackMeasure = layout.getMockImplementation();
+    layout.mockImplementation(function (this: HTMLElement) {
+      if (this.dataset.testLayoutRow !== undefined) {
+        const content = this.parentElement!;
+        let cursor = 16;
+        for (const child of content.children) {
+          const row = child as HTMLElement;
+          const top = cursor + (Number.parseFloat(row.style.marginTop) || 0);
+          const height = Number.parseFloat(row.dataset.testHeight ?? '0');
+          if (row === this) return rect(top - scrollTop, height);
+          cursor = top + height + (Number.parseFloat(row.style.marginBottom) || 0);
+        }
+      }
+      return fallbackMeasure?.call(this) ?? rect(0, 50);
+    });
+
+    function History({ revealActivity }: { revealActivity: boolean }) {
+      const entries = revealActivity
+        ? [initialRows[0], ...activityRows, ...initialRows.slice(1)]
+        : initialRows;
+      const position = useReadingPosition(true, entries.map(entry => entry.key));
+      reading = position;
+      return <div ref={position.viewport} className="tb-chat-viewport" onScroll={position.onScroll}
+        onWheel={event => { if (event.deltaY !== 0) position.noteUserScroll(); }}>
+        <div ref={position.content}>{entries.map(entry => <div key={entry.key}
+          ref={element => position.registerRow(entry.key, element)} data-scroll-key={entry.key}
+          data-test-layout-row="true" data-test-height={entry.height}
+          data-activity-run={entry.kind === 'activity' ? entry.key : undefined}
+          style={entry.marginTop === undefined ? undefined : { marginTop: `${entry.marginTop}px` }} />)}</div>
+      </div>;
+    }
+
+    const view = render(<History revealActivity={false} />);
+    const box = document.querySelector<HTMLElement>('.tb-chat-viewport')!;
+    readAt(box, 0);
+    const stableKeys = ['upper-message', 'compaction-one', 'compaction-two', 'lower-message'];
+    const offset = (key: string) => box.querySelector<HTMLElement>(`[data-scroll-key="${key}"]`)!.getBoundingClientRect().top;
+    const before = new Map(stableKeys.map(key => [key, offset(key)]));
+    const releasePosition = reading!.holdPosition();
+
+    view.rerender(<History revealActivity />);
+    releasePosition();
+
+    for (const key of stableKeys) expect(offset(key)).toBeCloseTo(before.get(key)!, 2);
+    const lastRun = box.querySelector<HTMLElement>('[data-scroll-key="tool-run-three"]')!;
+    expect(lastRun.style.marginBottom).toMatch(/-/);
+  });
+
   it('does not treat browser clamping after rows shrink as reader movement', () => {
     const { runtime, box } = setup();
     readAt(box, 1400);

@@ -7,7 +7,7 @@ const arrivalDuration = 240;
 const arrivalEasing = 'cubic-bezier(0.2, 0, 0, 1)';
 const arrivalTopInset = 40;
 const arrivalVisibleTail = 16;
-type Anchor = { key: string; top: number };
+type Anchor = { key: string; top: number; height: number };
 type MessageRow = { key: string; scrollKey: string; role: string; prompt: boolean; isFromReader: boolean };
 type IncomingMessageArrival = {
   readonly scrollKey: string;
@@ -59,6 +59,9 @@ export function useReadingPosition(
   const topAnchoredPrompt = useRef<{ readonly scrollKey: string; readonly bottomOffset: number } | undefined>(undefined);
   const arrivalStreamingRef = useRef(arrivalStreaming);
   const seenArrivalRows = useRef(new Set<string>());
+  const knownRowKeys = useRef(new Set<string>());
+  const newlyRegisteredRowKeys = useRef(new Set<string>());
+  const activityGapMargins = useRef(new WeakMap<HTMLElement, { baseMarginBottom: number; amount: number }>());
   const arrivalScopeRef = useRef(arrivalScope);
   const messageRows = useRef<ReadonlyMap<string, MessageRow>>(new Map());
   const knownMessages = useRef(new Set<string>());
@@ -72,6 +75,9 @@ export function useReadingPosition(
     incomingMessageArrival.current = undefined;
     topAnchoredPrompt.current = undefined;
     knownMessages.current.clear();
+    knownRowKeys.current.clear();
+    newlyRegisteredRowKeys.current.clear();
+    activityGapMargins.current = new WeakMap();
     unseenMessages.current.clear();
     messageBaselineReady.current = false;
     arrivalScopeRef.current = arrivalScope;
@@ -97,7 +103,11 @@ export function useReadingPosition(
   const anchors = useRef<Anchor[]>([]);
   const registeredRows = useRef(new Map<string, HTMLElement>());
   const registerRow = useCallback((key: string, element: HTMLElement | null) => {
-    if (element) registeredRows.current.set(key, element);
+    if (element) {
+      if (!knownRowKeys.current.has(key)) newlyRegisteredRowKeys.current.add(key);
+      knownRowKeys.current.add(key);
+      registeredRows.current.set(key, element);
+    }
     else registeredRows.current.delete(key);
   }, []);
   const getRow = useCallback((key: string) => registeredRows.current.get(key), []);
@@ -443,6 +453,7 @@ export function useReadingPosition(
     const unseenBounds = unseenMessages.current.size > 0 ? bounds ?? box.getBoundingClientRect() : bounds;
     refreshUnseenMessages(unseenBounds, measuredRows, true);
     anchors.current = [];
+    newlyRegisteredRowKeys.current.clear();
     if (following.current) return;
     const anchorBounds = bounds ?? box.getBoundingClientRect();
     const measureRow = (row: HTMLElement) => {
@@ -462,30 +473,89 @@ export function useReadingPosition(
       if (measureRow(children[middle] as HTMLElement).bottom <= anchorBounds.top) low = middle + 1;
       else high = middle;
     }
-    const remember = (row: HTMLElement, top: number) => {
+    const remember = (row: HTMLElement, measured: DOMRect) => {
       const key = row.dataset.scrollKey;
       if (key !== undefined && !remembered.has(key)) {
         remembered.add(key);
-        anchors.current.push({ key, top: top - anchorBounds.top + box.scrollTop });
+        anchors.current.push({ key, top: measured.top - anchorBounds.top + box.scrollTop, height: measured.height });
       }
     };
     for (let i = low; i < children.length; i++) {
       const row = children[i] as HTMLElement;
       const rect = measureRow(row);
-      remember(row, rect.top);
+      remember(row, rect);
       if (rect.top >= anchorBounds.bottom) break;
     }
     if (low > 0) {
       const previous = children[low - 1] as HTMLElement;
-      remember(previous, measureRow(previous).top);
+      remember(previous, measureRow(previous));
     }
     // If filtering removes every row around the reader, retain a distant
     // survivor so its old position can keep the transcript from collapsing.
     for (let i = children.length - 1; i >= 0; i--) {
       const lastRow = children[i] as HTMLElement;
       if (lastRow.dataset.scrollKey === undefined) continue;
-      remember(lastRow, measureRow(lastRow).top);
+      remember(lastRow, measureRow(lastRow));
       break;
+    }
+  };
+
+  const fitNewActivityRowsIntoVisibleGaps = (box: HTMLElement) => {
+    const contentElement = content.current;
+    if (!contentElement || anchors.current.length < 2 || newlyRegisteredRowKeys.current.size === 0) return;
+    const anchorKeys = new Set(anchors.current.map(anchor => anchor.key));
+    let viewportTop: number | undefined;
+    const contentTop = (row: HTMLElement, bounds = row.getBoundingClientRect()) => {
+      viewportTop ??= box.getBoundingClientRect().top;
+      return bounds.top - viewportTop + box.scrollTop;
+    };
+
+    for (let index = 0; index < anchors.current.length - 1; index++) {
+      const previousAnchor = anchors.current[index];
+      const nextAnchor = anchors.current[index + 1];
+      const previousRow = registeredRows.current.get(previousAnchor.key);
+      const nextRow = registeredRows.current.get(nextAnchor.key);
+      if (!previousRow || !nextRow || previousRow.parentElement !== contentElement || nextRow.parentElement !== contentElement) continue;
+
+      const insertedRuns: HTMLElement[] = [];
+      let hasOtherUnanchoredRow = false;
+      let row = previousRow.nextElementSibling as HTMLElement | null;
+      while (row && row !== nextRow) {
+        const key = row.dataset.scrollKey;
+        if (key !== undefined && !anchorKeys.has(key)) {
+          if (newlyRegisteredRowKeys.current.has(key) && row.dataset.activityRun !== undefined) insertedRuns.push(row);
+          else hasOtherUnanchoredRow = true;
+        }
+        row = row.nextElementSibling as HTMLElement | null;
+      }
+      if (row !== nextRow || hasOtherUnanchoredRow || insertedRuns.length === 0) continue;
+
+      const oldGap = nextAnchor.top - (previousAnchor.top + previousAnchor.height);
+      if (oldGap <= 0) continue;
+      // Keep the original gap only when the newly indexed rows fit fully inside it.
+      const previousBounds = previousRow.getBoundingClientRect();
+      const nextBounds = nextRow.getBoundingClientRect();
+      if (Math.abs(previousBounds.height - previousAnchor.height) > .5 ||
+          Math.abs(nextBounds.height - nextAnchor.height) > .5) continue;
+
+      const previousTop = contentTop(previousRow, previousBounds);
+      const nextTop = contentTop(nextRow, nextBounds);
+      const growth = nextTop - (previousTop + previousBounds.height) - oldGap;
+      if (growth <= .5 || growth > oldGap + .5) continue;
+
+      const firstRunBounds = insertedRuns[0].getBoundingClientRect();
+      const lastRun = insertedRuns[insertedRuns.length - 1];
+      const lastRunBounds = lastRun.getBoundingClientRect();
+      const previousBottom = previousTop + previousBounds.height;
+      if (contentTop(insertedRuns[0], firstRunBounds) < previousBottom - .5 ||
+          contentTop(lastRun, lastRunBounds) + lastRunBounds.height > previousBottom + oldGap + .5) continue;
+
+      const priorCorrection = activityGapMargins.current.get(lastRun);
+      const baseMarginBottom = priorCorrection?.baseMarginBottom ??
+        (Number.parseFloat(getComputedStyle(lastRun).marginBottom) || 0);
+      const amount = (priorCorrection?.amount ?? 0) + growth;
+      lastRun.style.marginBottom = `${baseMarginBottom - amount}px`;
+      activityGapMargins.current.set(lastRun, { baseMarginBottom, amount });
     }
   };
 
@@ -649,6 +719,7 @@ export function useReadingPosition(
         animating.current = false;
         target.current = undefined;
       }
+      fitNewActivityRowsIntoVisibleGaps(box);
       const rows = registeredRows.current;
       const survivor = anchors.current.find(anchor => rows.has(anchor.key));
       if (survivor) {
