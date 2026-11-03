@@ -162,10 +162,10 @@ describe('activity pill presentation', () => {
   });
 
   it('identifies a known agent sender when no display name is available', () => {
-    const fullSender = 'agent:agent:main:clawline:mike:main s_6f3b51ed';
+    const fullSender = 'agent:agent:main:clawline:fixture:main s_1234abcd';
     expect(activityPillPresentation({ kind: 'agent', gist: 'Another agent — Review complete',
       content: 'Review complete', sender: fullSender })).toMatchObject({
-      label: 'Agent · session 6f3b51ed', tone: 'indigo', icon: 'message', text: 'Review complete', senderLabel: true,
+      label: 'Agent · session 1234abcd', tone: 'indigo', icon: 'message', text: 'Review complete', senderLabel: true,
     });
     expect(activityPillPresentation({ kind: 'agent', gist: 'Another agent — Update ready',
       content: 'Update ready', sender: 'agent:helper', senderDisplayName: 'Another agent' })).toMatchObject({
