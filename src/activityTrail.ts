@@ -81,6 +81,8 @@ interface Candidate extends ActivityLine {
   readonly semanticFoldKind?: string;
   /** Agent entries in mixed batches keep their individual delivery position and pill. */
   readonly separatePill?: boolean;
+  /** Direct agent-origin history rows do not require an owner prompt/reply span. */
+  readonly standaloneAgentMessage?: boolean;
 }
 
 interface BubbleEvent extends Position {
@@ -146,7 +148,8 @@ function knownSenderDisplayNames(records: readonly {
   return new Map([...latest].map(([sender, value]) => [sender, value.displayName]));
 }
 
-function messageCandidate(message: CanonicalMessage, senderDisplayName?: string): Candidate | undefined {
+function messageCandidate(message: CanonicalMessage, senderDisplayName?: string,
+  clearedThroughSeq?: number): Candidate | undefined {
   const sender = message.sender ?? '';
   if (message.recordEventIds?.length) {
     const gist = bodyGist(message.content) || 'Record notice';
@@ -189,6 +192,7 @@ function messageCandidate(message: CanonicalMessage, senderDisplayName?: string)
       semanticFoldKind: gatewayNoticeFoldKind(message.content) };
   }
   if (message.messageType === 'agent' || sender.startsWith('agent:') || sender.startsWith('session:')) {
+    if (clearedThroughSeq !== undefined && message.seq <= clearedThroughSeq) return undefined;
     const displayName = activitySenderLabel(sender, rawDisplayName(message) ?? senderDisplayName);
     const name = displayName || 'Another agent';
     const content = stripDeliveryScaffolding(message.content);
@@ -200,7 +204,7 @@ function messageCandidate(message: CanonicalMessage, senderDisplayName?: string)
       originalContent: content,
       presentation: activityPillPresentation({ kind: 'agent', gist, content, sender,
         senderDisplayName: displayName }), sortTime,
-      historyBacked: true };
+      historyBacked: true, standaloneAgentMessage: true };
   }
   return undefined;
 }
@@ -357,7 +361,8 @@ function belongsToOwnerConversation(candidate: Candidate, precedingBubble: Bubbl
 function lineWithRun(candidate: Candidate, runKey: string, includeToolDetails = true): ActivityLine {
   const { liveTailEligibleAtArrival: _eligibleAtArrival,
     historyBacked: _historyBacked,
-    semanticFoldKind: _semanticFoldKind, separatePill: _separatePill, ...line } = candidate;
+    semanticFoldKind: _semanticFoldKind, separatePill: _separatePill,
+    standaloneAgentMessage: _standaloneAgentMessage, ...line } = candidate;
   if (candidate.kind === 'tool' && candidate.call) {
     if (!includeToolDetails) return { ...line, runKey, gist: '', accessibleText: '' };
     const call = candidate.call;
@@ -376,6 +381,8 @@ function lineWithRun(candidate: Candidate, runKey: string, includeToolDetails = 
  */
 export function buildActivityTrail(input: {
   readonly sessionKey: string;
+  /** Sequence of the most recent message intentionally cleared from the transcript. */
+  readonly clearedThroughSeq?: number;
   readonly records: readonly { readonly kind: 'message'; readonly id: string; readonly seq: number;
     readonly sender?: string; readonly messageType?: string; readonly role: string; readonly content: string;
     readonly isBatchCarrier?: boolean; readonly turnSeq?: number; readonly recordEventIds?: readonly string[]; readonly raw: Readonly<Record<string, unknown>> }[];
@@ -409,7 +416,7 @@ export function buildActivityTrail(input: {
   for (const message of input.records) {
     if (visibleIds.has(message.id)) continue;
     if (message.recordEventIds?.length) {
-      candidates.push(messageCandidate(message as CanonicalMessage)!);
+      candidates.push(messageCandidate(message as CanonicalMessage, undefined, input.clearedThroughSeq)!);
       continue;
     }
     const batchMembers = parseBatchMembers(message as CanonicalMessage);
@@ -426,7 +433,8 @@ export function buildActivityTrail(input: {
       }
       continue;
     }
-    const candidate = messageCandidate(message as CanonicalMessage, senderDisplayNames.get(message.sender ?? ''));
+    const candidate = messageCandidate(message as CanonicalMessage,
+      senderDisplayNames.get(message.sender ?? ''), input.clearedThroughSeq);
     if (candidate) candidates.push(candidate);
     else if (message.role === 'assistant') continue;
   }
@@ -478,8 +486,8 @@ export function buildActivityTrail(input: {
 
   const eligible = new Map<string, EligibleCandidate[]>();
   const membership = new Map<string, string>();
-  const add = (candidate: Candidate, runKey: string) => {
-    const priorRun = input.shownRuns.get(candidate.id);
+  const add = (candidate: Candidate, runKey: string, preserveShownRun = true) => {
+    const priorRun = preserveShownRun ? input.shownRuns.get(candidate.id) : undefined;
     const chosenRun = priorRun ?? runKey;
     const rows = eligible.get(chosenRun) ?? [];
     rows.push({ candidate, segmentKey: runKey });
@@ -539,6 +547,11 @@ export function buildActivityTrail(input: {
       // A stamped notice is the durable event's visible representation even
       // outside a human reply span. Keep the complete canonical notice once.
       if (event.candidate.recordEventNotice) add(event.candidate, `notice:${event.candidate.id}`);
+      else if (event.candidate.standaloneAgentMessage) {
+        // Direct agent messages belong to retained history even when no owner
+        // prompt/reply span surrounds them. Keep each row separate and uncapped.
+        add(event.candidate, `agent:${event.candidate.id}`, false);
+      }
       else pending.push(event);
     }
     else {
