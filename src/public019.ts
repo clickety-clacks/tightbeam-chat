@@ -231,11 +231,9 @@ export function decodePublic019Turn(value: unknown, sessionKey: string): Canonic
 function decodeTriggerSource(value: unknown, origin: string): CanonicalTurn['triggerSource'] {
   if (value === 'batch' || value === 'agent' || value === 'process' || value === 'other') return value;
   if (typeof value !== 'string' || !value || !origin.startsWith('user:')) return undefined;
-  const originPrincipal = origin.slice('user:'.length);
-  if (!originPrincipal) return undefined;
-  // Gateway 0.1.14 used the user-origin principal as its human trigger value.
-  // Newer Gateway data uses the explicit `human` value; unrelated unknown values stay unknown.
-  return value === 'human' || value === originPrincipal ? 'human' : undefined;
+  if (!origin.slice('user:'.length)) return undefined;
+  // Gateway uses a nonstandard trigger value for human turns; the user origin disambiguates it.
+  return 'human';
 }
 
 export function decodePublic019Session(value: unknown, sessionKey: string): SessionRecord {

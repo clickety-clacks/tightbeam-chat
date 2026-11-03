@@ -12,9 +12,7 @@ const sessionKey = 's-public';
 const identity = { principalKey: 'person-1', deviceId: 'device-1' };
 const operatorPrincipalKey = 'configured-operator';
 const otherPrincipalKey = 'other-principal';
-const gatewayHumanTrigger = 'human';
-const legacyUserTrigger = 'fixture-principal';
-const unknownGatewayTrigger = 'future-trigger';
+const gatewayHumanTrigger = 'legacy-turn-value';
 const version = { server: 'tightbeam', version: '0.1.11', build: 3390, sha: '306f423d', protocolVersion: 1 };
 const laterPatch = { ...version, version: '0.1.12', build: 3402, sha: '7c4d2e11' };
 const item = {
@@ -143,25 +141,22 @@ describe('Gateway wire mapping and behavior checks', () => {
     expect(candidate.paths).toEqual([]);
   });
 
-  it('normalizes the Gateway human trigger only with a user origin', () => {
+  it('normalizes nonstandard user-origin triggers and preserves known sources', () => {
     const userTurn = decodePublic019Turn({ seq: 4, sessionKey, status: 'running',
       origin: 'user:fixture-principal', triggerSource: gatewayHumanTrigger }, sessionKey);
     const nonUserTurn = decodePublic019Turn({ seq: 5, sessionKey, status: 'running',
       origin: 'process:events', triggerSource: gatewayHumanTrigger }, sessionKey);
-    const unknownUserTurn = decodePublic019Turn({ seq: 6, sessionKey, status: 'running',
-      origin: 'user:fixture-principal', triggerSource: unknownGatewayTrigger }, sessionKey);
-    const legacyUserTurn = decodePublic019Turn({ seq: 7, sessionKey, status: 'running',
-      origin: `user:${legacyUserTrigger}`, triggerSource: legacyUserTrigger }, sessionKey);
-    const knownAgentTurn = decodePublic019Turn({ seq: 8, sessionKey, status: 'running',
-      origin: 'agent:fixture-agent', triggerSource: 'agent' }, sessionKey);
+    const emptyUserOriginTurn = decodePublic019Turn({ seq: 6, sessionKey, status: 'running',
+      origin: 'user:', triggerSource: gatewayHumanTrigger }, sessionKey);
+    const knownTurns = ['batch', 'agent', 'process', 'other'].map((triggerSource, index) =>
+      decodePublic019Turn({ seq: 7 + index, sessionKey, status: 'running',
+        origin: 'user:fixture-principal', triggerSource }, sessionKey));
 
     expect(userTurn.triggerSource).toBe('human');
-    expect(userTurn.raw.triggerSource).toBe('human');
+    expect(userTurn.raw.triggerSource).toBe(gatewayHumanTrigger);
     expect(nonUserTurn.triggerSource).toBeUndefined();
-    expect(unknownUserTurn.triggerSource).toBeUndefined();
-    expect(legacyUserTurn.triggerSource).toBe('human');
-    expect(legacyUserTurn.raw.triggerSource).toBe(legacyUserTrigger);
-    expect(knownAgentTurn.triggerSource).toBe('agent');
+    expect(emptyUserOriginTurn.triggerSource).toBeUndefined();
+    expect(knownTurns.map(turn => turn.triggerSource)).toEqual(['batch', 'agent', 'process', 'other']);
   });
 
   it('resolves a role name to its bound session through the existing role detail route', async () => {
