@@ -574,7 +574,8 @@ export function useReadingPosition(
 
     const firstAppendedMessage = [...appendedScrollKeys].find(scrollKey =>
       !scrollKey.startsWith('local-') && messageRows.current.get(scrollKey)?.role === 'assistant');
-    if (!incoming && firstAppendedMessage && arrivalEligibleRef.current && following.current && !userScrollIntent.current) {
+    if (firstAppendedMessage && firstAppendedMessage !== incoming?.scrollKey &&
+      arrivalEligibleRef.current && following.current && !userScrollIntent.current) {
       const appendedMessageKeys = [...appendedScrollKeys].filter(scrollKey =>
         !scrollKey.startsWith('local-') && messageRows.current.has(scrollKey));
       const groupEndScrollKey = appendedMessageKeys.at(-1) ?? firstAppendedMessage;
