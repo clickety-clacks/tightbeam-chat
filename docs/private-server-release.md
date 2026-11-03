@@ -23,7 +23,7 @@ CHAT_DEFAULT_PRINCIPAL_KEY=example-user
 CHAT_DEFAULT_SESSION_KEY=agent:example:main
 ```
 
-The default gateway must be an HTTP(S) origin, and the principal and session identify an existing owner and opaque session key. These values are not credentials. `/chat-config.json` returns the configured target without caching so the page can resolve its root at runtime; it also returns a stable nonsecret device identifier used by the server bridge. A missing or invalid target is reported by the page. Tokens and other credentials never belong in this file or a link.
+The default gateway must be an HTTP(S) origin, and the principal and session identify the configured Chat owner and opaque session key. The principal also identifies the Chat operator for read-marker access; when it is unset, marker support is unavailable. Human-turn classification uses the Gateway trigger and its user-origin field, so it needs no separate Chat setting. These values are not credentials. `/chat-config.json` returns the configured target without caching so the page can resolve its root at runtime; it also returns a stable nonsecret device identifier used by the server bridge. A missing or invalid target is reported by the page. Tokens and other credentials never belong in this file or a link.
 
 For Gateway requests, the Chat server reads each provisioned `gateway.json` descriptor inside the server process. To provision more than one Gateway, set `CHAT_GATEWAY_MAP_FILE` to a deployment-owned JSON file with this shape:
 

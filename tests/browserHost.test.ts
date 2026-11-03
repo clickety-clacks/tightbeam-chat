@@ -117,6 +117,7 @@ describe('private browser entry and same-origin gateway bridge', () => {
     const host = browserHost({ ...configured, principalKey: 'fixture-principal', readMarkerRoute: 'gateway-user-device' });
 
     expect(host.readMarkerRoute).toBe('gateway-user-device');
+    expect(host.readMarkerOperatorPrincipalKey).toBe('fixture-principal');
     await host.fetch('/__chat/agent/dispatch', {
       method: 'POST',
       headers: { authorization: 'Bearer browser-supplied-value', 'content-type': 'application/json' },

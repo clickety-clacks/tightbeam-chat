@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createTightbeamAdapter } from '../src/runtime';
 import { advanceReadMarkerForwardOnly } from '../src/readMarker';
 import {
-  createPublic019Transport, decodePublic019Message, decodeToolCall,
+  createPublic019Transport, decodePublic019Message, decodePublic019Turn, decodeToolCall,
   decodePublic019Notice, type Public019Channel, type Public019Host,
 } from '../src/public019';
 import { AuthorizationError, SessionNotFoundError, UnsupportedTargetError } from '../src/types';
@@ -10,6 +10,9 @@ import { ToolHistoryUnavailableError } from '../src/toolHistory';
 
 const sessionKey = 's-public';
 const identity = { principalKey: 'person-1', deviceId: 'device-1' };
+const operatorPrincipalKey = 'configured-operator';
+const otherPrincipalKey = 'other-principal';
+const gatewayHumanTrigger = 'legacy-turn-value';
 const version = { server: 'tightbeam', version: '0.1.11', build: 3390, sha: '306f423d', protocolVersion: 1 };
 const laterPatch = { ...version, version: '0.1.12', build: 3402, sha: '7c4d2e11' };
 const item = {
@@ -41,12 +44,17 @@ class Channel implements Public019Channel {
 }
 
 function setup(heartbeatTimeoutMs?: number, observedVersion = version, historyItems: unknown[] = [item],
-  turnItems: unknown[] = [], turnStatus = 200, railDenials?: unknown) {
+  turnItems: unknown[] = [], turnStatus = 200, railDenials?: unknown,
+  markerOperatorPrincipalKey?: string, markerIdentity = identity) {
   const changes = new Channel();
   const human = new Channel();
   const paths: string[] = [];
   const host: Public019Host = {
-    currentIdentity: () => identity,
+    currentIdentity: () => markerIdentity,
+    ...(markerOperatorPrincipalKey ? {
+      readMarkerRoute: 'gateway-user-device',
+      readMarkerOperatorPrincipalKey: markerOperatorPrincipalKey,
+    } : {}),
     fetch: async (path) => {
       paths.push(path);
       if (path.includes('/record-events?')) return new Response(JSON.stringify({
@@ -89,16 +97,26 @@ function setup(heartbeatTimeoutMs?: number, observedVersion = version, historyIt
 describe('Gateway wire mapping and behavior checks', () => {
   it('keeps marker transport unavailable without a declared user-device route', () => {
     const candidate = setup();
-    candidate.host.currentIdentity = () => ({ principalKey: 'mike', deviceId: 'device-mike' });
 
     expect(candidate.transport.readReadMarker).toBeUndefined();
     expect(candidate.transport.writeReadMarker).toBeUndefined();
     expect(candidate.paths).toEqual([]);
   });
 
-  it('opens normally for Mike on a host without a compatible marker route', async () => {
+  it('keeps marker transport unavailable when the route has no configured operator principal', () => {
     const candidate = setup();
-    candidate.host.currentIdentity = () => ({ principalKey: 'mike', deviceId: 'fixture-device' });
+    const { transport } = createPublic019Transport({
+      baseUrl: 'https://host.example',
+      host: { ...candidate.host, readMarkerRoute: 'gateway-user-device', readMarkerOperatorPrincipalKey: '  ' },
+    });
+
+    expect(transport.readReadMarker).toBeUndefined();
+    expect(transport.writeReadMarker).toBeUndefined();
+  });
+
+  it('opens normally for a configured user on a host without a compatible marker route', async () => {
+    const candidate = setup();
+    candidate.host.currentIdentity = () => ({ principalKey: operatorPrincipalKey, deviceId: 'fixture-device' });
     const runtime = createTightbeamAdapter(candidate.transport, candidate.profile).open(sessionKey);
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
     await runtime.markReadPosition?.();
@@ -107,6 +125,38 @@ describe('Gateway wire mapping and behavior checks', () => {
     expect(candidate.paths.some(path => path.includes('/api/read-markers/'))).toBe(false);
     expect(candidate.paths.some(path => path.endsWith('/agent/dispatch'))).toBe(false);
     runtime.dispose();
+  });
+
+  it('does not issue marker requests when the current principal is not the configured operator', async () => {
+    const candidate = setup(undefined, version, [item], [], 200, undefined,
+      operatorPrincipalKey, { principalKey: otherPrincipalKey, deviceId: 'fixture-device' });
+
+    expect(candidate.transport.readReadMarker).toBeDefined();
+    expect(candidate.transport.writeReadMarker).toBeDefined();
+    expect(await candidate.transport.readReadMarker!('scope', new AbortController().signal))
+      .toEqual({ supported: false });
+    expect(await candidate.transport.writeReadMarker!({ userId: operatorPrincipalKey,
+      scopeKey: 'scope', sequence: '1', expectedCurrent: null }, new AbortController().signal))
+      .toBe('unsupported');
+    expect(candidate.paths).toEqual([]);
+  });
+
+  it('normalizes nonstandard user-origin triggers and preserves known sources', () => {
+    const userTurn = decodePublic019Turn({ seq: 4, sessionKey, status: 'running',
+      origin: 'user:fixture-principal', triggerSource: gatewayHumanTrigger }, sessionKey);
+    const nonUserTurn = decodePublic019Turn({ seq: 5, sessionKey, status: 'running',
+      origin: 'process:events', triggerSource: gatewayHumanTrigger }, sessionKey);
+    const emptyUserOriginTurn = decodePublic019Turn({ seq: 6, sessionKey, status: 'running',
+      origin: 'user:', triggerSource: gatewayHumanTrigger }, sessionKey);
+    const knownTurns = ['batch', 'agent', 'process', 'other'].map((triggerSource, index) =>
+      decodePublic019Turn({ seq: 7 + index, sessionKey, status: 'running',
+        origin: 'user:fixture-principal', triggerSource }, sessionKey));
+
+    expect(userTurn.triggerSource).toBe('human');
+    expect(userTurn.raw.triggerSource).toBe(gatewayHumanTrigger);
+    expect(nonUserTurn.triggerSource).toBeUndefined();
+    expect(emptyUserOriginTurn.triggerSource).toBeUndefined();
+    expect(knownTurns.map(turn => turn.triggerSource)).toEqual(['batch', 'agent', 'process', 'other']);
   });
 
   it('resolves a role name to its bound session through the existing role detail route', async () => {
@@ -132,13 +182,14 @@ describe('Gateway wire mapping and behavior checks', () => {
     let marker: string | null = null;
     const host: Public019Host = {
       readMarkerRoute: 'gateway-user-device',
-      currentIdentity: () => ({ principalKey: 'mike', deviceId: 'fixture-device' }),
+      readMarkerOperatorPrincipalKey: operatorPrincipalKey,
+      currentIdentity: () => ({ principalKey: operatorPrincipalKey, deviceId: 'fixture-device' }),
       fetch: async (input, init) => {
         requests.push({ input, init });
         const url = new URL(input);
         if (url.pathname.startsWith('/api/read-markers/')) {
           if (init.method === 'GET') return new Response(JSON.stringify({ schemaVersion: 1,
-            resource: 'read markers', item: { userId: 'mike', scopeKey, marker } }), { status: 200 });
+            resource: 'read markers', item: { userId: operatorPrincipalKey, scopeKey, marker } }), { status: 200 });
         }
         if (url.pathname === '/agent/dispatch' && init.method === 'POST') {
           marker = '90071992547409931';
@@ -152,7 +203,7 @@ describe('Gateway wire mapping and behavior checks', () => {
     const { transport } = createPublic019Transport({ baseUrl: 'https://gateway.example', host });
     const port = { readReadMarker: transport.readReadMarker!, writeReadMarker: transport.writeReadMarker! };
 
-    await advanceReadMarkerForwardOnly(port, { userId: 'mike', scopeKey, sequence: '90071992547409930' },
+    await advanceReadMarkerForwardOnly(port, { userId: operatorPrincipalKey, scopeKey, sequence: '90071992547409930' },
       new AbortController().signal);
 
     const encodedPath = `/api/read-markers/${encodeURIComponent(scopeKey)}`;
@@ -175,13 +226,14 @@ describe('Gateway wire mapping and behavior checks', () => {
     let conflictNextWrite = true;
     const host: Public019Host = {
       readMarkerRoute: 'gateway-user-device',
-      currentIdentity: () => ({ principalKey: 'mike', deviceId: 'fixture-device' }),
+      readMarkerOperatorPrincipalKey: operatorPrincipalKey,
+      currentIdentity: () => ({ principalKey: operatorPrincipalKey, deviceId: 'fixture-device' }),
       fetch: async (input, init) => {
         requests.push({ input, init });
         const url = new URL(input);
         if (url.pathname.startsWith('/api/read-markers/') && init.method === 'GET') {
           return new Response(JSON.stringify({ schemaVersion: 1, resource: 'read markers',
-            item: { userId: 'mike', scopeKey, marker } }), { status: 200 });
+            item: { userId: operatorPrincipalKey, scopeKey, marker } }), { status: 200 });
         }
         if (url.pathname === '/agent/dispatch' && init.method === 'POST') {
           const body = JSON.parse(String(init.body)) as { params: { expectedCurrent: number | string | null; marker: string } };
@@ -206,7 +258,7 @@ describe('Gateway wire mapping and behavior checks', () => {
     await advanceReadMarkerForwardOnly({
       readReadMarker: transport.readReadMarker!,
       writeReadMarker: transport.writeReadMarker!,
-    }, { userId: 'mike', scopeKey, sequence: '43' }, new AbortController().signal);
+    }, { userId: operatorPrincipalKey, scopeKey, sequence: '43' }, new AbortController().signal);
 
     const writes = requests.filter(({ input }) => new URL(input).pathname === '/agent/dispatch');
     expect(writes).toHaveLength(2);
@@ -227,7 +279,7 @@ describe('Gateway wire mapping and behavior checks', () => {
       class: status === 'queued' ? 'turn.queued' : status === 'running' ? 'turn.started' : 'turn.ended',
       resource: 'turns', op: 'upsert', refs: { sessionKey, turnSeq: 12 },
       payload: { seq: 12, rowVersion: sequence, sessionKey, status, messageId: humanRow.id,
-        origin: 'user:person-1', triggerSource: 'mike', ...extra },
+        origin: 'user:person-1', triggerSource: gatewayHumanTrigger, ...extra },
     });
     turnEvent('running');
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
@@ -423,7 +475,7 @@ describe('Gateway wire mapping and behavior checks', () => {
       messageType: 'chat', clientMessageId: 'client-human', deviceId: 'device-1', turnSeq: 12,
       content: 'Can you help?' };
     const turn = { seq: 12, rowVersion: 1, sessionKey, status: 'running', messageId: human.id,
-      origin: 'user:person-1', triggerSource: 'mike' };
+      origin: 'user:person-1', triggerSource: gatewayHumanTrigger };
     const candidate = setup(undefined, version, [human], [turn]);
     const runtime = createTightbeamAdapter(candidate.transport, candidate.profile).open(sessionKey);
     await vi.waitFor(() => expect(candidate.changes.sent).toHaveLength(2));
@@ -443,7 +495,7 @@ describe('Gateway wire mapping and behavior checks', () => {
 
   it('clears stale turn state at disconnect and only uses records delivered after reconnect', async () => {
     const running = { seq: 12, rowVersion: 1, sessionKey, status: 'running', messageId: 'human-message',
-      origin: 'user:person-1', triggerSource: 'mike' };
+      origin: 'user:person-1', triggerSource: gatewayHumanTrigger };
     const human = { ...item, id: 'human-message', seq: 9, role: 'user', sender: 'user:person-1',
       messageType: 'chat', clientMessageId: 'client-human', deviceId: 'device-1', turnSeq: 12,
       content: 'Can you help?' };
@@ -705,7 +757,8 @@ describe('Gateway wire mapping and behavior checks', () => {
     await vi.waitFor(() => expect(tailStarted).toBe(true));
     changes.emit({ type: 'change', schemaVersion: 2, subscriptionId: 'chat:s-public', seq: 1,
       class: 'turn.started', resource: 'turns', op: 'upsert', refs: { sessionKey, turnSeq: 10 },
-      payload: { seq: 10, sessionKey, status: 'running', messageId: item.id, origin: 'user:person-1', triggerSource: 'mike' } });
+      payload: { seq: 10, sessionKey, status: 'running', messageId: item.id,
+        origin: 'user:person-1', triggerSource: gatewayHumanTrigger } });
     changes.emit({ type: 'change', schemaVersion: 2, subscriptionId: 'chat:s-public', seq: 2,
       class: 'session.updated', resource: 'sessions', op: 'upsert', refs: { sessionKey },
       payload: { ...session, rowVersion: 5, mechanicalStatus: 'running' } });

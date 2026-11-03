@@ -56,6 +56,8 @@ export interface Public019Host {
   currentIdentity(): HostIdentity;
   /** Set only when this host already routes marker access through a compatible user-device credential. */
   readonly readMarkerRoute?: 'gateway-user-device';
+  /** The deployment-configured principal permitted to use the declared marker route. */
+  readonly readMarkerOperatorPrincipalKey?: string;
   /** Connect /ws/changes?protocolVersion=2, authenticate, then return a fresh socket. */
   openAuthenticatedChanges(signal: AbortSignal): Promise<Public019Channel>;
   /** Connect /ws, authenticate as the human device, await sync_complete, then return a fresh socket. */
@@ -215,14 +217,23 @@ export function decodePublic019Turn(value: unknown, sessionKey: string): Canonic
   if (requiredString(row, 'sessionKey') !== sessionKey) {
     throw new UnsupportedTargetError('Turn belongs to a different session.');
   }
+  const origin = requiredString(row, 'origin');
+  const triggerSource = row.triggerSource;
   return Object.freeze({
     seq: positiveInteger(row, 'seq'), sessionKey, status: requiredString(row, 'status'),
-    messageId: optionalString(row, 'messageId'), origin: requiredString(row, 'origin'),
-    triggerSource: ['batch', 'mike', 'agent', 'process', 'other'].includes(String(row.triggerSource))
-      ? row.triggerSource as CanonicalTurn['triggerSource'] : undefined,
+    messageId: optionalString(row, 'messageId'), origin,
+    triggerSource: decodeTriggerSource(triggerSource, origin),
     batchMemberCount: optionalPositiveInteger(row, 'batchMemberCount'),
     raw: Object.freeze({ ...row }),
   });
+}
+
+function decodeTriggerSource(value: unknown, origin: string): CanonicalTurn['triggerSource'] {
+  if (value === 'batch' || value === 'agent' || value === 'process' || value === 'other') return value;
+  if (typeof value !== 'string' || !value || !origin.startsWith('user:')) return undefined;
+  if (!origin.slice('user:'.length)) return undefined;
+  // Gateway uses a nonstandard trigger value for human turns; the user origin disambiguates it.
+  return 'human';
 }
 
 export function decodePublic019Session(value: unknown, sessionKey: string): SessionRecord {
@@ -681,10 +692,13 @@ export function createPublic019Transport(config: Public019Config): { transport: 
       return { close };
     }
 
-  const markerTransport: Pick<ChatTransport, 'readReadMarker' | 'writeReadMarker'> =
-    config.host.readMarkerRoute === 'gateway-user-device' ? {
+  const markerOperatorPrincipalKey = config.host.readMarkerOperatorPrincipalKey?.trim();
+  const markerTransport: Pick<ChatTransport,
+    'readMarkerOperatorPrincipalKey' | 'readReadMarker' | 'writeReadMarker'> =
+    config.host.readMarkerRoute === 'gateway-user-device' && markerOperatorPrincipalKey ? {
+      readMarkerOperatorPrincipalKey: markerOperatorPrincipalKey,
       async readReadMarker(scopeKey, signal): Promise<ReadMarkerReadResult> {
-        if (config.host.currentIdentity().principalKey !== 'mike') return { supported: false };
+        if (config.host.currentIdentity().principalKey !== markerOperatorPrincipalKey) return { supported: false };
         const response = await config.host.fetch(`${baseUrl}/api/read-markers/${encodeURIComponent(scopeKey)}`, {
           method: 'GET', signal, cache: 'no-store',
         });
@@ -700,12 +714,13 @@ export function createPublic019Transport(config: Public019Config): { transport: 
         const body = record(await response.json());
         if (body.schemaVersion !== 1 || body.resource !== 'read markers') return { supported: false };
         const item = record(body.item);
-        if (item.userId !== 'mike' || item.scopeKey !== scopeKey) return { supported: false };
+        if (item.userId !== markerOperatorPrincipalKey || item.scopeKey !== scopeKey) return { supported: false };
         const marker = readMarkerValue(item.marker);
         return marker === undefined ? { supported: false } : { supported: true, marker };
       },
       async writeReadMarker(request: ReadMarkerWriteRequest, signal): Promise<ReadMarkerWriteResult> {
-        if (request.userId !== 'mike' || config.host.currentIdentity().principalKey !== request.userId) {
+        if (request.userId !== markerOperatorPrincipalKey ||
+            config.host.currentIdentity().principalKey !== markerOperatorPrincipalKey) {
           return 'unsupported';
         }
         const response = await config.host.fetch(`${baseUrl}/agent/dispatch`, {

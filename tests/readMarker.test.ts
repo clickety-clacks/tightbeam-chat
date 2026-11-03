@@ -8,7 +8,7 @@ import {
 import type { ReadMarkerCandidate } from '../src/types';
 
 const candidate: ReadMarkerCandidate = {
-  userId: 'mike',
+  userId: 'configured-operator',
   scopeKey: 'agent:sample assistant with space:session-read-position',
   sequence: '90071992547409930',
 };

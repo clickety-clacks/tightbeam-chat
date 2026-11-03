@@ -1809,12 +1809,12 @@ describe('conversation surface', () => {
       const active = createTurnProvenance({ ...turn(20, sessionKey, human.id, 'user:unrelated', 'running'), ...patch }, records, 'person', 'person');
       act(() => runtime.update({ activeTurn: active, activityTurnStateAvailable: true }));
     };
-    show({ triggerSource: 'mike' });
+    show({ triggerSource: 'human' });
     const activeCaption = screen.getByRole('status', { name: 'Active turn: Replying to you' });
     expect(activeCaption.classList.contains('tb-chat-caption-neutral')).toBe(true);
     expect(activeCaption.querySelector('.tb-chat-active-caption-icon svg')).toBeTruthy();
     expect(activeCaption.textContent).toContain('Replying to you');
-    show({ triggerSource: 'mike', messageId: 'unloaded' }, []);
+    show({ triggerSource: 'human', messageId: 'unloaded' }, []);
     expect(screen.getByRole('status', { name: 'Active turn: Replying to you' })).toBeTruthy();
     show({ triggerSource: 'batch', batchMemberCount: 2 });
     expect(screen.getByRole('status', { name: 'Active turn: Processing message batch' })).toBeTruthy();
@@ -1844,7 +1844,7 @@ describe('conversation surface', () => {
     act(() => runtime.update({ activeTurn: untypedProcess }));
     expect(screen.getByRole('status', { name: 'Active turn: Other activity' })).toBeTruthy();
     for (const status of ['queued', 'completed', 'failed', 'canceled']) {
-      show({ triggerSource: 'mike', status });
+      show({ triggerSource: 'human', status });
       expect(screen.queryByRole('status', { name: /^Active turn:/ })).toBeNull();
     }
     expect(field.value).toBe('Draft remains');
@@ -1869,7 +1869,7 @@ describe('conversation surface', () => {
       const sessionKey = 'reduced-motion-caption';
       const human = row(sessionKey, 'human', 'A question', { role: 'user', sender: 'user:person', turnSeq: 1 });
       const activeTurn = createTurnProvenance({ ...turn(1, sessionKey, human.id, 'user:person', 'running'),
-        triggerSource: 'mike' }, [human], 'person', 'person');
+        triggerSource: 'human' }, [human], 'person', 'person');
       const runtime = new FakeRuntime(sessionKey, { records: [human], activeTurn, activityTurnStateAvailable: true });
       render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
       expect(screen.getByRole('status', { name: 'Active turn: Replying to you' }).style.opacity).toBe('1');

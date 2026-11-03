@@ -36,6 +36,7 @@ class HostComposerTransport implements ChatTransport {
   readonly observation: TargetObservation = profile;
   readReadMarker?: ChatTransport['readReadMarker'];
   writeReadMarker?: ChatTransport['writeReadMarker'];
+  readMarkerOperatorPrincipalKey?: string;
   readyGate?: ReturnType<typeof deferred<void>>;
   readGate?: ReturnType<typeof deferred<void>>;
   changeOpenFailures = 0;
@@ -362,7 +363,8 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     const sessionKey = 'agent:sample assistant with space';
     const acceptedCorrelation = 'c_223e4567-e89b-42d3-a456-426614174001';
     const transport = new HostComposerTransport();
-    transport.currentIdentity = () => ({ principalKey: 'mike', deviceId: 'device-1' });
+    transport.currentIdentity = () => ({ principalKey: 'configured-operator', deviceId: 'device-1' });
+    transport.readMarkerOperatorPrincipalKey = 'configured-operator';
     const initial: CanonicalMessage = { kind: 'message', id: 'initial', sessionKey, seq: 7, rowVersion: 1,
       role: 'assistant', sender: 'assistant-service', content: 'Initial reply', raw: {} };
     transport.records.set(sessionKey, [initial]);
@@ -403,7 +405,7 @@ describe('versioned host composer seam on the real adapter and surface', () => {
       event.correlationId === acceptedCorrelation)).toBe(true));
     expect(events.some((event) => event.event === 'rejected' && event.correlationId === acceptedCorrelation)).toBe(false);
     expect(read).toHaveBeenCalledTimes(1);
-    expect(write).toHaveBeenLastCalledWith({ userId: 'mike',
+    expect(write).toHaveBeenLastCalledWith({ userId: 'configured-operator',
       scopeKey: `${sessionKey}:session-read-position`, sequence: '8', expectedCurrent: '7' },
     expect.any(AbortSignal));
   });
@@ -889,7 +891,7 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     const events: HostComposerEvent[] = [];
     const transport = new HostComposerTransport();
     const active: CanonicalTurn = { seq: 7, sessionKey: 'conversation-a', status: 'running',
-      messageId: 'human-trigger', origin: 'user:person', triggerSource: 'mike', raw: { rowVersion: 1 } };
+      messageId: 'human-trigger', origin: 'user:person', triggerSource: 'human', raw: { rowVersion: 1 } };
     const human: CanonicalMessage = { kind: 'message', id: 'human-trigger', sessionKey: 'conversation-a',
       seq: 1, rowVersion: 1, role: 'user', sender: 'user:person', content: 'Can you help?', turnSeq: 7, raw: {} };
     transport.records.set('conversation-a', [human]);
@@ -916,7 +918,7 @@ describe('versioned host composer seam on the real adapter and surface', () => {
   it('clears a completed turn after reconnect and restores a turn when reopening mid-run', async () => {
     const transport = new HostComposerTransport();
     const active: CanonicalTurn = { seq: 7, sessionKey: 'conversation-a', status: 'running',
-      messageId: 'human-trigger', origin: 'user:person', triggerSource: 'mike', raw: { rowVersion: 1 } };
+      messageId: 'human-trigger', origin: 'user:person', triggerSource: 'human', raw: { rowVersion: 1 } };
     const human: CanonicalMessage = { kind: 'message', id: 'human-trigger', sessionKey: 'conversation-a',
       seq: 1, rowVersion: 1, role: 'user', sender: 'user:person', content: 'Can you help?', turnSeq: 7, raw: {} };
     transport.emitTurn(active);
