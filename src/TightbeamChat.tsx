@@ -2162,6 +2162,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   const returnedPromptHandoffIdentity = useRef<string | undefined>(undefined);
   const promptHandoffMotionStart = useRef<{ identity: string; rect: PromptHandoffRect } | null>(null);
   const composer = useRef<ComposerHandle>(null);
+  const hasMeasuredComposerHeight = useRef(false);
   const [overlay, setOverlay] = useState<ChatOverlay | null>(null);
   const overlayRef = useRef<ChatOverlay | null>(null);
   const handledSettingsRevision = useRef(0);
@@ -2176,10 +2177,15 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     const element = container?.querySelector<HTMLElement>('.tb-chat-composer');
     if (!container || !element) return;
     const update = () => {
+      const firstMeasurement = !hasMeasuredComposerHeight.current;
+      hasMeasuredComposerHeight.current = true;
       const height = `${element.getBoundingClientRect().height}px`;
       if (container.style.getPropertyValue('--tb-chat-composer-height') === height) return;
       container.style.setProperty('--tb-chat-composer-height', height);
-      if (typeof reading.viewport.current?.scrollTo === 'function') reading.reconcileViewportLayout();
+      // Body recovery restores the saved reader offset before this effect. Its
+      // initial reserve update must not send a restored older reader to latest.
+      const restoringOlderPosition = firstMeasurement && recoverySnapshot.hasReadingPosition && !recoverySnapshot.followLatest;
+      if (!restoringOlderPosition && typeof reading.viewport.current?.scrollTo === 'function') reading.reconcileViewportLayout();
     };
     const observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(update);
     observer?.observe(element);
