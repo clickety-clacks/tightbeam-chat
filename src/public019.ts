@@ -849,12 +849,12 @@ export function createPublic019Transport(config: Public019Config): { transport: 
         throw new AttachmentUploadError(code, `Attachment upload failed (HTTP ${response.status}): ${code}`);
       }
       const wire = await response.json();
-      if (!wire || typeof wire.asset_id !== 'string' || !wire.asset_id ||
-          typeof wire.mime_type !== 'string' || !wire.mime_type || !Number.isSafeInteger(wire.size) ||
-          wire.size !== input.bytes.size || wire.mime_type !== (input.bytes.type || 'application/octet-stream')) {
+      if (!wire || typeof wire.assetId !== 'string' || !wire.assetId ||
+          typeof wire.mimeType !== 'string' || !wire.mimeType || !Number.isSafeInteger(wire.size) ||
+          wire.size !== input.bytes.size || wire.mimeType !== (input.bytes.type || 'application/octet-stream')) {
         throw new AttachmentUploadError('reference-mismatch', 'Attachment upload returned a different type or byte count.');
       }
-      return Object.freeze({ assetId: wire.asset_id, mimeType: wire.mime_type,
+      return Object.freeze({ assetId: wire.assetId, mimeType: wire.mimeType,
         filename: input.filename, size: wire.size }) as AttachmentReference;
     },
     async readAttachment(reference, signal) {

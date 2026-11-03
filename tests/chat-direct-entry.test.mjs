@@ -1030,7 +1030,7 @@ describe('attachment byte routes', () => {
         const id = `asset_${assets.size}`;
         assets.set(id, { bytes, type: file.type, filename: file.name });
         response.writeHead(200, { 'content-type': 'application/json' });
-        response.end(JSON.stringify({ asset_id: id, mime_type: mismatch === 'type' ? 'text/plain' : file.type, size: bytes.length + (mismatch === 'size' ? 1 : 0) }));
+        response.end(JSON.stringify({ assetId: id, mimeType: mismatch === 'mimeType' ? 'text/plain' : file.type, size: bytes.length + (mismatch === 'size' ? 1 : 0) }));
       } else if (url.pathname.startsWith('/download/')) {
         const asset = assets.get(decodeURIComponent(url.pathname.slice('/download/'.length)));
         if (!asset) { response.writeHead(404).end(); return; }
@@ -1077,7 +1077,7 @@ describe('attachment byte routes', () => {
     expect(result.outcome).toBe('accepted');
     expect(frames).toEqual([{ type: 'message', id: 'c_assets', sessionKey: SESSION, content: '', attachments: refs }]);
     expect(observations.every(row => row.actingUser === PRINCIPAL && row.auth === `Bearer ${TOKEN}`)).toBe(true);
-    for (const field of ['type', 'size']) {
+    for (const field of ['mimeType', 'size']) {
       mismatch = field;
       await expect(transport.uploadAttachment({ id: 'mismatch', filename: 'item.bin',
         bytes: new Blob(['x'], { type: 'application/octet-stream' }) }, new AbortController().signal))
