@@ -2,7 +2,7 @@ import { uncoveredRecordEvents, recordEventPresentation } from './sessionRecordE
 import type { SessionRecordEvent } from './types';
 import { Component, forwardRef, memo, useCallback, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore,
   type AnchorHTMLAttributes, type ClipboardEvent as ReactClipboardEvent, type FormEvent, type HTMLAttributes, type ImgHTMLAttributes,
-  type ErrorInfo, type ReactNode, type RefObject, type TableHTMLAttributes } from 'react';
+  type ErrorInfo, type ReactNode, type TableHTMLAttributes } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { AttachmentPreparationError } from './types';
@@ -1054,11 +1054,10 @@ const Composer = forwardRef<ComposerHandle, {
   state: RuntimeState;
   recoverySnapshot: ChatRecoverySnapshot;
   agentName: string;
-  root: RefObject<HTMLElement | null>;
   suppressStatus: boolean;
   onSettings: () => void;
   onSubmitted: () => void;
-}>(function Composer({ runtime, state, recoverySnapshot, agentName, root, suppressStatus, onSettings, onSubmitted }, ref) {
+}>(function Composer({ runtime, state, recoverySnapshot, agentName, suppressStatus, onSettings, onSubmitted }, ref) {
   const [draft, setDraft] = useState(recoverySnapshot.draft);
   const [attachments, setAttachments] = useState<readonly DraftAttachment[]>([]);
   const [acquisitionError, setAcquisitionError] = useState<string | null>(null);
@@ -1437,17 +1436,6 @@ const Composer = forwardRef<ComposerHandle, {
       }
     }
   }, [recoverySnapshot, state.sends, updateDraft]);
-
-  useLayoutEffect(() => {
-    const element = shell.current;
-    const container = root.current;
-    if (!element || !container) return;
-    const update = () => container.style.setProperty('--tb-chat-composer-height', `${element.getBoundingClientRect().height}px`);
-    const observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(update);
-    observer?.observe(element);
-    update();
-    return () => observer?.disconnect();
-  }, [root]);
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -2125,6 +2113,8 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   }, [recoverySnapshot, viewport]);
   const readingOnScroll = useRef(reading.onScroll);
   readingOnScroll.current = reading.onScroll;
+  const preserveReadingPositionRef = useRef(reading.preserveVisiblePosition);
+  preserveReadingPositionRef.current = reading.preserveVisiblePosition;
   useLayoutEffect(() => {
     if (!recoverySnapshot.hasReadingPosition) return;
     const box = viewport.current;
@@ -2133,13 +2123,13 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     // The browser clamps an offset if recovered history has become shorter.
     box.scrollTop = recoverySnapshot.followLatest
       ? bottom : recoverySnapshot.scrollTop;
+    // A restored older offset is settled reading state, not initial browser restoration.
+    if (!recoverySnapshot.followLatest) preserveReadingPositionRef.current();
     readingOnScroll.current();
     rememberReadingPosition();
   }, [recoverySnapshot, rememberReadingPosition, viewport]);
   useLayoutEffect(() => { rememberReadingPosition(); }, [host, rememberReadingPosition, state]);
   const retryTranscript = useCallback(() => { void runtime.rebuild({ restart: true }); }, [runtime]);
-  const preserveReadingPositionRef = useRef(reading.preserveVisiblePosition);
-  preserveReadingPositionRef.current = reading.preserveVisiblePosition;
   const preserveReadingPosition = useCallback(() => preserveReadingPositionRef.current(), []);
   useLayoutEffect(() => {
     previousArrivalContext.current = { sessionKey: state.sessionKey, generation: state.generation,
@@ -2174,6 +2164,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   const returnedPromptHandoffIdentity = useRef<string | undefined>(undefined);
   const promptHandoffMotionStart = useRef<{ identity: string; rect: PromptHandoffRect } | null>(null);
   const composer = useRef<ComposerHandle>(null);
+  const hasMeasuredComposerHeight = useRef(false);
   const [overlay, setOverlay] = useState<ChatOverlay | null>(null);
   const overlayRef = useRef<ChatOverlay | null>(null);
   const handledSettingsRevision = useRef(0);
@@ -2182,6 +2173,27 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     overlayRef.current = next;
     setOverlay(next);
   }, []);
+
+  useLayoutEffect(() => {
+    const container = root.current;
+    const element = container?.querySelector<HTMLElement>('.tb-chat-composer');
+    if (!container || !element) return;
+    const update = () => {
+      const firstMeasurement = !hasMeasuredComposerHeight.current;
+      hasMeasuredComposerHeight.current = true;
+      const height = `${element.getBoundingClientRect().height}px`;
+      if (container.style.getPropertyValue('--tb-chat-composer-height') === height) return;
+      container.style.setProperty('--tb-chat-composer-height', height);
+      // Body recovery restores the saved reader offset before this effect. Its
+      // initial reserve update must not send a restored older reader to latest.
+      const restoringOlderPosition = firstMeasurement && recoverySnapshot.hasReadingPosition && !recoverySnapshot.followLatest;
+      if (!restoringOlderPosition && typeof reading.viewport.current?.scrollTo === 'function') reading.reconcileViewportLayout();
+    };
+    const observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(update);
+    observer?.observe(element);
+    update();
+    return () => observer?.disconnect();
+  }, [host.composerHidden, reading.reconcileViewportLayout]);
   const recordWhatsNewSeen = useCallback(() => {
     if (!CHAT_RELEASE_VERSION || typeof window === 'undefined') return;
     try { recordSeenReleaseVersion(window.localStorage, CHAT_RELEASE_VERSION); } catch { /* Storage may be unavailable. */ }
@@ -3108,7 +3120,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     </button>}
     {!host.composerHidden && <Composer ref={composer} runtime={runtime} state={state}
       recoverySnapshot={recoverySnapshot} agentName={agentName}
-      root={root} suppressStatus={host.optedIn} onSettings={openSettings} onSubmitted={reading.scrollToLatest} />}
+      suppressStatus={host.optedIn} onSettings={openSettings} onSubmitted={reading.scrollToLatest} />}
     {overlay && <ReleaseNotesDialog overlay={overlay} entries={bundledNotes} onClose={closeOverlay}
       onOpenReleaseNotes={openReleaseNotes} onBack={backToSettings} />}
   </section></ActivitySummaryProvider>;
