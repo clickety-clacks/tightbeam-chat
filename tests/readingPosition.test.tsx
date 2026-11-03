@@ -1333,6 +1333,9 @@ describe('conversation reading position', () => {
 
     scrollTo.mockClear();
     fireEvent.click(screen.getByRole('button', { name: 'Scroll to bottom' }));
+    for (let frame = 0; frame < 4 && scrollTo.mock.calls.length === 0; frame++) {
+      advanceNextFrame(performance.now() + 16 * (frame + 1));
+    }
     expect(scrollTo).toHaveBeenLastCalledWith({ top: box.scrollHeight - box.clientHeight, behavior: 'smooth' });
     expect(document.activeElement).toBe(box);
     box.scrollTop = box.scrollHeight - box.clientHeight;
@@ -1402,7 +1405,34 @@ describe('conversation reading position', () => {
     const button = screen.getByRole('button', { name: 'Scroll to bottom' });
     scrollTo.mockClear();
     fireEvent.click(button);
+    for (let frame = 0; frame < 4 && scrollTo.mock.calls.length === 0; frame++) {
+      advanceNextFrame(performance.now() + 16 * (frame + 1));
+    }
     expect(scrollTo).toHaveBeenLastCalledWith({ top: bottom, behavior: 'smooth' });
+  });
+
+  it('resolves the plain bottom-control destination after hiding its extra tail space', () => {
+    const { box } = setup();
+    extraBottomSpace = 24;
+    const buttonVisibleBottom = box.scrollHeight - box.clientHeight;
+    readAt(box, buttonVisibleBottom - 120);
+    const button = screen.getByRole('button', { name: 'Scroll to bottom' });
+    button.focus();
+    scrollTo.mockClear();
+
+    fireEvent.click(button);
+
+    expect(screen.queryByRole('button', { name: latestButtonName })).toBeNull();
+    expect(document.activeElement).toBe(box);
+    expect(scrollTo).not.toHaveBeenCalled();
+
+    extraBottomSpace = 0;
+    const settledBottom = box.scrollHeight - box.clientHeight;
+    for (let frame = 0; frame < 4 && scrollTo.mock.calls.length === 0; frame++) {
+      advanceNextFrame(performance.now() + 16 * (frame + 1));
+    }
+    expect(scrollTo).toHaveBeenLastCalledWith({ top: settledBottom, behavior: 'smooth' });
+    expect(screen.queryByRole('button', { name: latestButtonName })).toBeNull();
   });
 
   it('does not count activity folds as unseen message bubbles', () => {
@@ -1508,7 +1538,11 @@ describe('conversation reading position', () => {
 
     box.scrollTop = revealTop;
     fireEvent.scroll(box);
+    scrollTo.mockClear();
     fireEvent.click(screen.getByRole('button', { name: 'Scroll to bottom' }));
+    for (let frame = 0; frame < 4 && scrollTo.mock.calls.length === 0; frame++) {
+      advanceNextFrame(performance.now() + 16 * (frame + 1));
+    }
     expect(scrollTo).toHaveBeenLastCalledWith({ top: box.scrollHeight - box.clientHeight, behavior: 'smooth' });
     expect(document.activeElement).toBe(box);
     box.scrollTop = box.scrollHeight;
@@ -1521,6 +1555,9 @@ describe('conversation reading position', () => {
     readAt(box, 0);
     const button = screen.getByRole('button', { name: /^(?:\d+ unseen messages?|Scroll to bottom)$/ });
     fireEvent.click(button);
+    for (let frame = 0; frame < 4 && scrollTo.mock.calls.length === 0; frame++) {
+      advanceNextFrame(performance.now() + 16 * (frame + 1));
+    }
     const oldBottom = box.scrollHeight - box.clientHeight;
 
     // The smooth scroll reaches its old target as the iOS keyboard resizes the viewport.

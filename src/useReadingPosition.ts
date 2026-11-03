@@ -80,6 +80,7 @@ export function useReadingPosition(
   const arrivalAnimationStarts = useRef(new Map<HTMLElement, number>());
   const arrivalEligibleRef = useRef(arrivalEligible);
   const userScrollIntent = useRef(false);
+  const latestControlNavigation = useRef(false);
   const userScrollTimeout = useRef<number | undefined>(undefined);
   const manualScrollReported = useRef(false);
   const onManualScrollRef = useRef(onManualScroll);
@@ -109,8 +110,9 @@ export function useReadingPosition(
   const distance = (box: HTMLElement) => Math.max(0, box.scrollHeight - box.clientHeight - box.scrollTop);
   const updateLatestControl = (box: HTMLElement) => {
     const atBottom = distance(box) <= bottomTolerance;
-    setShowLatest(!atBottom);
+    setShowLatest(!atBottom && !latestControlNavigation.current);
     if (atBottom) {
+      latestControlNavigation.current = false;
       setUnseenControlPrimed(false);
       if (document.activeElement?.getAttribute('data-scroll-latest') === 'true') {
         box.focus({ preventScroll: true });
@@ -406,6 +408,7 @@ export function useReadingPosition(
     userScrollTimeout.current = window.setTimeout(clearUserScrollIntent, 250);
   };
   const noteUserScroll = () => {
+    latestControlNavigation.current = false;
     if (arrivalStartTime.current !== undefined || arrivalAnimations.current.size > 0) cancelArrivalAnimations();
     if (incomingMessageArrival.current) {
       incomingMessageArrival.current.streaming = false;
@@ -732,6 +735,7 @@ export function useReadingPosition(
     const box = viewport.current;
     if (!box) return;
     const readerInitiated = userScrollIntent.current;
+    if (readerInitiated) latestControlNavigation.current = false;
     if (readerInitiated && heldPositionCount.current > 0) heldPositionScrollTop.current = box.scrollTop;
     if (readerInitiated && !manualScrollReported.current && lastKnownScrollTop.current !== undefined &&
         Math.abs(box.scrollTop - lastKnownScrollTop.current) >= 1) {
@@ -884,9 +888,10 @@ export function useReadingPosition(
     }
     capture();
   };
-  const scrollToLatest = () => {
+  const scrollToLatestCore = (keepControlHidden: boolean) => {
     const box = viewport.current;
     if (!box) return;
+    if (!keepControlHidden) latestControlNavigation.current = false;
     incomingMessageArrival.current = undefined;
     topAnchoredPrompt.current = undefined;
     if (arrivalStartTime.current !== undefined || arrivalAnimations.current.size > 0) cancelArrivalAnimations();
@@ -896,11 +901,22 @@ export function useReadingPosition(
     moveToLatest(true);
   };
 
+  const scrollToLatest = () => scrollToLatestCore(false);
+
   const scrollToLatestFromControl = () => {
     // The floating control is local navigation. A pending wheel or key intent
     // must not turn its programmatic scroll into a read-marker write.
     clearUserScrollIntent();
-    scrollToLatest();
+    const box = viewport.current;
+    if (!box) return;
+    if (document.activeElement?.getAttribute('data-scroll-latest') === 'true') box.focus({ preventScroll: true });
+    // Hiding the control removes its extra tail padding. Apply that layout first
+    // so the smooth scroll uses one stable destination from start to finish.
+    latestControlNavigation.current = true;
+    setShowLatest(false);
+    requestAnimationFrame(() => {
+      if (latestControlNavigation.current) scrollToLatestCore(true);
+    });
   };
 
   const scrollToNextUnseen = (): boolean => {
