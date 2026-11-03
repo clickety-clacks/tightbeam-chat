@@ -6,6 +6,7 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
 
 .tb-chat {
   --tb-chat-safe-area-top: env(safe-area-inset-top, 0px);
+  --tb-chat-composer-reserved-height: max(5rem, var(--tb-chat-composer-height, 5rem));
   position: relative;
   display: flex;
   flex-direction: column;
@@ -44,7 +45,7 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
   /* Follow the visible viewport each keyboard frame so the latest message moves with it. */
   max-height: calc(100% - var(--tb-chat-keyboard-inset, 0px));
   padding: calc(clamp(1rem, 3.5vw, 2rem) + var(--tb-chat-anchor-space, 0px)) var(--tb-chat-viewport-inline-padding)
-    calc(var(--tb-chat-composer-height, 5rem) + 4.5rem + env(safe-area-inset-bottom));
+    calc(var(--tb-chat-composer-reserved-height) + 4.5rem + env(safe-area-inset-bottom));
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
   touch-action: pan-y;
@@ -55,7 +56,7 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
   padding-bottom: calc(clamp(1rem, 3.5vw, 2rem) + 4rem + env(safe-area-inset-bottom));
 }
 .tb-chat-viewport:not([data-latest-control-visible]) {
-  padding-bottom: calc(var(--tb-chat-composer-height, 5rem) + 3rem + env(safe-area-inset-bottom));
+  padding-bottom: calc(var(--tb-chat-composer-reserved-height) + 3rem + env(safe-area-inset-bottom));
 }
 .tb-chat-host-composer-hidden .tb-chat-viewport:not([data-latest-control-visible]) {
   padding-bottom: calc(clamp(1rem, 3.5vw, 2rem) + env(safe-area-inset-bottom));
@@ -182,7 +183,7 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
   left: 50%;
   transform: translateX(-50%);
   max-width: calc(100% - 1.3rem);
-  bottom: calc(var(--tb-chat-keyboard-inset, 0px) + env(safe-area-inset-bottom) + var(--tb-chat-composer-height, 5rem) + 1.4rem);
+  bottom: calc(var(--tb-chat-keyboard-inset, 0px) + env(safe-area-inset-bottom) + var(--tb-chat-composer-reserved-height) + 1.4rem);
   padding: .45rem .8rem;
   border: 1px solid var(--tb-chat-border);
   border-radius: 1.2rem;
