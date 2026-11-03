@@ -6,7 +6,8 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
 
 .tb-chat {
   --tb-chat-safe-area-top: env(safe-area-inset-top, 0px);
-  --tb-chat-composer-reserved-height: max(5rem, var(--tb-chat-composer-height, 5rem));
+  --tb-chat-composer-one-row-height: calc(2.35rem + .7rem + 2px);
+  --tb-chat-composer-reserved-height: max(5rem, calc(var(--tb-chat-composer-height, var(--tb-chat-composer-one-row-height)) + 5rem - var(--tb-chat-composer-one-row-height)));
   position: relative;
   display: flex;
   flex-direction: column;
