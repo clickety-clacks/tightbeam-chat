@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.83",
+    "items": [
+      {
+        "title": "Keep your place as older history loads",
+        "description": "When older history adds activity between messages already in view, Chat keeps those messages in place. The activity appears once it can be added without shifting your current view."
+      }
+    ]
+  },
+  {
     "version": "v0.1.82",
     "items": [
       {
