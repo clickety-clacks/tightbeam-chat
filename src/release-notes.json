@@ -9,6 +9,10 @@
       {
         "title": "Use the configured Chat operator for read markers",
         "description": "Read markers are available only for the configured Chat operator and remain unavailable when none is set. Chat recognizes turns started by people regardless of which operator is configured."
+      },
+      {
+        "title": "Attach files after upload",
+        "description": "Files uploaded through Chat are now correctly included as attachments when you send a message."
       }
     ]
   },
