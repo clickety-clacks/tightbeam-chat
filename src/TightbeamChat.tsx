@@ -1055,10 +1055,11 @@ const Composer = forwardRef<ComposerHandle, {
   recoverySnapshot: ChatRecoverySnapshot;
   agentName: string;
   root: RefObject<HTMLElement | null>;
+  onComposerHeightChange: () => void;
   suppressStatus: boolean;
   onSettings: () => void;
   onSubmitted: () => void;
-}>(function Composer({ runtime, state, recoverySnapshot, agentName, root, suppressStatus, onSettings, onSubmitted }, ref) {
+}>(function Composer({ runtime, state, recoverySnapshot, agentName, root, onComposerHeightChange, suppressStatus, onSettings, onSubmitted }, ref) {
   const [draft, setDraft] = useState(recoverySnapshot.draft);
   const [attachments, setAttachments] = useState<readonly DraftAttachment[]>([]);
   const [acquisitionError, setAcquisitionError] = useState<string | null>(null);
@@ -1442,12 +1443,17 @@ const Composer = forwardRef<ComposerHandle, {
     const element = shell.current;
     const container = root.current;
     if (!element || !container) return;
-    const update = () => container.style.setProperty('--tb-chat-composer-height', `${element.getBoundingClientRect().height}px`);
+    const update = () => {
+      const height = `${element.getBoundingClientRect().height}px`;
+      if (container.style.getPropertyValue('--tb-chat-composer-height') === height) return;
+      container.style.setProperty('--tb-chat-composer-height', height);
+      onComposerHeightChange();
+    };
     const observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(update);
     observer?.observe(element);
     update();
     return () => observer?.disconnect();
-  }, [root]);
+  }, [onComposerHeightChange, root]);
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -3108,7 +3114,8 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     </button>}
     {!host.composerHidden && <Composer ref={composer} runtime={runtime} state={state}
       recoverySnapshot={recoverySnapshot} agentName={agentName}
-      root={root} suppressStatus={host.optedIn} onSettings={openSettings} onSubmitted={reading.scrollToLatest} />}
+      root={root} onComposerHeightChange={reading.reconcileViewportLayout}
+      suppressStatus={host.optedIn} onSettings={openSettings} onSubmitted={reading.scrollToLatest} />}
     {overlay && <ReleaseNotesDialog overlay={overlay} entries={bundledNotes} onClose={closeOverlay}
       onOpenReleaseNotes={openReleaseNotes} onBack={backToSettings} />}
   </section></ActivitySummaryProvider>;
