@@ -2,7 +2,7 @@ import { uncoveredRecordEvents, recordEventPresentation } from './sessionRecordE
 import type { SessionRecordEvent } from './types';
 import { Component, forwardRef, memo, useCallback, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore,
   type AnchorHTMLAttributes, type ClipboardEvent as ReactClipboardEvent, type FormEvent, type HTMLAttributes, type ImgHTMLAttributes,
-  type ErrorInfo, type ReactNode, type RefObject, type TableHTMLAttributes } from 'react';
+  type ErrorInfo, type ReactNode, type TableHTMLAttributes } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { AttachmentPreparationError } from './types';
