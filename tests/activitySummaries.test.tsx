@@ -98,7 +98,9 @@ describe('summary answer delivery', () => {
     const { calls, transport } = transportFixture();
     let available = true;
     const viewer = new ActivitySummaryViewer(transport, () => available);
-    viewer.subscribe(line('message:a', 'Original'), () => {});
+    // Model a mounted row: the viewer keeps only a WeakRef while the row owns the entry.
+    const entry = line('message:a', 'Original');
+    viewer.subscribe(entry, () => {});
     await flush();
     calls[0].receive({ index: 0, state: 'pending' }); calls[0].fail(); await flush();
     expect(calls).toHaveLength(2);
@@ -112,6 +114,7 @@ describe('summary answer delivery', () => {
     viewer.resume(); await flush(); expect(calls).toHaveLength(3);
     available = true; viewer.resume(); await flush(); expect(calls).toHaveLength(4);
     calls[3].receive({ index: 0, state: 'summary', summary: 'Finished.' }); calls[3].end(); await flush();
+    expect(viewer.snapshot(viewer.key(entry)).state).toBe('summary');
     viewer.resume(); await flush(); expect(calls).toHaveLength(4);
     viewer.dispose();
   });
