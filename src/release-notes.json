@@ -4,11 +4,11 @@
     "items": [
       {
         "title": "Show agent messages in conversation history",
-        "description": "Messages from other agents appear in order as individual rows, even when they fall outside a prompt-and-reply group. Messages at or before the conversation's clear point stay hidden, and batched notices remain notices."
+        "description": "Messages from other agents appear in sequence, even when they fall outside a prompt-and-reply group. Consecutive messages from the same sender can be grouped; messages at or before the conversation's clear point stay hidden, and batched notices remain notices."
       },
       {
-        "title": "Use the configured Chat operator for read markers and turns",
-        "description": "Chat uses its configured operator identity for read markers and user-originated turns. Read markers stay unavailable when no operator is configured; agent messages and batched activity retain their existing handling."
+        "title": "Use the configured Chat operator for read markers",
+        "description": "Read markers are available only for the configured Chat operator and remain unavailable when none is set. Chat recognizes turns started by people regardless of which operator is configured."
       }
     ]
   },
