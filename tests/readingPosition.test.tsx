@@ -686,6 +686,7 @@ describe('conversation reading position', () => {
   it.each(['an unsolicited reply', 'a reply after sending'] as const)(
     'keeps Scroll to bottom hidden during %s while following the newest end', scenario => {
       const { runtime, box } = setup();
+      const latestButton = () => screen.queryByRole('button', { name: latestButtonName });
       let replyId = 20;
       if (scenario === 'a reply after sending') {
         const send = { sessionKey: 'reading', clientMessageId: 'c_reply_flash', deviceId: 'browser',
@@ -696,8 +697,14 @@ describe('conversation reading position', () => {
         const ownMessage = { ...message(20), content: send.content, deviceId: send.deviceId,
           clientMessageId: send.clientMessageId };
         act(() => runtime.publish({ records: [...initialRows, ownMessage] }));
+        expect(latestButton()).toBeNull();
+        const sendingControl = box.parentElement!.querySelector<HTMLElement>('.tb-chat-scroll-latest');
+        expect(sendingControl?.dataset.scrollControlHidden).toBe('true');
+        expect(sendingControl?.getAttribute('aria-hidden')).toBe('true');
+        expect(sendingControl?.tabIndex).toBe(-1);
         for (let frame = 0; frame < 8 && animationFrames.size > 0; frame++) {
           advanceNextFrame(performance.now() + 300 + frame * 300);
+          expect(latestButton()).toBeNull();
         }
         replyId++;
       }
@@ -712,7 +719,6 @@ describe('conversation reading position', () => {
       act(() => runtime.publish({ activityTurnStateAvailable: true, activeTurn,
         records: [...runtime.state.records, reply] }));
 
-      const latestButton = () => screen.queryByRole('button', { name: latestButtonName });
       expect(latestButton()).toBeNull();
       const suppressedControl = box.parentElement!.querySelector<HTMLElement>('.tb-chat-scroll-latest');
       expect(suppressedControl?.dataset.scrollControlHidden).toBe('true');
