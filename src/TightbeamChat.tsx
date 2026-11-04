@@ -18,7 +18,7 @@ import { firstAfterTime, getIndex, indexValues, putIndex, type RecordIndex } fro
 import { getHostComposerSnapshot, HostComposerBridge, subscribeHostComposer } from './hostComposer';
 import { ReleaseNotesDialog, type ChatOverlay } from './ReleaseNotesDialog';
 import { CHAT_RELEASE_VERSION, RELEASE_NOTES, recordSeenReleaseVersion, releaseNotesForBuild, unseenReleaseNotes } from './releaseNotes';
-import { MarkdownImagePreview } from './MessageAttachments';
+import { MarkdownImagePreview, MessageAttachments } from './MessageAttachments';
 import { isSettingsCommand } from './settingsCommand';
 import { stripProvenanceMarkup } from './displayText';
 import './style.css';
@@ -675,17 +675,44 @@ function useActivityRevealAnimation<T extends HTMLElement>(active: boolean, key:
   return element;
 }
 
-function AttachmentDetails({ record, preservePosition, reconcileLayout }: {
+function isTranscriptImageAttachment(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const mimeType = (value as Record<string, unknown>).mimeType;
+  return typeof mimeType === 'string' && /^image\/[a-z0-9.+-]+$/i.test(mimeType.trim());
+}
+
+function AttachmentDetails({ record, readAttachment, preservePosition, reconcileLayout }: {
   readonly record: CanonicalMessage;
+  readonly readAttachment?: ChatRuntime['readAttachment'];
   readonly preservePosition: () => void;
   readonly reconcileLayout: () => void;
 }): ReactNode {
   if (!record.attachments?.length) return null;
-  return <AttachmentDisclosure record={record} preservePosition={preservePosition} reconcileLayout={reconcileLayout} />;
+
+  const items: ReactNode[] = [];
+  let details: unknown[] = [];
+  const flushDetails = () => {
+    if (!details.length) return;
+    items.push(<AttachmentDisclosure key={`details-${items.length}`} attachments={details}
+      preservePosition={preservePosition} reconcileLayout={reconcileLayout} />);
+    details = [];
+  };
+
+  record.attachments.forEach((attachment, index) => {
+    if (isTranscriptImageAttachment(attachment)) {
+      flushDetails();
+      items.push(<MessageAttachments key={`image-${index}`} attachments={[attachment]}
+        readAttachment={readAttachment} />);
+    } else {
+      details.push(attachment);
+    }
+  });
+  flushDetails();
+  return <>{items}</>;
 }
 
-function AttachmentDisclosure({ record, preservePosition, reconcileLayout }: {
-  readonly record: CanonicalMessage;
+function AttachmentDisclosure({ attachments, preservePosition, reconcileLayout }: {
+  readonly attachments: readonly unknown[];
   readonly preservePosition: () => void;
   readonly reconcileLayout: () => void;
 }) {
@@ -696,19 +723,21 @@ function AttachmentDisclosure({ record, preservePosition, reconcileLayout }: {
       event.preventDefault();
       preservePosition();
       setExpanded(value => !value);
-    }}>{record.attachments!.length} attachment {record.attachments!.length === 1 ? 'detail' : 'details'}</summary>
+    }}>{attachments.length} attachment {attachments.length === 1 ? 'detail' : 'details'}</summary>
     <AnimatedFoldContent expanded={expanded} className="tb-chat-attachment-content"
       onPresenceChange={setContentPresent} onLayoutChange={reconcileLayout}>
-      {() => <pre>{JSON.stringify(record.attachments, null, 2)}</pre>}
+      {() => <pre>{JSON.stringify(attachments, null, 2)}</pre>}
     </AnimatedFoldContent>
   </details>;
 }
 
-function defaultBody(record: CanonicalMessage, preservePosition: () => void, reconcileLayout: () => void,
+function defaultBody(record: CanonicalMessage, readAttachment: ChatRuntime['readAttachment'],
+  preservePosition: () => void, reconcileLayout: () => void,
   content = record.content): ReactNode {
   return <>
     {markdownBody(content || '(No text content)')}
-    <AttachmentDetails record={record} preservePosition={preservePosition} reconcileLayout={reconcileLayout} />
+    <AttachmentDetails record={record} readAttachment={readAttachment}
+      preservePosition={preservePosition} reconcileLayout={reconcileLayout} />
   </>;
 }
 
@@ -857,12 +886,13 @@ function StatusIcon({ state }: { state: RuntimeState }) {
   return <span className={`tb-chat-status-dot tb-chat-status-${status}`} aria-hidden="true" />;
 }
 
-const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, registerRow, preservePosition,
+const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, registerRow, readAttachment, preservePosition,
   reconcileLayout, onRetryRender, scrollKey: scrollKeyOverride, promptTargetPrefix }: {
   bubble: Bubble;
   renderMessage?: TightbeamChatProps['renderMessage'];
   agentName: string;
   registerRow: (key: string, element: HTMLElement | null) => void;
+  readAttachment?: ChatRuntime['readAttachment'];
   preservePosition: () => void;
   reconcileLayout: () => void;
   onRetryRender: () => void;
@@ -884,7 +914,7 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, re
       sender: record.sender, messageType: record.messageType, turnSeq: record.turnSeq, createdAt: record.createdAt,
     }), member: Object.freeze({ ...bubble.member }) } : {}),
     defaultRender: () => bubble.derived ? markdownBody(displayContent)
-      : defaultBody(record, preservePosition, reconcileLayout, displayContent),
+      : defaultBody(record, readAttachment, preservePosition, reconcileLayout, displayContent),
     copyText: () => navigator.clipboard.writeText(bubble.displayContent ?? record.content),
   };
   // Existing renderers consume record.content. Give them only the member view;
@@ -924,7 +954,7 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, re
   return before.key === after.key && before.record === after.record && before.side === after.side &&
     before.sender === after.sender && before.displayContent === after.displayContent &&
     before.derived === after.derived && sameMember && previous.renderMessage === next.renderMessage &&
-    previous.onRetryRender === next.onRetryRender &&
+    previous.onRetryRender === next.onRetryRender && previous.readAttachment === next.readAttachment &&
     previous.promptTargetPrefix === next.promptTargetPrefix &&
     previous.agentName === next.agentName && previous.registerRow === next.registerRow &&
     previous.preservePosition === next.preservePosition && previous.reconcileLayout === next.reconcileLayout &&
@@ -2978,6 +3008,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
           const { bubble } = item;
           return <RecordRow key={bubble.key} bubble={bubble} scrollKey={item.scrollKey}
             renderMessage={renderMessage} agentName={agentName} registerRow={reading.registerRow}
+            readAttachment={runtime.readAttachment}
             preservePosition={preserveReadingPosition} reconcileLayout={reading.reconcileViewportLayout}
             onRetryRender={retryTranscript} promptTargetPrefix={promptTargetPrefix} />;
         }
