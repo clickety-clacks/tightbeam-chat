@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import { createTightbeamAdapter } from '../src/runtime';
 import { advanceReadMarkerForwardOnly } from '../src/readMarker';
@@ -916,14 +918,24 @@ describe('Gateway wire mapping and behavior checks', () => {
     const oldPage = await olderGateway.transport.readTail(sessionKey, new AbortController().signal);
     expect(oldPage.railDenials).toBeUndefined();
 
-    const crossSession = setup(undefined, version, [item], [], 200,
-      [{ ...denial, sessionKey: 'other', principal: 'session:other' }]);
-    await expect(crossSession.transport.readTail(sessionKey, new AbortController().signal))
-      .rejects.toThrow('Refused action belongs to a different session.');
-    const crossPrincipal = setup(undefined, version, [item], [], 200,
-      [{ ...denial, principal: 'session:other' }]);
-    await expect(crossPrincipal.transport.readTail(sessionKey, new AbortController().signal))
-      .rejects.toThrow('Refused action belongs to a different principal.');
+    const mixedRows = JSON.parse(readFileSync(resolve(process.cwd(),
+      'tests/fixtures/gateway-0.1.14-3688-rail-denials.json'), 'utf8')) as unknown[];
+    const mixedPage = setup(undefined, version, [item], [], 200, mixedRows);
+    const tolerantPage = await mixedPage.transport.readTail(sessionKey, new AbortController().signal);
+    expect(tolerantPage.records.map((record) => record.id)).toEqual(['m_1']);
+    expect(tolerantPage.railDenials).toEqual([
+      { id: 'rail:1001', sessionKey, principal: `session:${sessionKey}`, verb: 'send',
+        rule: 'fixture-owner-policy', origin: 'user:fixture-owner',
+        payload: { detail: 'Fixture refusal with a nullable position', rule: 'fixture-owner-policy', verb: 'send' },
+        occurredAt: Date.parse('2026-10-12T00:00:01Z') },
+      { id: 'rail:1002', sessionKey, principal: `session:${sessionKey}`, verb: 'send',
+        rule: 'fixture-owner-policy', origin: 'user:fixture-owner',
+        payload: { detail: 'Fixture refusal with an omitted position', rule: 'fixture-owner-policy', verb: 'send' },
+        occurredAt: Date.parse('2026-10-12T00:00:02Z') },
+    ]);
+    const olderPage = await mixedPage.transport.readOlder(sessionKey, 'older-cursor', new AbortController().signal);
+    expect(olderPage.records.map((record) => record.id)).toEqual(['m_1']);
+    expect(olderPage.railDenials).toEqual(tolerantPage.railDenials);
   });
 
   it('keeps transcript metadata complete and accepts an empty after page without a backward cursor', async () => {

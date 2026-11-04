@@ -2054,6 +2054,29 @@ describe('conversation surface', () => {
     }
   });
 
+  it('renders a history-backed refusal without a stored position as a pill', () => {
+    const sessionKey = 'history-refusal-layout';
+    const prompt = row(sessionKey, 'history-refusal-prompt', 'Question', {
+      seq: 1, role: 'user', sender: 'user:fixture', messageType: 'chat', turnSeq: 1,
+      createdAt: '2026-10-12T00:00:00.000Z',
+    });
+    const denial = { id: 'history-refusal-1001', sessionKey, principal: `session:${sessionKey}`,
+      origin: 'user:fixture-owner', verb: 'send', rule: 'fixture-owner-policy',
+      payload: { detail: 'Fixture refusal', rule: 'fixture-owner-policy', verb: 'send' },
+      occurredAt: Date.parse('2026-10-12T00:00:01Z') };
+    const runtime = new FakeRuntime(sessionKey, {
+      records: [prompt], historyRailDenials: [denial], provenanceAvailable: false,
+    });
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+
+    const pill = within(screen.getByRole('log')).getByRole('note', {
+      name: 'Refused: send was not allowed',
+    });
+    expect(pill.classList.contains('tb-chat-activity-pill-row')).toBe(true);
+    expect(pill.querySelector('.tb-chat-activity-pill-text')?.textContent).toBe('send was not allowed');
+    expect(pill.getAttribute('title')).toBe('send refused by fixture-owner-policy');
+  });
+
   it('renders delivered outcome notices with distinct icons, tones and short wording', () => {
     const sessionKey = 'delivered-outcome-notices';
     const human = row(sessionKey, 'prompt', 'Review these changes', {
