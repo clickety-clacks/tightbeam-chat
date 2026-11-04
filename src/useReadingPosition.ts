@@ -129,8 +129,8 @@ export function useReadingPosition(
   const distance = (box: HTMLElement) => Math.max(0, box.scrollHeight - box.clientHeight - box.scrollTop);
   const updateLatestControl = (box: HTMLElement) => {
     const atBottom = distance(box) <= bottomTolerance;
-    const followingArrivalGlide = arrivalStartTime.current !== undefined && following.current &&
-      !userScrollIntent.current && !latestControlNavigation.current;
+    const followingArrivalGlide = (incomingMessageArrival.current !== undefined || arrivalStartTime.current !== undefined) &&
+      following.current && !userScrollIntent.current && !latestControlNavigation.current;
     setShowLatest(!atBottom && !latestControlNavigation.current);
     setHideLatestControl(!atBottom && followingArrivalGlide);
     if (atBottom) {
