@@ -559,6 +559,7 @@ describe('conversation reading position', () => {
 
     if (shouldTopAnchor) {
       expect(row.getBoundingClientRect().top).toBeCloseTo(box.getBoundingClientRect().top + expectedReplyTopInset);
+      expect(screen.getByRole('button', { name: 'Scroll to bottom' })).toBeTruthy();
     } else {
       expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight);
       expect(row.getBoundingClientRect().bottom).toBeLessThan(
@@ -680,6 +681,67 @@ describe('conversation reading position', () => {
     act(() => runtime.publish({ records: [...runtime.state.records, laterReply] }));
     expect(box.scrollTop).toBe(anchoredScrollTop);
     expect(screen.getByRole('button', { name: /^[1-9]\d* unseen messages?$/ })).toBeTruthy();
+  });
+
+  it.each(['an unsolicited reply', 'a reply after sending'] as const)(
+    'keeps Scroll to bottom hidden during %s while following the newest end', scenario => {
+      const { runtime, box } = setup();
+      let replyId = 20;
+      if (scenario === 'a reply after sending') {
+        const send = { sessionKey: 'reading', clientMessageId: 'c_reply_flash', deviceId: 'browser',
+          content: 'A local prompt before the reply.', status: 'accepted' as const,
+          submittedAt: '2026-10-23T00:00:00Z', reconciled: false,
+          hostSend: { lifetimeId: 'host-bridge', attempt: 1 } };
+        act(() => runtime.publish({ sends: [send] }));
+        const ownMessage = { ...message(20), content: send.content, deviceId: send.deviceId,
+          clientMessageId: send.clientMessageId };
+        act(() => runtime.publish({ records: [...initialRows, ownMessage] }));
+        for (let frame = 0; frame < 8 && animationFrames.size > 0; frame++) {
+          advanceNextFrame(performance.now() + 300 + frame * 300);
+        }
+        replyId++;
+      }
+      expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight);
+
+      const reply = { ...message(replyId), role: 'assistant' as const, sender: 'assistant' };
+      const preceding = runtime.state.records.at(-1)!;
+      const activeTurn = createTurnProvenance({
+        seq: replyId, sessionKey: 'reading', messageId: preceding.id, origin: 'agent:other',
+        status: 'running', triggerSource: 'agent', raw: { seq: replyId, origin: 'agent:other' },
+      }, [preceding], 'person', 'person');
+      act(() => runtime.publish({ activityTurnStateAvailable: true, activeTurn,
+        records: [...runtime.state.records, reply] }));
+
+      const latestButton = () => screen.queryByRole('button', { name: latestButtonName });
+      expect(latestButton()).toBeNull();
+      const suppressedControl = box.parentElement!.querySelector<HTMLElement>('.tb-chat-scroll-latest');
+      expect(suppressedControl?.dataset.scrollControlHidden).toBe('true');
+      expect(suppressedControl?.getAttribute('aria-hidden')).toBe('true');
+      expect(suppressedControl?.tabIndex).toBe(-1);
+      advanceNextFrame(performance.now() + 100);
+      fireEvent.scroll(box);
+      expect(latestButton()).toBeNull();
+      for (let frame = 0; frame < 8 && animationFrames.size > 0; frame++) {
+        advanceNextFrame(performance.now() + 300 + frame * 300);
+        expect(latestButton()).toBeNull();
+      }
+      expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight);
+    });
+
+  it('keeps Scroll to bottom visible for a reply received while the reader is scrolled up', () => {
+    const { runtime, box } = setup();
+    readAt(box, 600);
+    expect(box.scrollHeight - box.clientHeight - box.scrollTop).toBeGreaterThan(100);
+    const reply = { ...message(20), role: 'assistant' as const, sender: 'assistant' };
+    const activeTurn = createTurnProvenance({
+      seq: 20, sessionKey: 'reading', messageId: initialRows.at(-1)!.id, origin: 'agent:other',
+      status: 'running', triggerSource: 'agent', raw: { seq: 20, origin: 'agent:other' },
+    }, [initialRows.at(-1)!], 'person', 'person');
+    const chosenPosition = box.scrollTop;
+    act(() => runtime.publish({ activityTurnStateAvailable: true, activeTurn, records: [...initialRows, reply] }));
+
+    expect(box.scrollTop).toBe(chosenPosition);
+    expect(screen.getByRole('button', { name: latestButtonName })).toBeTruthy();
   });
 
   it.each([

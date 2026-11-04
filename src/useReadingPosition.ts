@@ -121,6 +121,7 @@ export function useReadingPosition(
   const getRow = useCallback((key: string) => registeredRows.current.get(key), []);
   const latestReady = useRef(ready);
   const [showLatest, setShowLatest] = useState(false);
+  const [hideLatestControl, setHideLatestControl] = useState(false);
   latestReady.current = ready;
   arrivalEligibleRef.current = arrivalEligible;
   arrivalStreamingRef.current = arrivalStreaming;
@@ -128,7 +129,10 @@ export function useReadingPosition(
   const distance = (box: HTMLElement) => Math.max(0, box.scrollHeight - box.clientHeight - box.scrollTop);
   const updateLatestControl = (box: HTMLElement) => {
     const atBottom = distance(box) <= bottomTolerance;
+    const followingIncomingArrival = incomingMessageArrival.current !== undefined && following.current &&
+      !userScrollIntent.current && !latestControlNavigation.current;
     setShowLatest(!atBottom && !latestControlNavigation.current);
+    setHideLatestControl(!atBottom && followingIncomingArrival);
     if (atBottom) {
       latestControlNavigation.current = false;
       setUnseenControlPrimed(false);
@@ -138,7 +142,8 @@ export function useReadingPosition(
     }
   };
   const unobscuredBounds = (box: HTMLElement, viewportBounds?: Pick<DOMRect, 'top' | 'bottom'>,
-    includeTopOverlays = false, ignorePromptPreview = false): Pick<DOMRect, 'top' | 'bottom'> => {
+    includeTopOverlays = false, ignorePromptPreview = false,
+    includeHiddenLatestControl = false): Pick<DOMRect, 'top' | 'bottom'> => {
     const bounds = viewportBounds ?? box.getBoundingClientRect();
     const root = box.parentElement;
     let top = bounds.top;
@@ -156,9 +161,11 @@ export function useReadingPosition(
       }
     }
     const button = root?.querySelector<HTMLElement>('.tb-chat-scroll-latest');
-    const composer = !button && !root?.classList.contains('tb-chat-host-composer-hidden')
+    const visibleButton = button && (includeHiddenLatestControl || button.dataset.scrollControlHidden !== 'true')
+      ? button : undefined;
+    const composer = !visibleButton && !root?.classList.contains('tb-chat-host-composer-hidden')
       ? root?.querySelector<HTMLElement>('.tb-chat-composer') : undefined;
-    const occluder = button ?? composer;
+    const occluder = visibleButton ?? composer;
     if (!occluder) return { top, bottom: bounds.bottom };
     const overlay = occluder.getBoundingClientRect();
     if (!Number.isFinite(overlay.top) || !Number.isFinite(overlay.bottom) ||
@@ -242,7 +249,7 @@ export function useReadingPosition(
 
     // An older prompt preview is hidden as soon as the answered prompt tail
     // becomes visible, so do not reserve its space when placing that tail.
-    const bounds = unobscuredBounds(box, undefined, true, Boolean(arrival.answeredPromptScrollKey));
+    const bounds = unobscuredBounds(box, undefined, true, Boolean(arrival.answeredPromptScrollKey), true);
     const rowBounds = row.getBoundingClientRect();
     const groupEndBounds = groupEndRow.getBoundingClientRect();
     const arrivalHeight = Math.max(rowBounds.height, groupEndBounds.bottom - rowBounds.top);
@@ -351,9 +358,11 @@ export function useReadingPosition(
       const currentBox = viewport.current;
       if (!currentBox || arrivalStartTime.current === undefined) return;
       const incoming = incomingMessageArrival.current;
+      const priorMode = incoming?.mode;
       const destination = incoming
         ? incomingMessageTarget(currentBox, incoming)
         : Math.max(0, currentBox.scrollHeight - currentBox.clientHeight);
+      if (incoming && incoming.mode !== priorMode) updateLatestControl(currentBox);
       const progress = reduceMotion ? 1 : Math.min(1, Math.max(0, (now - arrivalStartTime.current) / arrivalDuration));
       const needsReducedMotionTopSettle = reduceMotion && incoming?.mode === 'top' &&
         Math.abs(currentBox.scrollTop - destination) > .5;
@@ -1114,7 +1123,7 @@ export function useReadingPosition(
     return anchor.scrollKey;
   }, []);
 
-  return { viewport, content, registerRow, getRow, showLatest, unseenMessageCount, unseenButtonLabel,
+  return { viewport, content, registerRow, getRow, showLatest, hideLatestControl, unseenMessageCount, unseenButtonLabel,
     hasUnseenButtonCount: unseenMessageCount > 0 && !unseenControlPrimed, setMessageRows, onScroll, interrupt,
     holdPosition, preserveVisiblePosition, scrollBy, scrollToLatest, scrollToLatestFromControl, scrollToNextUnseen, arriveOwnMessages,
     noteUserScroll, reconcileViewportLayout, reconcileReducedMotionTopAnchor, getTopAnchoredPromptScrollKey };
