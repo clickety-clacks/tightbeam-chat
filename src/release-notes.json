@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.87",
+    "items": [
+      {
+        "title": "Keep reply follow free of button flashes",
+        "description": "The Scroll to bottom button stays hidden while Chat follows a new reply, instead of appearing briefly during the scroll. It remains available when you are reading older messages."
+      }
+    ]
+  },
+  {
     "version": "v0.1.86",
     "items": [
       {
