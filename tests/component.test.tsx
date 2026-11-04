@@ -10,7 +10,7 @@ import { createTurnProvenance } from '../src/provenance';
 import { decodePublic019Message } from '../src/public019';
 import { AttachmentPreparationError } from '../src/types';
 import type {
-  AttachmentInput, ToolCallIndex, ToolCallRecord, CanonicalMessage, CanonicalTurn, ChatRuntime, ConversationRecord, LocalSend, RuntimeState,
+  AttachmentInput, AttachmentReference, ToolCallIndex, ToolCallRecord, CanonicalMessage, CanonicalTurn, ChatRuntime, ConversationRecord, LocalSend, RuntimeState,
   TightbeamAdapter, TurnProvenance,
 } from '../src/types';
 
@@ -68,6 +68,7 @@ class FakeRuntime implements ChatRuntime {
   sendResult: string | null = 'fixture-send';
   attachmentSendResult: string | null = 'fixture-attachment-send';
   attachmentSubmissions: Array<{ content: string; inputs: readonly { id: string; filename: string; bytes: Blob }[] }> = [];
+  readAttachment?: ChatRuntime['readAttachment'];
   retried: string[] = [];
   loadOlderCalls = 0;
   rebuildCalls = 0;
@@ -651,6 +652,64 @@ describe('conversation surface', () => {
 
     expect(renderedKeys()).toEqual(['first', 'middle', 'last']);
     expect(within(screen.getByRole('log')).getByText('First canonical message')).toBeTruthy();
+  });
+
+  it('renders ordered transcript image references with enlargement for user and agent messages', async () => {
+    const sessionKey = 'transcript-image-references';
+    const userBefore = { assetId: 'user-file-before', mimeType: 'application/pdf', filename: 'before.pdf', size: 21 };
+    const userImage: AttachmentReference = {
+      assetId: 'user-image', mimeType: 'image/png', filename: 'user-photo.png', size: 32,
+    };
+    const userAfter = { assetId: 'user-file-after', mimeType: 'application/pdf', filename: 'after.pdf', size: 23 };
+    const agentImage: AttachmentReference = {
+      assetId: 'agent-image', mimeType: 'image/jpeg', filename: 'agent-photo.jpg', size: 34,
+    };
+    const userMessage = decodePublic019Message({
+      id: 'user-image-message', seq: 10, rowVersion: 10, sessionKey, role: 'user', sender: 'user:person',
+      messageType: 'chat', content: 'Here is a photo.', assignmentId: 'task-123', turnSeq: 7,
+      at: Date.parse('2026-11-04T00:00:00Z'), attachments: [userBefore, userImage, userAfter],
+    }, sessionKey);
+    const agentMessage = decodePublic019Message({
+      id: 'agent-image-message', seq: 11, rowVersion: 11, sessionKey, role: 'assistant', sender: 'assistant-service',
+      messageType: 'assistant', content: 'I have attached the result.', assignmentId: 'task-123', turnSeq: 7,
+      replyToMessageId: userMessage.id, at: Date.parse('2026-11-04T00:01:00Z'), attachments: [agentImage],
+    }, sessionKey);
+    const runtime = new FakeRuntime(sessionKey, { records: [userMessage, agentMessage] });
+    const readAttachment = vi.fn(async (reference: AttachmentReference, _signal: AbortSignal) =>
+      new Blob(['image bytes'], { type: reference.mimeType }));
+    runtime.readAttachment = readAttachment;
+    let objectUrlNumber = 0;
+    const objectUrls = mockObjectUrls(() => `blob:transcript-image-${++objectUrlNumber}`);
+
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+
+    expect(await screen.findByRole('img', { name: 'Image: user-photo.png' })).toBeTruthy();
+    expect(await screen.findByRole('img', { name: 'Image: agent-photo.jpg' })).toBeTruthy();
+    expect(readAttachment).toHaveBeenCalledWith(userImage, expect.any(AbortSignal));
+    expect(readAttachment).toHaveBeenCalledWith(agentImage, expect.any(AbortSignal));
+
+    const userRow = screen.getByText('Here is a photo.').closest<HTMLElement>('.tb-chat-bubble')!;
+    const genericDisclosures = within(userRow).getAllByText('1 attachment detail')
+      .map(summary => summary.closest('details')!);
+    const userPreview = within(userRow).getByRole('button', { name: 'Enlarge Image: user-photo.png' });
+    expect(genericDisclosures).toHaveLength(2);
+    expect(genericDisclosures[0].compareDocumentPosition(userPreview) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(userPreview.compareDocumentPosition(genericDisclosures[1]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    genericDisclosures.forEach(disclosure => fireEvent.click(disclosure.querySelector('summary')!));
+    await waitFor(() => expect(userRow.querySelectorAll('pre')).toHaveLength(2));
+    expect(userRow.querySelectorAll('pre')[0].textContent).toContain('user-file-before');
+    expect(userRow.querySelectorAll('pre')[0].textContent).not.toContain('user-image');
+    expect(userRow.querySelectorAll('pre')[1].textContent).toContain('user-file-after');
+
+    fireEvent.click(userPreview);
+    const enlarged = screen.getByRole('dialog');
+    expect(within(enlarged).getByRole('img', { name: 'Image: user-photo.png' })).toBeTruthy();
+    expect(objectUrls.createObjectURL).toHaveBeenCalled();
+
+    const agentRow = screen.getByText('I have attached the result.').closest<HTMLElement>('.tb-chat-bubble')!;
+    expect(within(agentRow).getByRole('button', { name: 'Enlarge Image: agent-photo.jpg' })).toBeTruthy();
+    expect(agentRow.querySelector('details.tb-chat-attachments')).toBeNull();
   });
 
   it('renders the full body of a canonical user message after its attribution wrapper', () => {
