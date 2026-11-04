@@ -3,8 +3,12 @@
     "version": "v0.1.87",
     "items": [
       {
-        "title": "Keep reply follow free of button flashes",
-        "description": "The Scroll to bottom button stays hidden while Chat follows a new reply, instead of appearing briefly during the scroll. It remains available when you are reading older messages."
+        "title": "Keep reply-follow controls steady",
+        "description": "The Scroll to bottom button stays hidden while Chat follows new replies and while it returns to the latest message after you send. It remains available when you are reading older messages."
+      },
+      {
+        "title": "Keep conversation history available through unrelated refusals",
+        "description": "If a history response includes refused actions for other sessions or unusable entries, Chat keeps loading the selected conversation's messages. Valid refused actions for that session still appear in the transcript."
       }
     ]
   },
