@@ -27,6 +27,7 @@ import {
   type TargetProfile,
 } from './types';
 import { ToolHistoryUnavailableError } from './toolHistory';
+import { isHistoryRailDenialForSession } from './railDenials';
 
 // Snapshot coverage is the Chat client's subscribe-before-REST overlap, not a
 // Gateway snapshot watermark.
@@ -127,14 +128,15 @@ function optionalNonnegativeInteger(row: Record<string, unknown>, key: string): 
   return nonnegativeInteger(row, key);
 }
 
-function decodeHistoryRailDenial(value: unknown, sessionKey: string): HistoryRailDenial | undefined {
+function decodeHistoryRailDenial(value: unknown, sessionKey: string, ownerUserId?: string): HistoryRailDenial | undefined {
   try {
     const row = record(value);
-    const principal = `session:${sessionKey}`;
+    const principal = row.principal;
     // Gateway history selection also returns denials attached to the selected
-    // session but made by another principal. Only the actor's own session row
-    // is a transcript pill; ignore other or unscoped principals per entry.
-    if (row.sessionKey !== sessionKey || row.principal !== principal) return undefined;
+    // session but made by another principal. Only the selected session or its
+    // known owner can be attributed here; skip other rows individually.
+    if (row.sessionKey !== sessionKey || typeof principal !== 'string' ||
+        !isHistoryRailDenialForSession({ sessionKey, principal }, sessionKey, ownerUserId)) return undefined;
     const payload = record(row.payload);
     const verb = requiredString(row, 'verb').trim();
     const rule = requiredString(row, 'rule').trim();
@@ -468,6 +470,7 @@ export function createPublic019Transport(config: Public019Config): { transport: 
   }
 
   const activeSessions = new Set<string>();
+  const sessionOwnerUserIds = new Map<string, string>();
   async function readPage(sessionKey: string, query: string, signal: AbortSignal,
     isAfterPage = false): Promise<ConversationPage> {
     const body = await get(`/api/sessions/${encodeURIComponent(sessionKey)}/messages?limit=50&${query}`, signal);
@@ -494,7 +497,7 @@ export function createPublic019Transport(config: Public019Config): { transport: 
       newestCursor, hasNewer: hasMoreAfter,
       ...(railDenials === undefined ? {} : {
         railDenials: Object.freeze(railDenials.flatMap((denial) => {
-          const decoded = decodeHistoryRailDenial(denial, sessionKey);
+          const decoded = decodeHistoryRailDenial(denial, sessionKey, sessionOwnerUserIds.get(sessionKey));
           return decoded ? [decoded] : [];
         })),
       }), coverage: sessionKey };
@@ -764,11 +767,15 @@ export function createPublic019Transport(config: Public019Config): { transport: 
       return { identity: profile.identity, capabilities: profile.capabilities };
     },
     async readSession(sessionKey, signal) {
+      sessionOwnerUserIds.delete(sessionKey);
       const body = await get(`/api/sessions/${encodeURIComponent(sessionKey)}`, signal);
       if (body.schemaVersion !== 1 || body.resource !== 'sessions') {
         throw new UnsupportedTargetError('Unexpected sessions detail envelope.');
       }
-      return decodePublic019Session(body.item, sessionKey);
+      const session = decodePublic019Session(body.item, sessionKey);
+      const ownerUserId = session.raw.ownerUserId;
+      if (typeof ownerUserId === 'string' && ownerUserId.trim()) sessionOwnerUserIds.set(sessionKey, ownerUserId);
+      return session;
     },
     async readRoleSessionKey(roleName, signal) {
       const body = await get(`/api/roles/${encodeURIComponent(roleName)}`, signal);

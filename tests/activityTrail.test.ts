@@ -36,6 +36,7 @@ function build(input: {
   activeOwnerTurnRunning?: boolean;
   activeOwnerTurnSeq?: number;
   activeOwnerTurnMessageId?: string;
+  ownerUserId?: string;
   railDenials?: readonly LiveRailDenial[];
   historyRailDenials?: readonly HistoryRailDenial[];
   shownRuns?: ReadonlyMap<string, string>;
@@ -54,6 +55,7 @@ function build(input: {
     activeOwnerTurnRunning: input.activeOwnerTurnRunning ?? input.activeTurnRunning ?? true,
     activeOwnerTurnSeq: input.activeOwnerTurnSeq ?? activeOwnerPrompt?.record.turnSeq,
     activeOwnerTurnMessageId: input.activeOwnerTurnMessageId ?? activeOwnerPrompt?.record.id,
+    ownerUserId: input.ownerUserId,
     railDenials: input.railDenials ?? [],
     historyRailDenials: input.historyRailDenials ?? [],
     shownRuns: input.shownRuns ?? new Map(), expandedRuns: input.expandedRuns ?? new Set(),
@@ -975,6 +977,21 @@ describe('activity trail projection', () => {
     const pill = plan.messageItems.find((item): item is ActivityLine => item.kind === 'rail');
     expect(pill).toMatchObject({ id: 'rail:legacy-id', anchorSeq: 1,
       position: { sequence: 1, phase: 3 }, gist: 'send refused by owner-policy' });
+  });
+
+  it('shows a user-principal history refusal only for the known session owner', () => {
+    const prompt = message('prompt', 1, 'user:fixture-owner', 'Question', { role: 'user',
+      createdAt: '2026-10-12T00:00:00.000Z' });
+    const denial: HistoryRailDenial = { id: 'owner-refusal', sessionKey: 'session',
+      principal: 'user:fixture-owner', origin: 'user:fixture-owner', verb: 'dispatch', rule: 'fixture-policy',
+      payload: { rule: 'fixture-policy', verb: 'dispatch' }, occurredAt: Date.parse('2026-10-12T00:00:01Z') };
+    const bubbles = [{ ...bubble(prompt, 'human'), ownerScoped: true }];
+    const owned = build({ records: [prompt], bubbles, historyRailDenials: [denial], ownerUserId: 'fixture-owner' });
+    expect(owned.messageItems.filter((item): item is ActivityLine => item.kind === 'rail'))
+      .toMatchObject([{ id: 'rail:owner-refusal', gist: 'dispatch refused by fixture-policy' }]);
+
+    const unowned = build({ records: [prompt], bubbles, historyRailDenials: [denial], ownerUserId: 'different-owner' });
+    expect(unowned.messageItems.some((item) => item.kind === 'rail')).toBe(false);
   });
 
   it('keeps a session-addressed agent message without owner-turn evidence both live and after reload', () => {

@@ -1,0 +1,6630 @@
+{
+  "schemaVersion": 1,
+  "resource": "transcript messages",
+  "items": [
+    {
+      "assignmentId": null,
+      "at": 1791763200000,
+      "attachments": [],
+      "attentionTier": 0,
+      "clientMessageId": null,
+      "content": "Fixture transcript row 1",
+      "context": null,
+      "deviceId": null,
+      "effort": null,
+      "harness": null,
+      "id": "m_fixture_1",
+      "isBatchCarrier": true,
+      "jobRef": null,
+      "llmVisibleMessageId": null,
+      "messageType": "substrate",
+      "model": null,
+      "provider": null,
+      "replyToClientMessageId": null,
+      "replyToMessageId": null,
+      "role": "user",
+      "rowVersion": 1,
+      "sender": "process:fixture-process",
+      "seq": 1,
+      "sessionKey": "s-public",
+      "turnIncludesHuman": false,
+      "turnSeq": 1
+    },
+    {
+      "assignmentId": null,
+      "at": 1791763201000,
+      "attachments": [],
+      "attentionTier": 0,
+      "clientMessageId": null,
+      "content": "Fixture transcript row 2",
+      "context": null,
+      "deviceId": null,
+      "effort": null,
+      "harness": null,
+      "id": "m_fixture_2",
+      "jobRef": null,
+      "llmVisibleMessageId": null,
+      "messageType": "substrate",
+      "model": null,
+      "provider": null,
+      "replyToClientMessageId": null,
+      "replyToMessageId": null,
+      "role": "assistant",
+      "rowVersion": 2,
+      "sender": "process:fixture-process",
+      "seq": 2,
+      "sessionKey": "s-public",
+      "turnSeq": 2
+    },
+    {
+      "assignmentId": null,
+      "at": 1791763202000,
+      "attachments": [],
+      "attentionTier": 0,
+      "clientMessageId": null,
+      "content": "Fixture transcript row 3",
+      "context": null,
+      "deviceId": null,
+      "effort": null,
+      "harness": null,
+      "id": "m_fixture_3",
+      "jobRef": null,
+      "llmVisibleMessageId": null,
+      "messageType": "assistant",
+      "model": null,
+      "provider": null,
+      "replyToClientMessageId": null,
+      "replyToMessageId": null,
+      "role": "assistant",
+      "rowVersion": 3,
+      "sender": "tightbeam",
+      "seq": 3,
+      "sessionKey": "s-public",
+      "turnIncludesHuman": false,
+      "turnSeq": 3
+    },
+    {
+      "assignmentId": null,
+      "at": 1791763203000,
+      "attachments": [],
+      "attentionTier": 0,
+      "clientMessageId": null,
+      "content": "Fixture transcript row 4",
+      "context": null,
+      "deviceId": null,
+      "effort": null,
+      "harness": null,
+      "id": "m_fixture_4",
+      "isBatchCarrier": true,
+      "jobRef": null,
+      "llmVisibleMessageId": null,
+      "messageType": "substrate",
+      "model": null,
+      "provider": null,
+      "replyToClientMessageId": null,
+      "replyToMessageId": null,
+      "role": "user",
+      "rowVersion": 4,
+      "sender": "process:fixture-process",
+      "seq": 4,
+      "sessionKey": "s-public",
+      "turnIncludesHuman": false,
+      "turnSeq": 4
+    },
+    {
+      "assignmentId": null,
+      "at": 1791763204000,
+      "attachments": [],
+      "attentionTier": 0,
+      "clientMessageId": null,
+      "content": "Fixture transcript row 5",
+      "context": null,
+      "deviceId": null,
+      "effort": null,
+      "harness": null,
+      "id": "m_fixture_5",
+      "jobRef": null,
+      "llmVisibleMessageId": null,
+      "messageType": "assistant",
+      "model": null,
+      "provider": null,
+      "replyToClientMessageId": null,
+      "replyToMessageId": null,
+      "role": "assistant",
+      "rowVersion": 5,
+      "sender": "tightbeam",
+      "seq": 5,
+      "sessionKey": "s-public",
+      "turnIncludesHuman": false,
+      "turnSeq": 5
+    }
+  ],
+  "page": {
+    "oldestCursor": "fixture-oldest",
+    "newestCursor": "fixture-newest",
+    "hasMoreBefore": true,
+    "hasMoreAfter": false
+  },
+  "railDenials": [
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1001",
+      "occurredAt": 1791763210000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763210000,
+        "eventId": 1001
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1002",
+      "occurredAt": 1791763211000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763211000,
+        "eventId": 1002
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1003",
+      "occurredAt": 1791763212000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763212000,
+        "eventId": 1003
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": "fixture-producer",
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1004",
+      "occurredAt": 1791763213000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763213000,
+        "eventId": 1004
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1005",
+      "occurredAt": 1791763214000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763214000,
+        "eventId": 1005
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1006",
+      "occurredAt": 1791763215000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763215000,
+        "eventId": 1006
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1007",
+      "occurredAt": 1791763216000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763216000,
+        "eventId": 1007
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1008",
+      "occurredAt": 1791763217000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763217000,
+        "eventId": 1008
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1009",
+      "occurredAt": 1791763218000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763218000,
+        "eventId": 1009
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1010",
+      "occurredAt": 1791763219000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763219000,
+        "eventId": 1010
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1011",
+      "occurredAt": 1791763220000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763220000,
+        "eventId": 1011
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1012",
+      "occurredAt": 1791763221000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763221000,
+        "eventId": 1012
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1013",
+      "occurredAt": 1791763222000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763222000,
+        "eventId": 1013
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1014",
+      "occurredAt": 1791763223000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763223000,
+        "eventId": 1014
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1015",
+      "occurredAt": 1791763224000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763224000,
+        "eventId": 1015
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1016",
+      "occurredAt": 1791763225000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763225000,
+        "eventId": 1016
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1017",
+      "occurredAt": 1791763226000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763226000,
+        "eventId": 1017
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1018",
+      "occurredAt": 1791763227000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763227000,
+        "eventId": 1018
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1019",
+      "occurredAt": 1791763228000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763228000,
+        "eventId": 1019
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1020",
+      "occurredAt": 1791763229000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763229000,
+        "eventId": 1020
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1021",
+      "occurredAt": 1791763230000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763230000,
+        "eventId": 1021
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1022",
+      "occurredAt": 1791763231000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763231000,
+        "eventId": 1022
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1023",
+      "occurredAt": 1791763232000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763232000,
+        "eventId": 1023
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1024",
+      "occurredAt": 1791763233000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763233000,
+        "eventId": 1024
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1025",
+      "occurredAt": 1791763234000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763234000,
+        "eventId": 1025
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1026",
+      "occurredAt": 1791763235000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763235000,
+        "eventId": 1026
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1027",
+      "occurredAt": 1791763236000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763236000,
+        "eventId": 1027
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1028",
+      "occurredAt": 1791763237000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763237000,
+        "eventId": 1028
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1029",
+      "occurredAt": 1791763238000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763238000,
+        "eventId": 1029
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1030",
+      "occurredAt": 1791763239000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763239000,
+        "eventId": 1030
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1031",
+      "occurredAt": 1791763240000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763240000,
+        "eventId": 1031
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1032",
+      "occurredAt": 1791763241000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763241000,
+        "eventId": 1032
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1033",
+      "occurredAt": 1791763242000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763242000,
+        "eventId": 1033
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1034",
+      "occurredAt": 1791763243000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763243000,
+        "eventId": 1034
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1035",
+      "occurredAt": 1791763244000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763244000,
+        "eventId": 1035
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1036",
+      "occurredAt": 1791763245000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763245000,
+        "eventId": 1036
+      },
+      "origin": "user:fixture-owner",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "user:fixture-owner",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1037",
+      "occurredAt": 1791763246000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763246000,
+        "eventId": 1037
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1038",
+      "occurredAt": 1791763247000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763247000,
+        "eventId": 1038
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1039",
+      "occurredAt": 1791763248000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763248000,
+        "eventId": 1039
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1040",
+      "occurredAt": 1791763249000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763249000,
+        "eventId": 1040
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1041",
+      "occurredAt": 1791763250000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763250000,
+        "eventId": 1041
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1042",
+      "occurredAt": 1791763251000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763251000,
+        "eventId": 1042
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1043",
+      "occurredAt": 1791763252000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763252000,
+        "eventId": 1043
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1044",
+      "occurredAt": 1791763253000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763253000,
+        "eventId": 1044
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1045",
+      "occurredAt": 1791763254000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763254000,
+        "eventId": 1045
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1046",
+      "occurredAt": 1791763255000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763255000,
+        "eventId": 1046
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1047",
+      "occurredAt": 1791763256000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763256000,
+        "eventId": 1047
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1048",
+      "occurredAt": 1791763257000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763257000,
+        "eventId": 1048
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1049",
+      "occurredAt": 1791763258000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763258000,
+        "eventId": 1049
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1050",
+      "occurredAt": 1791763259000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763259000,
+        "eventId": 1050
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1051",
+      "occurredAt": 1791763260000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763260000,
+        "eventId": 1051
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1052",
+      "occurredAt": 1791763261000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763261000,
+        "eventId": 1052
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1053",
+      "occurredAt": 1791763262000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763262000,
+        "eventId": 1053
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1054",
+      "occurredAt": 1791763263000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763263000,
+        "eventId": 1054
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1055",
+      "occurredAt": 1791763264000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763264000,
+        "eventId": 1055
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1056",
+      "occurredAt": 1791763265000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763265000,
+        "eventId": 1056
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1057",
+      "occurredAt": 1791763266000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763266000,
+        "eventId": 1057
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1058",
+      "occurredAt": 1791763267000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763267000,
+        "eventId": 1058
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1059",
+      "occurredAt": 1791763268000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763268000,
+        "eventId": 1059
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1060",
+      "occurredAt": 1791763269000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763269000,
+        "eventId": 1060
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1061",
+      "occurredAt": 1791763270000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763270000,
+        "eventId": 1061
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1062",
+      "occurredAt": 1791763271000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763271000,
+        "eventId": 1062
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": "fixture-producer",
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1063",
+      "occurredAt": 1791763272000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763272000,
+        "eventId": 1063
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1064",
+      "occurredAt": 1791763273000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763273000,
+        "eventId": 1064
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1065",
+      "occurredAt": 1791763274000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763274000,
+        "eventId": 1065
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1066",
+      "occurredAt": 1791763275000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763275000,
+        "eventId": 1066
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1067",
+      "occurredAt": 1791763276000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763276000,
+        "eventId": 1067
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1068",
+      "occurredAt": 1791763277000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763277000,
+        "eventId": 1068
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1069",
+      "occurredAt": 1791763278000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763278000,
+        "eventId": 1069
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1070",
+      "occurredAt": 1791763279000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763279000,
+        "eventId": 1070
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1071",
+      "occurredAt": 1791763280000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763280000,
+        "eventId": 1071
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1072",
+      "occurredAt": 1791763281000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763281000,
+        "eventId": 1072
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1073",
+      "occurredAt": 1791763282000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763282000,
+        "eventId": 1073
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1074",
+      "occurredAt": 1791763283000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763283000,
+        "eventId": 1074
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1075",
+      "occurredAt": 1791763284000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763284000,
+        "eventId": 1075
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1076",
+      "occurredAt": 1791763285000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763285000,
+        "eventId": 1076
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1077",
+      "occurredAt": 1791763286000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763286000,
+        "eventId": 1077
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1078",
+      "occurredAt": 1791763287000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763287000,
+        "eventId": 1078
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1079",
+      "occurredAt": 1791763288000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763288000,
+        "eventId": 1079
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1080",
+      "occurredAt": 1791763289000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763289000,
+        "eventId": 1080
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1081",
+      "occurredAt": 1791763290000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763290000,
+        "eventId": 1081
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1082",
+      "occurredAt": 1791763291000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763291000,
+        "eventId": 1082
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1083",
+      "occurredAt": 1791763292000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763292000,
+        "eventId": 1083
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1084",
+      "occurredAt": 1791763293000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763293000,
+        "eventId": 1084
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1085",
+      "occurredAt": 1791763294000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763294000,
+        "eventId": 1085
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1086",
+      "occurredAt": 1791763295000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763295000,
+        "eventId": 1086
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1087",
+      "occurredAt": 1791763296000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763296000,
+        "eventId": 1087
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1088",
+      "occurredAt": 1791763297000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763297000,
+        "eventId": 1088
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1089",
+      "occurredAt": 1791763298000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763298000,
+        "eventId": 1089
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1090",
+      "occurredAt": 1791763299000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763299000,
+        "eventId": 1090
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1091",
+      "occurredAt": 1791763300000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763300000,
+        "eventId": 1091
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1092",
+      "occurredAt": 1791763301000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763301000,
+        "eventId": 1092
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1093",
+      "occurredAt": 1791763302000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763302000,
+        "eventId": 1093
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1094",
+      "occurredAt": 1791763303000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763303000,
+        "eventId": 1094
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1095",
+      "occurredAt": 1791763304000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763304000,
+        "eventId": 1095
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1096",
+      "occurredAt": 1791763305000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763305000,
+        "eventId": 1096
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1097",
+      "occurredAt": 1791763306000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763306000,
+        "eventId": 1097
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1098",
+      "occurredAt": 1791763307000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763307000,
+        "eventId": 1098
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1099",
+      "occurredAt": 1791763308000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763308000,
+        "eventId": 1099
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1100",
+      "occurredAt": 1791763309000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763309000,
+        "eventId": 1100
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1101",
+      "occurredAt": 1791763310000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763310000,
+        "eventId": 1101
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1102",
+      "occurredAt": 1791763311000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763311000,
+        "eventId": 1102
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1103",
+      "occurredAt": 1791763312000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763312000,
+        "eventId": 1103
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1104",
+      "occurredAt": 1791763313000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763313000,
+        "eventId": 1104
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1105",
+      "occurredAt": 1791763314000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763314000,
+        "eventId": 1105
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1106",
+      "occurredAt": 1791763315000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763315000,
+        "eventId": 1106
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1107",
+      "occurredAt": 1791763316000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763316000,
+        "eventId": 1107
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1108",
+      "occurredAt": 1791763317000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763317000,
+        "eventId": 1108
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1109",
+      "occurredAt": 1791763318000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763318000,
+        "eventId": 1109
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1110",
+      "occurredAt": 1791763319000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763319000,
+        "eventId": 1110
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1111",
+      "occurredAt": 1791763320000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763320000,
+        "eventId": 1111
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1112",
+      "occurredAt": 1791763321000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763321000,
+        "eventId": 1112
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1113",
+      "occurredAt": 1791763322000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763322000,
+        "eventId": 1113
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1114",
+      "occurredAt": 1791763323000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763323000,
+        "eventId": 1114
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1115",
+      "occurredAt": 1791763324000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763324000,
+        "eventId": 1115
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1116",
+      "occurredAt": 1791763325000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763325000,
+        "eventId": 1116
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1117",
+      "occurredAt": 1791763326000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763326000,
+        "eventId": 1117
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1118",
+      "occurredAt": 1791763327000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763327000,
+        "eventId": 1118
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1119",
+      "occurredAt": 1791763328000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763328000,
+        "eventId": 1119
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1120",
+      "occurredAt": 1791763329000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763329000,
+        "eventId": 1120
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1121",
+      "occurredAt": 1791763330000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763330000,
+        "eventId": 1121
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1122",
+      "occurredAt": 1791763331000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763331000,
+        "eventId": 1122
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1123",
+      "occurredAt": 1791763332000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763332000,
+        "eventId": 1123
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1124",
+      "occurredAt": 1791763333000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763333000,
+        "eventId": 1124
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1125",
+      "occurredAt": 1791763334000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763334000,
+        "eventId": 1125
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1126",
+      "occurredAt": 1791763335000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763335000,
+        "eventId": 1126
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1127",
+      "occurredAt": 1791763336000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763336000,
+        "eventId": 1127
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1128",
+      "occurredAt": 1791763337000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763337000,
+        "eventId": 1128
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1129",
+      "occurredAt": 1791763338000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763338000,
+        "eventId": 1129
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1130",
+      "occurredAt": 1791763339000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763339000,
+        "eventId": 1130
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1131",
+      "occurredAt": 1791763340000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763340000,
+        "eventId": 1131
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1132",
+      "occurredAt": 1791763341000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763341000,
+        "eventId": 1132
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1133",
+      "occurredAt": 1791763342000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763342000,
+        "eventId": 1133
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1134",
+      "occurredAt": 1791763343000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763343000,
+        "eventId": 1134
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1135",
+      "occurredAt": 1791763344000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763344000,
+        "eventId": 1135
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1136",
+      "occurredAt": 1791763345000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763345000,
+        "eventId": 1136
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1137",
+      "occurredAt": 1791763346000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763346000,
+        "eventId": 1137
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1138",
+      "occurredAt": 1791763347000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763347000,
+        "eventId": 1138
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1139",
+      "occurredAt": 1791763348000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763348000,
+        "eventId": 1139
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1140",
+      "occurredAt": 1791763349000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763349000,
+        "eventId": 1140
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1141",
+      "occurredAt": 1791763350000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763350000,
+        "eventId": 1141
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1142",
+      "occurredAt": 1791763351000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763351000,
+        "eventId": 1142
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1143",
+      "occurredAt": 1791763352000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763352000,
+        "eventId": 1143
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1144",
+      "occurredAt": 1791763353000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763353000,
+        "eventId": 1144
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1145",
+      "occurredAt": 1791763354000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763354000,
+        "eventId": 1145
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1146",
+      "occurredAt": 1791763355000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763355000,
+        "eventId": 1146
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1147",
+      "occurredAt": 1791763356000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763356000,
+        "eventId": 1147
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1148",
+      "occurredAt": 1791763357000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763357000,
+        "eventId": 1148
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1149",
+      "occurredAt": 1791763358000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763358000,
+        "eventId": 1149
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1150",
+      "occurredAt": 1791763359000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763359000,
+        "eventId": 1150
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1151",
+      "occurredAt": 1791763360000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763360000,
+        "eventId": 1151
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1152",
+      "occurredAt": 1791763361000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763361000,
+        "eventId": 1152
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1153",
+      "occurredAt": 1791763362000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763362000,
+        "eventId": 1153
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1154",
+      "occurredAt": 1791763363000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763363000,
+        "eventId": 1154
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1155",
+      "occurredAt": 1791763364000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763364000,
+        "eventId": 1155
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1156",
+      "occurredAt": 1791763365000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763365000,
+        "eventId": 1156
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1157",
+      "occurredAt": 1791763366000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763366000,
+        "eventId": 1157
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1158",
+      "occurredAt": 1791763367000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763367000,
+        "eventId": 1158
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1159",
+      "occurredAt": 1791763368000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763368000,
+        "eventId": 1159
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1160",
+      "occurredAt": 1791763369000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763369000,
+        "eventId": 1160
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1161",
+      "occurredAt": 1791763370000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763370000,
+        "eventId": 1161
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1162",
+      "occurredAt": 1791763371000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763371000,
+        "eventId": 1162
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1163",
+      "occurredAt": 1791763372000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763372000,
+        "eventId": 1163
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1164",
+      "occurredAt": 1791763373000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763373000,
+        "eventId": 1164
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1165",
+      "occurredAt": 1791763374000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763374000,
+        "eventId": 1165
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1166",
+      "occurredAt": 1791763375000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763375000,
+        "eventId": 1166
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1167",
+      "occurredAt": 1791763376000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763376000,
+        "eventId": 1167
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1168",
+      "occurredAt": 1791763377000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763377000,
+        "eventId": 1168
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1169",
+      "occurredAt": 1791763378000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763378000,
+        "eventId": 1169
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1170",
+      "occurredAt": 1791763379000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763379000,
+        "eventId": 1170
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1171",
+      "occurredAt": 1791763380000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763380000,
+        "eventId": 1171
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1172",
+      "occurredAt": 1791763381000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763381000,
+        "eventId": 1172
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1173",
+      "occurredAt": 1791763382000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763382000,
+        "eventId": 1173
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1174",
+      "occurredAt": 1791763383000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763383000,
+        "eventId": 1174
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1175",
+      "occurredAt": 1791763384000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763384000,
+        "eventId": 1175
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1176",
+      "occurredAt": 1791763385000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763385000,
+        "eventId": 1176
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1177",
+      "occurredAt": 1791763386000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763386000,
+        "eventId": 1177
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1178",
+      "occurredAt": 1791763387000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763387000,
+        "eventId": 1178
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1179",
+      "occurredAt": 1791763388000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763388000,
+        "eventId": 1179
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1180",
+      "occurredAt": 1791763389000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763389000,
+        "eventId": 1180
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1181",
+      "occurredAt": 1791763390000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763390000,
+        "eventId": 1181
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1182",
+      "occurredAt": 1791763391000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763391000,
+        "eventId": 1182
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "session:fixture-other",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1183",
+      "occurredAt": 1791763392000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763392000,
+        "eventId": 1183
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1184",
+      "occurredAt": 1791763393000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763393000,
+        "eventId": 1184
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1185",
+      "occurredAt": 1791763394000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763394000,
+        "eventId": 1185
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1186",
+      "occurredAt": 1791763395000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763395000,
+        "eventId": 1186
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1187",
+      "occurredAt": 1791763396000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763396000,
+        "eventId": 1187
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1188",
+      "occurredAt": 1791763397000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763397000,
+        "eventId": 1188
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1189",
+      "occurredAt": 1791763398000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763398000,
+        "eventId": 1189
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1190",
+      "occurredAt": 1791763399000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763399000,
+        "eventId": 1190
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1191",
+      "occurredAt": 1791763400000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763400000,
+        "eventId": 1191
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1192",
+      "occurredAt": 1791763401000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763401000,
+        "eventId": 1192
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1193",
+      "occurredAt": 1791763402000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763402000,
+        "eventId": 1193
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "session:fixture-other",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1194",
+      "occurredAt": 1791763403000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763403000,
+        "eventId": 1194
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1195",
+      "occurredAt": 1791763404000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763404000,
+        "eventId": 1195
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1196",
+      "occurredAt": 1791763405000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763405000,
+        "eventId": 1196
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1197",
+      "occurredAt": 1791763406000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763406000,
+        "eventId": 1197
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1198",
+      "occurredAt": 1791763407000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763407000,
+        "eventId": 1198
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1199",
+      "occurredAt": 1791763408000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763408000,
+        "eventId": 1199
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1200",
+      "occurredAt": 1791763409000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763409000,
+        "eventId": 1200
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1201",
+      "occurredAt": 1791763410000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763410000,
+        "eventId": 1201
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1202",
+      "occurredAt": 1791763411000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763411000,
+        "eventId": 1202
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "session:fixture-other",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1203",
+      "occurredAt": 1791763412000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763412000,
+        "eventId": 1203
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1204",
+      "occurredAt": 1791763413000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763413000,
+        "eventId": 1204
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1205",
+      "occurredAt": 1791763414000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763414000,
+        "eventId": 1205
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1206",
+      "occurredAt": 1791763415000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763415000,
+        "eventId": 1206
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1207",
+      "occurredAt": 1791763416000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763416000,
+        "eventId": 1207
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1208",
+      "occurredAt": 1791763417000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763417000,
+        "eventId": 1208
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1209",
+      "occurredAt": 1791763418000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763418000,
+        "eventId": 1209
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1210",
+      "occurredAt": 1791763419000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763419000,
+        "eventId": 1210
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1211",
+      "occurredAt": 1791763420000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763420000,
+        "eventId": 1211
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1212",
+      "occurredAt": 1791763421000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763421000,
+        "eventId": 1212
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1213",
+      "occurredAt": 1791763422000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763422000,
+        "eventId": 1213
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1214",
+      "occurredAt": 1791763423000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763423000,
+        "eventId": 1214
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1215",
+      "occurredAt": 1791763424000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763424000,
+        "eventId": 1215
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1216",
+      "occurredAt": 1791763425000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763425000,
+        "eventId": 1216
+      },
+      "origin": "user:fixture-owner",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "user:fixture-owner",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1217",
+      "occurredAt": 1791763426000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763426000,
+        "eventId": 1217
+      },
+      "origin": "user:fixture-owner",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "user:fixture-owner",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1218",
+      "occurredAt": 1791763427000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763427000,
+        "eventId": 1218
+      },
+      "origin": "user:fixture-owner",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "user:fixture-owner",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1219",
+      "occurredAt": 1791763428000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763428000,
+        "eventId": 1219
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "wake"
+      },
+      "principal": "session:fixture-other",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "wake"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1220",
+      "occurredAt": 1791763429000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763429000,
+        "eventId": 1220
+      },
+      "origin": "user:fixture-owner",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "user:fixture-owner",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1221",
+      "occurredAt": 1791763430000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763430000,
+        "eventId": 1221
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1222",
+      "occurredAt": 1791763431000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763431000,
+        "eventId": 1222
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1223",
+      "occurredAt": 1791763432000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763432000,
+        "eventId": 1223
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1224",
+      "occurredAt": 1791763433000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763433000,
+        "eventId": 1224
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": "fixture-producer",
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "attest"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "attest"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1225",
+      "occurredAt": 1791763434000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763434000,
+        "eventId": 1225
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1226",
+      "occurredAt": 1791763435000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763435000,
+        "eventId": 1226
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "session:fixture-other",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1227",
+      "occurredAt": 1791763436000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763436000,
+        "eventId": 1227
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:fixture-other",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1228",
+      "occurredAt": 1791763437000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763437000,
+        "eventId": 1228
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1229",
+      "occurredAt": 1791763438000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763438000,
+        "eventId": 1229
+      },
+      "origin": "user:fixture-owner",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": null,
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "user:fixture-owner",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1230",
+      "occurredAt": 1791763439000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763439000,
+        "eventId": 1230
+      },
+      "origin": "user:fixture-owner",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "user:fixture-owner",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1231",
+      "occurredAt": 1791763440000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763440000,
+        "eventId": 1231
+      },
+      "origin": "user:fixture-owner",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "user:fixture-owner",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1232",
+      "occurredAt": 1791763441000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763441000,
+        "eventId": 1232
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1233",
+      "occurredAt": 1791763442000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763442000,
+        "eventId": 1233
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1234",
+      "occurredAt": 1791763443000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763443000,
+        "eventId": 1234
+      },
+      "origin": "user:fixture-owner",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "user:fixture-owner",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1235",
+      "occurredAt": 1791763444000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763444000,
+        "eventId": 1235
+      },
+      "origin": "user:fixture-owner",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "user:fixture-owner",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1236",
+      "occurredAt": 1791763445000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763445000,
+        "eventId": 1236
+      },
+      "origin": "user:fixture-owner",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "user:fixture-owner",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1237",
+      "occurredAt": 1791763446000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763446000,
+        "eventId": 1237
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1238",
+      "occurredAt": 1791763447000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763447000,
+        "eventId": 1238
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "assign"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "assign"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1239",
+      "occurredAt": 1791763448000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763448000,
+        "eventId": 1239
+      },
+      "origin": "process:fixture-process",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "process:fixture-process",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    },
+    {
+      "afterMessageSeq": null,
+      "id": "rail:1240",
+      "occurredAt": 1791763449000,
+      "order": {
+        "afterMessageSeq": null,
+        "occurredAt": 1791763449000,
+        "eventId": 1240
+      },
+      "origin": "agent:fixture-agent",
+      "payload": {
+        "code": "fixture-code",
+        "edge": "fixture-edge",
+        "identityManifestSha": "fixture-manifest",
+        "message": "Fixture refusal detail",
+        "producer": null,
+        "reason": "Fixture refusal detail",
+        "ref": "fixture-reference",
+        "rule": "fixture-policy",
+        "scriptExitClass": null,
+        "verb": "dispatch"
+      },
+      "principal": "session:s-public",
+      "rule": "fixture-policy",
+      "sessionKey": "s-public",
+      "verb": "dispatch"
+    }
+  ]
+}

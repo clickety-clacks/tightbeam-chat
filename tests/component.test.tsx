@@ -2060,12 +2060,13 @@ describe('conversation surface', () => {
       seq: 1, role: 'user', sender: 'user:fixture', messageType: 'chat', turnSeq: 1,
       createdAt: '2026-10-12T00:00:00.000Z',
     });
-    const denial = { id: 'history-refusal-1001', sessionKey, principal: `session:${sessionKey}`,
+    const denial = { id: 'history-refusal-1001', sessionKey, principal: 'user:fixture-owner',
       origin: 'user:fixture-owner', verb: 'send', rule: 'fixture-owner-policy',
       payload: { detail: 'Fixture refusal', rule: 'fixture-owner-policy', verb: 'send' },
       occurredAt: Date.parse('2026-10-12T00:00:01Z') };
     const runtime = new FakeRuntime(sessionKey, {
       records: [prompt], historyRailDenials: [denial], provenanceAvailable: false,
+      session: { sessionKey, rowVersion: 1, displayName: 'Fixture assistant', raw: { ownerUserId: 'fixture-owner' } },
     });
     render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
 

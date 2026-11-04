@@ -3,6 +3,18 @@ import type { RailDenialIdentity } from './types';
 /** The live event and its history row can differ slightly in event-clock precision. */
 export const railDenialMatchWindowMs = 5_000;
 
+/** Keep selected-session denials, plus user denials matched to its known owner. */
+export function isHistoryRailDenialForSession(
+  denial: Pick<RailDenialIdentity, 'sessionKey' | 'principal'>,
+  sessionKey: string,
+  ownerUserId?: unknown,
+): boolean {
+  if (denial.sessionKey !== sessionKey) return false;
+  if (denial.principal === `session:${sessionKey}`) return true;
+  return typeof ownerUserId === 'string' && ownerUserId.length > 0 &&
+    denial.principal === `user:${ownerUserId}`;
+}
+
 function stableJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
   if (value !== null && typeof value === 'object') {

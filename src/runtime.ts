@@ -40,7 +40,7 @@ import { isPreparedAttachmentSelection, prepareAttachmentInputs } from './attach
 import { ToolHistoryUnavailableError } from './toolHistory';
 import { createTurnProvenance } from './provenance';
 import { getIndex, putIndex, removeIndex, trimIndexBelow, type RecordIndex } from './recordIndex';
-import { sameRailDenial } from './railDenials';
+import { isHistoryRailDenialForSession, sameRailDenial } from './railDenials';
 import { advanceReadMarkerForwardOnly } from './readMarker';
 import { parseBatchMembers } from './messageVisibility';
 
@@ -1264,7 +1264,7 @@ class SessionRuntime implements ChatRuntime {
         !!this.transport.readAfter;
       const [tailResult] = await Promise.allSettled([
         catchingUp
-          ? this.readAfterPages(priorNewestCursor!, controller.signal)
+          ? this.readAfterPages(priorNewestCursor!, controller.signal, session?.raw.ownerUserId)
           : this.transport.readTail(this.sessionKey, controller.signal),
       ] as const);
       if (!this.isCurrent(generation) || !this.checkIdentity()) return;
@@ -1278,7 +1278,7 @@ class SessionRuntime implements ChatRuntime {
       let conversationError: string | undefined;
       if (tailResult.status === 'fulfilled') {
         try {
-          this.validatePage(tailResult.value);
+          this.validatePage(tailResult.value, session?.raw.ownerUserId);
           tail = tailResult.value;
         } catch (error) {
           if (error instanceof AuthorizationError) throw error;
@@ -1310,7 +1310,7 @@ class SessionRuntime implements ChatRuntime {
           try {
             const page = await this.transport.readOlder(this.sessionKey, cursor, controller.signal);
             if (!this.isCurrent(generation) || !this.checkIdentity()) return;
-            this.validatePage(page);
+            this.validatePage(page, session?.raw.ownerUserId);
             if (page.oldestCursor === cursor && page.hasOlder) {
               throw new UnsupportedTargetError('Older cursor did not advance.');
             }
@@ -1518,7 +1518,7 @@ class SessionRuntime implements ChatRuntime {
     }
   }
 
-  private async readAfterPages(after: string, signal: AbortSignal): Promise<ConversationPage> {
+  private async readAfterPages(after: string, signal: AbortSignal, ownerUserId?: unknown): Promise<ConversationPage> {
     const readAfter = this.transport.readAfter;
     if (!readAfter) throw new UnsupportedTargetError('Newer history cursor is unavailable.');
     const records: ConversationRecord[] = [];
@@ -1527,7 +1527,7 @@ class SessionRuntime implements ChatRuntime {
     let page: ConversationPage | undefined;
     while (true) {
       page = await readAfter.call(this.transport, this.sessionKey, cursor, signal);
-      this.validatePage({ ...page, hasOlder: false });
+      this.validatePage({ ...page, hasOlder: false }, ownerUserId);
       if (typeof page.hasNewer !== 'boolean' || (page.hasNewer && !page.newestCursor) ||
           (page.records.length > 0 && !page.newestCursor)) {
         throw new UnsupportedTargetError('Newer history page has invalid cursor metadata.');
@@ -1554,14 +1554,14 @@ class SessionRuntime implements ChatRuntime {
     };
   }
 
-  private validatePage(page: ConversationPage): void {
+  private validatePage(page: ConversationPage, ownerUserId?: unknown): void {
     if (page.hasOlder && !page.oldestCursor) throw new UnsupportedTargetError('Older history has no opaque cursor.');
     if (page.hasNewer && !page.newestCursor) throw new UnsupportedTargetError('Newer history has no opaque cursor.');
     for (const record of page.records) {
       if (record.sessionKey !== this.sessionKey) throw new UnsupportedTargetError('History page crossed session boundary.');
     }
     for (const denial of page.railDenials ?? []) {
-      if (denial.sessionKey !== this.sessionKey || denial.principal !== `session:${this.sessionKey}` ||
+      if (!isHistoryRailDenialForSession(denial, this.sessionKey, ownerUserId) ||
           !denial.id || !denial.verb.trim() || !denial.rule.trim() || !denial.origin.trim() ||
           !Number.isSafeInteger(denial.occurredAt) || denial.occurredAt < 0 ||
           (denial.afterMessageSeq !== undefined &&
@@ -1592,7 +1592,7 @@ class SessionRuntime implements ChatRuntime {
     try {
       const page = await this.transport.readOlder(this.sessionKey, cursor, signal);
       if (!this.isCurrent(generation) || !this.checkIdentity()) return;
-      this.validatePage(page);
+      this.validatePage(page, this.state.session?.raw.ownerUserId);
       if (page.hasOlder && page.oldestCursor === cursor) throw new InvalidCursorError('Older cursor did not advance.');
       await this.olderTools(page);
       if (!this.isCurrent(generation) || !this.checkIdentity()) return;
@@ -2025,7 +2025,7 @@ class SessionRuntime implements ChatRuntime {
       if (!session || session.sessionKey !== this.sessionKey) {
         throw new UnsupportedTargetError('Ready session snapshot is unavailable for canonical refresh.');
       }
-      this.validatePage(page);
+      this.validatePage(page, session.raw.ownerUserId);
       if (!this.transport.proveCoverage(session, page, captured)) {
         throw new UnsupportedTargetError('Canonical refresh lacks verified subscription coverage.');
       }

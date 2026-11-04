@@ -47,7 +47,7 @@ class Channel implements Public019Channel {
 
 function setup(heartbeatTimeoutMs?: number, observedVersion = version, historyItems: unknown[] = [item],
   turnItems: unknown[] = [], turnStatus = 200, railDenials?: unknown,
-  markerOperatorPrincipalKey?: string, markerIdentity = identity) {
+  markerOperatorPrincipalKey?: string, markerIdentity = identity, sessionOwnerUserId?: string, historyPage?: unknown) {
   const changes = new Channel();
   const human = new Channel();
   const paths: string[] = [];
@@ -72,13 +72,15 @@ function setup(heartbeatTimeoutMs?: number, observedVersion = version, historyIt
         schemaVersion: 1, resource: 'transcript messages', item,
       }), { status: 200 });
       const afterCurrentCursor = path.includes('/messages?') && new URL(path).searchParams.get('after') === 'newer-cursor';
-      const pageBody = { schemaVersion: 1, resource: 'transcript messages', items: afterCurrentCursor ? [] : historyItems,
+      const pageBody = historyPage ?? { schemaVersion: 1, resource: 'transcript messages', items: afterCurrentCursor ? [] : historyItems,
           page: { oldestCursor: afterCurrentCursor ? null : 'older-cursor', newestCursor: 'newer-cursor',
             hasMoreBefore: !afterCurrentCursor, hasMoreAfter: false },
           ...(railDenials === undefined ? {} : { railDenials }) };
       const body = path.endsWith('/version') ? observedVersion : path.includes('/messages?')
         ? pageBody
-        : { schemaVersion: 1, resource: 'sessions', item: session };
+        : { schemaVersion: 1, resource: 'sessions', item: {
+          ...session, ...(sessionOwnerUserId ? { ownerUserId: sessionOwnerUserId } : {}),
+        } };
       return new Response(JSON.stringify(body), { status: 200 });
     },
     openAuthenticatedChanges: async () => {
@@ -904,11 +906,12 @@ describe('Gateway wire mapping and behavior checks', () => {
     expect(transport.proveCoverage({ sessionKey, rowVersion: 4, displayName: 'Fixture agent', raw: {} }, page, [])).toBe(false);
   });
 
-  it('decodes additive refused-action history while keeping older Gateway pages compatible', async () => {
+  it('decodes Gateway 0.1.14 refusal history per entry while keeping older pages compatible', async () => {
+    const gateway3688 = { ...version, version: '0.1.14', build: 3688, sha: 'fixture-3688' };
     const denial = { id: 'rd_14', sessionKey, principal: `session:${sessionKey}`, verb: 'send',
       rule: 'owner-policy', origin: 'chat', payload: { verb: 'send', rule: 'owner-policy', detail: 'Refused' },
       occurredAt: Date.parse('2026-10-12T00:00:01Z'), afterMessageSeq: 9 };
-    const supported = setup(undefined, version, [item], [], 200, [denial]);
+    const supported = setup(undefined, gateway3688, [item], [], 200, [denial]);
     const page = await supported.transport.readTail(sessionKey, new AbortController().signal);
     expect(page.railDenials).toEqual([denial]);
     expect((await supported.transport.readOlder(sessionKey, 'older-cursor', new AbortController().signal)).railDenials)
@@ -918,24 +921,56 @@ describe('Gateway wire mapping and behavior checks', () => {
     const oldPage = await olderGateway.transport.readTail(sessionKey, new AbortController().signal);
     expect(oldPage.railDenials).toBeUndefined();
 
-    const mixedRows = JSON.parse(readFileSync(resolve(process.cwd(),
-      'tests/fixtures/gateway-0.1.14-3688-rail-denials.json'), 'utf8')) as unknown[];
-    const mixedPage = setup(undefined, version, [item], [], 200, mixedRows);
-    const tolerantPage = await mixedPage.transport.readTail(sessionKey, new AbortController().signal);
-    expect(tolerantPage.records.map((record) => record.id)).toEqual(['m_1']);
-    expect(tolerantPage.railDenials).toEqual([
-      { id: 'rail:1001', sessionKey, principal: `session:${sessionKey}`, verb: 'send',
-        rule: 'fixture-owner-policy', origin: 'user:fixture-owner',
-        payload: { detail: 'Fixture refusal with a nullable position', rule: 'fixture-owner-policy', verb: 'send' },
-        occurredAt: Date.parse('2026-10-12T00:00:01Z') },
-      { id: 'rail:1002', sessionKey, principal: `session:${sessionKey}`, verb: 'send',
-        rule: 'fixture-owner-policy', origin: 'user:fixture-owner',
-        payload: { detail: 'Fixture refusal with an omitted position', rule: 'fixture-owner-policy', verb: 'send' },
-        occurredAt: Date.parse('2026-10-12T00:00:02Z') },
-    ]);
-    const olderPage = await mixedPage.transport.readOlder(sessionKey, 'older-cursor', new AbortController().signal);
-    expect(olderPage.records.map((record) => record.id)).toEqual(['m_1']);
+    const fixture = JSON.parse(readFileSync(resolve(process.cwd(),
+      'tests/fixtures/gateway-0.1.14-3688-history-page.json'), 'utf8')) as {
+        schemaVersion: number; resource: string; items: unknown[]; page: Record<string, unknown>; railDenials: unknown[];
+      };
+    expect(fixture.items).toHaveLength(5);
+    expect(fixture.railDenials).toHaveLength(240);
+    expect(fixture.railDenials.every((entry) =>
+      typeof entry === 'object' && entry !== null && (entry as Record<string, unknown>).afterMessageSeq === null))
+      .toBe(true);
+
+    const unplaceable = { ...(fixture.railDenials[0] as Record<string, unknown>),
+      id: 'rail:fixture-unplaceable', occurredAt: null,
+      order: { afterMessageSeq: null, occurredAt: null, eventId: 5000 } };
+    const missingSequence: Record<string, unknown> = {
+      ...(fixture.railDenials[0] as Record<string, unknown>), id: 'rail:fixture-missing-sequence' };
+    delete missingSequence['afterMessageSeq'];
+    const unscoped = { ...(fixture.railDenials[0] as Record<string, unknown>),
+      id: 'rail:fixture-unscoped', principal: null };
+    const volumeScoped = { ...(fixture.railDenials[0] as Record<string, unknown>),
+      id: 'rail:fixture-volume', principal: 'volume:fixture-volume' };
+    const sourcePageWithUnattributableRows = {
+      ...fixture, railDenials: [...fixture.railDenials, missingSequence, unplaceable, unscoped, volumeScoped],
+    };
+    const mixedPage = setup(undefined, gateway3688, [], [], 200, undefined,
+      undefined, undefined, 'fixture-owner', sourcePageWithUnattributableRows);
+    const signal = new AbortController().signal;
+    const sessionRecord = await mixedPage.transport.readSession(sessionKey, signal);
+    expect(sessionRecord.raw.ownerUserId).toBe('fixture-owner');
+    const tolerantPage = await mixedPage.transport.readTail(sessionKey, signal);
+    expect(tolerantPage.records).toHaveLength(5);
+    expect(tolerantPage.railDenials).toHaveLength(234);
+    // 222 source rows plus the one source-shaped row with no sequence position.
+    expect(tolerantPage.railDenials?.filter((entry) => entry.principal === `session:${sessionKey}`)).toHaveLength(223);
+    expect(tolerantPage.railDenials?.filter((entry) => entry.principal === 'user:fixture-owner')).toHaveLength(11);
+    expect(tolerantPage.railDenials?.every((entry) => entry.afterMessageSeq === undefined)).toBe(true);
+    expect(tolerantPage.railDenials?.some((entry) => entry.id === 'rail:fixture-missing-sequence')).toBe(true);
+    expect(tolerantPage.railDenials?.some((entry) => entry.id === 'rail:fixture-unplaceable')).toBe(false);
+    expect(tolerantPage.railDenials?.some((entry) => entry.id === 'rail:fixture-unscoped')).toBe(false);
+    expect(tolerantPage.railDenials?.some((entry) => entry.id === 'rail:fixture-volume')).toBe(false);
+    const olderPage = await mixedPage.transport.readOlder(sessionKey, 'older-cursor', signal);
+    expect(olderPage.records).toHaveLength(5);
     expect(olderPage.railDenials).toEqual(tolerantPage.railDenials);
+
+    const noOwner = setup(undefined, gateway3688, [], [], 200, undefined,
+      undefined, undefined, undefined, fixture);
+    await noOwner.transport.readSession(sessionKey, signal);
+    const noOwnerPage = await noOwner.transport.readTail(sessionKey, signal);
+    expect(noOwnerPage.records).toHaveLength(5);
+    expect(noOwnerPage.railDenials).toHaveLength(222);
+    expect(noOwnerPage.railDenials?.every((entry) => entry.principal === `session:${sessionKey}`)).toBe(true);
   });
 
   it('keeps transcript metadata complete and accepts an empty after page without a backward cursor', async () => {

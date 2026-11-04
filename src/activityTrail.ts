@@ -2,7 +2,7 @@ import type { CanonicalMessage, CanonicalTransition, HistoryRailDenial, LiveRail
 import { isUnmarkedCanonicalProcessBatch, parseBatchMembers, type HumanMember, type ParsedBatchMember } from './messageVisibility';
 import { activityPillPresentation, activitySenderLabel, type ActivityPillPresentation } from './activityPresentation';
 import { stripDeliveryScaffolding, stripProvenanceMarkup } from './displayText';
-import { sameRailDenial } from './railDenials';
+import { isHistoryRailDenialForSession, sameRailDenial } from './railDenials';
 
 export type ActivityKind = 'tool' | 'agent' | 'substrate' | 'rail';
 
@@ -405,6 +405,7 @@ export function buildActivityTrail(input: {
   /** Source-backed identity of the currently running owner turn, when available. */
   readonly activeOwnerTurnSeq?: number;
   readonly activeOwnerTurnMessageId?: string;
+  readonly ownerUserId?: string;
   readonly railDenials: readonly LiveRailDenial[];
   readonly historyRailDenials?: readonly HistoryRailDenial[];
   readonly shownRuns: ReadonlyMap<string, string>;
@@ -444,7 +445,7 @@ export function buildActivityTrail(input: {
   const historyDenials: HistoryRailDenial[] = [];
   const historyIds = new Set<string>();
   for (const denial of input.historyRailDenials ?? []) {
-    if (denial.sessionKey === input.sessionKey && denial.principal === `session:${input.sessionKey}` &&
+    if (isHistoryRailDenialForSession(denial, input.sessionKey, input.ownerUserId) &&
         !historyIds.has(denial.id)) {
       historyDenials.push(denial);
       historyIds.add(denial.id);

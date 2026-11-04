@@ -42,6 +42,7 @@ class ControlledTransport implements ChatTransport {
   readAfterCalls: string[] = [];
   readMessageCalls: string[] = [];
   readSessionCalls = 0;
+  ownerUserId?: string;
   readRoleSessionKey?: ChatTransport['readRoleSessionKey'];
   closed = 0;
   coverage = true;
@@ -77,7 +78,9 @@ class ControlledTransport implements ChatTransport {
     this.readSessionCalls++;
     await this.readSessionHook?.(this.readSessionCalls);
     return { sessionKey: key, rowVersion: this.readSessionCalls, displayName: 'Fixture agent',
-      clearedThroughSeq: this.resetBoundary, raw: { clearedThroughSeq: this.resetBoundary }, activity: 'idle' };
+      clearedThroughSeq: this.resetBoundary,
+      raw: { clearedThroughSeq: this.resetBoundary, ...(this.ownerUserId ? { ownerUserId: this.ownerUserId } : {}) },
+      activity: 'idle' };
   };
   private page(rows: ConversationRecord[]): ConversationPage {
     const firstSeq = rows[0]?.seq;
@@ -306,6 +309,21 @@ describe('framework-independent runtime', () => {
     await vi.waitFor(() => expect(returned.getSnapshot().status).toBe('ready'));
     expect(returned.getSnapshot().historyRailDenials).toEqual([denial]);
     returned.dispose();
+  });
+
+  it('accepts owner-principal history refusals when session detail proves the owner', async () => {
+    const denial: HistoryRailDenial = { id: 'history-owner-refusal', sessionKey,
+      principal: 'user:fixture-owner', origin: 'user:fixture-owner', verb: 'dispatch', rule: 'fixture-policy',
+      payload: { verb: 'dispatch', rule: 'fixture-policy' }, occurredAt: 10_000 };
+    const transport = new ControlledTransport();
+    transport.ownerUserId = 'fixture-owner';
+    transport.railDenials = [denial];
+
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+    expect(runtime.getSnapshot().session?.raw.ownerUserId).toBe('fixture-owner');
+    expect(runtime.getSnapshot().historyRailDenials).toEqual([denial]);
+    runtime.dispose();
   });
 
   it('retains deprecated live-activity snapshot fields as optional types without populating runtime state', async () => {
