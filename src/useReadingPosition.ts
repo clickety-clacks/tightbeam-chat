@@ -128,7 +128,9 @@ export function useReadingPosition(
   const distance = (box: HTMLElement) => Math.max(0, box.scrollHeight - box.clientHeight - box.scrollTop);
   const updateLatestControl = (box: HTMLElement) => {
     const atBottom = distance(box) <= bottomTolerance;
-    setShowLatest(!atBottom && !latestControlNavigation.current);
+    const followingIncomingArrival = incomingMessageArrival.current !== undefined && following.current &&
+      !userScrollIntent.current && !latestControlNavigation.current;
+    setShowLatest(!atBottom && !latestControlNavigation.current && !followingIncomingArrival);
     if (atBottom) {
       latestControlNavigation.current = false;
       setUnseenControlPrimed(false);
