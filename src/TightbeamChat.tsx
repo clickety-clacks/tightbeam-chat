@@ -675,7 +675,7 @@ function useActivityRevealAnimation<T extends HTMLElement>(active: boolean, key:
   return element;
 }
 
-function isImageAttachment(value: unknown): boolean {
+function isTranscriptImageAttachment(value: unknown): boolean {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const mimeType = (value as Record<string, unknown>).mimeType;
   return typeof mimeType === 'string' && /^image\/[a-z0-9.+-]+$/i.test(mimeType.trim());
@@ -699,7 +699,7 @@ function AttachmentDetails({ record, readAttachment, preservePosition, reconcile
   };
 
   record.attachments.forEach((attachment, index) => {
-    if (isImageAttachment(attachment)) {
+    if (isTranscriptImageAttachment(attachment)) {
       flushDetails();
       items.push(<MessageAttachments key={`image-${index}`} attachments={[attachment]}
         readAttachment={readAttachment} />);
