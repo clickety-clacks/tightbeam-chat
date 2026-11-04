@@ -3115,6 +3115,9 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
         }}>×</button>
     </div>}
     {reading.showLatest && <button type="button" className="tb-chat-scroll-latest" data-scroll-latest="true"
+      data-scroll-control-hidden={reading.hideLatestControl ? 'true' : undefined}
+      aria-hidden={reading.hideLatestControl || undefined} tabIndex={reading.hideLatestControl ? -1 : undefined}
+      style={reading.hideLatestControl ? { visibility: 'hidden', pointerEvents: 'none' } : undefined}
       aria-label={reading.unseenButtonLabel} onMouseDown={(event) => event.preventDefault()} onClick={() => {
         if (reading.hasUnseenButtonCount && reading.scrollToNextUnseen()) return;
         reading.scrollToLatestFromControl();

@@ -559,6 +559,7 @@ describe('conversation reading position', () => {
 
     if (shouldTopAnchor) {
       expect(row.getBoundingClientRect().top).toBeCloseTo(box.getBoundingClientRect().top + expectedReplyTopInset);
+      expect(screen.getByRole('button', { name: 'Scroll to bottom' })).toBeTruthy();
     } else {
       expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight);
       expect(row.getBoundingClientRect().bottom).toBeLessThan(
@@ -713,6 +714,10 @@ describe('conversation reading position', () => {
 
       const latestButton = () => screen.queryByRole('button', { name: latestButtonName });
       expect(latestButton()).toBeNull();
+      const suppressedControl = box.parentElement!.querySelector<HTMLElement>('.tb-chat-scroll-latest');
+      expect(suppressedControl?.dataset.scrollControlHidden).toBe('true');
+      expect(suppressedControl?.getAttribute('aria-hidden')).toBe('true');
+      expect(suppressedControl?.tabIndex).toBe(-1);
       advanceNextFrame(performance.now() + 100);
       fireEvent.scroll(box);
       expect(latestButton()).toBeNull();
