@@ -127,29 +127,32 @@ function optionalNonnegativeInteger(row: Record<string, unknown>, key: string): 
   return nonnegativeInteger(row, key);
 }
 
-function decodeHistoryRailDenial(value: unknown, sessionKey: string): HistoryRailDenial {
-  const row = record(value);
-  if (requiredString(row, 'sessionKey') !== sessionKey) {
-    throw new UnsupportedTargetError('Refused action belongs to a different session.');
+function decodeHistoryRailDenial(value: unknown, sessionKey: string): HistoryRailDenial | undefined {
+  try {
+    const row = record(value);
+    const principal = `session:${sessionKey}`;
+    // Gateway history selection also returns denials attached to the selected
+    // session but made by another principal. Only the actor's own session row
+    // is a transcript pill; ignore other or unscoped principals per entry.
+    if (row.sessionKey !== sessionKey || row.principal !== principal) return undefined;
+    const payload = record(row.payload);
+    const verb = requiredString(row, 'verb').trim();
+    const rule = requiredString(row, 'rule').trim();
+    const origin = requiredString(row, 'origin');
+    if (!verb || !rule || !origin.trim()) {
+      throw new UnsupportedTargetError('Invalid refused-action details in Gateway wire response.');
+    }
+    const afterMessageSeq = optionalNonnegativeInteger(row, 'afterMessageSeq');
+    return Object.freeze({
+      id: requiredString(row, 'id'), sessionKey, principal,
+      verb, rule, origin, payload: Object.freeze({ ...payload }),
+      occurredAt: nonnegativeInteger(row, 'occurredAt'),
+      ...(afterMessageSeq === undefined ? {} : { afterMessageSeq }),
+    });
+  } catch (error) {
+    if (error instanceof UnsupportedTargetError) return undefined;
+    throw error;
   }
-  const principal = requiredString(row, 'principal');
-  if (principal !== `session:${sessionKey}`) {
-    throw new UnsupportedTargetError('Refused action belongs to a different principal.');
-  }
-  const payload = record(row.payload);
-  const verb = requiredString(row, 'verb').trim();
-  const rule = requiredString(row, 'rule').trim();
-  const origin = requiredString(row, 'origin');
-  if (!verb || !rule || !origin.trim()) {
-    throw new UnsupportedTargetError('Invalid refused-action details in Gateway wire response.');
-  }
-  const afterMessageSeq = optionalNonnegativeInteger(row, 'afterMessageSeq');
-  return Object.freeze({
-    id: requiredString(row, 'id'), sessionKey, principal,
-    verb, rule, origin, payload: Object.freeze({ ...payload }),
-    occurredAt: nonnegativeInteger(row, 'occurredAt'),
-    ...(afterMessageSeq === undefined ? {} : { afterMessageSeq }),
-  });
 }
 
 function messageTime(row: Record<string, unknown>): string {
@@ -490,7 +493,10 @@ export function createPublic019Transport(config: Public019Config): { transport: 
       hasOlder: emptyAfterWithoutBackwardCursor ? false : page.hasMoreBefore,
       newestCursor, hasNewer: hasMoreAfter,
       ...(railDenials === undefined ? {} : {
-        railDenials: Object.freeze(railDenials.map((denial) => decodeHistoryRailDenial(denial, sessionKey))),
+        railDenials: Object.freeze(railDenials.flatMap((denial) => {
+          const decoded = decodeHistoryRailDenial(denial, sessionKey);
+          return decoded ? [decoded] : [];
+        })),
       }), coverage: sessionKey };
   }
 
