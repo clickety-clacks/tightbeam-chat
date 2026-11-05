@@ -54,9 +54,9 @@ const semanticLines = (value: string): string[] => lines(value).filter(line => !
 const wireOnlyLine = (line: string): boolean => transportLine(line) ||
   /^(?:terminal-child-owner-notification|(?:source_kind|source_token|assignment_id|work_item_id|child_session_key|outcome|terminal_at)=)/i.test(line) ||
   /^\[(?:assignment:|woke:|turn failed\])/i.test(line);
-/** Shorten full prefixed record IDs while leaving ordinary snake_case words alone. */
+/** Shorten prefixed hex IDs across hyphenated UUIDs and unhyphenated generated tokens. */
 export const formatVisibleIds = (value: string): string => value.replace(
-  /\b((?:[a-z][a-z0-9]*_)+)([a-f0-9]{4})[a-f0-9]{4}(?:-[a-f0-9-]+)?\b/gi,
+  /\b((?:[a-z][a-z0-9]*_)+)([a-f0-9]{4})[a-f0-9-]{4,}\b/gi,
   (_match, prefix: string, firstFour: string) => `${prefix}${firstFour}`,
 );
 function plainText(value: string): string {

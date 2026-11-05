@@ -9,13 +9,25 @@ const deliveredNotice = (line: string) => source('substrate', `[from process:tig
 
 describe('activity pill presentation', () => {
   it('shortens every full prefixed identifier to its prefix and first four characters', () => {
+    const hex64 = 'a'.repeat(64);
+    const hex32 = 'b'.repeat(32);
+    const hex40 = 'c'.repeat(40);
     expect(formatVisibleIds([
       'wi_12345678-1111-4111-8111-123456789abc',
       'art_b322d95e',
       'wake_87654321-1111-4111-8111-123456789abc',
       'w_terminal_4cf9f4ff-1111-4111-8111-123456789abc',
+      `w_nb_${hex64}`,
+      `w_terminal_${hex64}`,
+      `w_terminal_action_${hex64}`,
+      `w_${hex32}`,
+      `nbt_${hex40}`,
+      `pfe_${hex40}`,
       'post_mvp',
-    ].join(' '))).toBe('wi_1234 art_b322 wake_8765 w_terminal_4cf9 post_mvp');
+    ].join(' '))).toBe([
+      'wi_1234', 'art_b322', 'wake_8765', 'w_terminal_4cf9',
+      'w_nb_aaaa', 'w_terminal_aaaa', 'w_terminal_action_aaaa', 'w_bbbb', 'nbt_cccc', 'pfe_cccc', 'post_mvp',
+    ].join(' '));
   });
 
   it('gives delivered verdict, completion, opened and closed notices distinct plain presentations', () => {

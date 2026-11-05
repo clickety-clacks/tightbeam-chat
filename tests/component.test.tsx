@@ -1023,10 +1023,24 @@ describe('conversation surface', () => {
     const assignmentId = 'asg_abcdef12-1111-4111-8111-123456789abc';
     const artifactId = 'art_b322d95e';
     const wakeId = 'wake_87654321-1111-4111-8111-123456789abc';
+    const longHex = 'a'.repeat(64);
+    const mediumHex = 'c'.repeat(40);
+    const storedWakeIds = [
+      `w_nb_${longHex}`, `w_terminal_${longHex}`, `w_terminal_action_${longHex}`,
+      `w_${'b'.repeat(32)}`, `nbt_${mediumHex}`, `pfe_${mediumHex}`,
+    ];
+    const shortStoredWakeIds = ['w_nb_aaaa', 'w_terminal_aaaa', 'w_terminal_action_aaaa', 'w_bbbb', 'nbt_cccc', 'pfe_cccc'];
     const prompt = row(sessionKey, 'prompt', `Please inspect ${workItemId}.`, {
       seq: 1, role: 'user', sender: 'user:person', messageType: 'chat', turnSeq: 1,
     });
-    const noticeContent = `[from process:tightbeam]\n\n[verdict filed: reviewed-clean on ${assignmentId}: See ${artifactId} and ${workItemId}]`;
+    const noticeContent = [
+      '[from process:tightbeam]',
+      '',
+      '[batched notices: 1]',
+      `batchId=nb_12345678 wake ${storedWakeIds[0]} token=${storedWakeIds[4]}`,
+      `[1] source=${storedWakeIds[2]} sender=process:tightbeam cause=wake class=fyi`,
+      `[verdict filed: reviewed-clean on ${assignmentId}: See ${artifactId} and ${workItemId}]`,
+    ].join('\n');
     const notice = row(sessionKey, 'notice', noticeContent, {
       seq: 2, role: 'user', sender: 'process:tightbeam', messageType: 'substrate', turnSeq: 1,
     });
@@ -1075,6 +1089,10 @@ describe('conversation surface', () => {
     expect(noticePill?.textContent).toContain('art_b322');
     expect(noticePill?.getAttribute('aria-label')).not.toContain(assignmentId);
     expect(noticePill?.title).not.toContain(artifactId);
+    for (const id of shortStoredWakeIds) {
+      expect(noticePill?.title).toContain(id);
+      expect(noticePill?.title).not.toContain(storedWakeIds[shortStoredWakeIds.indexOf(id)]);
+    }
     fireEvent.click(within(noticePill!).getByRole('button', { name: /Show full message/ }));
     const noticeBody = noticePill!.querySelector('[data-activity-message-content]')!;
     expect(noticeBody.textContent).toContain('asg_abcd');
@@ -1083,6 +1101,10 @@ describe('conversation surface', () => {
     expect(noticeBody.textContent).not.toContain(assignmentId);
     expect(noticeBody.textContent).not.toContain(artifactId);
     expect(noticeBody.textContent).not.toContain(workItemId);
+    for (let index = 0; index < shortStoredWakeIds.length; index++) {
+      expect(noticeBody.textContent).toContain(shortStoredWakeIds[index]);
+      expect(noticeBody.textContent).not.toContain(storedWakeIds[index]);
+    }
 
     const agentPill = pillForContent('Evidence art_b322');
     expect(agentPill).toBeTruthy();
