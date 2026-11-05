@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.90",
+    "items": [
+      {
+        "title": "Refused-action history in every session",
+        "description": "A refused-action pill recorded in session history now shows up even in sessions that did not start with your own prompt. These could previously be silently dropped from the conversation."
+      }
+    ]
+  },
+  {
     "version": "v0.1.89",
     "items": [
       {
