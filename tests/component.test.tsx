@@ -1038,7 +1038,9 @@ describe('conversation surface', () => {
       '',
       '[batched notices: 1]',
       `batchId=nb_12345678 wake ${storedWakeIds[0]} token=${storedWakeIds[4]}`,
-      `[1] source=${storedWakeIds[2]} sender=process:tightbeam cause=wake class=fyi`,
+      `[1] source=${storedWakeIds[1]} sender=process:tightbeam cause=wake class=fyi`,
+      `[2] source=${storedWakeIds[2]} sender=process:tightbeam cause=wake class=fyi`,
+      `[3] source=${storedWakeIds[3]} token=${storedWakeIds[5]} sender=process:tightbeam cause=wake class=fyi`,
       `[verdict filed: reviewed-clean on ${assignmentId}: See ${artifactId} and ${workItemId}]`,
     ].join('\n');
     const notice = row(sessionKey, 'notice', noticeContent, {
