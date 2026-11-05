@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { activityPillPresentation, type ActivityPillSource } from '../src/activityPresentation';
+import { activityPillPresentation, activitySenderLabel, formatVisibleIds, type ActivityPillSource } from '../src/activityPresentation';
 
 const source = (kind: ActivityPillSource['kind'], content: string, gist = content.split('\n')[0] ?? '',
   extra: Partial<ActivityPillSource> = {}) => ({ kind, content, gist, ...extra } satisfies ActivityPillSource);
@@ -8,6 +8,16 @@ const deliveredNotice = (line: string) => source('substrate', `[from process:tig
 });
 
 describe('activity pill presentation', () => {
+  it('shortens every full prefixed identifier to its prefix and first four characters', () => {
+    expect(formatVisibleIds([
+      'wi_12345678-1111-4111-8111-123456789abc',
+      'art_b322d95e',
+      'wake_87654321-1111-4111-8111-123456789abc',
+      'w_terminal_4cf9f4ff-1111-4111-8111-123456789abc',
+      'post_mvp',
+    ].join(' '))).toBe('wi_1234 art_b322 wake_8765 w_terminal_4cf9 post_mvp');
+  });
+
   it('gives delivered verdict, completion, opened and closed notices distinct plain presentations', () => {
     const assignmentIds = [
       'asg_12345678-1111-4111-8111-123456789abc',
@@ -165,7 +175,7 @@ describe('activity pill presentation', () => {
     const fullSender = 'agent:agent:main:clawline:fixture:main s_1234abcd';
     expect(activityPillPresentation({ kind: 'agent', gist: 'Another agent — Review complete',
       content: 'Review complete', sender: fullSender })).toMatchObject({
-      label: 'Agent · session 1234abcd', tone: 'indigo', icon: 'message', text: 'Review complete', senderLabel: true,
+      label: 'Agent · session s_1234', tone: 'indigo', icon: 'message', text: 'Review complete', senderLabel: true,
     });
     expect(activityPillPresentation({ kind: 'agent', gist: 'Another agent — Update ready',
       content: 'Update ready', sender: 'agent:helper', senderDisplayName: 'Another agent' })).toMatchObject({
@@ -174,6 +184,14 @@ describe('activity pill presentation', () => {
     expect(activityPillPresentation(source('agent', 'Update ready'))).toMatchObject({
       label: 'Another agent', text: 'Update ready', icon: 'message',
     });
+  });
+
+  it('shortens artifact and wake identifiers in generic activity text', () => {
+    expect(activityPillPresentation(source('substrate',
+      'See artifact art_b322d95e and wake wake_87654321-1111-4111-8111-123456789abc')))
+      .toMatchObject({ text: 'See artifact art_b322 and wake wake_8765' });
+    expect(activitySenderLabel('agent:helper s_12345678-1111-4111-8111-123456789abc'))
+      .toBe('Agent · session s_1234');
   });
 
   it('keeps message detail separate when a sender display name contains the gist separator', () => {

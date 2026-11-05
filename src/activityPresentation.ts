@@ -39,8 +39,8 @@ export function activitySenderLabel(sender?: string, displayName?: string): stri
 
   const kind = senderKind[1].toLowerCase() === 'session' ? 'Session' : 'Agent';
   const sessionId = /(?:^|\s)(s_[a-z0-9-]+)$/i.exec(key)?.[1];
-  if (sessionId) return kind === 'Agent' ? `${kind} · session ${sessionId.slice(2)}`
-    : `${kind} · ${sessionId.slice(2)}`;
+  if (sessionId) return kind === 'Agent' ? `${kind} · session ${formatVisibleIds(sessionId)}`
+    : `${kind} · ${formatVisibleIds(sessionId)}`;
   const identity = key.slice(senderKind[0].length).trim();
   return identity ? `${kind} ${identity}` : undefined;
 }
@@ -54,12 +54,13 @@ const semanticLines = (value: string): string[] => lines(value).filter(line => !
 const wireOnlyLine = (line: string): boolean => transportLine(line) ||
   /^(?:terminal-child-owner-notification|(?:source_kind|source_token|assignment_id|work_item_id|child_session_key|outcome|terminal_at)=)/i.test(line) ||
   /^\[(?:assignment:|woke:|turn failed\])/i.test(line);
-const shortenVisibleIds = (value: string): string => value.replace(
-  /\b((?:wi|asg|dr|att|s|w|c|tc)_)([a-z0-9]{4})[a-z0-9-]{4,}\b/gi,
+/** Shorten full prefixed record IDs while leaving ordinary snake_case words alone. */
+export const formatVisibleIds = (value: string): string => value.replace(
+  /\b((?:[a-z][a-z0-9]*_)+)([a-f0-9]{4})[a-f0-9]{4}(?:-[a-f0-9-]+)?\b/gi,
   (_match, prefix: string, firstFour: string) => `${prefix}${firstFour}`,
 );
 function plainText(value: string): string {
-  return shortenVisibleIds(lines(value).filter(line => !wireOnlyLine(line))
+  return formatVisibleIds(lines(value).filter(line => !wireOnlyLine(line))
     .map(line => line.replace(/\[([^\]]*)\]/g, '$1').replace(/[\[\]]/g, '')).join(' '));
 }
 

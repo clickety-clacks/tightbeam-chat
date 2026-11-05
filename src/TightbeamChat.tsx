@@ -12,7 +12,7 @@ import { projectMessages, type HumanMember } from './messageVisibility';
 import { ActivitySummaryProvider, useActivitySummary } from './ActivitySummaryView';
 import type { SummaryAnswer, ActivitySummaryTransport } from './activitySummaries';
 import { buildActivityTrail, type ActivityFold, type ActivityLine, type ActivityOverflow, type MessageActivityItem } from './activityTrail';
-import type { ActivityPillIcon, ActivityPillPresentation } from './activityPresentation';
+import { formatVisibleIds, type ActivityPillIcon, type ActivityPillPresentation } from './activityPresentation';
 import { useReadingPosition } from './useReadingPosition';
 import { firstAfterTime, getIndex, indexValues, putIndex, type RecordIndex } from './recordIndex';
 import { getHostComposerSnapshot, HostComposerBridge, subscribeHostComposer } from './hostComposer';
@@ -467,7 +467,27 @@ const IndexedTimeline = memo(function IndexedTimelineBranch({ messages, tools, p
 });
 
 const markdownPlugins = [remarkGfm];
-const markdownRehypePlugins = [highlightRecognizedCode];
+function formatVisibleMarkdownIds() {
+  return (tree: unknown) => {
+    const visit = (candidate: unknown): void => {
+      if (!candidate || typeof candidate !== 'object') return;
+      const node = candidate as Record<string, unknown>;
+      if (node.type === 'text' && typeof node.value === 'string') {
+        node.value = formatVisibleIds(node.value);
+      }
+      if (node.properties && typeof node.properties === 'object' && !Array.isArray(node.properties)) {
+        const properties = node.properties as Record<string, unknown>;
+        for (const name of ['alt', 'title', 'ariaLabel', 'ariaDescription']) {
+          const value = properties[name];
+          if (typeof value === 'string') properties[name] = formatVisibleIds(value);
+        }
+      }
+      if (Array.isArray(node.children)) node.children.forEach(visit);
+    };
+    visit(tree);
+  };
+}
+const markdownRehypePlugins = [formatVisibleMarkdownIds, highlightRecognizedCode];
 const markdownComponents = {
   a: ({ href, children, ...props }: AnchorHTMLAttributes<HTMLAnchorElement>) =>
     <a {...props} href={href} target="_blank" rel="noreferrer noopener">{children}</a>,
@@ -726,7 +746,7 @@ function AttachmentDisclosure({ attachments, preservePosition, reconcileLayout }
     }}>{attachments.length} attachment {attachments.length === 1 ? 'detail' : 'details'}</summary>
     <AnimatedFoldContent expanded={expanded} className="tb-chat-attachment-content"
       onPresenceChange={setContentPresent} onLayoutChange={reconcileLayout}>
-      {() => <pre>{JSON.stringify(attachments, null, 2)}</pre>}
+      {() => <pre>{formatVisibleIds(JSON.stringify(attachments, null, 2))}</pre>}
     </AnimatedFoldContent>
   </details>;
 }
@@ -863,9 +883,9 @@ function WorkingStateCaption({ caption, turnSeq }: {
     };
   }, [turnSeq]);
   return <div ref={element} className="tb-chat-active-caption tb-chat-caption tb-chat-caption-neutral" role="status"
-    aria-label={`Active turn: ${caption.text}`}>
+    aria-label={`Active turn: ${formatVisibleIds(caption.text)}`}>
     <span className="tb-chat-caption-body"><span className="tb-chat-active-caption-icon"><ActiveTurnIcon icon={caption.icon} /></span>
-      <span>{caption.text}</span></span>
+      <span>{formatVisibleIds(caption.text)}</span></span>
   </div>;
 }
 
@@ -928,14 +948,14 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, re
   }) : record;
   return <article ref={rowRef} id={`${promptTargetPrefix}-${encodeURIComponent(bubble.key)}`}
     className={`tb-chat-bubble tb-chat-bubble-${bubble.side}`} data-record-key={bubble.key} data-scroll-key={scrollKey}
-    aria-label={`Message from ${bubble.sender || sourceLabel(bubble.side, agentName)}`}>
-    {bubble.side === 'human' && <span className="tb-chat-bubble-sender" aria-hidden="true">{bubble.sender}</span>}
+    aria-label={`Message from ${formatVisibleIds(bubble.sender || sourceLabel(bubble.side, agentName))}`}>
+    {bubble.side === 'human' && <span className="tb-chat-bubble-sender" aria-hidden="true">{formatVisibleIds(bubble.sender)}</span>}
     <div className="tb-chat-bubble-body">
       <TranscriptRenderBoundary resetKey={record.rowVersion} onRecovered={reconcileLayout}
         onRetry={onRetryRender} fallback={retry => <TranscriptRenderFailure scope="message"
           className="tb-chat-render-failure tb-chat-render-failure-message" onLayoutChange={reconcileLayout}>
           <span>Message formatting failed. The text is still available.</span>
-          <div className="tb-chat-render-failure-text">{displayContent}</div>
+          <div className="tb-chat-render-failure-text">{formatVisibleIds(displayContent)}</div>
           <button type="button" onClick={retry}>Try formatting again</button>
         </TranscriptRenderFailure>}>
         <RenderedRecordBody record={displayRecord} context={context} renderMessage={renderMessage} />
@@ -1563,7 +1583,7 @@ const Composer = forwardRef<ComposerHandle, {
 
   return <form className={`tb-chat-composer${cameraState !== 'closed' ? ' tb-chat-composer-camera-open' : ''}`} onSubmit={submit} ref={shell}>
     <label className="tb-chat-sr-only" htmlFor={`${titleId}-input`}>Message to {agentName || 'the selected agent'}</label>
-    {acquisitionError && <p className="tb-chat-composer-error" role="alert">{acquisitionError}</p>}
+    {acquisitionError && <p className="tb-chat-composer-error" role="alert">{formatVisibleIds(acquisitionError)}</p>}
     {attachmentSendStates.length > 0 && <section className="tb-chat-attachment-send-states" aria-label="Attachment send status">
       {attachmentSendStates.map(send => {
         const attachmentItems = send.attachmentItems ?? [];
@@ -1573,17 +1593,17 @@ const Composer = forwardRef<ComposerHandle, {
         const retryUnavailable = send.reason === 'retry-unavailable';
         return <div className="tb-chat-attachment-send" key={send.clientMessageId}>
           <p className="tb-chat-attachment-send-heading" role={failed ? 'alert' : 'status'}>
-            {attachmentSendHeading(send)}
+            {formatVisibleIds(attachmentSendHeading(send))}
           </p>
           <ul className="tb-chat-attachment-send-items" aria-label="Files in this attachment send">
             {attachmentItems.map(item => <li className="tb-chat-attachment-send-item" key={item.id}>
-              <span className="tb-chat-attachment-send-name">{item.filename}</span>
+              <span className="tb-chat-attachment-send-name">{formatVisibleIds(item.filename)}</span>
               <span className="tb-chat-attachment-send-item-status">{pendingAttachmentStatusText(item, send)}</span>
-              {item.error && <span className="tb-chat-attachment-send-item-error" role="alert">{item.error}</span>}
+              {item.error && <span className="tb-chat-attachment-send-item-error" role="alert">{formatVisibleIds(item.error)}</span>}
             </li>)}
           </ul>
           {submissionReason && <p className="tb-chat-attachment-send-reason" role={failed ? 'alert' : 'status'}>
-            Submission reason: {submissionReason}
+            Submission reason: {formatVisibleIds(submissionReason)}
           </p>}
           {failed && !retryUnavailable && <button type="button" className="tb-chat-attachment-send-retry"
             disabled={state.status === 'unauthorized'} onClick={() => void runtime.retrySend(send.clientMessageId)}>
@@ -1600,20 +1620,20 @@ const Composer = forwardRef<ComposerHandle, {
         return <li className="tb-chat-draft-attachment" key={item.input.id}>
           <div className="tb-chat-draft-attachment-preview">
             {preparedPreview
-              ? <img src={item.previewUrl} alt={`Preview of ${item.input.filename}`} onError={() => failImagePreview(item.input.id)} />
+              ? <img src={item.previewUrl} alt={formatVisibleIds(`Preview of ${item.input.filename}`)} onError={() => failImagePreview(item.input.id)} />
               : <span aria-hidden="true" className="tb-chat-draft-attachment-kind">
                 {image ? item.preparationState === 'preparing' ? 'Preparing…' : 'Image' : type.split(' ')[0]}
               </span>}
           </div>
           <span className="tb-chat-draft-attachment-details">
-            <span className="tb-chat-draft-attachment-name">{item.input.filename}</span>
+            <span className="tb-chat-draft-attachment-name">{formatVisibleIds(item.input.filename)}</span>
             <span className="tb-chat-draft-attachment-type">{type}</span>
             {item.preparationState === 'preparing' && <span className="tb-chat-draft-attachment-type" role="status">Preparing attachment…</span>}
-            {item.preparationError && <span className="tb-chat-draft-attachment-error" role="alert">{item.preparationError}</span>}
-            {item.previewError && <span className="tb-chat-draft-attachment-error" role="alert">{item.previewError}</span>}
+            {item.preparationError && <span className="tb-chat-draft-attachment-error" role="alert">{formatVisibleIds(item.preparationError)}</span>}
+            {item.previewError && <span className="tb-chat-draft-attachment-error" role="alert">{formatVisibleIds(item.previewError)}</span>}
           </span>
           <button type="button" className="tb-chat-draft-attachment-remove"
-            aria-label={`Remove ${item.input.filename}`} onClick={() => removeAttachment(item.input.id)}>×</button>
+            aria-label={`Remove ${formatVisibleIds(item.input.filename)}`} onClick={() => removeAttachment(item.input.id)}>×</button>
         </li>;
       })}
     </ul>}
@@ -1667,13 +1687,13 @@ const Composer = forwardRef<ComposerHandle, {
         <div className="tb-chat-popup-heading"><StatusIcon state={state} />
           <button type="button" aria-label="Close connection details" onClick={closeStatusPopup}>×</button>
         </div>
-        {state.sessionError && <p>Session details: {state.sessionError}</p>}
+        {state.sessionError && <p>Session details: {formatVisibleIds(state.sessionError)}</p>}
         {state.sessionNotFound && <p>This conversation no longer exists.</p>}
-        {state.conversationError && <p>Conversation history: {state.conversationError}</p>}
-        {state.historyError && <p>Earlier messages: {state.historyError}</p>}
+        {state.conversationError && <p>Conversation history: {formatVisibleIds(state.conversationError)}</p>}
+        {state.historyError && <p>Earlier messages: {formatVisibleIds(state.historyError)}</p>}
         <dl>
           <dt>Gateway</dt><dd>{state.targetGateway || 'Unavailable'}</dd>
-          <dt>Session</dt><dd>{state.sessionKey}</dd>
+          <dt>Session</dt><dd>{formatVisibleIds(state.sessionKey)}</dd>
           <dt>Agent</dt><dd>{agentName || 'Unavailable'}</dd>
           <dt>Model</dt><dd>{state.session?.model || 'Unavailable'}</dd>
           <dt>Harness</dt><dd>{state.session?.harness || 'Unavailable'}</dd>
@@ -1787,9 +1807,9 @@ function ActivityPillContents({ presentation, summaryState }: { readonly present
 
 function displayPillPresentation(presentation: ActivityPillPresentation): ActivityPillPresentation {
   return { ...presentation,
-    label: stripProvenanceMarkup(presentation.label),
-    text: stripProvenanceMarkup(presentation.text),
-    metadata: presentation.metadata ? stripProvenanceMarkup(presentation.metadata) || undefined : undefined };
+    label: formatVisibleIds(stripProvenanceMarkup(presentation.label)),
+    text: formatVisibleIds(stripProvenanceMarkup(presentation.text)),
+    metadata: presentation.metadata ? formatVisibleIds(stripProvenanceMarkup(presentation.metadata)) || undefined : undefined };
 }
 
 function sameActivityPresentation(left: ActivityPillPresentation | undefined,
@@ -1821,11 +1841,11 @@ const ActivityMessageRow = memo(function ActivityMessageRow({ entry, registerRow
   const [expanded, setExpanded] = useState(false);
   const [detailContentPresent, setDetailContentPresent] = useState(false);
   const presentation = summary.presentation ? displayPillPresentation(summary.presentation) : undefined;
-  const accessibleText = presentation
+  const accessibleText = formatVisibleIds(presentation
     ? `${presentation.label}: ${presentation.text}${presentation.metadata ? `, ${presentation.metadata}` : ''}`
-    : entry.accessibleText;
-  const fullMessage = stripProvenanceMarkup(entry.originalContent ?? entry.accessibleText);
-  const displayOriginal = stripProvenanceMarkup(summary.original);
+    : entry.accessibleText);
+  const fullMessage = formatVisibleIds(stripProvenanceMarkup(entry.originalContent ?? entry.accessibleText));
+  const displayOriginal = formatVisibleIds(stripProvenanceMarkup(summary.original));
   const registerElement = useCallback((element: HTMLDivElement | null) => {
     registerRow(scrollKey, element);
     revealElement.current = element;
@@ -1857,7 +1877,7 @@ const ActivityMessageRow = memo(function ActivityMessageRow({ entry, registerRow
     ref={registerElement} data-record-key={entry.id} data-scroll-key={scrollKey}
     data-activity-run={entry.runKey}>
     <span className="tb-chat-activity-bullet" aria-hidden="true">•</span>
-    <span className="tb-chat-activity-gist">{entry.gist}</span>
+    <span className="tb-chat-activity-gist">{formatVisibleIds(entry.gist)}</span>
   </div>;
 }, (previous, next) => previous.registerRow === next.registerRow && previous.scrollKey === next.scrollKey &&
   previous.reveal === next.reveal && previous.onRevealComplete === next.onRevealComplete &&
@@ -1893,11 +1913,11 @@ const ToolCallRow = memo(function ToolCallRow({ call, entry, registerRow, preser
   const terminal = call.status === 'completed' || call.status === 'failed';
   if (!entry) return null;
   if (entry.kind === 'overflow') return <ActivityOverflowButton entry={entry} registerRow={registerRow} expand={expandRun} />;
-  const title = call.title.trim() || call.toolName?.trim() || call.kind;
+  const title = formatVisibleIds(call.title.trim() || call.toolName?.trim() || call.kind);
   const status = call.status === 'pending' || call.status === 'in_progress' ? 'running'
     : call.status === 'completed' ? 'done' : 'failed';
-  const gist = entry.gist || `${title} · ${status}`;
-  const accessibleText = entry.accessibleText || `Tool call: ${gist}`;
+  const gist = formatVisibleIds(entry.gist || `${title} · ${status}`);
+  const accessibleText = formatVisibleIds(entry.accessibleText || `Tool call: ${gist}`);
   return <details ref={registerElement} tabIndex={-1} data-record-key={rowKey} data-scroll-key={rowKey}
     open={expanded || detailContentPresent} data-activity-run={entry.runKey} className="tb-chat-activity-line tb-chat-activity-tool"
     aria-label={accessibleText}>
@@ -1921,7 +1941,7 @@ const ToolCallRow = memo(function ToolCallRow({ call, entry, registerRow, preser
             <h4>{label}</h4>
             {truncated && <p>{label} truncated — original size {truncated.originalBytes} bytes.</p>}
             {value === null ? <p>{field === 'rawInput' ? 'No input recorded.' : terminal ? 'No result recorded.' : 'Waiting for result…'}</p>
-              : <pre>{typeof value === 'string' ? value : JSON.stringify(value, null, 2)}</pre>}
+              : <pre>{formatVisibleIds(typeof value === 'string' ? value : JSON.stringify(value, null, 2) ?? '')}</pre>}
           </section>;
         })}
       </AnimatedFoldContent>
@@ -1951,9 +1971,9 @@ const ActivityRunRow = memo(function ActivityRunRow({ entry, expanded, toggle, r
   const detailLines = entry.lines;
   const summary = useActivitySummary(entry.summary);
   const presentation = summary.presentation ? displayPillPresentation(summary.presentation) : undefined;
-  const latestDescription = presentation
+  const latestDescription = formatVisibleIds(presentation
     ? `${presentation.label}: ${presentation.text}${presentation.metadata ? `, ${presentation.metadata}` : ''}`
-    : entry.summary.gist;
+    : entry.summary.gist);
   return <div className={`tb-chat-activity-run tb-chat-activity-${entry.activityKind}`} tabIndex={-1}
     onMouseEnter={summary.restoreOriginal}
     ref={registerElement} data-record-key={entry.id} data-scroll-key={entry.id}
@@ -1961,7 +1981,7 @@ const ActivityRunRow = memo(function ActivityRunRow({ entry, expanded, toggle, r
     <button type="button" className={`tb-chat-activity-run-toggle tb-chat-activity-${entry.activityKind}${toolRun ? ' tb-chat-activity-tool-run-toggle' : ''}${presentation ? ' tb-chat-activity-pill-toggle' : ''}`}
       aria-expanded={expanded}
       aria-label={`${expanded ? 'Collapse' : 'Expand'} ${entry.activityKind} activity run, ${entry.lines.length} entries. Latest: ${latestDescription}`}
-      title={presentation ? stripProvenanceMarkup(summary.original) : undefined}
+      title={presentation ? formatVisibleIds(stripProvenanceMarkup(summary.original)) : undefined}
       onClick={() => { preservePosition(); toggle(entry.id); }}>
       {toolRun
         ? <ToolCallTerminalIcon className="tb-chat-tool-terminal-icon" />
@@ -1970,7 +1990,7 @@ const ActivityRunRow = memo(function ActivityRunRow({ entry, expanded, toggle, r
           <span className={`tb-chat-activity-run-chevron${expanded ? ' is-expanded' : ''}`} aria-hidden="true" />
         </>}
       {presentation ? <ActivityPillContents presentation={presentation} summaryState={summary.state} />
-        : <span className="tb-chat-activity-gist">{entry.summary.gist}</span>}
+        : <span className="tb-chat-activity-gist">{formatVisibleIds(entry.summary.gist)}</span>}
       <span className="tb-chat-activity-run-count" aria-hidden="true">×{entry.lines.length}</span>
       {toolRun && <span className={`tb-chat-activity-run-chevron${expanded ? ' is-expanded' : ''}`} aria-hidden="true" />}
     </button>
@@ -2943,7 +2963,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     {state.toolCallsLoading && <span className="tb-chat-caption tb-chat-caption-neutral" role="status">Loading tool history…</span>}
     {visibleToolCallsError && <span className="tb-chat-caption tb-chat-caption-danger" role="status">
       <span className="tb-chat-caption-body">
-        <span>Tool history is not current: {visibleToolCallsError}{' '}</span>
+        <span>Tool history is not current: {formatVisibleIds(visibleToolCallsError)}{' '}</span>
           <button type="button" disabled={placeholder || undefined} tabIndex={placeholder ? -1 : undefined}
             onClick={() => runtime.retryToolCalls?.()}>Retry tool history</button>
       </span>
@@ -2954,11 +2974,12 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
         if (item.kind === 'record-event') {
           const key = 'record-event:' + item.event.eventId;
           const presentation = recordEventPresentation(item.event);
+          const recordId = formatVisibleIds(item.event.record.id);
           return <div key={key} role="note" tabIndex={-1}
             ref={element => reading.registerRow(key, element)} data-record-key={key} data-scroll-key={key}
             className="tb-chat-activity-line tb-chat-activity-substrate tb-chat-activity-pill-row"
-            aria-label={`${presentation.label}: ${presentation.text}, ${item.event.record.id}`}
-            title={`${presentation.text} · ${item.event.record.id}`}>
+            aria-label={`${presentation.label}: ${presentation.text}, ${recordId}`}
+            title={`${presentation.text} · ${recordId}`}>
             <ActivityPillContents presentation={presentation} />
           </div>;
         }
@@ -2997,7 +3018,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
           registerRow={reading.registerRow} expand={expandRun} />;
         if (item.kind === 'transition') {
           const record = item.record;
-          const gist = transitionGist(record);
+          const gist = formatVisibleIds(transitionGist(record));
           return <div role="separator" aria-orientation="horizontal" key={record.id} ref={element => reading.registerRow(record.id, element)}
             data-record-key={record.id} data-scroll-key={record.id}
             className="tb-chat-transition tb-chat-transition-marker" aria-label={`Transition: ${gist}`}>
@@ -3045,7 +3066,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
           id={`${promptTargetPrefix}-${encodeURIComponent(`local-${send.clientMessageId}`)}`}
           className="tb-chat-bubble tb-chat-bubble-human tb-chat-local" key={send.clientMessageId}
           data-record-key={targetKey} data-scroll-key={targetKey}
-          aria-label={announcement}
+          aria-label={formatVisibleIds(announcement)}
           data-send-state={send.reconciled ? 'solid' : refused ? 'refused' : uncertain ? 'uncertain' : 'ghosted'}>
           <div className="tb-chat-bubble-body">{markdownBody(stripProvenanceMarkup(send.content))}</div>
           {refusalCopy && <p className="tb-chat-send-refusal" aria-hidden="true">{refusalCopy}</p>}
@@ -3054,7 +3075,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
             {refused ? <span className="tb-chat-send-error">!</span> : uncertain
               ? <span className="tb-chat-send-uncertain-mark">?</span> : <span className="tb-chat-send-spinner" />}
           </div>}
-          <span className="tb-chat-sr-only" role={refused ? 'alert' : 'status'} aria-atomic="true">{announcement}</span>
+          <span className="tb-chat-sr-only" role={refused ? 'alert' : 'status'} aria-atomic="true">{formatVisibleIds(announcement)}</span>
           {retryAvailable && <div className="tb-chat-send-actions">
             <button type="button" disabled={state.status === 'unauthorized'}
               onClick={() => void runtime.retrySend(send.clientMessageId)}>
@@ -3093,7 +3114,8 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
         ? 'tb-chat-caption-danger' : 'tb-chat-caption-neutral'}`} role={state.historyError || state.sessionNotFound || state.conversationError || state.sessionError || state.status === 'unauthorized' || state.status === 'unsupported' ? 'alert' : 'status'}>
         <span className="tb-chat-caption-body">
           {(state.loadingOlder || state.historyError || localNotice) && <span>{state.loadingOlder ? 'Loading earlier messages…'
-            : state.historyError ? `Earlier messages could not be loaded: ${state.historyError}` : localNotice}</span>}
+            : state.historyError ? `Earlier messages could not be loaded: ${formatVisibleIds(state.historyError)}`
+              : localNotice ? formatVisibleIds(localNotice) : undefined}</span>}
           {state.historyError && <button type="button" onClick={loadOlder}>Retry loading messages</button>}
           {showReconnect &&
             <button type="button" onClick={() => void runtime.rebuild({ restart: true })}>Reconnect</button>}
@@ -3130,14 +3152,14 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     {measurementPrompt && <div ref={stickyPromptMeasurement} className="tb-chat-latest-user-prompt-measurement"
       aria-hidden="true" inert>
       <button type="button" className="tb-chat-latest-user-prompt-jump" tabIndex={-1}>
-        <span className="tb-chat-latest-user-prompt-text">{measurementPrompt.content}</span>
+        <span className="tb-chat-latest-user-prompt-text">{formatVisibleIds(measurementPrompt.content)}</span>
       </button>
       <button type="button" className="tb-chat-latest-user-prompt-dismiss" tabIndex={-1}>×</button>
     </div>}
     {showStickyPrompt && displayedPrompt && <div ref={stickyPromptOverlay} className="tb-chat-latest-user-prompt">
       <button type="button" className="tb-chat-latest-user-prompt-jump" aria-controls={displayedPromptTargetId}
         aria-label="Jump to user prompt" onClick={jumpToStickyPrompt}>
-        <span className="tb-chat-latest-user-prompt-text">{displayedPrompt.content}</span>
+        <span className="tb-chat-latest-user-prompt-text">{formatVisibleIds(displayedPrompt.content)}</span>
       </button>
       <button type="button" className="tb-chat-latest-user-prompt-dismiss" aria-label="Dismiss user prompt preview"
         onClick={() => {

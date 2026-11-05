@@ -1,4 +1,4 @@
-import type { ActivityPillPresentation } from './activityPresentation';
+import { formatVisibleIds, type ActivityPillPresentation } from './activityPresentation';
 import type { ChatTransport, ConversationRecord, RuntimeState, SessionRecordEvent } from './types';
 
 const compare = (a: SessionRecordEvent, b: SessionRecordEvent) => a.at - b.at || a.eventId.localeCompare(b.eventId);
@@ -172,5 +172,5 @@ const presentations: Readonly<Record<string, ActivityPillPresentation>> = {
 };
 export function recordEventPresentation(event: SessionRecordEvent): ActivityPillPresentation {
   return { ...(presentations[event.kind] ?? { label: 'Activity', text: event.kind, tone: 'slate', icon: 'activity' }),
-    metadata: event.record.id.replace(/^([a-z]+_)(.{4}).*$/, '$1$2') };
+    metadata: formatVisibleIds(event.record.id) };
 }
