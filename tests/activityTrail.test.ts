@@ -359,7 +359,7 @@ describe('activity trail projection', () => {
     ]);
     expect(fold.lines.every(line => line.presentation !== undefined)).toBe(true);
     expect(fold.lines[0].presentation).toMatchObject({ label: 'Research — helper', text: 'First helper update', icon: 'message' });
-    expect(fold.lines[2].presentation).toMatchObject({ label: 'Agent · session 12345678', text: 'Unresolved helper update' });
+    expect(fold.lines[2].presentation).toMatchObject({ label: 'Agent · session s_1234', text: 'Unresolved helper update' });
     expect(fold.lines[0].accessibleText).toBe('Other agent: Research — helper — First helper update');
     expect(fold.lines[0].originalContent).toBe('First helper update');
   });
