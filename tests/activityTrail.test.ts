@@ -351,7 +351,7 @@ describe('activity trail projection', () => {
     } });
     expect(fold.lines.map(line => line.gist)).toEqual([
       'Research — helper — First helper update', 'Research — helper — Second helper update',
-      'Agent · session 12345678 — Unresolved helper update', 'Research — helper — Latest helper update',
+      'Agent · session s_1234 — Unresolved helper update', 'Research — helper — Latest helper update',
     ]);
     expect(fold.lines.map(line => line.id)).toEqual([
       'member:carrier-first:member:7', 'member:carrier-first:member:9',
