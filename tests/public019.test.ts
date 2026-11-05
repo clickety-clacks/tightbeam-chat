@@ -1552,7 +1552,7 @@ it('decodes exact record-event notice coverage and reads the same live/history o
     record: { type: 'assignment', id: 'assignment-example', detail: '/api/assignments/assignment-example' },
     actorSessionKey: 'another-session', tiedAs: ['holder'], cause: null, noticeMessageIds: [] };
   const notice = decodePublic019Notice({ type: 'change', schemaVersion: 2, class: 'session_record_event.created', refs: { sessionKey },
-    payload: event, resource: 'record events', op: 'upsert' }, sessionKey);
+    payload: event, resource: 'record events', op: 'append' }, sessionKey);
   expect(notice).toMatchObject({ operation: 'record-event', event: { ...event, sessionKey } });
   expect(decodePublic019Message({ ...item, recordEventIds: [event.eventId] }, sessionKey))
     .toMatchObject({ recordEventIds: [event.eventId] });

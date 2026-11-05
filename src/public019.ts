@@ -466,10 +466,6 @@ export function decodePublic019Notice(value: unknown, sessionKey: string): Chang
   const refs = record(frame.refs);
   if (refs.sessionKey !== sessionKey) throw new UnsupportedTargetError('Change frame has a different session reference.');
   if (frame.class === 'session_record_event.created') {
-    if (frame.resource !== 'record events' || frame.op !== 'upsert') {
-      logGatewayIncompatibility('record-event notice', 'Skipped an unexpected resource or operation.');
-      return { operation: 'unknown', sessionKey, resource: frame.class };
-    }
     return { operation: 'record-event', event: decodeRecordEvent(frame.payload, sessionKey) };
   }
   if (frame.class === 'message.created' || frame.class === 'transition.recorded') {
