@@ -1563,7 +1563,8 @@ class SessionRuntime implements ChatRuntime {
     for (const denial of page.railDenials ?? []) {
       if (denial.sessionKey !== this.sessionKey || denial.principal !== `session:${this.sessionKey}` ||
           !denial.id || !denial.verb.trim() || !denial.rule.trim() || !denial.origin.trim() ||
-          !Number.isSafeInteger(denial.occurredAt) || denial.occurredAt < 0 ||
+          (denial.occurredAt !== undefined &&
+            (!Number.isSafeInteger(denial.occurredAt) || denial.occurredAt < 0)) ||
           (denial.afterMessageSeq !== undefined &&
             (!Number.isSafeInteger(denial.afterMessageSeq) || denial.afterMessageSeq < 0)) ||
           denial.payload === null || typeof denial.payload !== 'object' || Array.isArray(denial.payload)) {

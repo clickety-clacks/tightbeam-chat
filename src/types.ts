@@ -440,7 +440,6 @@ export interface RailDenialIdentity {
 export interface HistoryRailDenial extends RailDenialIdentity {
   readonly origin: string;
   readonly payload: Readonly<Record<string, unknown>>;
-  readonly occurredAt: number;
 }
 
 export interface LiveRailDenial extends RailDenialIdentity {
