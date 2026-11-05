@@ -1060,10 +1060,10 @@ describe('conversation surface', () => {
       `[2] source=${storedWakeIds[2]} sender=process:tightbeam cause=wake class=fyi`,
       `[3] source=${storedWakeIds[3]} token=${storedWakeIds[5]} sender=process:tightbeam cause=wake class=fyi`,
       `[4] source=${harklightWakeId}-verification.md sender=process:tightbeam cause=wake class=fyi`,
+      `[verdict filed: reviewed-clean on ${assignmentId}: See ${artifactId} and ${workItemId}-verification.md]`,
       '[5] condition ' + additionalStoredIds[1] + ' source_token="' + additionalStoredIds[0] + '"',
       '[6] source=' + additionalStoredIds[5] + ' sender=remedy:policy cause=wake class=fyi',
       '[7] stored IDs ' + additionalStoredIds.slice(2).join(' '),
-      `[verdict filed: reviewed-clean on ${assignmentId}: See ${artifactId} and ${workItemId}-verification.md]`,
     ].join('\n');
     const notice = row(sessionKey, 'notice', noticeContent, {
       seq: 2, role: 'user', sender: 'process:tightbeam', messageType: 'substrate', turnSeq: 1,

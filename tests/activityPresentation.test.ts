@@ -55,6 +55,27 @@ describe('activity pill presentation', () => {
     ].join(' '));
   });
 
+  it('covers source-inventoried producer families and preserves their neighboring text', () => {
+    const uuid = '12345678-1111-4111-8111-123456789abc';
+    for (const prefix of ['a', 'act', 'aev', 'dlv', 'cn', 'ew', 'tl', 'tlm', 'tlc', 'wr', 'l', 'hhcp', 'w_retire']) {
+      expect(formatVisibleIds(prefix + '_' + uuid)).toBe(prefix + '_1234');
+    }
+    const cases = [
+      ['w_rs_' + 'a'.repeat(24) + '_12', 'w_rs_aaaa'],
+      ['w_health_redelivery_parent_123456', 'w_health_redelivery_parent_1234'],
+      ...['req', 'int', 'dbc', 'lgen'].map(prefix => [prefix + '_Ab_z-0123456789abcdefg', prefix + '_Ab_z']),
+      ['cli_1793910000000_abc123', 'cli_1793'],
+      ...['identity-', 'assignment-inactivity-episode-v1:', 'provider-auth:', 'catalog-attempt:', 'catalog-final-401:',
+        'other-open:', 'other-resolve:', 'other:', 'settle-turn:'].map(prefix => [prefix + uuid, prefix + '1234']),
+      [uuid, '1234'],
+      ['01ARZ3NDEKTSV4RRFFQ69G5FAV', '01AR'],
+    ];
+    for (const [full, short] of cases) {
+      expect(formatVisibleIds('source=' + full + ' next')).toBe('source=' + short + ' next');
+      expect(formatVisibleIds(full + '-verification.md')).toBe(short + '-verification.md');
+    }
+  });
+
   it('preserves hyphenated suffixes and date-like non-ID text', () => {
     expect(formatVisibleIds([
       'wi_b63e7584-verification.md',
