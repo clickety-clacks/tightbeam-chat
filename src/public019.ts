@@ -152,10 +152,15 @@ function decodeHistoryRailDenial(value: unknown, sessionKey: string): HistoryRai
     let afterMessageSeq: number | undefined;
     try { afterMessageSeq = optionalNonnegativeInteger(row, 'afterMessageSeq'); }
     catch (error) { logDecodeFailure('history refusal position', error); }
+    // A refusal without a usable time still shows; it only loses time placement
+    // and live matching.
+    let occurredAt: number | undefined;
+    try { occurredAt = nonnegativeInteger(row, 'occurredAt'); }
+    catch (error) { logDecodeFailure('history refusal time', error); }
     return Object.freeze({
       id: requiredString(row, 'id'), sessionKey, principal,
       verb, rule, origin, payload: Object.freeze({ ...payload }),
-      occurredAt: nonnegativeInteger(row, 'occurredAt'),
+      ...(occurredAt === undefined ? {} : { occurredAt }),
       ...(afterMessageSeq === undefined ? {} : { afterMessageSeq }),
     });
   } catch (error) {

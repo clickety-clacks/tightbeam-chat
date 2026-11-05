@@ -294,14 +294,17 @@ function historyDenialAnchor(denial: HistoryRailDenial, records: readonly {
   readonly seq: number; readonly createdAt?: string;
 }[]): number {
   if (denial.afterMessageSeq !== undefined) return denial.afterMessageSeq;
+  const latest = records.reduce((max, record) => Math.max(max, record.seq), 0);
+  const occurredAt = denial.occurredAt;
+  if (occurredAt === undefined) return latest;
   const timed = records.flatMap((record) => {
     const time = record.createdAt ? Date.parse(record.createdAt) : Number.NaN;
     return Number.isFinite(time) ? [{ seq: record.seq, time }] : [];
   }).sort((left, right) => left.seq - right.seq);
-  const prior = timed.filter((record) => record.time <= denial.occurredAt);
+  const prior = timed.filter((record) => record.time <= occurredAt);
   if (prior.length) return prior[prior.length - 1].seq;
   if (timed.length) return timed[0].seq;
-  return records.reduce((latest, record) => Math.max(latest, record.seq), 0);
+  return latest;
 }
 
 const comparePosition = (left: Position, right: Position): number =>
@@ -502,7 +505,15 @@ export function buildActivityTrail(input: {
   let standaloneAgentRun: { sender: string; runKey: string } | undefined;
   let pending: CandidateEvent[] = [];
   const closeGap = (nextBubble?: BubbleEvent) => {
-    if (!previousBubble?.spanKey) { pending = []; return; }
+    if (!previousBubble?.spanKey) {
+      // A recorded refusal belongs to the session's history even where no owner
+      // prompt opens a span, as in sessions driven only by wakes.
+      for (const event of pending) {
+        if (event.candidate.persistedRailDenial) add(event.candidate, `notice:${event.candidate.id}`);
+      }
+      pending = [];
+      return;
+    }
     const runKey = `run:${previousBubble.bubble.key}`;
     const closedByReply = !!nextBubble && previousBubble.ownerTurnScoped && nextBubble.ownerTurnScoped &&
       nextBubble.bubble.side === 'agent' && nextBubble.spanKey === previousBubble.spanKey;

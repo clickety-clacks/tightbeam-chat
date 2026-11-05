@@ -977,6 +977,38 @@ describe('activity trail projection', () => {
       position: { sequence: 1, phase: 3 }, gist: 'send refused by owner-policy' });
   });
 
+  it('shows a history-backed refusal in an agent session with no owner prompt span', () => {
+    // Shaped like the Gateway row: rail-prefixed string id, session principal,
+    // origin, payload, event time and a null position, which decoding omits.
+    const denial: HistoryRailDenial = { id: 'rail:5712231', sessionKey: 'session', principal: 'session:session',
+      origin: 'session:session', verb: 'attest', rule: 'completion-requires-verification',
+      payload: { verb: 'attest', rule: 'completion-requires-verification', detail: 'Completion needs verification' },
+      occurredAt: Date.parse('2026-11-04T00:00:02.000Z') };
+    const wake = message('wake', 1, 'process:events', '[woke: wait w1; assignment a1; path after-turn]\n\nNext step',
+      { messageType: 'substrate', createdAt: '2026-11-04T00:00:00.000Z' });
+    const later = message('later-wake', 2, 'process:events', '[woke: wait w2; assignment a1; path after-turn]\n\nLater',
+      { messageType: 'substrate', createdAt: '2026-11-04T00:00:05.000Z' });
+    const reply = message('reply', 3, 'assistant-service', 'Working on it', { role: 'assistant',
+      createdAt: '2026-11-04T00:00:06.000Z' });
+    const pill = (plan: ReturnType<typeof build>) =>
+      plan.messageItems.filter((item): item is ActivityLine => item.kind === 'rail');
+    const expected = { id: 'rail:rail:5712231', anchorSeq: 1, gist: 'attest refused by completion-requires-verification' };
+
+    const noBubbles = build({ records: [wake, later], historyRailDenials: [denial], activeTurnRunning: false });
+    expect(pill(noBubbles)).toHaveLength(1);
+    expect(pill(noBubbles)[0]).toMatchObject(expected);
+
+    const agentOnly = build({ records: [wake, later, reply], bubbles: [bubble(reply, 'agent')],
+      historyRailDenials: [denial], activeTurnRunning: false });
+    expect(pill(agentOnly)).toHaveLength(1);
+    expect(pill(agentOnly)[0]).toMatchObject(expected);
+
+    const { occurredAt: _occurredAt, ...untimed } = denial;
+    const withoutTime = build({ records: [wake, later], historyRailDenials: [untimed], activeTurnRunning: false });
+    expect(pill(withoutTime)).toHaveLength(1);
+    expect(pill(withoutTime)[0]).toMatchObject({ ...expected, anchorSeq: 2 });
+  });
+
   it('keeps a session-addressed agent message without owner-turn evidence both live and after reload', () => {
     const prompt = message('prompt', 1, 'user:person');
     const activity = message('session-message', 2, 'session:helper', 'Helper is working');

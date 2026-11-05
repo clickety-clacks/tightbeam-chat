@@ -932,6 +932,10 @@ describe('Gateway wire mapping and behavior checks', () => {
         rule: 'fixture-owner-policy', origin: 'user:fixture-owner',
         payload: { detail: 'Fixture refusal with an omitted position', rule: 'fixture-owner-policy', verb: 'send' },
         occurredAt: Date.parse('2026-10-12T00:00:02Z') },
+      // A refusal without a usable time still shows with what it has.
+      { id: 'rail:1006', sessionKey, principal: `session:${sessionKey}`, verb: 'send',
+        rule: 'fixture-owner-policy', origin: 'user:fixture-owner',
+        payload: { detail: 'Fixture refusal without a usable time', rule: 'fixture-owner-policy', verb: 'send' } },
     ]);
     const olderPage = await mixedPage.transport.readOlder(sessionKey, 'older-cursor', new AbortController().signal);
     expect(olderPage.records.map((record) => record.id)).toEqual(['m_1']);
