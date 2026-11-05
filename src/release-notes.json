@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.88",
+    "items": [
+      {
+        "title": "View image attachments in the transcript",
+        "description": "Image attachments in messages from people and agents now appear inline in the conversation. Select an image to open a larger view."
+      }
+    ]
+  },
+  {
     "version": "v0.1.87",
     "items": [
       {
