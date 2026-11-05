@@ -96,9 +96,25 @@ describe('activity pill presentation', () => {
     ].join(' '))).toBe('wi_b63e-verification.md asg_ae3a-aarch64-pack art_b322_report backup_2026-11-05.md backup_2026.md custom_dead');
   });
 
-  it('leaves long non-matching hex runs unchanged', () => {
-    const value = `w_${'a'.repeat(65536)}g`;
-    expect(formatVisibleIds(value)).toBe(value);
+  it('shortens embedded and joined IDs while retaining surrounding text', () => {
+    expect(formatVisibleIds('progressatt_12345678records')).toBe('progressatt_1234records');
+    expect(formatVisibleIds('s_f5017fc8-wi_b63e7584')).toBe('s_f501-wi_b63e');
+    expect(formatVisibleIds('progressatt_12345678recordswi_87654321notes'))
+      .toBe('progressatt_1234recordswi_8765notes');
+    expect(formatVisibleIds('progressatt_12345678-1111-4111-8111-123456789abcrecords'))
+      .toBe('progressatt_1234records');
+    expect(formatVisibleIds('s_f5017fc8-wi_b63e7584-verification.md'))
+      .toBe('s_f501-wi_b63e-verification.md');
+    expect(formatVisibleIds('w_harklight_12345678-1111-4111-8111-123456789abc_abcd1234notes-wi_b63e7584'))
+      .toBe('w_harklight_1234notes-wi_b63e');
+  });
+
+  it('handles long matching and non-matching input without timing assertions', () => {
+    expect(formatVisibleIds(`w_${'a'.repeat(65536)}g`)).toBe('w_aaaag');
+    const nonmatching = 'w_1234567g-'.repeat(8192);
+    expect(formatVisibleIds(nonmatching)).toBe(nonmatching);
+    expect(formatVisibleIds('progressatt_12345678records-wi_b63e7584-'.repeat(8192)))
+      .toBe('progressatt_1234records-wi_b63e-'.repeat(8192));
     expect(formatVisibleIds(`sha256_${'b'.repeat(64)}_tmp`)).toBe('sha256_bbbb_tmp');
   });
 

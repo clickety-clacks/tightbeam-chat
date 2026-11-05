@@ -1043,10 +1043,13 @@ describe('conversation surface', () => {
       'nbm_abcdef12-1111-4111-8111-123456789abc',
       'tcf_abcdef12-1111-4111-8111-123456789abc',
       'tcfo_abcdef12-1111-4111-8111-123456789abc', 'hhore_abcd1234',
+      'progressatt_12345678records', 's_f5017fc8-wi_b63e7584-verification.md',
+      'progressatt_12345678-1111-4111-8111-123456789abcrecords',
     ];
     const shortAdditionalIds = [
       'rev_abcd', 'cp_abcd', 'hhi_abcd', 'hho_abcd', 'crc_abcd', 'w_rule_aaaa',
       'tra_abcd', 'ara_abcd', 'trp_abcd', 'nbm_abcd', 'tcf_abcd', 'tcfo_abcd', 'hhore_abcd',
+      'progressatt_1234records', 's_f501-wi_b63e-verification.md', 'progressatt_1234records',
     ];
     const prompt = row(sessionKey, 'prompt', `Please inspect ${workItemId}.`, {
       seq: 1, role: 'user', sender: 'user:person', messageType: 'chat', turnSeq: 1,

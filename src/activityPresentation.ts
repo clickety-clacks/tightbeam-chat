@@ -54,30 +54,42 @@ const semanticLines = (value: string): string[] => lines(value).filter(line => !
 const wireOnlyLine = (line: string): boolean => transportLine(line) ||
   /^(?:terminal-child-owner-notification|(?:source_kind|source_token|assignment_id|work_item_id|child_session_key|outcome|terminal_at)=)/i.test(line) ||
   /^\[(?:assignment:|woke:|turn failed\])/i.test(line);
-// Scan tokens once: prefix segments end at underscores and each hex run is
-// consumed whole. A failed body cannot be repartitioned by a regex engine.
+// Scan forward through every body, including bodies followed directly by prose.
+// Each hex run is consumed whole, never repartitioned by a regex engine.
 function formatHexIdToken(token: string): string {
   let cursor = 0;
   let prefixValid = false;
+  let copiedUntil = 0;
+  const chunks: string[] = [];
+  const hexEnd = (start: number): number => {
+    let end = start;
+    while (end < token.length && /[a-f0-9]/i.test(token[end])) end++;
+    return end;
+  };
   while (cursor < token.length) {
     const start = cursor;
+    if (prefixValid && token[start - 1] === '_') {
+      let end = hexEnd(start);
+      if (end - start >= 8) {
+        while (token[end] === '_' || token[end] === '-') {
+          const next = hexEnd(end + 1);
+          if (next - end - 1 < 4) break;
+          end = next;
+        }
+        chunks.push(token.slice(copiedUntil, start + 4));
+        copiedUntil = end;
+        cursor = end;
+        prefixValid = false;
+        continue;
+      }
+    }
     while (cursor < token.length && token[cursor] !== '_' && token[cursor] !== '-') cursor++;
     const part = token.slice(start, cursor);
-    if (prefixValid && token[start - 1] === '_' && /^[a-f0-9]{8,}$/i.test(part)) {
-      let end = cursor;
-      while (end < token.length && (token[end] === '_' || token[end] === '-')) {
-        let next = end + 1;
-        while (next < token.length && token[next] !== '_' && token[next] !== '-') next++;
-        if (!/^[a-f0-9]{4,}$/i.test(token.slice(end + 1, next))) break;
-        end = next;
-      }
-      return token.slice(0, start) + part.slice(0, 4) + token.slice(end);
-    }
-    prefixValid = (start === 0 || token[start - 1] === '-' || prefixValid) &&
-      /^[a-z][a-z0-9]*$/i.test(part);
+    prefixValid = /^[a-z][a-z0-9]*$/i.test(part);
     cursor++;
   }
-  return token;
+  chunks.push(token.slice(copiedUntil));
+  return chunks.join('');
 }
 // Fixed producer shapes with non-hex payloads or numeric generation suffixes.
 // Each repeated hex group requires a separator; none can repartition one hex run.
