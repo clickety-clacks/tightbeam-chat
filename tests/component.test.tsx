@@ -1033,6 +1033,21 @@ describe('conversation surface', () => {
     const shortStoredWakeIds = [
       'w_nb_aaaa', 'w_terminal_aaaa', 'w_terminal_action_aaaa', 'w_bbbb', 'nbt_cccc', 'pfe_cccc', 'w_harklight_1234',
     ];
+    const additionalStoredIds = [
+      'rev_abcdef12-1111-4111-8111-123456789abc',
+      'cp_abcdef12-1111-4111-8111-123456789abc',
+      'hhi_abcd1234', 'hho_abcd1234', 'crc_abcd1234', 'w_rule_' + longHex,
+      'tra_abcdef12-1111-4111-8111-123456789abc',
+      'ara_abcdef12-1111-4111-8111-123456789abc',
+      'trp_abcdef12-1111-4111-8111-123456789abc',
+      'nbm_abcdef12-1111-4111-8111-123456789abc',
+      'tcf_abcdef12-1111-4111-8111-123456789abc',
+      'tcfo_abcdef12-1111-4111-8111-123456789abc', 'hhore_abcd1234',
+    ];
+    const shortAdditionalIds = [
+      'rev_abcd', 'cp_abcd', 'hhi_abcd', 'hho_abcd', 'crc_abcd', 'w_rule_aaaa',
+      'tra_abcd', 'ara_abcd', 'trp_abcd', 'nbm_abcd', 'tcf_abcd', 'tcfo_abcd', 'hhore_abcd',
+    ];
     const prompt = row(sessionKey, 'prompt', `Please inspect ${workItemId}.`, {
       seq: 1, role: 'user', sender: 'user:person', messageType: 'chat', turnSeq: 1,
     });
@@ -1045,6 +1060,9 @@ describe('conversation surface', () => {
       `[2] source=${storedWakeIds[2]} sender=process:tightbeam cause=wake class=fyi`,
       `[3] source=${storedWakeIds[3]} token=${storedWakeIds[5]} sender=process:tightbeam cause=wake class=fyi`,
       `[4] source=${harklightWakeId}-verification.md sender=process:tightbeam cause=wake class=fyi`,
+      '[5] condition ' + additionalStoredIds[1] + ' source_token="' + additionalStoredIds[0] + '"',
+      '[6] source=' + additionalStoredIds[5] + ' sender=remedy:policy cause=wake class=fyi',
+      '[7] stored IDs ' + additionalStoredIds.slice(2).join(' '),
       `[verdict filed: reviewed-clean on ${assignmentId}: See ${artifactId} and ${workItemId}-verification.md]`,
     ].join('\n');
     const notice = row(sessionKey, 'notice', noticeContent, {
@@ -1099,6 +1117,10 @@ describe('conversation surface', () => {
       expect(noticePill?.title).toContain(id);
       expect(noticePill?.title).not.toContain(storedWakeIds[shortStoredWakeIds.indexOf(id)]);
     }
+    for (let index = 0; index < shortAdditionalIds.length; index++) {
+      expect(noticePill?.title).toContain(shortAdditionalIds[index]);
+      expect(noticePill?.title).not.toContain(additionalStoredIds[index]);
+    }
     expect(noticePill?.title).toContain('w_harklight_1234-verification.md');
     expect(noticePill?.title).toContain('wi_1234-verification.md');
     fireEvent.click(within(noticePill!).getByRole('button', { name: /Show full message/ }));
@@ -1112,6 +1134,10 @@ describe('conversation surface', () => {
     for (let index = 0; index < shortStoredWakeIds.length; index++) {
       expect(noticeBody.textContent).toContain(shortStoredWakeIds[index]);
       expect(noticeBody.textContent).not.toContain(storedWakeIds[index]);
+    }
+    for (let index = 0; index < shortAdditionalIds.length; index++) {
+      expect(noticeBody.textContent).toContain(shortAdditionalIds[index]);
+      expect(noticeBody.textContent).not.toContain(additionalStoredIds[index]);
     }
     expect(noticeBody.textContent).toContain('w_harklight_1234-verification.md');
     expect(noticeBody.textContent).toContain('wi_1234-verification.md');
