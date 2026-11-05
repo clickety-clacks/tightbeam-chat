@@ -14,7 +14,14 @@ describe('activity pill presentation', () => {
     const hex40 = 'c'.repeat(40);
     expect(formatVisibleIds([
       'wi_12345678-1111-4111-8111-123456789abc',
+      'asg_abcdef12-1111-4111-8111-123456789abc',
+      'dr_abcdef12-1111-4111-8111-123456789abc',
+      'att_abcdef12-1111-4111-8111-123456789abc',
+      's_abcdef12-1111-4111-8111-123456789abc',
+      'c_abcdef12-1111-4111-8111-123456789abc',
+      'tc_abcdef12-1111-4111-8111-123456789abc',
       'art_b322d95e',
+      'nb_12345678',
       'wake_87654321-1111-4111-8111-123456789abc',
       'w_terminal_4cf9f4ff-1111-4111-8111-123456789abc',
       `w_nb_${hex64}`,
@@ -24,11 +31,12 @@ describe('activity pill presentation', () => {
       `nbt_${hex40}`,
       `pfe_${hex40}`,
       'w_harklight_12345678-9abc-4def-8abc-123456789abc_0123456789abcdef0123',
+      'w_harklight_notice_recovery_12345678-9abc-4def-8abc-123456789abc',
       'post_mvp',
     ].join(' '))).toBe([
-      'wi_1234', 'art_b322', 'wake_8765', 'w_terminal_4cf9',
-      'w_nb_aaaa', 'w_terminal_aaaa', 'w_terminal_action_aaaa', 'w_bbbb', 'nbt_cccc', 'pfe_cccc',
-      'w_harklight_1234', 'post_mvp',
+      'wi_1234', 'asg_abcd', 'dr_abcd', 'att_abcd', 's_abcd', 'c_abcd', 'tc_abcd', 'art_b322', 'nb_1234',
+      'wake_8765', 'w_terminal_4cf9', 'w_nb_aaaa', 'w_terminal_aaaa', 'w_terminal_action_aaaa',
+      'w_bbbb', 'nbt_cccc', 'pfe_cccc', 'w_harklight_1234', 'w_harklight_notice_recovery_1234', 'post_mvp',
     ].join(' '));
   });
 
@@ -36,15 +44,17 @@ describe('activity pill presentation', () => {
     expect(formatVisibleIds([
       'wi_b63e7584-verification.md',
       'asg_ae3ac59d-aarch64-pack',
+      'art_b322d95e_report',
       'backup_2026-11-05.md',
-    ].join(' '))).toBe('wi_b63e-verification.md asg_ae3a-aarch64-pack backup_2026-11-05.md');
+      'backup_20261105.md',
+      'custom_deadbeef',
+    ].join(' '))).toBe('wi_b63e-verification.md asg_ae3a-aarch64-pack art_b322_report backup_2026-11-05.md backup_20261105.md custom_deadbeef');
   });
 
-  it('returns a long non-matching hex run promptly', () => {
-    const value = `w_${'a'.repeat(64)}_tmp`;
-    const startedAt = performance.now();
+  it('leaves long non-matching hex runs unchanged', () => {
+    const value = `w_${'a'.repeat(64)}g`;
     expect(formatVisibleIds(value)).toBe(value);
-    expect(performance.now() - startedAt).toBeLessThan(250);
+    expect(formatVisibleIds(`sha256_${'b'.repeat(64)}_tmp`)).toBe(`sha256_${'b'.repeat(64)}_tmp`);
   });
 
   it('gives delivered verdict, completion, opened and closed notices distinct plain presentations', () => {

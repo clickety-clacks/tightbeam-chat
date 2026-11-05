@@ -54,8 +54,8 @@ const semanticLines = (value: string): string[] => lines(value).filter(line => !
 const wireOnlyLine = (line: string): boolean => transportLine(line) ||
   /^(?:terminal-child-owner-notification|(?:source_kind|source_token|assignment_id|work_item_id|child_session_key|outcome|terminal_at)=)/i.test(line) ||
   /^\[(?:assignment:|woke:|turn failed\])/i.test(line);
-/** Shorten prefixed hex IDs while keeping adjacent punctuation and suffix text intact. */
-const visibleIdPattern = /\b((?:[a-z][a-z0-9]*_)+)([a-f0-9]{4})[a-f0-9]{4,}(?:[-_][a-f0-9]{4,})*\b/gi;
+/** Known ID prefixes and separator-led hex groups keep matching bounded and suffixes intact. */
+const visibleIdPattern = /\b((?:w_terminal_action|w_harklight_notice_recovery|w_harklight|w_terminal|w_nb|wi|asg|dr|att|s|c|tc|art|nbt|pfe|wake|nb|w)_)([a-f0-9]{4})[a-f0-9]{4,}(?:[-_][a-f0-9]{4,})*(?![a-z0-9])/gi;
 export const formatVisibleIds = (value: string): string => value.replace(
   visibleIdPattern,
   (_match, prefix: string, firstFour: string) => `${prefix}${firstFour}`,
