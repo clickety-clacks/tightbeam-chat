@@ -1350,8 +1350,10 @@ describe('conversation surface', () => {
 
     const toolRow = view.container.querySelector<HTMLElement>('[data-record-key="tool-tc-provenance"]')!;
     fireEvent.click(toolRow.querySelector('summary')!);
-    expect(toolRow.textContent).toContain(toolInput);
-    expect(toolRow.textContent).toContain(toolResult);
+    expect(toolRow.textContent).toContain('<engram-src id="123e"/> tool input remains verbatim');
+    expect(toolRow.textContent).toContain('<engram-src id="123e"/> tool result remains verbatim');
+    expect(toolCall.rawInput).toBe(toolInput);
+    expect(toolCall.rawOutput).toBe(toolResult);
 
     expect(runtime.getSnapshot().records.find(record => record.id === prompt.id)?.content).toBe(promptContent);
     expect(runtime.getSnapshot().records.find(record => record.id === carrier.id)?.content).toBe(carrierContent);
