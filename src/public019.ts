@@ -43,6 +43,14 @@ const gatewayCapabilities: TargetCapabilities = Object.freeze({
 
 const gatewayIdentity = 'tightbeam-gateway';
 
+function logGatewayIncompatibility(site: string, reason: string): void {
+  console.error('[Chat] Gateway data incompatibility', { site, reason });
+}
+
+function logDecodeFailure(site: string, error: unknown): void {
+  logGatewayIncompatibility(site, error instanceof Error ? error.message : 'Unsupported Gateway data.');
+}
+
 /** A fresh, host-authenticated socket. The host owns credentials and the auth handshake. */
 export interface Public019Channel {
   send(frame: Readonly<Record<string, unknown>>): void;
@@ -104,15 +112,6 @@ const positiveInteger = (row: Record<string, unknown>, key: string): number => {
   return value as number;
 };
 
-function optionalPositiveInteger(row: Record<string, unknown>, key: string): number | undefined {
-  const value = row[key];
-  if (value === null || value === undefined) return undefined;
-  if (!Number.isSafeInteger(value) || (value as number) < 1) {
-    throw new UnsupportedTargetError(`Invalid ${key} in Gateway wire response.`);
-  }
-  return value as number;
-}
-
 function nonnegativeInteger(row: Record<string, unknown>, key: string): number {
   const value = row[key];
   if (!Number.isSafeInteger(value) || (value as number) < 0) {
@@ -125,6 +124,14 @@ function optionalNonnegativeInteger(row: Record<string, unknown>, key: string): 
   const value = row[key];
   if (value === null || value === undefined) return undefined;
   return nonnegativeInteger(row, key);
+}
+
+function readableOptionalString(row: Record<string, unknown>, key: string, site: string): string | undefined {
+  const value = row[key];
+  if (value === null || value === undefined) return undefined;
+  if (typeof value === 'string') return value;
+  logGatewayIncompatibility(site, `Ignored invalid optional ${key}.`);
+  return undefined;
 }
 
 function decodeHistoryRailDenial(value: unknown, sessionKey: string): HistoryRailDenial | undefined {
@@ -142,7 +149,9 @@ function decodeHistoryRailDenial(value: unknown, sessionKey: string): HistoryRai
     if (!verb || !rule || !origin.trim()) {
       throw new UnsupportedTargetError('Invalid refused-action details in Gateway wire response.');
     }
-    const afterMessageSeq = optionalNonnegativeInteger(row, 'afterMessageSeq');
+    let afterMessageSeq: number | undefined;
+    try { afterMessageSeq = optionalNonnegativeInteger(row, 'afterMessageSeq'); }
+    catch (error) { logDecodeFailure('history refusal position', error); }
     return Object.freeze({
       id: requiredString(row, 'id'), sessionKey, principal,
       verb, rule, origin, payload: Object.freeze({ ...payload }),
@@ -150,19 +159,24 @@ function decodeHistoryRailDenial(value: unknown, sessionKey: string): HistoryRai
       ...(afterMessageSeq === undefined ? {} : { afterMessageSeq }),
     });
   } catch (error) {
-    if (error instanceof UnsupportedTargetError) return undefined;
+    if (error instanceof UnsupportedTargetError) {
+      logDecodeFailure('history refusal', error);
+      return undefined;
+    }
     throw error;
   }
 }
 
-function messageTime(row: Record<string, unknown>): string {
+function messageTime(row: Record<string, unknown>, site: string): string | undefined {
   const at = row.at;
   if (!Number.isSafeInteger(at) || (at as number) < 0) {
-    throw new UnsupportedTargetError('Invalid millisecond at timestamp in Gateway message.');
+    logGatewayIncompatibility(site, 'Ignored invalid millisecond at timestamp.');
+    return undefined;
   }
   const date = new Date(at as number);
   if (!Number.isFinite(date.getTime())) {
-    throw new UnsupportedTargetError('Message at timestamp is outside the supported date range.');
+    logGatewayIncompatibility(site, 'Ignored timestamp outside the supported date range.');
+    return undefined;
   }
   return date.toISOString();
 }
@@ -173,23 +187,52 @@ export function decodePublic019Message(value: unknown, sessionKey: string): Conv
   if (requiredString(row, 'sessionKey') !== sessionKey) {
     throw new UnsupportedTargetError('Message belongs to a different session.');
   }
+  const content = typeof row.content === 'string' ? row.content : '';
+  if (typeof row.content !== 'string') logGatewayIncompatibility('message', 'Used the empty-content display fallback.');
+  const recordEventIds = stringList(row.recordEventIds ?? [], 'message record-event references');
   if (row.messageType === 'marker') {
-    const marker = row.marker === undefined || row.marker === null ? {} : record(row.marker);
+    let marker: Record<string, unknown> = {};
+    if (row.marker !== undefined && row.marker !== null) {
+      try { marker = record(row.marker); }
+      catch (error) { logDecodeFailure('transition marker metadata', error); }
+    }
     const kind = typeof marker.kind === 'string' ? marker.kind : undefined;
+    if (!['harness-switch', 'model-retune', 'session-restart', 'context-compacted'].includes(kind ?? '')) {
+      logGatewayIncompatibility('transition marker metadata', 'Used the unknown-transition fallback.');
+    }
+    const from = readableOptionalString(marker, 'from', 'transition marker metadata');
+    const to = readableOptionalString(marker, 'to', 'transition marker metadata');
     return Object.freeze({
       kind: 'transition', id: requiredString(row, 'id'), sessionKey,
       seq: positiveInteger(row, 'seq'), rowVersion: positiveInteger(row, 'rowVersion'),
       transition: kind === 'harness-switch' ? 'harness' : kind === 'model-retune' ? 'model'
         : kind === 'session-restart' ? 'restart' : kind === 'context-compacted' ? 'compaction' : 'unknown',
-      content: typeof row.content === 'string' ? row.content : requiredString(row, 'content'),
-      from: typeof marker.from === 'string' ? marker.from : undefined,
-      to: typeof marker.to === 'string' ? marker.to : undefined,
-      recordEventIds: stringList(row.recordEventIds ?? []),
-      createdAt: messageTime(row), raw: Object.freeze({ ...row }),
+      content, from, to, recordEventIds,
+      createdAt: messageTime(row, 'transition marker'), raw: Object.freeze({ ...row }),
     });
   }
   const attachments = row.attachments;
-  if (!Array.isArray(attachments)) throw new UnsupportedTargetError('Invalid attachments in message.');
+  if (attachments !== undefined && attachments !== null && !Array.isArray(attachments)) {
+    logGatewayIncompatibility('message attachments', 'Ignored a non-list attachments field.');
+  }
+  const attentionTier = typeof row.attentionTier === 'number' && Number.isSafeInteger(row.attentionTier)
+    ? row.attentionTier : undefined;
+  if (row.attentionTier !== undefined && row.attentionTier !== null && attentionTier === undefined) {
+    logGatewayIncompatibility('message', 'Ignored invalid optional attentionTier.');
+  }
+  const turnIncludesHuman = typeof row.turnIncludesHuman === 'boolean' ? row.turnIncludesHuman : undefined;
+  if (row.turnIncludesHuman !== undefined && row.turnIncludesHuman !== null && turnIncludesHuman === undefined) {
+    logGatewayIncompatibility('message', 'Ignored invalid optional turnIncludesHuman.');
+  }
+  const isBatchCarrier = typeof row.isBatchCarrier === 'boolean' ? row.isBatchCarrier : undefined;
+  if (row.isBatchCarrier !== undefined && row.isBatchCarrier !== null && isBatchCarrier === undefined) {
+    logGatewayIncompatibility('message', 'Ignored invalid optional isBatchCarrier.');
+  }
+  const turnSeq = row.turnSeq === undefined || row.turnSeq === null ? undefined
+    : Number.isSafeInteger(row.turnSeq) && (row.turnSeq as number) > 0 ? row.turnSeq as number : undefined;
+  if (row.turnSeq !== undefined && row.turnSeq !== null && turnSeq === undefined) {
+    logGatewayIncompatibility('message', 'Ignored invalid optional turnSeq.');
+  }
   return Object.freeze({
     kind: 'message' as const,
     id: requiredString(row, 'id'),
@@ -197,20 +240,19 @@ export function decodePublic019Message(value: unknown, sessionKey: string): Conv
     seq: positiveInteger(row, 'seq'),
     rowVersion: positiveInteger(row, 'rowVersion'),
     role: requiredString(row, 'role'),
-    attentionTier: typeof row.attentionTier === 'number' && Number.isSafeInteger(row.attentionTier)
-      ? row.attentionTier : undefined,
-    content: typeof row.content === 'string' ? row.content : requiredString(row, 'content'),
-    sender: optionalString(row, 'sender'),
-    replyToMessageId: optionalString(row, 'replyToMessageId'),
-    turnIncludesHuman: typeof row.turnIncludesHuman === 'boolean' ? row.turnIncludesHuman : undefined,
-    isBatchCarrier: typeof row.isBatchCarrier === 'boolean' ? row.isBatchCarrier : undefined,
-    messageType: optionalString(row, 'messageType'),
-    createdAt: messageTime(row),
-    recordEventIds: stringList(row.recordEventIds ?? []),
-    attachments: Object.freeze([...attachments]),
-    clientMessageId: optionalString(row, 'clientMessageId'),
-    deviceId: optionalString(row, 'deviceId'),
-    turnSeq: optionalPositiveInteger(row, 'turnSeq'),
+    attentionTier,
+    content,
+    sender: readableOptionalString(row, 'sender', 'message'),
+    replyToMessageId: readableOptionalString(row, 'replyToMessageId', 'message'),
+    turnIncludesHuman,
+    isBatchCarrier,
+    messageType: readableOptionalString(row, 'messageType', 'message'),
+    createdAt: messageTime(row, 'message'),
+    recordEventIds,
+    attachments: Object.freeze(Array.isArray(attachments) ? [...attachments] : []),
+    clientMessageId: readableOptionalString(row, 'clientMessageId', 'message'),
+    deviceId: readableOptionalString(row, 'deviceId', 'message'),
+    turnSeq,
     raw: Object.freeze({ ...row }),
   });
 }
@@ -222,11 +264,18 @@ export function decodePublic019Turn(value: unknown, sessionKey: string): Canonic
   }
   const origin = requiredString(row, 'origin');
   const triggerSource = row.triggerSource;
+  const messageId = readableOptionalString(row, 'messageId', 'turn');
+  const batchMemberCount = row.batchMemberCount === undefined || row.batchMemberCount === null ? undefined
+    : Number.isSafeInteger(row.batchMemberCount) && (row.batchMemberCount as number) > 0
+      ? row.batchMemberCount as number : undefined;
+  if (row.batchMemberCount !== undefined && row.batchMemberCount !== null && batchMemberCount === undefined) {
+    logGatewayIncompatibility('turn', 'Ignored invalid optional batchMemberCount.');
+  }
   return Object.freeze({
     seq: positiveInteger(row, 'seq'), sessionKey, status: requiredString(row, 'status'),
-    messageId: optionalString(row, 'messageId'), origin,
+    messageId, origin,
     triggerSource: decodeTriggerSource(triggerSource, origin),
-    batchMemberCount: optionalPositiveInteger(row, 'batchMemberCount'),
+    batchMemberCount,
     raw: Object.freeze({ ...row }),
   });
 }
@@ -244,39 +293,67 @@ export function decodePublic019Session(value: unknown, sessionKey: string): Sess
   if (requiredString(row, 'sessionKey') !== sessionKey) {
     throw new UnsupportedTargetError('Session detail belongs to a different session.');
   }
+  const clearedThroughSeq = typeof row.clearedThroughSeq === 'number' && Number.isSafeInteger(row.clearedThroughSeq) &&
+    row.clearedThroughSeq >= 0 ? row.clearedThroughSeq : undefined;
+  if (row.clearedThroughSeq !== undefined && row.clearedThroughSeq !== null && clearedThroughSeq === undefined) {
+    logGatewayIncompatibility('session', 'Ignored invalid optional clearedThroughSeq.');
+  }
+  const model = readableOptionalString(row, 'model', 'session');
+  const harness = readableOptionalString(row, 'harness', 'session');
+  const mechanicalStatus = readableOptionalString(row, 'mechanicalStatus', 'session');
+  const state = readableOptionalString(row, 'state', 'session');
+  const displayName = typeof row.displayName === 'string' ? row.displayName : '';
+  if (typeof row.displayName !== 'string') logGatewayIncompatibility('session', 'Used the empty display-name fallback.');
   return Object.freeze({
     sessionKey,
     rowVersion: positiveInteger(row, 'rowVersion'),
-    clearedThroughSeq: typeof row.clearedThroughSeq === 'number' && Number.isSafeInteger(row.clearedThroughSeq) &&
-      row.clearedThroughSeq >= 0 ? row.clearedThroughSeq : undefined,
-    displayName: requiredString(row, 'displayName'),
-    model: optionalString(row, 'model'),
-    harness: optionalString(row, 'harness'),
-    activity: optionalString(row, 'mechanicalStatus') ?? optionalString(row, 'state'),
+    clearedThroughSeq,
+    displayName,
+    model,
+    harness,
+    activity: mechanicalStatus ?? state,
     raw: Object.freeze({ ...row }),
   });
 }
 
-function stringList(value: unknown): readonly string[] {
-  if (!Array.isArray(value) || value.some(item => typeof item !== 'string')) {
-    throw new UnsupportedTargetError('Invalid record-event identity list.');
+function stringList(value: unknown, site: string): readonly string[] {
+  if (!Array.isArray(value)) {
+    logGatewayIncompatibility(site, 'Used an empty-list fallback.');
+    return Object.freeze([]);
   }
-  return Object.freeze([...value]);
+  const strings = value.filter((item): item is string => typeof item === 'string');
+  if (strings.length !== value.length) logGatewayIncompatibility(site, 'Ignored non-string list entries.');
+  return Object.freeze(strings);
 }
 
 /** History supplies the session through its route; live frames supply refs.sessionKey. */
 export function decodeRecordEvent(value: unknown, sessionKey: string): SessionRecordEvent {
   const row = record(value);
   const source = record(row.record);
-  const cause = row.cause == null ? null : record(row.cause);
+  let cause: Record<string, unknown> | null = null;
+  if (row.cause != null) {
+    try { cause = record(row.cause); }
+    catch (error) { logDecodeFailure('record-event cause', error); }
+  }
+  const actorSessionKey = readableOptionalString(row, 'actorSessionKey', 'record-event');
+  let causeTurnSeq: number | null = null;
+  let causeMessageId: string | undefined;
+  if (cause) {
+    const value = cause.turnSeq;
+    if (value !== undefined && value !== null) {
+      if (Number.isSafeInteger(value) && (value as number) > 0) causeTurnSeq = value as number;
+      else logGatewayIncompatibility('record-event cause', 'Ignored invalid turnSeq.');
+    }
+    causeMessageId = readableOptionalString(cause, 'messageId', 'record-event cause');
+  }
   return Object.freeze({ eventId: requiredString(row, 'eventId'), sessionKey,
     kind: requiredString(row, 'kind'), at: nonnegativeInteger(row, 'at'),
     record: Object.freeze({ type: requiredString(source, 'type'), id: requiredString(source, 'id'),
-      detail: requiredString(source, 'detail'), workItemId: optionalString(source, 'workItemId') }),
-    actorSessionKey: optionalString(row, 'actorSessionKey') ?? null,
-    tiedAs: stringList(row.tiedAs), noticeMessageIds: stringList(row.noticeMessageIds),
-    cause: cause ? Object.freeze({ turnSeq: optionalPositiveInteger(cause, 'turnSeq') ?? null,
-      messageId: optionalString(cause, 'messageId') ?? null }) : null,
+      detail: requiredString(source, 'detail'), workItemId: readableOptionalString(source, 'workItemId', 'record-event details') }),
+    actorSessionKey: actorSessionKey ?? null,
+    tiedAs: stringList(row.tiedAs, 'record-event tiedAs'),
+    noticeMessageIds: stringList(row.noticeMessageIds, 'record-event notice references'),
+    cause: cause ? Object.freeze({ turnSeq: causeTurnSeq, messageId: causeMessageId ?? null }) : null,
   });
 }
 
@@ -291,19 +368,45 @@ export function decodeToolCall(value: unknown, sessionKey: string): ToolCallReco
   };
   const status = row.status;
   if (!['pending', 'in_progress', 'completed', 'failed'].includes(String(status))) throw new UnsupportedTargetError('Unknown tool-call status.');
-  if (typeof row.title !== 'string' || !Array.isArray(row.truncated)) throw new UnsupportedTargetError('Invalid tool-call projection.');
-  const truncated = row.truncated.map(value => {
-    const entry = record(value);
-    if (!['rawInput', 'rawOutput', 'content'].includes(String(entry.field))) throw new UnsupportedTargetError('Invalid truncation field.');
-    return Object.freeze({ field: entry.field as 'rawInput' | 'rawOutput' | 'content', originalBytes: positiveInteger(entry, 'originalBytes') });
-  });
+  const title = typeof row.title === 'string' ? row.title : '';
+  if (typeof row.title !== 'string') logGatewayIncompatibility('tool call', 'Used the existing title fallback.');
+  const kind = typeof row.kind === 'string' ? row.kind : '';
+  if (typeof row.kind !== 'string') logGatewayIncompatibility('tool call', 'Ignored invalid kind.');
+  const toolName = readableOptionalString(row, 'toolName', 'tool call') ?? null;
+  if (!title.trim() && !toolName?.trim() && !kind.trim()) {
+    throw new UnsupportedTargetError('Tool call has no usable display label.');
+  }
+  const truncated: Array<{ field: 'rawInput' | 'rawOutput' | 'content'; originalBytes: number }> = [];
+  if (!Array.isArray(row.truncated)) {
+    logGatewayIncompatibility('tool call truncation metadata', 'Used an empty-list fallback.');
+  } else {
+    row.truncated.forEach(value => {
+      try {
+        const entry = record(value);
+        if (!['rawInput', 'rawOutput', 'content'].includes(String(entry.field))) {
+          throw new UnsupportedTargetError('Invalid truncation field.');
+        }
+        truncated.push(Object.freeze({ field: entry.field as 'rawInput' | 'rawOutput' | 'content',
+          originalBytes: positiveInteger(entry, 'originalBytes') }));
+      } catch (error) {
+        if (!(error instanceof UnsupportedTargetError)) throw error;
+        logDecodeFailure('tool call truncation metadata', error);
+      }
+    });
+  }
+  const harnessToolCallId = readableOptionalString(row, 'harnessToolCallId', 'tool call') ?? '';
+  const endedAt = row.endedAt === null || row.endedAt === undefined ? null
+    : Number.isSafeInteger(row.endedAt) && (row.endedAt as number) >= 0 ? row.endedAt as number : null;
+  if (row.endedAt !== null && row.endedAt !== undefined && endedAt === null) {
+    logGatewayIncompatibility('tool call', 'Ignored invalid optional endedAt.');
+  }
   return Object.freeze({ id: requiredString(row, 'id'), seq: positiveInteger(row, 'seq'), sessionKey,
     turnSeq: positiveInteger(row, 'turnSeq'), afterMessageSeq: integer('afterMessageSeq'),
-    harnessToolCallId: requiredString(row, 'harnessToolCallId'), title: row.title, kind: requiredString(row, 'kind'),
-    toolName: optionalString(row, 'toolName') ?? null, status: status as ToolCallRecord['status'],
+    harnessToolCallId, title, kind,
+    toolName, status: status as ToolCallRecord['status'],
     rawInput: row.rawInput ?? null, rawOutput: row.rawOutput ?? null, content: row.content ?? null,
     truncated: Object.freeze(truncated), startedAt: integer('startedAt'),
-    endedAt: row.endedAt === null ? null : integer('endedAt'), rowVersion: positiveInteger(row, 'rowVersion'),
+    endedAt, rowVersion: positiveInteger(row, 'rowVersion'),
   });
 }
 
@@ -328,6 +431,15 @@ export function decodePublic019Notice(value: unknown, sessionKey: string): Chang
       const publicPayload = frame.payload !== null && typeof frame.payload === 'object' && !Array.isArray(frame.payload)
         ? Object.freeze({ ...(frame.payload as Record<string, unknown>) }) : undefined;
       const origin = typeof refs.origin === 'string' ? refs.origin : undefined;
+      if (refs.origin !== undefined && origin === undefined) logGatewayIncompatibility('refused-action notice', 'Ignored invalid origin.');
+      if (frame.occurredAt !== undefined &&
+          !(Number.isSafeInteger(frame.occurredAt) && (frame.occurredAt as number) >= 0)) {
+        logGatewayIncompatibility('refused-action notice', 'Ignored invalid occurredAt.');
+      }
+      if (refs.afterMessageSeq !== undefined &&
+          !(Number.isSafeInteger(refs.afterMessageSeq) && (refs.afterMessageSeq as number) >= 0)) {
+        logGatewayIncompatibility('refused-action notice', 'Ignored invalid afterMessageSeq.');
+      }
       const id = Number.isSafeInteger(refs.railDenialId) && (refs.railDenialId as number) > 0
         ? `rail:${refs.railDenialId}`
         : `notice:${JSON.stringify({ principal, verb, rule, occurredAt: frame.occurredAt,
@@ -340,6 +452,15 @@ export function decodePublic019Notice(value: unknown, sessionKey: string): Chang
         ...(Number.isSafeInteger(refs.afterMessageSeq) && (refs.afterMessageSeq as number) >= 0
           ? { afterMessageSeq: refs.afterMessageSeq as number } : {}) };
     }
+    logGatewayIncompatibility('refused-action notice', 'Skipped an unusable refusal entry.');
+    return { operation: 'unknown', sessionKey, resource: frame.class };
+  }
+  const knownClass = frame.class === 'session_record_event.created' ||
+    frame.class === 'message.created' || frame.class === 'transition.recorded' ||
+    frame.class === 'tool_call.started' || frame.class === 'tool_call.ended' ||
+    frame.class.startsWith('session.') || frame.class === 'turn.started' || frame.class === 'turn.ended';
+  if (!knownClass) {
+    logGatewayIncompatibility('change notice', 'Skipped an unknown change class.');
     return { operation: 'unknown', sessionKey, resource: frame.class };
   }
   const refs = record(frame.refs);
@@ -347,21 +468,33 @@ export function decodePublic019Notice(value: unknown, sessionKey: string): Chang
   if (frame.class === 'session_record_event.created') {
     return { operation: 'record-event', event: decodeRecordEvent(frame.payload, sessionKey) };
   }
-  if ((frame.class === 'message.created' || frame.class === 'transition.recorded') &&
-      ['messages', 'transcript messages'].includes(String(frame.resource)) && frame.op === 'upsert') {
+  if (frame.class === 'message.created' || frame.class === 'transition.recorded') {
+    if (!['messages', 'transcript messages'].includes(String(frame.resource)) || frame.op !== 'upsert') {
+      logGatewayIncompatibility('transcript notice', 'Skipped an unexpected resource or operation.');
+      return { operation: 'unknown', sessionKey, resource: frame.class };
+    }
     return { operation: 'upsert', record: decodePublic019Message(frame.payload, sessionKey) };
   }
-  if (['tool_call.started', 'tool_call.ended'].includes(frame.class) &&
-      frame.resource === 'tool calls' && frame.op === 'upsert') {
+  if (frame.class === 'tool_call.started' || frame.class === 'tool_call.ended') {
+    if (frame.resource !== 'tool calls' || frame.op !== 'upsert') {
+      logGatewayIncompatibility('tool-call notice', 'Skipped an unexpected resource or operation.');
+      return { operation: 'unknown', sessionKey, resource: frame.class };
+    }
     return { operation: 'tool', tool: decodeToolCall(frame.payload, sessionKey) };
   }
-  if (typeof frame.class === 'string' && frame.class.startsWith('session.') &&
-      frame.resource === 'sessions' && frame.op === 'upsert') {
+  if (frame.class.startsWith('session.')) {
+    if (frame.resource !== 'sessions' || frame.op !== 'upsert') {
+      logGatewayIncompatibility('session notice', 'Skipped an unexpected resource or operation.');
+      return { operation: 'unknown', sessionKey, resource: frame.class };
+    }
     return { operation: 'session', session: decodePublic019Session(frame.payload, sessionKey) };
   }
   // The payload seq identifies the turn; the outer seq orders this subscription.
-  if (['turn.started', 'turn.ended'].includes(frame.class) &&
-      frame.resource === 'turns' && frame.op === 'upsert') {
+  if (frame.class === 'turn.started' || frame.class === 'turn.ended') {
+    if (frame.resource !== 'turns' || frame.op !== 'upsert') {
+      logGatewayIncompatibility('turn notice', 'Skipped an unexpected resource or operation.');
+      return { operation: 'unknown', sessionKey, resource: frame.class };
+    }
     return { operation: 'turn', turn: decodePublic019Turn(frame.payload, sessionKey) };
   }
   return { operation: 'unknown', sessionKey, resource: frame.class };
@@ -464,7 +597,11 @@ export function createPublic019Transport(config: Public019Config): { transport: 
       }
       throw new Error(`Tightbeam REST request failed with HTTP ${response.status}${code ? ` (${code})` : ''}.`);
     }
-    return record(await response.json());
+    try { return record(await response.json()); }
+    catch (error) {
+      logDecodeFailure('Gateway REST response', error);
+      throw error;
+    }
   }
 
   const activeSessions = new Set<string>();
@@ -472,24 +609,45 @@ export function createPublic019Transport(config: Public019Config): { transport: 
     isAfterPage = false): Promise<ConversationPage> {
     const body = await get(`/api/sessions/${encodeURIComponent(sessionKey)}/messages?limit=50&${query}`, signal);
     if (body.schemaVersion !== 1 || body.resource !== 'transcript messages' || !Array.isArray(body.items)) {
+      logGatewayIncompatibility('transcript history', 'Received an unexpected protocol envelope.');
       throw new UnsupportedTargetError('Unexpected transcript collection envelope.');
     }
-    const page = record(body.page);
-    const oldestCursor = optionalString(page, 'oldestCursor') ?? null;
-    const newestCursor = optionalString(page, 'newestCursor') ?? null;
+    let page: Record<string, unknown>;
+    try { page = record(body.page); }
+    catch (error) { logDecodeFailure('transcript page metadata', error); throw error; }
+    let oldestCursor: string | null;
+    let newestCursor: string | null;
+    try {
+      oldestCursor = optionalString(page, 'oldestCursor') ?? null;
+      newestCursor = optionalString(page, 'newestCursor') ?? null;
+    } catch (error) { logDecodeFailure('transcript page metadata', error); throw error; }
     const hasMoreAfter = page.hasMoreAfter;
     const emptyAfterWithoutBackwardCursor = isAfterPage && body.items.length === 0 && !oldestCursor;
     if (typeof page.hasMoreBefore !== 'boolean' || typeof hasMoreAfter !== 'boolean' ||
         (page.hasMoreBefore && !oldestCursor && !emptyAfterWithoutBackwardCursor) ||
         (page.hasMoreAfter && !newestCursor)) {
+      logGatewayIncompatibility('transcript page metadata', 'Received unusable pagination fields.');
       throw new UnsupportedTargetError('Invalid transcript page metadata.');
     }
-    const railDenials = body.railDenials === undefined ? undefined : body.railDenials;
-    if (railDenials !== undefined && !Array.isArray(railDenials)) {
-      throw new UnsupportedTargetError('Invalid refused-action history in Gateway response.');
+    let railDenials: unknown[] | undefined;
+    if (body.railDenials === undefined || body.railDenials === null) railDenials = undefined;
+    else if (Array.isArray(body.railDenials)) railDenials = body.railDenials;
+    else {
+      logGatewayIncompatibility('history refusal collection', 'Ignored a non-list optional field.');
     }
-    return { records: body.items.map((item) => decodePublic019Message(item, sessionKey))
-      .sort((a, b) => a.seq - b.seq), oldestCursor: emptyAfterWithoutBackwardCursor ? null : oldestCursor,
+    const records: ConversationRecord[] = [];
+    for (const item of body.items) {
+      try { records.push(decodePublic019Message(item, sessionKey)); }
+      catch (error) {
+        if (!(error instanceof UnsupportedTargetError)) throw error;
+        logDecodeFailure('transcript history item', error);
+      }
+    }
+    if (body.items.length > 0 && records.length === 0) {
+      logGatewayIncompatibility('transcript history', 'No entries had enough information to place a message.');
+      throw new UnsupportedTargetError('Transcript page contains no usable messages.');
+    }
+    return { records: records.sort((a, b) => a.seq - b.seq), oldestCursor: emptyAfterWithoutBackwardCursor ? null : oldestCursor,
       hasOlder: emptyAfterWithoutBackwardCursor ? false : page.hasMoreBefore,
       newestCursor, hasNewer: hasMoreAfter,
       ...(railDenials === undefined ? {} : {
@@ -652,10 +810,23 @@ export function createPublic019Transport(config: Public019Config): { transport: 
                 !(hasRailSubscription && frame.subscriptionId === railSubscriptionId)) {
               throw new UnsupportedTargetError('Wrong Firehose subscription.');
             }
-            callbacks.onNotice(decodePublic019Notice(frame, sessionKey));
+            let notice: ChangeNotice;
+            try { notice = decodePublic019Notice(frame, sessionKey); }
+            catch (error) {
+              if (error instanceof UnsupportedTargetError && frame.schemaVersion === 2 && typeof frame.class === 'string') {
+                logDecodeFailure('live change entry', error);
+                watchHeartbeat();
+                return;
+              }
+              throw error;
+            }
+            callbacks.onNotice(notice);
           }
           watchHeartbeat();
         } catch (error) {
+          if (error instanceof UnsupportedTargetError) {
+            logDecodeFailure(ready ? 'live change frame' : 'change subscription frame', error);
+          }
           if (!ready) { close(); rejectReady(error); }
           else doubt(error instanceof Error ? error.message : String(error));
         }
@@ -717,11 +888,25 @@ export function createPublic019Transport(config: Public019Config): { transport: 
           if (response.status === 405 || response.status === 501) return { supported: false };
           throw new Error(`Read marker request failed with HTTP ${response.status}.`);
         }
-        const body = record(await response.json());
-        if (body.schemaVersion !== 1 || body.resource !== 'read markers') return { supported: false };
-        const item = record(body.item);
+        let body: Record<string, unknown>;
+        try { body = record(await response.json()); }
+        catch (error) {
+          logDecodeFailure('read marker response', error);
+          throw error;
+        }
+        if (body.schemaVersion !== 1 || body.resource !== 'read markers') {
+          logGatewayIncompatibility('read marker', 'Used the unsupported-protocol fallback.');
+          return { supported: false };
+        }
+        let item: Record<string, unknown>;
+        try { item = record(body.item); }
+        catch (error) {
+          logDecodeFailure('read marker', error);
+          return { supported: false };
+        }
         if (item.userId !== markerOperatorPrincipalKey || item.scopeKey !== scopeKey) return { supported: false };
         const marker = readMarkerValue(item.marker);
+        if (marker === undefined) logGatewayIncompatibility('read marker', 'Used the unsupported-marker fallback.');
         return marker === undefined ? { supported: false } : { supported: true, marker };
       },
       async writeReadMarker(request: ReadMarkerWriteRequest, signal): Promise<ReadMarkerWriteResult> {
@@ -766,27 +951,43 @@ export function createPublic019Transport(config: Public019Config): { transport: 
     async readSession(sessionKey, signal) {
       const body = await get(`/api/sessions/${encodeURIComponent(sessionKey)}`, signal);
       if (body.schemaVersion !== 1 || body.resource !== 'sessions') {
+        logGatewayIncompatibility('session detail', 'Received an unexpected protocol envelope.');
         throw new UnsupportedTargetError('Unexpected sessions detail envelope.');
       }
-      return decodePublic019Session(body.item, sessionKey);
+      try { return decodePublic019Session(body.item, sessionKey); }
+      catch (error) {
+        if (error instanceof UnsupportedTargetError) logDecodeFailure('session detail', error);
+        throw error;
+      }
     },
     async readRoleSessionKey(roleName, signal) {
       const body = await get(`/api/roles/${encodeURIComponent(roleName)}`, signal);
       if (body.schemaVersion !== 1 || body.resource !== 'roles') {
+        logGatewayIncompatibility('role detail', 'Received an unexpected protocol envelope.');
         throw new UnsupportedTargetError('Unexpected role detail envelope.');
       }
-      const role = record(body.item);
-      if (requiredString(role, 'name') !== roleName) {
-        throw new UnsupportedTargetError('Role detail belongs to a different role.');
+      try {
+        const role = record(body.item);
+        if (requiredString(role, 'name') !== roleName) {
+          throw new UnsupportedTargetError('Role detail belongs to a different role.');
+        }
+        return requiredString(role, 'boundSessionKey');
+      } catch (error) {
+        if (error instanceof UnsupportedTargetError) logDecodeFailure('role detail', error);
+        throw error;
       }
-      return requiredString(role, 'boundSessionKey');
     },
     async readMessage(sessionKey, messageId, signal) {
       const body = await get(`/api/sessions/${encodeURIComponent(sessionKey)}/messages/${encodeURIComponent(messageId)}`, signal);
       if (body.schemaVersion !== 1 || body.resource !== 'transcript messages') {
+        logGatewayIncompatibility('transcript message detail', 'Received an unexpected protocol envelope.');
         throw new UnsupportedTargetError('Unexpected transcript message detail envelope.');
       }
-      return decodePublic019Message(body.item, sessionKey);
+      try { return decodePublic019Message(body.item, sessionKey); }
+      catch (error) {
+        if (error instanceof UnsupportedTargetError) logDecodeFailure('transcript message detail', error);
+        throw error;
+      }
     },
     readTail: (sessionKey, signal) => readPage(sessionKey, 'tail=true', signal),
     readOlder: (sessionKey, before, signal) => readPage(sessionKey, `before=${encodeURIComponent(before)}`, signal),
@@ -803,41 +1004,77 @@ export function createPublic019Transport(config: Public019Config): { transport: 
       if (before) query.set('before', before);
       const body = await get('/api/sessions/' + encodeURIComponent(sessionKey) + '/record-events?' + query, signal);
       if (body.schemaVersion !== 1 || body.resource !== 'record events' || !Array.isArray(body.items)) {
+        logGatewayIncompatibility('record-event history', 'Received an unexpected protocol envelope.');
         throw new Error('Unexpected record-event collection envelope.');
       }
-      const page = record(body.page);
-      const oldestCursor = optionalString(page, 'oldestCursor') ?? null;
+      let page: Record<string, unknown>;
+      let oldestCursor: string | null;
+      try {
+        page = record(body.page);
+        oldestCursor = optionalString(page, 'oldestCursor') ?? null;
+      } catch (error) { logDecodeFailure('record-event page metadata', error); throw error; }
       if (typeof page.hasMoreBefore !== 'boolean' || (page.hasMoreBefore && !oldestCursor)) {
+        logGatewayIncompatibility('record-event history', 'Received an unusable page cursor.');
         throw new Error('Invalid record-event page cursor.');
       }
-      return Object.freeze({ items: Object.freeze(body.items.map(item => decodeRecordEvent(item, sessionKey))),
-        oldestCursor, hasOlder: page.hasMoreBefore });
+      const items: SessionRecordEvent[] = [];
+      for (const item of body.items) {
+        try { items.push(decodeRecordEvent(item, sessionKey)); }
+        catch (error) {
+          if (!(error instanceof UnsupportedTargetError)) throw error;
+          logDecodeFailure('record-event history item', error);
+        }
+      }
+      if (body.items.length > 0 && items.length === 0) {
+        logGatewayIncompatibility('record-event history', 'No entries had enough information to place an activity item.');
+        throw new UnsupportedTargetError('Record-event page contains no usable entries.');
+      }
+      return Object.freeze({ items: Object.freeze(items), oldestCursor, hasOlder: page.hasMoreBefore });
     },
     async readToolCalls(sessionKey, range, signal) {
       const filters = new URLSearchParams({ limit: '50', afterMessageSeqFromInclusive: String(range.fromInclusive) });
       if (range.toExclusive !== undefined) filters.set('afterMessageSeqToExclusive', String(range.toExclusive));
       const calls = new Map<string, ToolCallRecord>();
       const cursors = new Set<string>();
+      let seenItems = 0;
       while (true) {
         const body = await get('/api/sessions/' + encodeURIComponent(sessionKey) + '/tool-calls?' + filters, signal);
         if (body.schemaVersion !== 1 || body.resource !== 'tool calls' || !Array.isArray(body.items)) {
+          logGatewayIncompatibility('tool-call history', 'Received an unexpected protocol envelope.');
           throw new Error('Unexpected tool-call collection envelope.');
         }
+        seenItems += body.items.length;
         for (const item of body.items) {
-          const call = decodeToolCall(item, sessionKey);
-          if (call.afterMessageSeq < range.fromInclusive ||
-              (range.toExclusive !== undefined && call.afterMessageSeq >= range.toExclusive)) {
-            throw new Error('Tool call falls outside the requested history slice.');
+          try {
+            const call = decodeToolCall(item, sessionKey);
+            if (call.afterMessageSeq < range.fromInclusive ||
+                (range.toExclusive !== undefined && call.afterMessageSeq >= range.toExclusive)) {
+              throw new UnsupportedTargetError('Tool call falls outside the requested history slice.');
+            }
+            const previous = calls.get(call.id);
+            if (!previous || call.rowVersion > previous.rowVersion) calls.set(call.id, call);
+          } catch (error) {
+            if (!(error instanceof UnsupportedTargetError)) throw error;
+            logDecodeFailure('tool-call history item', error);
           }
-          const previous = calls.get(call.id);
-          if (!previous || call.rowVersion > previous.rowVersion) calls.set(call.id, call);
         }
-        const page = record(body.page);
+        let page: Record<string, unknown>;
+        try { page = record(body.page); }
+        catch (error) { logDecodeFailure('tool-call page metadata', error); throw error; }
         if (page.hasMoreBefore === false) break;
-        const cursor = optionalString(page, 'oldestCursor');
-        if (page.hasMoreBefore !== true || !cursor || cursors.has(cursor)) throw new Error('Invalid tool-call page cursor.');
+        let cursor: string | undefined;
+        try { cursor = optionalString(page, 'oldestCursor'); }
+        catch (error) { logDecodeFailure('tool-call page metadata', error); throw error; }
+        if (page.hasMoreBefore !== true || !cursor || cursors.has(cursor)) {
+          logGatewayIncompatibility('tool-call history', 'Received an unusable page cursor.');
+          throw new Error('Invalid tool-call page cursor.');
+        }
         cursors.add(cursor);
         filters.set('before', cursor);
+      }
+      if (seenItems > 0 && calls.size === 0) {
+        logGatewayIncompatibility('tool-call history', 'No entries had enough information to place a tool call.');
+        throw new UnsupportedTargetError('Tool-call history contains no usable entries.');
       }
       return Object.freeze([...calls.values()].sort((a, b) => a.afterMessageSeq - b.afterMessageSeq || a.seq - b.seq));
     },
@@ -854,21 +1091,32 @@ export function createPublic019Transport(config: Public019Config): { transport: 
         } catch { /* Some upstream failures have no JSON body. */ }
         throw new AttachmentUploadError(code, `Attachment upload failed (HTTP ${response.status}): ${code}`);
       }
-      const wire = await response.json();
-      if (!wire || typeof wire.assetId !== 'string' || !wire.assetId ||
-          typeof wire.mimeType !== 'string' || !wire.mimeType || !Number.isSafeInteger(wire.size) ||
-          wire.size !== input.bytes.size || wire.mimeType !== (input.bytes.type || 'application/octet-stream')) {
+      let wire: unknown;
+      try { wire = await response.json(); }
+      catch (error) {
+        logDecodeFailure('attachment upload response', error);
+        throw error;
+      }
+      const upload = wire && typeof wire === 'object' && !Array.isArray(wire)
+        ? wire as Record<string, unknown> : {};
+      if (typeof upload.assetId !== 'string' || !upload.assetId ||
+          typeof upload.mimeType !== 'string' || !upload.mimeType || !Number.isSafeInteger(upload.size) ||
+          upload.size !== input.bytes.size || upload.mimeType !== (input.bytes.type || 'application/octet-stream')) {
+        logGatewayIncompatibility('attachment upload response', 'Received an incompatible attachment reference.');
         throw new AttachmentUploadError('reference-mismatch', 'Attachment upload returned a different type or byte count.');
       }
-      return Object.freeze({ assetId: wire.assetId, mimeType: wire.mimeType,
-        filename: input.filename, size: wire.size }) as AttachmentReference;
+      return Object.freeze({ assetId: upload.assetId, mimeType: upload.mimeType,
+        filename: input.filename, size: upload.size as number }) as AttachmentReference;
     },
     async readAttachment(reference, signal) {
       const response = await config.host.fetch(`${baseUrl}/download/${encodeURIComponent(reference.assetId)}`,
         { method: 'GET', signal, cache: 'no-store' });
       if (!response.ok) throw new Error(`Attachment retrieval failed (HTTP ${response.status}).`);
       const bytes = await response.blob();
-      if (bytes.size !== reference.size) throw new Error('Attachment retrieval returned an incomplete file.');
+      if (bytes.size !== reference.size) {
+        logGatewayIncompatibility('attachment download', 'Received an incomplete attachment.');
+        throw new Error('Attachment retrieval returned an incomplete file.');
+      }
       return bytes;
     },
     async sendHuman(submission: HumanSubmission, signal: AbortSignal, onSubmitted?: () => void): Promise<HumanSendResult> {
@@ -910,9 +1158,14 @@ export function createPublic019Transport(config: Public019Config): { transport: 
             const frame = record(raw);
             if (frame.type === 'ack' && frame.id === submission.clientMessageId) finish({ outcome: 'accepted' });
             else if (frame.type === 'error' && frame.messageId === submission.clientMessageId) {
-              finish({ outcome: 'refused', reason: String(frame.code ?? 'refused') });
+              if (frame.code !== undefined && typeof frame.code !== 'string') {
+                logGatewayIncompatibility('human send response', 'Used the refusal-code fallback.');
+              }
+              finish({ outcome: 'refused', reason: typeof frame.code === 'string' && frame.code ? frame.code : 'refused' });
             }
-          } catch { finish({ outcome: 'retryable', reason: 'Malformed human response.' }); }
+          } catch (error) {
+            logDecodeFailure('human send response', error);
+          }
         }, (event) => finish(event?.code === 1009
           ? { outcome: 'refused', reason: 'payload_too_large' }
           : { outcome: 'uncertain', reason: 'connection-closed-before-acknowledgement' }));

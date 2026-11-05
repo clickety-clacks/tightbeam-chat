@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createTightbeamAdapter } from '../src/runtime';
 import { advanceReadMarkerForwardOnly } from '../src/readMarker';
 import {
-  createPublic019Transport, decodePublic019Message, decodePublic019Turn, decodeToolCall,
+  createPublic019Transport, decodePublic019Message, decodePublic019Session, decodePublic019Turn, decodeRecordEvent, decodeToolCall,
   decodePublic019Notice, type Public019Channel, type Public019Host,
 } from '../src/public019';
 import { AuthorizationError, SessionNotFoundError, UnsupportedTargetError } from '../src/types';
@@ -884,8 +884,8 @@ describe('Gateway wire mapping and behavior checks', () => {
       id: 'm_1', seq: 9, createdAt: '2026-10-12T00:00:00.000Z',
       clientMessageId: 'c_1', replyToMessageId: 'parent-1', raw: { at: item.at, unknownMetadata: { preserved: true } },
     });
-    expect(() => decodePublic019Message({ ...item, at: '2026-10-12T00:00:00Z' }, sessionKey))
-      .toThrow(UnsupportedTargetError);
+    expect(decodePublic019Message({ ...item, at: '2026-10-12T00:00:00Z' }, sessionKey))
+      .toMatchObject({ id: 'm_1', seq: 9, content: 'hello', createdAt: undefined });
   });
 
   it('reads bounded tail and opaque before pages and gates coverage on an active subscription', async () => {
@@ -956,6 +956,44 @@ describe('Gateway wire mapping and behavior checks', () => {
 
     expect(page).toMatchObject({ records: [], oldestCursor: null, hasOlder: false,
       newestCursor: null, hasNewer: false });
+  });
+
+  it('keeps readable transcript rows and fields when neighboring Gateway data is malformed', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const unusable = { ...item, id: 'm_unplaceable', seq: 0 };
+    const readable = { ...item, id: 'm_readable', seq: 10, content: 42, at: 'bad-time', sender: 17,
+      replyToMessageId: false, turnSeq: -1, attachments: { malformed: true },
+      recordEventIds: ['event-good', null] };
+    const candidate = setup(undefined, version, [unusable, readable], [], 200, { malformed: true });
+
+    const page = await candidate.transport.readTail(sessionKey, new AbortController().signal);
+
+    expect(page.records).toHaveLength(1);
+    expect(page.records[0]).toMatchObject({ id: 'm_readable', seq: 10, content: '', sender: undefined,
+      replyToMessageId: undefined, turnSeq: undefined, attachments: [], recordEventIds: ['event-good'],
+      createdAt: undefined });
+    expect(log).toHaveBeenCalledWith('[Chat] Gateway data incompatibility', expect.objectContaining({ site: 'transcript history item' }));
+    expect(log).toHaveBeenCalledWith('[Chat] Gateway data incompatibility', expect.objectContaining({ site: 'message' }));
+    expect(log).toHaveBeenCalledWith('[Chat] Gateway data incompatibility', expect.objectContaining({ site: 'history refusal collection' }));
+    log.mockRestore();
+  });
+
+  it('fails a transcript page only when none of its nonempty entries can be placed', async () => {
+    const candidate = setup(undefined, version, [{ ...item, seq: 0 }]);
+    await expect(candidate.transport.readTail(sessionKey, new AbortController().signal))
+      .rejects.toThrow('Transcript page contains no usable messages.');
+  });
+
+  it('uses readable session and turn fallbacks for malformed optional Gateway fields', () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(decodePublic019Session({ sessionKey, rowVersion: 1, displayName: null,
+      model: 3, harness: 'harness-a', mechanicalStatus: false, state: 'idle' }, sessionKey))
+      .toMatchObject({ displayName: '', model: undefined, harness: 'harness-a', activity: 'idle' });
+    expect(decodePublic019Turn({ seq: 1, sessionKey, status: 'running', origin: 'process:events',
+      messageId: 3, batchMemberCount: -1 }, sessionKey))
+      .toMatchObject({ messageId: undefined, batchMemberCount: undefined, status: 'running' });
+    expect(log).toHaveBeenCalled();
+    log.mockRestore();
   });
 
   it('reads forward pages and individual transcript details through the 0.1.11 routes', async () => {
@@ -1034,6 +1072,31 @@ describe('Gateway wire mapping and behavior checks', () => {
       .toEqual({ operation: 'unknown', sessionKey, resource: 'unrecognized.state' });
     expect(() => decodePublic019Notice({ ...notice, refs: { sessionKey: 'other' } }, sessionKey))
       .toThrow(UnsupportedTargetError);
+  });
+
+  it('skips malformed live change entries without dropping the feed or later notices', async () => {
+    const candidate = setup();
+    candidate.changes.autoReady = true;
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const notices: string[] = [];
+    const doubts: string[] = [];
+    const connection = await candidate.transport.openChanges(sessionKey, {
+      onNotice: notice => notices.push(notice.operation), onDoubt: reason => doubts.push(reason),
+    }, new AbortController().signal);
+
+    candidate.changes.emit({ type: 'change', schemaVersion: 2, subscriptionId: 'chat:s-public', seq: 1,
+      class: 'future.change', resource: 'future', op: 'observe' });
+    candidate.changes.emit({ type: 'change', schemaVersion: 2, subscriptionId: 'chat:s-public', seq: 2,
+      class: 'message.created', resource: 'messages', op: 'upsert', refs: { sessionKey }, payload: { seq: 2 } });
+    candidate.changes.emit({ type: 'change', schemaVersion: 2, subscriptionId: 'chat:s-public', seq: 3,
+      class: 'message.created', resource: 'messages', op: 'upsert', refs: { sessionKey }, payload: { ...item, id: 'm_live_good', seq: 11 } });
+
+    expect(notices).toEqual(['unknown', 'upsert']);
+    expect(doubts).toEqual([]);
+    expect(candidate.changes.closed).toBe(false);
+    expect(log).toHaveBeenCalledWith('[Chat] Gateway data incompatibility', expect.objectContaining({ site: 'live change entry' }));
+    connection.close();
+    log.mockRestore();
   });
 
   it('keeps the conversation feed when an uncorrelated optional rail refusal arrives before readiness', async () => {
@@ -1263,6 +1326,22 @@ describe('Gateway wire mapping and behavior checks', () => {
     });
   });
 
+  it('keeps waiting for a usable send acknowledgement after a malformed response frame', async () => {
+    const candidate = setup();
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const pending = candidate.transport.sendHuman({ sessionKey, deviceId: 'device-1',
+      clientMessageId: 'c_mixed_response', content: 'hello' }, new AbortController().signal);
+    await vi.waitFor(() => expect(candidate.human.sent).toHaveLength(1));
+
+    candidate.human.emit(null);
+    candidate.human.emit({ type: 'ack', id: 'c_mixed_response' });
+
+    await expect(pending).resolves.toEqual({ outcome: 'accepted' });
+    expect(log).toHaveBeenCalledWith('[Chat] Gateway data incompatibility',
+      expect.objectContaining({ site: 'human send response' }));
+    log.mockRestore();
+  });
+
   it('sends the complete prompt once and maps a Gateway size refusal by matching ID', async () => {
     const content = 'Keep this complete prompt unchanged.';
     const submission = { sessionKey, deviceId: 'device-1', clientMessageId: 'c_size_refusal', content };
@@ -1414,6 +1493,26 @@ describe('tool-call contract and transition category', () => {
       .toMatchObject({ operation: 'upsert', record: { kind: 'transition', transition: 'compaction', content: item.content } });
   });
 
+  it('keeps valid tool calls when one row or truncation entry is malformed', async () => {
+    const candidate = setup();
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const malformed = { ...call, id: 'tc_unusable', afterMessageSeq: -1 };
+    const readable = { ...call, id: 'tc_readable', truncated: [
+      { field: 'rawOutput', originalBytes: 12 }, null, { field: 'futureField', originalBytes: 16 },
+    ] };
+    candidate.host.fetch = async () => new Response(JSON.stringify({ schemaVersion: 1, resource: 'tool calls',
+      items: [malformed, readable], page: { hasMoreBefore: false } }));
+
+    const calls = await candidate.transport.readToolCalls!(sessionKey, { fromInclusive: 8, toExclusive: 10 },
+      new AbortController().signal);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({ id: 'tc_readable', truncated: [{ field: 'rawOutput', originalBytes: 12 }] });
+    expect(log).toHaveBeenCalledWith('[Chat] Gateway data incompatibility', expect.objectContaining({ site: 'tool-call history item' }));
+    expect(log).toHaveBeenCalledWith('[Chat] Gateway data incompatibility', expect.objectContaining({ site: 'tool call truncation metadata' }));
+    log.mockRestore();
+  });
+
   it('exhausts fixed-range tool pages and keeps tool subscriptions separate from transcript classes', async () => {
     const paths: URL[] = [];
     const channels: Channel[] = [];
@@ -1453,7 +1552,7 @@ it('decodes exact record-event notice coverage and reads the same live/history o
     record: { type: 'assignment', id: 'assignment-example', detail: '/api/assignments/assignment-example' },
     actorSessionKey: 'another-session', tiedAs: ['holder'], cause: null, noticeMessageIds: [] };
   const notice = decodePublic019Notice({ type: 'change', schemaVersion: 2, class: 'session_record_event.created', refs: { sessionKey },
-    payload: event, resource: 'record events', op: 'upsert' }, sessionKey);
+    payload: event, resource: 'record events', op: 'append' }, sessionKey);
   expect(notice).toMatchObject({ operation: 'record-event', event: { ...event, sessionKey } });
   expect(decodePublic019Message({ ...item, recordEventIds: [event.eventId] }, sessionKey))
     .toMatchObject({ recordEventIds: [event.eventId] });
@@ -1468,4 +1567,29 @@ it('decodes exact record-event notice coverage and reads the same live/history o
   await candidate.transport.readRecordEvents!(sessionKey, 'older event cursor', new AbortController().signal);
   expect(new URL(paths[0]).searchParams.has('before')).toBe(false);
   expect(new URL(paths[1]).searchParams.get('before')).toBe('older event cursor');
+});
+
+it('keeps valid record events when one event or optional event field is malformed', async () => {
+  const candidate = setup();
+  const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+  const unusable = { eventId: null, kind: 'assignment.opened', at: 100,
+    record: { type: 'assignment', id: 'a_bad', detail: 'opened' }, tiedAs: [], noticeMessageIds: [], cause: null };
+  const readable = { eventId: 'e_readable', kind: 'assignment.opened', at: 101,
+    record: { type: 'assignment', id: 'a_readable', detail: 'opened' }, actorSessionKey: 4,
+    tiedAs: ['owner', false], noticeMessageIds: ['m_notice', null], cause: 'malformed' };
+  const pageBody = { schemaVersion: 1, resource: 'record events', items: [unusable, readable],
+    page: { oldestCursor: 'event-cursor', hasMoreBefore: true } };
+  candidate.host.fetch = async () => new Response(JSON.stringify(pageBody));
+
+  const page = await candidate.transport.readRecordEvents!(sessionKey, undefined, new AbortController().signal);
+
+  expect(page.items).toHaveLength(1);
+  expect(page.items[0]).toMatchObject({ eventId: 'e_readable', actorSessionKey: null,
+    tiedAs: ['owner'], noticeMessageIds: ['m_notice'], cause: null,
+    record: { id: 'a_readable', detail: 'opened' } });
+  expect(decodeRecordEvent(readable, sessionKey)).toMatchObject({ eventId: 'e_readable', actorSessionKey: null,
+    tiedAs: ['owner'], noticeMessageIds: ['m_notice'], cause: null });
+  expect(log).toHaveBeenCalledWith('[Chat] Gateway data incompatibility', expect.objectContaining({ site: 'record-event history item' }));
+  expect(log).toHaveBeenCalledWith('[Chat] Gateway data incompatibility', expect.objectContaining({ site: 'record-event' }));
+  log.mockRestore();
 });
