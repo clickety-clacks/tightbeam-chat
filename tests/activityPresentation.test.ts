@@ -23,7 +23,7 @@ describe('activity pill presentation', () => {
       `w_${hex32}`,
       `nbt_${hex40}`,
       `pfe_${hex40}`,
-      'w_harklight_12345678-9abc-4def-8abc-123456789abc-deadbeef_facefeed',
+      'w_harklight_12345678-9abc-4def-8abc-123456789abc_0123456789abcdef0123',
       'post_mvp',
     ].join(' '))).toBe([
       'wi_1234', 'art_b322', 'wake_8765', 'w_terminal_4cf9',
@@ -38,6 +38,13 @@ describe('activity pill presentation', () => {
       'asg_ae3ac59d-aarch64-pack',
       'backup_2026-11-05.md',
     ].join(' '))).toBe('wi_b63e-verification.md asg_ae3a-aarch64-pack backup_2026-11-05.md');
+  });
+
+  it('returns a long non-matching hex run promptly', () => {
+    const value = `w_${'a'.repeat(64)}_tmp`;
+    const startedAt = performance.now();
+    expect(formatVisibleIds(value)).toBe(value);
+    expect(performance.now() - startedAt).toBeLessThan(250);
   });
 
   it('gives delivered verdict, completion, opened and closed notices distinct plain presentations', () => {

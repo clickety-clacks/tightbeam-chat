@@ -1025,7 +1025,7 @@ describe('conversation surface', () => {
     const wakeId = 'wake_87654321-1111-4111-8111-123456789abc';
     const longHex = 'a'.repeat(64);
     const mediumHex = 'c'.repeat(40);
-    const harklightWakeId = 'w_harklight_12345678-9abc-4def-8abc-123456789abc-deadbeef_facefeed';
+    const harklightWakeId = 'w_harklight_12345678-9abc-4def-8abc-123456789abc_0123456789abcdef0123';
     const storedWakeIds = [
       `w_nb_${longHex}`, `w_terminal_${longHex}`, `w_terminal_action_${longHex}`,
       `w_${'b'.repeat(32)}`, `nbt_${mediumHex}`, `pfe_${mediumHex}`, harklightWakeId,
