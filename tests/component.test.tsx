@@ -1025,11 +1025,14 @@ describe('conversation surface', () => {
     const wakeId = 'wake_87654321-1111-4111-8111-123456789abc';
     const longHex = 'a'.repeat(64);
     const mediumHex = 'c'.repeat(40);
+    const harklightWakeId = 'w_harklight_12345678-9abc-4def-8abc-123456789abc-deadbeef_facefeed';
     const storedWakeIds = [
       `w_nb_${longHex}`, `w_terminal_${longHex}`, `w_terminal_action_${longHex}`,
-      `w_${'b'.repeat(32)}`, `nbt_${mediumHex}`, `pfe_${mediumHex}`,
+      `w_${'b'.repeat(32)}`, `nbt_${mediumHex}`, `pfe_${mediumHex}`, harklightWakeId,
     ];
-    const shortStoredWakeIds = ['w_nb_aaaa', 'w_terminal_aaaa', 'w_terminal_action_aaaa', 'w_bbbb', 'nbt_cccc', 'pfe_cccc'];
+    const shortStoredWakeIds = [
+      'w_nb_aaaa', 'w_terminal_aaaa', 'w_terminal_action_aaaa', 'w_bbbb', 'nbt_cccc', 'pfe_cccc', 'w_harklight_1234',
+    ];
     const prompt = row(sessionKey, 'prompt', `Please inspect ${workItemId}.`, {
       seq: 1, role: 'user', sender: 'user:person', messageType: 'chat', turnSeq: 1,
     });
@@ -1041,7 +1044,8 @@ describe('conversation surface', () => {
       `[1] source=${storedWakeIds[1]} sender=process:tightbeam cause=wake class=fyi`,
       `[2] source=${storedWakeIds[2]} sender=process:tightbeam cause=wake class=fyi`,
       `[3] source=${storedWakeIds[3]} token=${storedWakeIds[5]} sender=process:tightbeam cause=wake class=fyi`,
-      `[verdict filed: reviewed-clean on ${assignmentId}: See ${artifactId} and ${workItemId}]`,
+      `[4] source=${harklightWakeId}-verification.md sender=process:tightbeam cause=wake class=fyi`,
+      `[verdict filed: reviewed-clean on ${assignmentId}: See ${artifactId} and ${workItemId}-verification.md]`,
     ].join('\n');
     const notice = row(sessionKey, 'notice', noticeContent, {
       seq: 2, role: 'user', sender: 'process:tightbeam', messageType: 'substrate', turnSeq: 1,
@@ -1095,6 +1099,8 @@ describe('conversation surface', () => {
       expect(noticePill?.title).toContain(id);
       expect(noticePill?.title).not.toContain(storedWakeIds[shortStoredWakeIds.indexOf(id)]);
     }
+    expect(noticePill?.title).toContain('w_harklight_1234-verification.md');
+    expect(noticePill?.title).toContain('wi_1234-verification.md');
     fireEvent.click(within(noticePill!).getByRole('button', { name: /Show full message/ }));
     const noticeBody = noticePill!.querySelector('[data-activity-message-content]')!;
     expect(noticeBody.textContent).toContain('asg_abcd');
@@ -1107,6 +1113,8 @@ describe('conversation surface', () => {
       expect(noticeBody.textContent).toContain(shortStoredWakeIds[index]);
       expect(noticeBody.textContent).not.toContain(storedWakeIds[index]);
     }
+    expect(noticeBody.textContent).toContain('w_harklight_1234-verification.md');
+    expect(noticeBody.textContent).toContain('wi_1234-verification.md');
 
     const agentPill = pillForContent('Evidence art_b322');
     expect(agentPill).toBeTruthy();

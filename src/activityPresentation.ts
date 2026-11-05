@@ -54,11 +54,12 @@ const semanticLines = (value: string): string[] => lines(value).filter(line => !
 const wireOnlyLine = (line: string): boolean => transportLine(line) ||
   /^(?:terminal-child-owner-notification|(?:source_kind|source_token|assignment_id|work_item_id|child_session_key|outcome|terminal_at)=)/i.test(line) ||
   /^\[(?:assignment:|woke:|turn failed\])/i.test(line);
-/** Shorten prefixed hex IDs across hyphenated UUIDs and unhyphenated generated tokens. */
-export const formatVisibleIds = (value: string): string => value.replace(
-  /\b((?:[a-z][a-z0-9]*_)+)([a-f0-9]{4})[a-f0-9-]{4,}\b/gi,
-  (_match, prefix: string, firstFour: string) => `${prefix}${firstFour}`,
-);
+/** Shorten prefixed hex IDs while keeping adjacent punctuation and suffix text intact. */
+const harklightWakeIdPattern = /\b(w_harklight_)([a-f0-9]{4})[a-f0-9]{4}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}-[a-f0-9]+_[a-f0-9]+\b/gi;
+const visibleIdPattern = /\b((?:[a-z][a-z0-9]*_)+)([a-f0-9]{4})(?:[a-f0-9]{4,}|-[a-f0-9]{4,}|_[a-f0-9]{4,})+\b/gi;
+export const formatVisibleIds = (value: string): string => value
+  .replace(harklightWakeIdPattern, (_match, prefix: string, firstFour: string) => `${prefix}${firstFour}`)
+  .replace(visibleIdPattern, (_match, prefix: string, firstFour: string) => `${prefix}${firstFour}`);
 function plainText(value: string): string {
   return formatVisibleIds(lines(value).filter(line => !wireOnlyLine(line))
     .map(line => line.replace(/\[([^\]]*)\]/g, '$1').replace(/[\[\]]/g, '')).join(' '));
