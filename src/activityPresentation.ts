@@ -54,8 +54,31 @@ const semanticLines = (value: string): string[] => lines(value).filter(line => !
 const wireOnlyLine = (line: string): boolean => transportLine(line) ||
   /^(?:terminal-child-owner-notification|(?:source_kind|source_token|assignment_id|work_item_id|child_session_key|outcome|terminal_at)=)/i.test(line) ||
   /^\[(?:assignment:|woke:|turn failed\])/i.test(line);
-/** Known ID prefixes and separator-led hex groups keep matching bounded and suffixes intact. */
-const visibleIdPattern = /\b((?:w_terminal_action|w_harklight_notice_recovery|w_harklight|w_terminal|w_rule|w_nb|w_retire|hhcp|hhore|hho|hhi|tcfo|tcf|a|act|aev|dlv|cn|ew|tlm|tlc|tl|wr|l|wi|asg|dr|att|s|c|tc|art|nbt|pfe|wake|nb|nbm|rev|cp|crc|tra|ara|trp|w)_)([a-f0-9]{4})[a-f0-9]{4,}(?:[-_][a-f0-9]{4,})*(?![a-z0-9])/gi;
+// Scan tokens once: prefix segments end at underscores and each hex run is
+// consumed whole. A failed body cannot be repartitioned by a regex engine.
+function formatHexIdToken(token: string): string {
+  let cursor = 0;
+  let prefixValid = false;
+  while (cursor < token.length) {
+    const start = cursor;
+    while (cursor < token.length && token[cursor] !== '_' && token[cursor] !== '-') cursor++;
+    const part = token.slice(start, cursor);
+    if (prefixValid && token[start - 1] === '_' && /^[a-f0-9]{8,}$/i.test(part)) {
+      let end = cursor;
+      while (end < token.length && (token[end] === '_' || token[end] === '-')) {
+        let next = end + 1;
+        while (next < token.length && token[next] !== '_' && token[next] !== '-') next++;
+        if (!/^[a-f0-9]{4,}$/i.test(token.slice(end + 1, next))) break;
+        end = next;
+      }
+      return token.slice(0, start) + part.slice(0, 4) + token.slice(end);
+    }
+    prefixValid = (start === 0 || token[start - 1] === '-' || prefixValid) &&
+      /^[a-z][a-z0-9]*$/i.test(part);
+    cursor++;
+  }
+  return token;
+}
 // Fixed producer shapes with non-hex payloads or numeric generation suffixes.
 // Each repeated hex group requires a separator; none can repartition one hex run.
 const generatedIdPatterns = [
@@ -64,7 +87,6 @@ const generatedIdPatterns = [
   /\b((?:req|int|dbc|lgen)_)([A-Za-z0-9_-]{4})[A-Za-z0-9_-]{18}(?![A-Za-z0-9_])/g,
   /\b(cli_)([0-9]{4})[0-9]+_[a-z0-9]{6}(?![a-z0-9_])/g,
   /\b((?:identity-|assignment-inactivity-episode-v1:|provider-auth:|catalog-attempt:|catalog-final-401:|other-open:|other-resolve:|other:|settle-turn:))([a-f0-9]{4})[a-f0-9]{4,}(?:-[a-f0-9]{4,})*(?![a-z0-9])/gi,
-  visibleIdPattern,
   // Unprefixed UUID handles and ULID execution/launch IDs have an empty prefix.
   /\b()([a-f0-9]{4})[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}(?![a-z0-9])/gi,
   /\b()([0-7][0-9A-HJKMNP-TV-Z]{3})[0-9A-HJKMNP-TV-Z]{22}(?![A-Za-z0-9_])/g,
@@ -72,7 +94,7 @@ const generatedIdPatterns = [
 export const formatVisibleIds = (value: string): string => generatedIdPatterns.reduce(
   (text, pattern) => text.replace(pattern, (_match, prefix: string, firstFour: string) => `${prefix}${firstFour}`),
   value,
-);
+).replace(/[A-Za-z0-9_-]+/g, formatHexIdToken);
 function plainText(value: string): string {
   return formatVisibleIds(lines(value).filter(line => !wireOnlyLine(line))
     .map(line => line.replace(/\[([^\]]*)\]/g, '$1').replace(/[\[\]]/g, '')).join(' '));

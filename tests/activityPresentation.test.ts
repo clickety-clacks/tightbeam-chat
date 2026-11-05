@@ -76,6 +76,15 @@ describe('activity pill presentation', () => {
     }
   });
 
+  it('recognizes new compound prefixes and consumes complete hex bodies', () => {
+    expect(formatVisibleIds('future_family_12345678-1111-4111-8111-123456789abc_abcd1234-verification.md'))
+      .toBe('future_family_1234-verification.md');
+    expect(formatVisibleIds('new_deadbeef_abcdef12_report')).toBe('new_dead_report');
+    expect(formatVisibleIds('x_1234567 x_12345678 next-prefix_abcdef12'))
+      .toBe('x_1234567 x_1234 next-prefix_abcd');
+    expect(formatVisibleIds('abc_'.repeat(16384) + 'zzzz')).toBe('abc_'.repeat(16384) + 'zzzz');
+  });
+
   it('preserves hyphenated suffixes and date-like non-ID text', () => {
     expect(formatVisibleIds([
       'wi_b63e7584-verification.md',
@@ -84,13 +93,13 @@ describe('activity pill presentation', () => {
       'backup_2026-11-05.md',
       'backup_20261105.md',
       'custom_deadbeef',
-    ].join(' '))).toBe('wi_b63e-verification.md asg_ae3a-aarch64-pack art_b322_report backup_2026-11-05.md backup_20261105.md custom_deadbeef');
+    ].join(' '))).toBe('wi_b63e-verification.md asg_ae3a-aarch64-pack art_b322_report backup_2026-11-05.md backup_2026.md custom_dead');
   });
 
   it('leaves long non-matching hex runs unchanged', () => {
-    const value = `w_${'a'.repeat(64)}g`;
+    const value = `w_${'a'.repeat(65536)}g`;
     expect(formatVisibleIds(value)).toBe(value);
-    expect(formatVisibleIds(`sha256_${'b'.repeat(64)}_tmp`)).toBe(`sha256_${'b'.repeat(64)}_tmp`);
+    expect(formatVisibleIds(`sha256_${'b'.repeat(64)}_tmp`)).toBe('sha256_bbbb_tmp');
   });
 
   it('gives delivered verdict, completion, opened and closed notices distinct plain presentations', () => {
