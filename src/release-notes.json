@@ -1,5 +1,18 @@
 [
   {
+    "version": "v0.1.89",
+    "items": [
+      {
+        "title": "View image attachments in the transcript",
+        "description": "Image attachments in messages from people and agents now appear inline in the conversation. Select an image to open a larger view."
+      },
+      {
+        "title": "Keep usable conversation data when entries are malformed",
+        "description": "When a Gateway response contains malformed entries, Chat continues to show valid messages, activity, and tool calls. It uses existing display fallbacks for optional fields, logs the incompatibility, and keeps live updates and pending sends active."
+      }
+    ]
+  },
+  {
     "version": "v0.1.88",
     "items": [
       {
