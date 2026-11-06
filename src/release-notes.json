@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.91",
+    "items": [
+      {
+        "title": "Shorter IDs throughout conversations",
+        "description": "IDs now show their prefix and first four characters in messages, activity pills, and expanded details. Copy actions and links keep the full values."
+      }
+    ]
+  },
+  {
     "version": "v0.1.90",
     "items": [
       {
