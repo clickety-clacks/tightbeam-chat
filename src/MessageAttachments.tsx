@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { formatVisibleIds } from './activityPresentation';
 import './messageAttachments.css';
 
 export interface ImageAttachmentReference {
@@ -77,8 +78,8 @@ function imageAttachment(value: unknown): ImageAttachment | undefined {
   return {
     src,
     reference,
-    alt: filename ? 'Image: ' + filename : 'Image attachment',
-    filename,
+    alt: formatVisibleIds(filename ? 'Image: ' + filename : 'Image attachment'),
+    filename: filename ? formatVisibleIds(filename) : undefined,
   };
 }
 
@@ -293,7 +294,7 @@ export function MessageAttachments({ attachments, readAttachment }: {
     </div>}
     {otherAttachments.length > 0 && <details className="tb-chat-attachments">
       <summary>{otherAttachments.length} attachment {otherAttachments.length === 1 ? 'detail' : 'details'}</summary>
-      <pre>{JSON.stringify(otherAttachments, null, 2)}</pre>
+      <pre>{formatVisibleIds(JSON.stringify(otherAttachments, null, 2))}</pre>
     </details>}
   </>;
 }

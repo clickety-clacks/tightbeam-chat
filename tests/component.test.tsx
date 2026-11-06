@@ -1017,6 +1017,168 @@ describe('conversation surface', () => {
     }
   });
 
+  it('shortens IDs in messages and activity details without changing source, copy, or link targets', () => {
+    const sessionKey = 's_12345678-1111-4111-8111-123456789abc';
+    const workItemId = 'wi_12345678-1111-4111-8111-123456789abc';
+    const assignmentId = 'asg_abcdef12-1111-4111-8111-123456789abc';
+    const artifactId = 'art_b322d95e';
+    const wakeId = 'wake_87654321-1111-4111-8111-123456789abc';
+    const longHex = 'a'.repeat(64);
+    const mediumHex = 'c'.repeat(40);
+    const harklightWakeId = 'w_harklight_12345678-9abc-4def-8abc-123456789abc_0123456789abcdef0123';
+    const storedWakeIds = [
+      `w_nb_${longHex}`, `w_terminal_${longHex}`, `w_terminal_action_${longHex}`,
+      `w_${'b'.repeat(32)}`, `nbt_${mediumHex}`, `pfe_${mediumHex}`, harklightWakeId,
+    ];
+    const shortStoredWakeIds = [
+      'w_nb_aaaa', 'w_terminal_aaaa', 'w_terminal_action_aaaa', 'w_bbbb', 'nbt_cccc', 'pfe_cccc', 'w_harklight_1234',
+    ];
+    const additionalStoredIds = [
+      'rev_abcdef12-1111-4111-8111-123456789abc',
+      'cp_abcdef12-1111-4111-8111-123456789abc',
+      'hhi_abcd1234', 'hho_abcd1234', 'crc_abcd1234', 'w_rule_' + longHex,
+      'tra_abcdef12-1111-4111-8111-123456789abc',
+      'ara_abcdef12-1111-4111-8111-123456789abc',
+      'trp_abcdef12-1111-4111-8111-123456789abc',
+      'nbm_abcdef12-1111-4111-8111-123456789abc',
+      'tcf_abcdef12-1111-4111-8111-123456789abc',
+      'tcfo_abcdef12-1111-4111-8111-123456789abc', 'hhore_abcd1234',
+      'progressatt_12345678records', 's_f5017fc8-wi_b63e7584-verification.md',
+      'progressatt_12345678-1111-4111-8111-123456789abcrecords',
+    ];
+    const shortAdditionalIds = [
+      'rev_abcd', 'cp_abcd', 'hhi_abcd', 'hho_abcd', 'crc_abcd', 'w_rule_aaaa',
+      'tra_abcd', 'ara_abcd', 'trp_abcd', 'nbm_abcd', 'tcf_abcd', 'tcfo_abcd', 'hhore_abcd',
+      'progressatt_1234records', 's_f501-wi_b63e-verification.md', 'progressatt_1234records',
+    ];
+    const prompt = row(sessionKey, 'prompt', `Please inspect ${workItemId}.`, {
+      seq: 1, role: 'user', sender: 'user:person', messageType: 'chat', turnSeq: 1,
+    });
+    const noticeContent = [
+      '[from process:tightbeam]',
+      '',
+      '[batched notices: 1]',
+      `batchId=nb_12345678 wake ${storedWakeIds[0]} token=${storedWakeIds[4]}`,
+      `[1] source=${storedWakeIds[1]} sender=process:tightbeam cause=wake class=fyi`,
+      `[2] source=${storedWakeIds[2]} sender=process:tightbeam cause=wake class=fyi`,
+      `[3] source=${storedWakeIds[3]} token=${storedWakeIds[5]} sender=process:tightbeam cause=wake class=fyi`,
+      `[4] source=${harklightWakeId}-verification.md sender=process:tightbeam cause=wake class=fyi`,
+      `[verdict filed: reviewed-clean on ${assignmentId}: See ${artifactId} and ${workItemId}-verification.md]`,
+      '[5] condition ' + additionalStoredIds[1] + ' source_token="' + additionalStoredIds[0] + '"',
+      '[6] source=' + additionalStoredIds[5] + ' sender=remedy:policy cause=wake class=fyi',
+      '[7] stored IDs ' + additionalStoredIds.slice(2).join(' '),
+    ].join('\n');
+    const notice = row(sessionKey, 'notice', noticeContent, {
+      seq: 2, role: 'user', sender: 'process:tightbeam', messageType: 'substrate', turnSeq: 1,
+    });
+    const agentContent = `Evidence ${artifactId}; follow wake ${wakeId}.`;
+    const agent = row(sessionKey, 'agent-message', agentContent, {
+      seq: 3, role: 'user', sender: 'agent:helper', messageType: 'agent', turnSeq: 1,
+    });
+    const answerContent = `See [${artifactId}](https://example.test/${artifactId}) and \`${workItemId}\`.`;
+    const answer = row(sessionKey, 'answer', answerContent, {
+      seq: 4, sender: 'assistant-service', messageType: 'assistant', replyToMessageId: prompt.id, turnSeq: 1,
+      attachments: [{ assetId: artifactId, mimeType: 'application/pdf', filename: 'artifact.pdf', size: 42 }],
+    });
+    const toolCall: ToolCallRecord = { id: 'tc-visible', seq: 1, sessionKey, turnSeq: 1, afterMessageSeq: 1,
+      harnessToolCallId: 'read-visible', title: `Read ${artifactId}`, kind: 'read', toolName: 'read_file',
+      status: 'completed', rawInput: { artifactId }, rawOutput: { wakeId }, content: null,
+      truncated: [], startedAt: 150, endedAt: 200, rowVersion: 1 };
+    const recordEvent = { eventId: 'work_item.filed:visible', sessionKey, at: 250, kind: 'work_item.filed',
+      record: { type: 'work item', id: artifactId, detail: '/api/work-items/visible' }, actorSessionKey: sessionKey,
+      tiedAs: ['creator'], cause: { turnSeq: 1, messageId: prompt.id }, noticeMessageIds: [] };
+    const runtime = new FakeRuntime(sessionKey, { records: [prompt, notice, agent, answer],
+      provenanceAvailable: false, activityTurnStateAvailable: true, toolCallsEnabled: true,
+      toolCalls: [toolCall], recordEvents: [recordEvent] });
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    const renderMessage = (_record: ConversationRecord, context: RenderContext) =>
+      _record.kind === 'message' && _record.id === answer.id
+        ? <>{context.defaultRender()}<button onClick={() => void context.copyText()}>Copy full message</button></>
+        : undefined;
+    const view = render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} renderMessage={renderMessage} />);
+
+    const log = screen.getByRole('log');
+    expect(within(log).getByText('Please inspect wi_1234.')).toBeTruthy();
+    const answerBubble = view.container.querySelector<HTMLElement>('[data-record-key="answer"]')!;
+    expect(answerBubble.textContent).toContain('art_b322');
+    expect(answerBubble.textContent).toContain('wi_1234');
+    expect(answerBubble.textContent).not.toContain(artifactId);
+    expect(answerBubble.textContent).not.toContain(workItemId);
+    expect(answerBubble.querySelector('a')?.getAttribute('href')).toBe(`https://example.test/${artifactId}`);
+    fireEvent.click(within(answerBubble).getByRole('button', { name: 'Copy full message' }));
+    expect(writeText).toHaveBeenCalledWith(answerContent);
+
+    const pillForContent = (needle: string) => [...view.container.querySelectorAll<HTMLElement>('.tb-chat-activity-pill-row')]
+      .find(pill => pill.textContent?.includes(needle));
+    const noticePill = pillForContent('Reviewed clean');
+    expect(noticePill).toBeTruthy();
+    expect(noticePill?.textContent).toContain('art_b322');
+    expect(noticePill?.getAttribute('aria-label')).not.toContain(assignmentId);
+    expect(noticePill?.title).not.toContain(artifactId);
+    for (const id of shortStoredWakeIds) {
+      expect(noticePill?.title).toContain(id);
+      expect(noticePill?.title).not.toContain(storedWakeIds[shortStoredWakeIds.indexOf(id)]);
+    }
+    for (let index = 0; index < shortAdditionalIds.length; index++) {
+      expect(noticePill?.title).toContain(shortAdditionalIds[index]);
+      expect(noticePill?.title).not.toContain(additionalStoredIds[index]);
+    }
+    expect(noticePill?.title).toContain('w_harklight_1234-verification.md');
+    expect(noticePill?.title).toContain('wi_1234-verification.md');
+    fireEvent.click(within(noticePill!).getByRole('button', { name: /Show full message/ }));
+    const noticeBody = noticePill!.querySelector('[data-activity-message-content]')!;
+    expect(noticeBody.textContent).toContain('asg_abcd');
+    expect(noticeBody.textContent).toContain('art_b322');
+    expect(noticeBody.textContent).toContain('wi_1234');
+    expect(noticeBody.textContent).not.toContain(assignmentId);
+    expect(noticeBody.textContent).not.toContain(artifactId);
+    expect(noticeBody.textContent).not.toContain(workItemId);
+    for (let index = 0; index < shortStoredWakeIds.length; index++) {
+      expect(noticeBody.textContent).toContain(shortStoredWakeIds[index]);
+      expect(noticeBody.textContent).not.toContain(storedWakeIds[index]);
+    }
+    for (let index = 0; index < shortAdditionalIds.length; index++) {
+      expect(noticeBody.textContent).toContain(shortAdditionalIds[index]);
+      expect(noticeBody.textContent).not.toContain(additionalStoredIds[index]);
+    }
+    expect(noticeBody.textContent).toContain('w_harklight_1234-verification.md');
+    expect(noticeBody.textContent).toContain('wi_1234-verification.md');
+
+    const agentPill = pillForContent('Evidence art_b322');
+    expect(agentPill).toBeTruthy();
+    expect(agentPill?.textContent).toContain('wake_8765');
+    fireEvent.click(within(agentPill!).getByRole('button', { name: /Show full message/ }));
+    const agentBody = agentPill!.querySelector('[data-activity-message-content]')!;
+    expect(agentBody.textContent).toBe('Evidence art_b322; follow wake wake_8765.');
+    expect(runtime.getSnapshot().records.find(record => record.id === agent.id)?.content).toBe(agentContent);
+    expect(runtime.getSnapshot().records.find(record => record.id === notice.id)?.content).toBe(noticeContent);
+    expect(runtime.getSnapshot().records.find(record => record.id === answer.id)?.content).toBe(answerContent);
+
+    const toolRow = view.container.querySelector<HTMLElement>('[data-record-key="tool-tc-visible"]')!;
+    fireEvent.click(toolRow.querySelector('summary')!);
+    expect(toolRow.textContent).toContain('art_b322');
+    expect(toolRow.textContent).toContain('wake_8765');
+    expect(toolRow.textContent).not.toContain(artifactId);
+    expect(toolRow.textContent).not.toContain(wakeId);
+
+    const eventPill = view.container.querySelector<HTMLElement>('[data-record-key="record-event:work_item.filed:visible"]')!;
+    expect(eventPill.textContent).toContain('art_b322');
+    expect(eventPill.getAttribute('aria-label')).toContain('art_b322');
+    expect(eventPill.getAttribute('title')).toContain('art_b322');
+    expect(eventPill.getAttribute('aria-label')).not.toContain(artifactId);
+    expect(eventPill.getAttribute('title')).not.toContain(artifactId);
+
+    const attachmentDisclosure = answerBubble.querySelector<HTMLDetailsElement>('.tb-chat-attachments')!;
+    fireEvent.click(attachmentDisclosure.querySelector('summary')!);
+    expect(attachmentDisclosure.textContent).toContain('art_b322');
+    expect(attachmentDisclosure.textContent).not.toContain(artifactId);
+
+    fireEvent.click(screen.getByRole('button', { name: /Connection status:/ }));
+    expect(view.container.querySelector('.tb-chat-status-popup')?.textContent).toContain('s_1234');
+    expect(view.container.querySelector('.tb-chat-status-popup')?.textContent).not.toContain(sessionKey);
+  });
+
   it('opens complete pill messages in place for standalone and grouped rows', () => {
     const sessionKey = 'activity-pill-details';
     const prompt = row(sessionKey, 'prompt', 'Question', {
@@ -1191,8 +1353,10 @@ describe('conversation surface', () => {
 
     const toolRow = view.container.querySelector<HTMLElement>('[data-record-key="tool-tc-provenance"]')!;
     fireEvent.click(toolRow.querySelector('summary')!);
-    expect(toolRow.textContent).toContain(toolInput);
-    expect(toolRow.textContent).toContain(toolResult);
+    expect(toolRow.textContent).toContain('<engram-src id="123e"/> tool input remains verbatim');
+    expect(toolRow.textContent).toContain('<engram-src id="123e"/> tool result remains verbatim');
+    expect(toolCall.rawInput).toBe(toolInput);
+    expect(toolCall.rawOutput).toBe(toolResult);
 
     expect(runtime.getSnapshot().records.find(record => record.id === prompt.id)?.content).toBe(promptContent);
     expect(runtime.getSnapshot().records.find(record => record.id === carrier.id)?.content).toBe(carrierContent);
@@ -2066,7 +2230,7 @@ describe('conversation surface', () => {
     expect(reminderFold.textContent).not.toMatch(/[\[\]]/);
     expect(reminderFold.getAttribute('aria-label')).not.toMatch(/asg_456789ab/);
     expect(reminderFold.getAttribute('title')).toBe(
-      'Assignment asg_456789ab-1111-4111-8111-123456789abc (Background task) has had no recorded activity since 12');
+      'Assignment asg_4567 (Background task) has had no recorded activity since 12');
     fireEvent.click(reminderFold);
     expect(reminderFold.getAttribute('aria-expanded')).toBe('true');
     expect(reminderFold.firstElementChild?.classList.contains('tb-chat-activity-run-chevron')).toBe(true);
@@ -2109,7 +2273,7 @@ describe('conversation surface', () => {
       expect(pill.querySelector('.tb-chat-activity-bullet')).toBeNull();
       expect(pill.textContent).not.toContain('•');
       expect(pill.textContent).not.toMatch(/[\[\]]/);
-      expect(pill.textContent).not.toMatch(/\b(?:wi|asg|dr|att|s|w|c|tc)_[a-f0-9]{8}-/i);
+      expect(pill.textContent).not.toMatch(/\b(?:[a-z][a-z0-9]*_)+[a-f0-9]{8}(?:-[a-f0-9-]+)?\b/i);
     }
   });
 

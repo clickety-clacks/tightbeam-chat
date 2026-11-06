@@ -39,8 +39,8 @@ export function activitySenderLabel(sender?: string, displayName?: string): stri
 
   const kind = senderKind[1].toLowerCase() === 'session' ? 'Session' : 'Agent';
   const sessionId = /(?:^|\s)(s_[a-z0-9-]+)$/i.exec(key)?.[1];
-  if (sessionId) return kind === 'Agent' ? `${kind} · session ${sessionId.slice(2)}`
-    : `${kind} · ${sessionId.slice(2)}`;
+  if (sessionId) return kind === 'Agent' ? `${kind} · session ${formatVisibleIds(sessionId)}`
+    : `${kind} · ${formatVisibleIds(sessionId)}`;
   const identity = key.slice(senderKind[0].length).trim();
   return identity ? `${kind} ${identity}` : undefined;
 }
@@ -54,12 +54,61 @@ const semanticLines = (value: string): string[] => lines(value).filter(line => !
 const wireOnlyLine = (line: string): boolean => transportLine(line) ||
   /^(?:terminal-child-owner-notification|(?:source_kind|source_token|assignment_id|work_item_id|child_session_key|outcome|terminal_at)=)/i.test(line) ||
   /^\[(?:assignment:|woke:|turn failed\])/i.test(line);
-const shortenVisibleIds = (value: string): string => value.replace(
-  /\b((?:wi|asg|dr|att|s|w|c|tc)_)([a-z0-9]{4})[a-z0-9-]{4,}\b/gi,
-  (_match, prefix: string, firstFour: string) => `${prefix}${firstFour}`,
-);
+// Scan forward through every body, including bodies followed directly by prose.
+// Each hex run is consumed whole, never repartitioned by a regex engine.
+function formatHexIdToken(token: string): string {
+  let cursor = 0;
+  let prefixValid = false;
+  let copiedUntil = 0;
+  const chunks: string[] = [];
+  const hexEnd = (start: number): number => {
+    let end = start;
+    while (end < token.length && /[a-f0-9]/i.test(token[end])) end++;
+    return end;
+  };
+  while (cursor < token.length) {
+    const start = cursor;
+    if (prefixValid && token[start - 1] === '_') {
+      let end = hexEnd(start);
+      if (end - start >= 8) {
+        while (token[end] === '_' || token[end] === '-') {
+          const next = hexEnd(end + 1);
+          if (next - end - 1 < 4) break;
+          end = next;
+        }
+        chunks.push(token.slice(copiedUntil, start + 4));
+        copiedUntil = end;
+        cursor = end;
+        prefixValid = false;
+        continue;
+      }
+    }
+    while (cursor < token.length && token[cursor] !== '_' && token[cursor] !== '-') cursor++;
+    const part = token.slice(start, cursor);
+    prefixValid = /^[a-z][a-z0-9]*$/i.test(part);
+    cursor++;
+  }
+  chunks.push(token.slice(copiedUntil));
+  return chunks.join('');
+}
+// Fixed producer shapes with non-hex payloads or numeric generation suffixes.
+// Each repeated hex group requires a separator; none can repartition one hex run.
+const generatedIdPatterns = [
+  /\b(w_rs_)([a-f0-9]{4})[a-f0-9]{20}_[0-9]+(?![a-z0-9_])/gi,
+  /\b(w_health_redelivery_parent_)([0-9]{4})[0-9]+(?![a-z0-9_])/gi,
+  /\b((?:req|int|dbc|lgen)_)([A-Za-z0-9_-]{4})[A-Za-z0-9_-]{18}(?![A-Za-z0-9_])/g,
+  /\b(cli_)([0-9]{4})[0-9]+_[a-z0-9]{6}(?![a-z0-9_])/g,
+  /\b((?:identity-|assignment-inactivity-episode-v1:|provider-auth:|catalog-attempt:|catalog-final-401:|other-open:|other-resolve:|other:|settle-turn:))([a-f0-9]{4})[a-f0-9]{4,}(?:-[a-f0-9]{4,})*(?![a-z0-9])/gi,
+  // Unprefixed UUID handles and ULID execution/launch IDs have an empty prefix.
+  /\b()([a-f0-9]{4})[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}(?![a-z0-9])/gi,
+  /\b()([0-7][0-9A-HJKMNP-TV-Z]{3})[0-9A-HJKMNP-TV-Z]{22}(?![A-Za-z0-9_])/g,
+];
+export const formatVisibleIds = (value: string): string => generatedIdPatterns.reduce(
+  (text, pattern) => text.replace(pattern, (_match, prefix: string, firstFour: string) => `${prefix}${firstFour}`),
+  value,
+).replace(/[A-Za-z0-9_-]+/g, formatHexIdToken);
 function plainText(value: string): string {
-  return shortenVisibleIds(lines(value).filter(line => !wireOnlyLine(line))
+  return formatVisibleIds(lines(value).filter(line => !wireOnlyLine(line))
     .map(line => line.replace(/\[([^\]]*)\]/g, '$1').replace(/[\[\]]/g, '')).join(' '));
 }
 

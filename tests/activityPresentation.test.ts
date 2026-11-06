@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { activityPillPresentation, type ActivityPillSource } from '../src/activityPresentation';
+import { activityPillPresentation, activitySenderLabel, formatVisibleIds, type ActivityPillSource } from '../src/activityPresentation';
 
 const source = (kind: ActivityPillSource['kind'], content: string, gist = content.split('\n')[0] ?? '',
   extra: Partial<ActivityPillSource> = {}) => ({ kind, content, gist, ...extra } satisfies ActivityPillSource);
@@ -8,6 +8,116 @@ const deliveredNotice = (line: string) => source('substrate', `[from process:tig
 });
 
 describe('activity pill presentation', () => {
+  it('shortens every full prefixed identifier to its prefix and first four characters', () => {
+    const hex64 = 'a'.repeat(64);
+    const hex32 = 'b'.repeat(32);
+    const hex40 = 'c'.repeat(40);
+    expect(formatVisibleIds([
+      'wi_12345678-1111-4111-8111-123456789abc',
+      'asg_abcdef12-1111-4111-8111-123456789abc',
+      'dr_abcdef12-1111-4111-8111-123456789abc',
+      'att_abcdef12-1111-4111-8111-123456789abc',
+      's_abcdef12-1111-4111-8111-123456789abc',
+      'c_abcdef12-1111-4111-8111-123456789abc',
+      'tc_abcdef12-1111-4111-8111-123456789abc',
+      'art_b322d95e',
+      'nb_12345678',
+      'wake_87654321-1111-4111-8111-123456789abc',
+      'rev_abcdef12-1111-4111-8111-123456789abc',
+      'cp_abcdef12-1111-4111-8111-123456789abc',
+      'hhi_abcd1234',
+      'hho_abcd1234',
+      'crc_abcd1234',
+      'w_rule_' + hex64,
+      'tra_abcdef12-1111-4111-8111-123456789abc',
+      'ara_abcdef12-1111-4111-8111-123456789abc',
+      'trp_abcdef12-1111-4111-8111-123456789abc',
+      'nbm_abcdef12-1111-4111-8111-123456789abc',
+      'tcf_abcdef12-1111-4111-8111-123456789abc',
+      'tcfo_abcdef12-1111-4111-8111-123456789abc',
+      'hhore_abcd1234',
+      'w_terminal_4cf9f4ff-1111-4111-8111-123456789abc',
+      `w_nb_${hex64}`,
+      `w_terminal_${hex64}`,
+      `w_terminal_action_${hex64}`,
+      `w_${hex32}`,
+      `nbt_${hex40}`,
+      `pfe_${hex40}`,
+      'w_harklight_12345678-9abc-4def-8abc-123456789abc_0123456789abcdef0123',
+      'w_harklight_notice_recovery_12345678-9abc-4def-8abc-123456789abc',
+      'post_mvp',
+    ].join(' '))).toBe([
+      'wi_1234', 'asg_abcd', 'dr_abcd', 'att_abcd', 's_abcd', 'c_abcd', 'tc_abcd', 'art_b322', 'nb_1234',
+      'wake_8765', 'rev_abcd', 'cp_abcd', 'hhi_abcd', 'hho_abcd', 'crc_abcd', 'w_rule_aaaa',
+      'tra_abcd', 'ara_abcd', 'trp_abcd', 'nbm_abcd', 'tcf_abcd', 'tcfo_abcd', 'hhore_abcd',
+      'w_terminal_4cf9', 'w_nb_aaaa', 'w_terminal_aaaa', 'w_terminal_action_aaaa',
+      'w_bbbb', 'nbt_cccc', 'pfe_cccc', 'w_harklight_1234', 'w_harklight_notice_recovery_1234', 'post_mvp',
+    ].join(' '));
+  });
+
+  it('covers source-inventoried producer families and preserves their neighboring text', () => {
+    const uuid = '12345678-1111-4111-8111-123456789abc';
+    for (const prefix of ['a', 'act', 'aev', 'dlv', 'cn', 'ew', 'tl', 'tlm', 'tlc', 'wr', 'l', 'hhcp', 'w_retire']) {
+      expect(formatVisibleIds(prefix + '_' + uuid)).toBe(prefix + '_1234');
+    }
+    const cases = [
+      ['w_rs_' + 'a'.repeat(24) + '_12', 'w_rs_aaaa'],
+      ['w_health_redelivery_parent_123456', 'w_health_redelivery_parent_1234'],
+      ...['req', 'int', 'dbc', 'lgen'].map(prefix => [prefix + '_Ab_z-0123456789abcdefg', prefix + '_Ab_z']),
+      ['cli_1793910000000_abc123', 'cli_1793'],
+      ...['identity-', 'assignment-inactivity-episode-v1:', 'provider-auth:', 'catalog-attempt:', 'catalog-final-401:',
+        'other-open:', 'other-resolve:', 'other:', 'settle-turn:'].map(prefix => [prefix + uuid, prefix + '1234']),
+      [uuid, '1234'],
+      ['01ARZ3NDEKTSV4RRFFQ69G5FAV', '01AR'],
+    ];
+    for (const [full, short] of cases) {
+      expect(formatVisibleIds('source=' + full + ' next')).toBe('source=' + short + ' next');
+      expect(formatVisibleIds(full + '-verification.md')).toBe(short + '-verification.md');
+    }
+  });
+
+  it('recognizes new compound prefixes and consumes complete hex bodies', () => {
+    expect(formatVisibleIds('future_family_12345678-1111-4111-8111-123456789abc_abcd1234-verification.md'))
+      .toBe('future_family_1234-verification.md');
+    expect(formatVisibleIds('new_deadbeef_abcdef12_report')).toBe('new_dead_report');
+    expect(formatVisibleIds('x_1234567 x_12345678 next-prefix_abcdef12'))
+      .toBe('x_1234567 x_1234 next-prefix_abcd');
+    expect(formatVisibleIds('abc_'.repeat(16384) + 'zzzz')).toBe('abc_'.repeat(16384) + 'zzzz');
+  });
+
+  it('preserves hyphenated suffixes and date-like non-ID text', () => {
+    expect(formatVisibleIds([
+      'wi_b63e7584-verification.md',
+      'asg_ae3ac59d-aarch64-pack',
+      'art_b322d95e_report',
+      'backup_2026-11-05.md',
+      'backup_20261105.md',
+      'custom_deadbeef',
+    ].join(' '))).toBe('wi_b63e-verification.md asg_ae3a-aarch64-pack art_b322_report backup_2026-11-05.md backup_2026.md custom_dead');
+  });
+
+  it('shortens embedded and joined IDs while retaining surrounding text', () => {
+    expect(formatVisibleIds('progressatt_12345678records')).toBe('progressatt_1234records');
+    expect(formatVisibleIds('s_f5017fc8-wi_b63e7584')).toBe('s_f501-wi_b63e');
+    expect(formatVisibleIds('progressatt_12345678recordswi_87654321notes'))
+      .toBe('progressatt_1234recordswi_8765notes');
+    expect(formatVisibleIds('progressatt_12345678-1111-4111-8111-123456789abcrecords'))
+      .toBe('progressatt_1234records');
+    expect(formatVisibleIds('s_f5017fc8-wi_b63e7584-verification.md'))
+      .toBe('s_f501-wi_b63e-verification.md');
+    expect(formatVisibleIds('w_harklight_12345678-1111-4111-8111-123456789abc_abcd1234notes-wi_b63e7584'))
+      .toBe('w_harklight_1234notes-wi_b63e');
+  });
+
+  it('handles long matching and non-matching input without timing assertions', () => {
+    expect(formatVisibleIds(`w_${'a'.repeat(65536)}g`)).toBe('w_aaaag');
+    const nonmatching = 'w_1234567g-'.repeat(8192);
+    expect(formatVisibleIds(nonmatching)).toBe(nonmatching);
+    expect(formatVisibleIds('progressatt_12345678records-wi_b63e7584-'.repeat(8192)))
+      .toBe('progressatt_1234records-wi_b63e-'.repeat(8192));
+    expect(formatVisibleIds(`sha256_${'b'.repeat(64)}_tmp`)).toBe('sha256_bbbb_tmp');
+  });
+
   it('gives delivered verdict, completion, opened and closed notices distinct plain presentations', () => {
     const assignmentIds = [
       'asg_12345678-1111-4111-8111-123456789abc',
@@ -165,7 +275,7 @@ describe('activity pill presentation', () => {
     const fullSender = 'agent:agent:main:clawline:fixture:main s_1234abcd';
     expect(activityPillPresentation({ kind: 'agent', gist: 'Another agent — Review complete',
       content: 'Review complete', sender: fullSender })).toMatchObject({
-      label: 'Agent · session 1234abcd', tone: 'indigo', icon: 'message', text: 'Review complete', senderLabel: true,
+      label: 'Agent · session s_1234', tone: 'indigo', icon: 'message', text: 'Review complete', senderLabel: true,
     });
     expect(activityPillPresentation({ kind: 'agent', gist: 'Another agent — Update ready',
       content: 'Update ready', sender: 'agent:helper', senderDisplayName: 'Another agent' })).toMatchObject({
@@ -174,6 +284,14 @@ describe('activity pill presentation', () => {
     expect(activityPillPresentation(source('agent', 'Update ready'))).toMatchObject({
       label: 'Another agent', text: 'Update ready', icon: 'message',
     });
+  });
+
+  it('shortens artifact and wake identifiers in generic activity text', () => {
+    expect(activityPillPresentation(source('substrate',
+      'See artifact art_b322d95e and wake wake_87654321-1111-4111-8111-123456789abc')))
+      .toMatchObject({ text: 'See artifact art_b322 and wake wake_8765' });
+    expect(activitySenderLabel('agent:helper s_12345678-1111-4111-8111-123456789abc'))
+      .toBe('Agent · session s_1234');
   });
 
   it('keeps message detail separate when a sender display name contains the gist separator', () => {
