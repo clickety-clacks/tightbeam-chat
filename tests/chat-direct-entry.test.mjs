@@ -197,6 +197,19 @@ describe('private direct-entry Chat service bridge', () => {
       if (request.url === '/version') {
         response.writeHead(200, { 'content-type': 'application/json' });
         response.end(JSON.stringify({ version: '0.1.11', build: 3390, sha: '306f423d', protocolVersion: 1 }));
+      } else if (request.url.startsWith(`/api/sessions/${encodeURIComponent(LINKED_SESSION)}/turn-events?`)) {
+        const turnEventsRequest = new URL(request.url, 'http://gateway.invalid');
+        if (turnEventsRequest.searchParams.get('turnSeq') === '12') {
+          response.writeHead(404, { 'content-type': 'application/json' });
+          response.end(JSON.stringify({ error: { code: 'not_found' } }));
+        } else {
+          response.writeHead(200, { 'content-type': 'application/json' });
+          response.end(JSON.stringify({ schemaVersion: 1, resource: 'turn events', items: [{
+            id: 'event-13-1', sessionKey: LINKED_SESSION, turnSeq: 13, turnEventSeq: 1,
+            kind: 'assistant.segment', messageId: 'reply-13', toolCallId: null,
+            content: { type: 'text', text: 'ordered reply' }, toolCall: null, rowVersion: 1,
+          }], page: { oldestCursor: null, hasMoreBefore: false } }));
+        }
       } else if (request.url.startsWith(`/api/sessions/${encodeURIComponent(LINKED_SESSION)}/tool-calls`)) {
         response.writeHead(200, { 'content-type': 'application/json' });
         response.end(JSON.stringify({ schemaVersion: 1, resource: 'tool calls', items: [], item: { id: 'tc_read' }, page: { hasMoreBefore: false } }));
@@ -316,7 +329,30 @@ describe('private direct-entry Chat service bridge', () => {
     );
     expect((await roleResponse.json()).item.boundSessionKey).toBe(LINKED_SESSION);
 
-    expect(seen).toHaveLength(7);
+    const turnEventsBase = `${chatOrigin}/__chat/api/sessions/${encodeURIComponent(LINKED_SESSION)}/turn-events`;
+    const turnEventCursor = 'opaque + / ordinal cursor';
+    const forwardedTurnEventQuery = new URLSearchParams([
+      ['asUser', PRINCIPAL], ['limit', '500'], ['turnSeq', '12'], ['before', turnEventCursor],
+    ]);
+    const turnEventsResponse = await fetch(
+      `${turnEventsBase}?gateway=${encodeURIComponent(gatewayOrigin)}&limit=500&turnSeq=12&before=${encodeURIComponent(turnEventCursor)}`,
+      { headers: { origin: chatOrigin } },
+    );
+    expect(turnEventsResponse.status).toBe(404);
+    expect(await turnEventsResponse.json()).toEqual({ error: { code: 'not_found' } });
+    const orderedTurnEvents = { schemaVersion: 1, resource: 'turn events', items: [{
+      id: 'event-13-1', sessionKey: LINKED_SESSION, turnSeq: 13, turnEventSeq: 1,
+      kind: 'assistant.segment', messageId: 'reply-13', toolCallId: null,
+      content: { type: 'text', text: 'ordered reply' }, toolCall: null, rowVersion: 1,
+    }], page: { oldestCursor: null, hasMoreBefore: false } };
+    const orderedEventsResponse = await fetch(
+      `${turnEventsBase}?gateway=${encodeURIComponent(gatewayOrigin)}&limit=500&turnSeq=13`,
+      { headers: { origin: chatOrigin } },
+    );
+    expect(orderedEventsResponse.status).toBe(200);
+    expect(await orderedEventsResponse.json()).toEqual(orderedTurnEvents);
+
+    expect(seen).toHaveLength(9);
     expect(seen.map((row) => row.url)).toEqual([
       '/version',
       `/api/sessions/${encodeURIComponent(LINKED_SESSION)}?asUser=${encodeURIComponent(PRINCIPAL)}`,
@@ -325,9 +361,11 @@ describe('private direct-entry Chat service bridge', () => {
       `/api/sessions/${encodeURIComponent(LINKED_SESSION)}/messages/trigger-12?asUser=${encodeURIComponent(PRINCIPAL)}`,
       `/api/sessions/${encodeURIComponent(LINKED_SESSION)}/turns?asUser=${encodeURIComponent(PRINCIPAL)}&limit=50&tail=true`,
       `/api/roles/example-role?asUser=${encodeURIComponent(PRINCIPAL)}`,
+      `/api/sessions/${encodeURIComponent(LINKED_SESSION)}/turn-events?${forwardedTurnEventQuery}`,
+      `/api/sessions/${encodeURIComponent(LINKED_SESSION)}/turn-events?asUser=${encodeURIComponent(PRINCIPAL)}&limit=500&turnSeq=13`,
     ]);
     expect(seen.map((row) => row.authorization)).toEqual([
-      undefined, `Bearer ${TOKEN}`, `Bearer ${TOKEN}`, `Bearer ${TOKEN}`, `Bearer ${TOKEN}`, `Bearer ${TOKEN}`, `Bearer ${TOKEN}`,
+      undefined, `Bearer ${TOKEN}`, `Bearer ${TOKEN}`, `Bearer ${TOKEN}`, `Bearer ${TOKEN}`, `Bearer ${TOKEN}`, `Bearer ${TOKEN}`, `Bearer ${TOKEN}`, `Bearer ${TOKEN}`,
     ]);
     expect(seen.every((row) => !row.cliVersion && row.body === '')).toBe(true);
 
@@ -335,7 +373,7 @@ describe('private direct-entry Chat service bridge', () => {
     expect(wrongSession.status).toBe(404);
     const wrongOrigin = await fetch(`${chatOrigin}/__chat/gateway/version`, { headers: { origin: 'https://elsewhere.example' } });
     expect(wrongOrigin.status).toBe(403);
-    expect(seen).toHaveLength(8);
+    expect(seen).toHaveLength(10);
 
     const afterResponse = await fetch(
       `${chatOrigin}/__chat/api/sessions/${encodeURIComponent(LINKED_SESSION)}/messages?gateway=${encodeURIComponent(gatewayOrigin)}&limit=50&after=${encodeURIComponent(afterCursor)}`,
@@ -350,7 +388,7 @@ describe('private direct-entry Chat service bridge', () => {
       ['asUser', PRINCIPAL], ['limit', '50'], ['after', afterCursor],
     ]);
     expect(seen.at(-1)).toMatchObject({ method: 'GET', authorization: `Bearer ${TOKEN}` });
-    expect(seen).toHaveLength(9);
+    expect(seen).toHaveLength(11);
 
     const toolQuery = 'limit=50&afterMessageSeqFromInclusive=9&afterMessageSeqToExclusive=20&before=opaque-cursor';
     const toolBase = `${chatOrigin}/__chat/api/sessions/${encodeURIComponent(LINKED_SESSION)}/tool-calls`;
@@ -366,7 +404,7 @@ describe('private direct-entry Chat service bridge', () => {
     expect(seen.slice(-2).every(row => row.authorization === `Bearer ${TOKEN}` && row.method === 'GET')).toBe(true);
     const unlisted = await fetch(`${toolBase}?limit=50&unlisted=value`, { headers: { origin: chatOrigin } });
     expect(unlisted.status).toBe(404);
-    expect(seen).toHaveLength(11);
+    expect(seen).toHaveLength(13);
   });
 
   it('keeps the configured operator credential private and uses it only for read-marker-set dispatch', async () => {
