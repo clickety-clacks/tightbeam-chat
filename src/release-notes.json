@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.92",
+    "items": [
+      {
+        "title": "Closer composer spacing above the keyboard",
+        "description": "Chat adjusts the built-in message composer's spacing above the iOS Safari keyboard and tracks keyboard opening and closing, while retaining normal spacing when the keyboard is closed."
+      }
+    ]
+  },
+  {
     "version": "v0.1.91",
     "items": [
       {
