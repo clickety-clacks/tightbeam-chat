@@ -1038,6 +1038,18 @@ describe('activity trail projection', () => {
     expect(ordinary.messageItems).toEqual([]);
   });
 
+  it('keeps direct and batched history-backed remedy rows hidden without a human prompt', () => {
+    const directRemedy = message('direct-remedy', 1, 'remedy:review', 'Review requested changes');
+    const batchedRemedy = message('remedy-carrier', 2, 'process:tightbeam', [
+      '[from process:tightbeam]', '', '[batched notices: 1]', 'batchId=remedy-carrier', 'release=idle',
+      '[1] source=notification sender=remedy:review cause=review class=fyi',
+      'Review requested changes', '', 'coalesced by notifications',
+    ].join('\n'), { isBatchCarrier: true, messageType: 'substrate' });
+
+    expect(build({ records: [directRemedy], activeTurnRunning: false }).messageItems).toEqual([]);
+    expect(build({ records: [batchedRemedy], activeTurnRunning: false }).messageItems).toEqual([]);
+  });
+
   it('keeps a session-addressed agent message without owner-turn evidence both live and after reload', () => {
     const prompt = message('prompt', 1, 'user:person');
     const activity = message('session-message', 2, 'session:helper', 'Helper is working');

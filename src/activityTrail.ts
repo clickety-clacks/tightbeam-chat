@@ -507,11 +507,12 @@ export function buildActivityTrail(input: {
   let pending: CandidateEvent[] = [];
   const closeGap = (nextBubble?: BubbleEvent) => {
     if (!previousBubble?.spanKey) {
-      // Refusals belong to session history even where no owner prompt opens a
-      // span. A live refusal must also appear before the first human prompt.
+      // Persisted refusals belong to session history even where no owner prompt
+      // opens a span. A live refusal must also appear before the first prompt.
       for (const event of pending) {
         if (event.candidate.persistedRailDenial ||
-            (event.candidate.kind === 'rail' && !hasHumanPrompt) || input.shownRuns.has(event.candidate.id)) {
+            (event.candidate.kind === 'rail' && !event.candidate.historyBacked && !hasHumanPrompt) ||
+            input.shownRuns.has(event.candidate.id)) {
           add(event.candidate, `notice:${event.candidate.id}`);
         }
       }
