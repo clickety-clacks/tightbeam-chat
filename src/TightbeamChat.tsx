@@ -2805,7 +2805,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
       element.classList.toggle('tb-chat-keyboard-open', keyboardOpen);
       if (!keyboardOpen && currentHeight > 0) {
         fullHeight = currentHeight;
-        if (visual) baselineViewportHeight = visual.height;
+        if (visual) baselineViewportHeight = Math.max(baselineViewportHeight, visual.height);
       }
       element.style.setProperty('--tb-chat-full-height', `${fullHeight}px`);
       const visibleBottom = visual ? visual.offsetTop + visual.height : window.innerHeight;

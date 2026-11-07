@@ -1832,6 +1832,26 @@ describe('conversation reading position', () => {
     expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight);
   });
 
+  it('keeps the keyboard clearance state through incremental opening and closing', () => {
+    viewportHeight = 874;
+    vi.stubGlobal('innerHeight', 874);
+    const visualViewport = installVisualViewport(874);
+    const { box } = setup();
+    const chat = box.closest<HTMLElement>('.tb-chat')!;
+
+    for (const height of [800, 720, 640, 560, 529]) {
+      act(() => visualViewport.resizeTo(height));
+      expect(chat.classList.contains('tb-chat-keyboard-open')).toBe(height < 754);
+      expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight);
+    }
+
+    for (const height of [620, 710, 800, 874]) {
+      act(() => visualViewport.resizeTo(height));
+      expect(chat.classList.contains('tb-chat-keyboard-open')).toBe(height < 754);
+      expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight);
+    }
+  });
+
   it('retains safe-area clearance for a desktop viewport resize', () => {
     viewportHeight = 874;
     const visualViewport = installVisualViewport(874);
