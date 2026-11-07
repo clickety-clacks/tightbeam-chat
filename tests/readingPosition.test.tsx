@@ -1002,6 +1002,28 @@ describe('conversation reading position', () => {
     expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight);
   });
 
+  it('does not reserve latest-control padding during an automatic bottom-arrival glide', () => {
+    const startedAt = 1000;
+    vi.spyOn(performance, 'now').mockReturnValue(startedAt);
+    const { runtime, box } = setup();
+
+    const notice = { ...message(20), sender: 'process:events', messageType: 'substrate',
+      recordEventIds: ['notice-event-20'], content: 'One-line notice' };
+    extraBottomSpace += 40;
+    act(() => runtime.publish({ records: [...initialRows, notice] }));
+    advanceNextFrame(startedAt + 120);
+    fireEvent.scroll(box);
+    expect(box.scrollTop).toBeLessThan(box.scrollHeight - box.clientHeight);
+    // The control's visible state reserves 24px more bottom padding. Keeping
+    // it absent during automatic follow prevents that space snapping away.
+    expect(box.hasAttribute('data-latest-control-visible')).toBe(false);
+    expect(box.parentElement?.querySelector<HTMLElement>('[data-scroll-latest]')?.dataset.scrollControlHidden).toBe('true');
+
+    advanceNextFrame(startedAt + 300);
+    expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight);
+    expect(box.hasAttribute('data-latest-control-visible')).toBe(false);
+  });
+
   it('stops bottom-follow while scrolling up and resumes it after a page reaches the bottom', () => {
     const { runtime, box, input } = setup();
     const bottom = box.scrollHeight - box.clientHeight;
