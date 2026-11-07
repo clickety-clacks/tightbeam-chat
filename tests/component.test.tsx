@@ -2300,6 +2300,42 @@ describe('conversation surface', () => {
     expect(pill.getAttribute('title')).toBe('send refused by fixture-owner-policy');
   });
 
+  it('shows a live refusal with no human history and still shows ordinary conversation after reload', () => {
+    const sessionKey = 'empty-human-history';
+    const liveDenial = { id: 'arrival-denial', sessionKey, principal: `session:${sessionKey}`,
+      origin: 'chat', verb: 'send', rule: 'fixture-owner-policy',
+      payload: { detail: 'Fixture refusal', rule: 'fixture-owner-policy', verb: 'send' },
+      occurredAt: Date.parse('2026-11-06T12:00:00Z'), afterMessageSeq: 0,
+      tailEligibleAtArrival: false, arrivalOrder: 1 };
+    const liveRuntime = new FakeRuntime(sessionKey, { provenanceAvailable: false });
+    const liveView = render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(liveRuntime)} />);
+    act(() => liveRuntime.update({ liveRailDenials: [liveDenial] }));
+    const livePill = within(screen.getByRole('log')).getByRole('note', {
+      name: 'Refused: send was not allowed',
+    });
+    expect(livePill.classList.contains('tb-chat-activity-pill-row')).toBe(true);
+    liveView.unmount();
+
+    const historyDenial = { ...liveDenial, id: 'history-denial' };
+    const reloadedRuntime = new FakeRuntime(sessionKey, { provenanceAvailable: false,
+      historyRailDenials: [historyDenial] });
+    const reloadedView = render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(reloadedRuntime)} />);
+    expect(within(screen.getByRole('log')).getByRole('note', {
+      name: 'Refused: send was not allowed',
+    }).classList.contains('tb-chat-activity-pill-row')).toBe(true);
+    reloadedView.unmount();
+
+    const prompt = row(sessionKey, 'ordinary-prompt', 'A normal prompt', {
+      seq: 1, role: 'user', sender: 'user:fixture', messageType: 'chat', turnSeq: 1,
+    });
+    const ordinaryRuntime = new FakeRuntime(sessionKey, { records: [prompt], provenanceAvailable: false });
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(ordinaryRuntime)} />);
+    expect(screen.getByText('A normal prompt')).toBeTruthy();
+    expect(within(screen.getByRole('log')).queryByRole('note', {
+      name: 'Refused: send was not allowed',
+    })).toBeNull();
+  });
+
   it('renders delivered outcome notices with distinct icons, tones and short wording', () => {
     const sessionKey = 'delivered-outcome-notices';
     const human = row(sessionKey, 'prompt', 'Review these changes', {
