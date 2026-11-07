@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.96",
+    "items": [
+      {
+        "title": "New arrivals settle smoothly",
+        "description": "Short notices and messages arriving while you are at the bottom of a conversation now settle without a final jump."
+      }
+    ]
+  },
+  {
     "version": "v0.1.95",
     "items": [
       {
