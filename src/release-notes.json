@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.93",
+    "items": [
+      {
+        "title": "Show refusals as they happen",
+        "description": "If an action is refused before you send your first message in a conversation, Chat now shows the refusal right away and keeps it visible after reload."
+      }
+    ]
+  },
+  {
     "version": "v0.1.92",
     "items": [
       {
