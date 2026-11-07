@@ -1812,6 +1812,57 @@ describe('conversation reading position', () => {
     expect(screen.queryByRole('button', { name: /^(?:\d+ unseen messages?|Scroll to bottom)$/ })).toBeNull();
   });
 
+  it('drops the bottom safe-area clearance while a software keyboard occupies the visual viewport', () => {
+    viewportHeight = 874;
+    const visualViewport = installVisualViewport(874);
+    const { box } = setup();
+    const chat = box.closest<HTMLElement>('.tb-chat')!;
+    expect(chat.classList.contains('tb-chat-keyboard-open')).toBe(false);
+    expect(screen.getByRole('button', { name: 'Send message' })).toBeTruthy();
+
+    act(() => visualViewport.resizeTo(529));
+    expect(chat.classList.contains('tb-chat-keyboard-open')).toBe(true);
+    expect(keyboardInset()).toBe(345);
+    expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight);
+    expect(screen.getByRole('button', { name: 'Send message' })).toBeTruthy();
+
+    act(() => visualViewport.resizeTo(874));
+    expect(chat.classList.contains('tb-chat-keyboard-open')).toBe(false);
+    expect(keyboardInset()).toBe(0);
+    expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight);
+  });
+
+  it('keeps the keyboard clearance state through incremental opening and closing', () => {
+    viewportHeight = 874;
+    vi.stubGlobal('innerHeight', 874);
+    const visualViewport = installVisualViewport(874);
+    const { box } = setup();
+    const chat = box.closest<HTMLElement>('.tb-chat')!;
+
+    for (const height of [800, 720, 640, 560, 529]) {
+      act(() => visualViewport.resizeTo(height));
+      expect(chat.classList.contains('tb-chat-keyboard-open')).toBe(height < 754);
+      expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight);
+    }
+
+    for (const height of [620, 710, 800, 874]) {
+      act(() => visualViewport.resizeTo(height));
+      expect(chat.classList.contains('tb-chat-keyboard-open')).toBe(height < 754);
+      expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight);
+    }
+  });
+
+  it('retains safe-area clearance for a desktop viewport resize', () => {
+    viewportHeight = 874;
+    const visualViewport = installVisualViewport(874);
+    const { box } = setup();
+    const chat = box.closest<HTMLElement>('.tb-chat')!;
+    vi.stubGlobal('innerHeight', 529);
+
+    act(() => visualViewport.resizeTo(529));
+    expect(chat.classList.contains('tb-chat-keyboard-open')).toBe(false);
+  });
+
   it('keeps the latest message aligned in the frame the Chat container resizes', () => {
     viewportHeight = 874;
     installVisualViewport(874);

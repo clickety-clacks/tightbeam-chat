@@ -2798,10 +2798,14 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     const update = () => {
       const visual = window.visualViewport;
       const currentHeight = element.clientHeight;
-      const keyboardOpen = Boolean(visual && visual.height < baselineViewportHeight - 120);
+      const keyboardOpen = Boolean(visual && visual.height < baselineViewportHeight - 120 &&
+        visual.height < window.innerHeight - 120);
+      // The keyboard already protects the bottom edge; retaining the home-indicator
+      // inset here adds a blank band above it in Safari.
+      element.classList.toggle('tb-chat-keyboard-open', keyboardOpen);
       if (!keyboardOpen && currentHeight > 0) {
         fullHeight = currentHeight;
-        if (visual) baselineViewportHeight = visual.height;
+        if (visual) baselineViewportHeight = Math.max(baselineViewportHeight, visual.height);
       }
       element.style.setProperty('--tb-chat-full-height', `${fullHeight}px`);
       const visibleBottom = visual ? visual.offsetTop + visual.height : window.innerHeight;
