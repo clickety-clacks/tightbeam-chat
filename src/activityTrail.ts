@@ -467,6 +467,7 @@ export function buildActivityTrail(input: {
   if (input.toolsEnabled) candidates.push(...input.tools.map(toolCandidate));
 
   const orderedBubbles = bubbleEvents(input.bubbles);
+  const hasHumanPrompt = input.bubbles.some((bubble) => bubble.side === 'human');
   const events: TrailEvent[] = [
     ...orderedBubbles,
     ...candidates.map((candidate): CandidateEvent => ({
@@ -506,10 +507,13 @@ export function buildActivityTrail(input: {
   let pending: CandidateEvent[] = [];
   const closeGap = (nextBubble?: BubbleEvent) => {
     if (!previousBubble?.spanKey) {
-      // A recorded refusal belongs to the session's history even where no owner
-      // prompt opens a span, as in sessions driven only by wakes.
+      // Refusals belong to session history even where no owner prompt opens a
+      // span. A live refusal must also appear before the first human prompt.
       for (const event of pending) {
-        if (event.candidate.persistedRailDenial) add(event.candidate, `notice:${event.candidate.id}`);
+        if (event.candidate.persistedRailDenial ||
+            (event.candidate.kind === 'rail' && !hasHumanPrompt) || input.shownRuns.has(event.candidate.id)) {
+          add(event.candidate, `notice:${event.candidate.id}`);
+        }
       }
       pending = [];
       return;

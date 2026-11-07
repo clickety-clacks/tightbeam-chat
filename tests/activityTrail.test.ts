@@ -1009,6 +1009,35 @@ describe('activity trail projection', () => {
     expect(pill(withoutTime)[0]).toMatchObject({ ...expected, anchorSeq: 2 });
   });
 
+  it('shows a live rail denial before any human prompt and keeps the history row after reload', () => {
+    const live: LiveRailDenial = { id: 'arrival-denial', sessionKey: 'session', principal: 'session:session',
+      origin: 'chat', verb: 'send', rule: 'fixture-owner-policy', payload: { detail: 'Fixture refusal' },
+      occurredAt: 10_000, afterMessageSeq: 0, tailEligibleAtArrival: false, arrivalOrder: 1 };
+    const history: HistoryRailDenial = { id: 'history-denial', sessionKey: 'session', principal: 'session:session',
+      origin: 'chat', verb: 'send', rule: 'fixture-owner-policy', payload: { detail: 'Fixture refusal' },
+      occurredAt: 10_000, afterMessageSeq: 0 };
+    const railLines = (plan: ReturnType<typeof build>) =>
+      plan.messageItems.filter((item): item is ActivityLine => item.kind === 'rail');
+
+    const onArrival = build({ railDenials: [live], activeTurnRunning: false });
+    const afterReload = build({ historyRailDenials: [history], activeTurnRunning: false });
+    expect(railLines(onArrival)).toHaveLength(1);
+    expect(railLines(afterReload)).toHaveLength(1);
+    expect(railLines(onArrival)[0]).toMatchObject({
+      gist: 'send refused by fixture-owner-policy',
+      accessibleText: 'Rail: send refused by fixture-owner-policy',
+    });
+    expect(railLines(afterReload)[0]).toMatchObject({
+      gist: 'send refused by fixture-owner-policy',
+      accessibleText: 'Rail: send refused by fixture-owner-policy',
+    });
+
+    const prompt = message('ordinary-prompt', 1, 'user:person', 'A normal prompt', { role: 'user' });
+    const ordinary = build({ records: [prompt], bubbles: [bubble(prompt, 'human')],
+      railDenials: [{ ...live, tailEligibleAtArrival: false, afterMessageSeq: 1 }], activeTurnRunning: false });
+    expect(ordinary.messageItems).toEqual([]);
+  });
+
   it('keeps a session-addressed agent message without owner-turn evidence both live and after reload', () => {
     const prompt = message('prompt', 1, 'user:person');
     const activity = message('session-message', 2, 'session:helper', 'Helper is working');
