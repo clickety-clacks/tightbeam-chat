@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.95",
+    "items": [
+      {
+        "title": "Steadier arrivals at the latest message",
+        "description": "Short notices arriving during the glide to the latest message no longer make the conversation jump, while new arrivals leave your place unchanged when you are reading older messages."
+      }
+    ]
+  },
+  {
     "version": "v0.1.94",
     "items": [
       {

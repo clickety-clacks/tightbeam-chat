@@ -659,6 +659,13 @@ export function useReadingPosition(
       (userScrollIntent.current || !arrivalEligibleRef.current || (!following.current && !incoming))) {
       cancelArrivalAnimations();
     }
+    if (arrivalStartTime.current !== undefined && canAnimateArrival && appendedRows.length &&
+      incoming?.mode !== 'top') {
+      // A later bottom item extends the destination. Restart from the current
+      // offset so that change cannot jump the next frame forward mid-glide.
+      arrivalStartTop.current = box.scrollTop;
+      arrivalStartTime.current = performance.now();
+    }
     if (arrivalStartTime.current !== undefined && !incoming && canAnimateArrival && appendedRows.length) {
       animateArrivalRows(appendedRows);
     }

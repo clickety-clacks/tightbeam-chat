@@ -945,6 +945,63 @@ describe('conversation reading position', () => {
     expect(animate).toHaveBeenCalledTimes(1);
   });
 
+  it('glides when short notices grow the existing bottom activity fold', () => {
+    const { runtime, box } = setup();
+    const activeOwnerTurn = createTurnProvenance({
+      seq: 20, sessionKey: 'reading', messageId: initialRows.at(-1)!.id, origin: 'user:person',
+      status: 'running', triggerSource: 'human', raw: { seq: 20, origin: 'user:person' },
+    }, [initialRows.at(-1)!], 'person', 'person');
+    const notice = (id: number) => ({ ...message(id), id: `activity-${id}`,
+      sender: 'process:events', messageType: 'substrate', content: `One-line notice ${id}` });
+    act(() => runtime.publish({ activityTurnStateAvailable: true, activeTurn: activeOwnerTurn,
+      records: [...initialRows, notice(20), notice(21)] }));
+    advanceNextFrame(performance.now() + 300);
+    const fold = box.querySelector<HTMLElement>('[data-activity-fold="true"]')!;
+    const before = box.scrollTop;
+    const beforeBottom = box.scrollHeight - box.clientHeight;
+    expect(before).toBe(beforeBottom);
+
+    extraBottomSpace += 24;
+    act(() => runtime.publish({ records: [...runtime.state.records, notice(22)] }));
+    expect(box.querySelector('[data-activity-fold="true"]')).toBe(fold);
+    expect(box.scrollHeight - box.clientHeight).toBe(beforeBottom + 24);
+    expect(box.scrollTop).toBe(before);
+    expect(animationFrames.size).toBeGreaterThan(0);
+    advanceNextFrame(performance.now() + 300);
+    expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight);
+  });
+
+  it('does not jump when a second short bottom item arrives during a glide', () => {
+    const startedAt = 1000;
+    const clock = vi.spyOn(performance, 'now').mockReturnValue(startedAt);
+    const { runtime, box } = setup();
+    rowHeightOverrides.set('message-20', 24);
+    rowHeightOverrides.set('message-21', 24);
+    rowHeightOverrides.set('message-22', 24);
+    const initialBottom = box.scrollTop;
+
+    act(() => runtime.publish({ records: [...initialRows, message(20)] }));
+    advanceNextFrame(startedAt + 120);
+    const midway = box.scrollTop;
+    expect(midway).toBeGreaterThan(initialBottom);
+    expect(midway).toBeLessThan(box.scrollHeight - box.clientHeight);
+
+    clock.mockReturnValue(startedAt + 120);
+    act(() => runtime.publish({ records: [...runtime.state.records, message(21)] }));
+    expect(box.scrollTop).toBe(midway);
+    advanceNextFrame(startedAt + 120);
+    expect(box.scrollTop).toBe(midway);
+    advanceNextFrame(startedAt + 240);
+    const secondMidway = box.scrollTop;
+    clock.mockReturnValue(startedAt + 240);
+    act(() => runtime.publish({ records: [...runtime.state.records, message(22)] }));
+    expect(box.scrollTop).toBe(secondMidway);
+    advanceNextFrame(startedAt + 240);
+    expect(box.scrollTop).toBe(secondMidway);
+    advanceNextFrame(startedAt + 480);
+    expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight);
+  });
+
   it('stops bottom-follow while scrolling up and resumes it after a page reaches the bottom', () => {
     const { runtime, box, input } = setup();
     const bottom = box.scrollHeight - box.clientHeight;
