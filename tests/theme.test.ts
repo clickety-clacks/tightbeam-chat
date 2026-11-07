@@ -361,7 +361,7 @@ describe('Nordic theme', () => {
     expect(rule(componentCss, '.tb-chat-viewport:not([data-latest-control-visible])')).toContain('+ 3rem +');
     expect(rule(componentCss, '.tb-chat-host-composer-hidden .tb-chat-viewport:not([data-latest-control-visible])'))
       .toContain('clamp(1rem, 3.5vw, 2rem) + env(safe-area-inset-bottom)');
-    expect(componentSource).toContain("data-latest-control-visible={reading.showLatest ? 'true' : undefined}");
+    expect(componentSource).toContain("data-latest-control-visible={reading.showLatest && !reading.hideLatestControl ? 'true' : undefined}");
   });
 
   it('keeps all served color literals in the shared definition and uses only the approved disabled send opacity', () => {
