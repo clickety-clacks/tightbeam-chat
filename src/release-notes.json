@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.94",
+    "items": [
+      {
+        "title": "Tool activity in conversation order",
+        "description": "Chat places tool activity in per-turn order when the Gateway supplies ordered history. If that optional history is unavailable, ordinary messages and legacy tool history remain available."
+      }
+    ]
+  },
+  {
     "version": "v0.1.93",
     "items": [
       {
