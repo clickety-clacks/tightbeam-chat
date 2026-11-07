@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createTightbeamAdapter } from '../src/runtime';
 import { AuthorizationError, AttachmentUploadError, UnsupportedTargetError } from '../src/types';
 import { ToolHistoryUnavailableError } from '../src/toolHistory';
-import { projectTurnEvents, TurnEventHistoryUnavailableError } from '../src/turnEvents';
+import { projectTurnEvents } from '../src/turnEvents';
 import type {
   RuntimeState, ToolCallRecord, ToolCallRange, CanonicalMessage, CanonicalTransition, CanonicalTurn, ChangeCallbacks, ChatTransport,
   ConversationPage, ConversationRecord, HostIdentity, HumanSendResult,
@@ -163,40 +163,6 @@ function turnEvent(id: string, turnEventSeq: number, kind: TurnEventRecord['kind
 async function settle() { await vi.waitFor(() => {}, { timeout: 50 }); }
 
 describe('framework-independent runtime', () => {
-  it('falls back to legacy tool history when turn-event history is unavailable', async () => {
-    class LegacyTurnEventTransport extends TurnEventTransport {
-      toolCallbacks?: ChangeCallbacks;
-      toolRows = [turnEventCall('in_progress', 1)];
-      openToolChanges = async (_key: string, callbacks: ChangeCallbacks) => {
-        this.toolCallbacks = callbacks;
-        return { close: () => { if (this.toolCallbacks === callbacks) this.toolCallbacks = undefined; } };
-      };
-      readToolCalls = async (_key: string, range: ToolCallRange) => this.toolRows.filter(call =>
-        call.afterMessageSeq >= range.fromInclusive &&
-        (range.toExclusive === undefined || call.afterMessageSeq < range.toExclusive));
-    }
-
-    const transport = new LegacyTurnEventTransport();
-    const prompt = message(10, { id: 'prompt-7', role: 'user', sender: 'user:person', turnSeq: 7 });
-    const reply = message(11, { id: 'message-7', role: 'assistant', replyToMessageId: prompt.id, turnSeq: 7 });
-    transport.rows = [prompt, reply];
-    transport.eventReadHook = async () => {
-      throw new TurnEventHistoryUnavailableError('Reply ordering history is unavailable.');
-    };
-
-    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
-    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
-    await vi.waitFor(() => expect(runtime.getSnapshot()).toMatchObject({
-      turnEventsEnabled: false, turnEventsLoading: false, turnEventsError: undefined,
-      toolCallsEnabled: true, toolCallsLoading: false, toolCallsError: undefined,
-    }));
-
-    expect(runtime.getSnapshot().turnEvents).toEqual([]);
-    expect(visibleTools(runtime.getSnapshot())).toEqual(transport.toolRows);
-    expect(transport.toolCallbacks).toBeDefined();
-    runtime.dispose();
-  });
-
   it('unions live turn events with the history read and reloads the same ordinal sequence', async () => {
     const transport = new TurnEventTransport();
     const prompt = message(10, { id: 'prompt-7', role: 'user', sender: 'user:person', turnSeq: 7 });

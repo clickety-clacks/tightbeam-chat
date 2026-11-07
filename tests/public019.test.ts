@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import { indexValues } from '../src/recordIndex';
 import { createTightbeamAdapter } from '../src/runtime';
 import { advanceReadMarkerForwardOnly } from '../src/readMarker';
 import {
@@ -1623,6 +1624,58 @@ describe('tool-call contract and transition category', () => {
         toolCall: null, rowVersion: 1 }], page: { hasMoreBefore: false } }));
     await expect(candidate.transport.readTurnEvents!(sessionKey, [7], new AbortController().signal))
       .rejects.toThrow('Turn-event history is missing an ordinal.');
+  });
+
+  it('falls back at runtime when an older Gateway returns 404 for turn-event history', async () => {
+    const prompt = { ...item, id: 'prompt-7', seq: 10, role: 'user', content: 'Question', sender: 'person-1',
+      replyToMessageId: null, turnSeq: 7 };
+    const reply = { ...item, id: 'reply-7', seq: 11, role: 'assistant', content: 'Answer', sender: 'agent:sample',
+      replyToMessageId: prompt.id, turnSeq: 7 };
+    const candidate = setup(undefined, version, [prompt, reply]);
+    const legacyTool = { id: 'legacy-call', seq: 1, sessionKey, turnSeq: 7, afterMessageSeq: 11,
+      harnessToolCallId: 'legacy-invocation', title: 'Read source', kind: 'read', toolName: 'read_file',
+      status: 'completed', rawInput: { path: 'source.ts' }, rawOutput: { text: 'done' }, content: null,
+      truncated: [], startedAt: 100, endedAt: 200, rowVersion: 1 };
+    const originalFetch = candidate.host.fetch;
+    let turnEventRequests = 0;
+    let toolHistoryRequests = 0;
+    candidate.host.fetch = async (path, init) => {
+      if (path.includes('/turn-events?')) {
+        turnEventRequests++;
+        return new Response(JSON.stringify({ error: { code: 'not_found' } }), { status: 404 });
+      }
+      if (path.includes('/tool-calls?')) {
+        toolHistoryRequests++;
+        return new Response(JSON.stringify({ schemaVersion: 1, resource: 'tool calls', items: [legacyTool],
+          page: { oldestCursor: null, hasMoreBefore: false } }), { status: 200 });
+      }
+      return originalFetch(path, init);
+    };
+
+    const runtime = createTightbeamAdapter(candidate.transport, candidate.profile).open(sessionKey);
+    await vi.waitFor(() => expect(candidate.changes.sent).toHaveLength(2));
+    candidate.changes.emit({ type: 'subscription_ready', subscriptionId: `chat:${sessionKey}` });
+    await vi.waitFor(() => expect(runtime.getSnapshot()).toMatchObject({
+      status: 'ready', turnEventsEnabled: false, turnEventsLoading: false, turnEventsError: undefined,
+      toolCallsEnabled: true, toolCallsLoading: false, toolCallsError: undefined,
+      conversationError: undefined, liveError: undefined,
+    }));
+
+    const state = runtime.getSnapshot();
+    expect(state.records.map(record => record.id)).toEqual(['prompt-7', 'reply-7']);
+    expect(state.records.map(record => record.kind === 'message' ? record.content : '')).toEqual(['Question', 'Answer']);
+    const visibleTools = [...indexValues(state.toolCallIndex)].flatMap(group => [...indexValues(group)]);
+    expect(visibleTools.map(({ id, title }) => ({ id, title }))).toEqual([{ id: 'legacy-call', title: 'Read source' }]);
+    expect(turnEventRequests).toBe(1);
+    expect(toolHistoryRequests).toBe(1);
+
+    const recoveryRevision = state.recoveryRevision;
+    const messageRequests = candidate.paths.filter(path => path.includes('/messages?')).length;
+    await new Promise(resolveDelay => setTimeout(resolveDelay, 300));
+    expect(runtime.getSnapshot().recoveryRevision).toBe(recoveryRevision);
+    expect(turnEventRequests).toBe(1);
+    expect(candidate.paths.filter(path => path.includes('/messages?'))).toHaveLength(messageRequests);
+    runtime.dispose();
   });
 });
 
