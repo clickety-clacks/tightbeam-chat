@@ -323,6 +323,7 @@ async function createBundleFixture(tag, sourceCommit, { noticeContent, includeEx
 async function createPackageSourceFixture(rootDir) {
   const files = [
     'bin/activity-summaries.mjs',
+    'scripts/pair-marker-device.mjs',
     'server/chat-server.mjs',
     'scripts/update-chat-release.mjs',
     'scripts/chat-release-updater.mjs',
