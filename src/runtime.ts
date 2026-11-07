@@ -9,6 +9,7 @@ import {
   type CanonicalMessage,
   type CanonicalTurn,
   type ToolCallRecord,
+  type TurnEventRecord,
   type AttachmentInput,
   type AttachmentItem,
   type AttachmentReference,
@@ -38,6 +39,7 @@ import {
 } from './types';
 import { isPreparedAttachmentSelection, prepareAttachmentInputs } from './attachmentPreparation';
 import { ToolHistoryUnavailableError } from './toolHistory';
+import { TurnEventHistoryUnavailableError } from './turnEvents';
 import { createTurnProvenance } from './provenance';
 import { getIndex, putIndex, removeIndex, trimIndexBelow, type RecordIndex } from './recordIndex';
 import { sameRailDenial } from './railDenials';
@@ -202,6 +204,14 @@ class SessionRuntime implements ChatRuntime {
   private toolIndex: ToolCallIndex | undefined;
   private toolHistoryLoaded = false;
   private toolHistoryUnavailable = false;
+  private turnEventConnection: ChangeConnection | undefined;
+  private turnEventReadiness: Promise<ChangeConnection> | undefined;
+  private turnEventController: AbortController | undefined;
+  private turnEventEpoch = 0;
+  private readonly turnEvents = new Map<string, TurnEventRecord>();
+  private readonly turnEventOrdinals = new Map<string, string>();
+  private readonly turnEventLoadedTurns = new Set<number>();
+  private turnEventHistoryUnavailable = false;
   private connection: ChangeConnection | undefined;
   private connectionController: AbortController | undefined;
   private connectionBinding: { generation: number; doubted: boolean } | undefined;
@@ -251,6 +261,8 @@ class SessionRuntime implements ChatRuntime {
       // The conversation surface does not expose a toggle for this setting.
       toolCallsEnabled: transport.openToolChanges && transport.readToolCalls ? true : undefined,
       toolCalls: Object.freeze([]), toolCallIndex: undefined,
+      turnEventsEnabled: transport.openTurnEventChanges && transport.readTurnEvents ? true : undefined,
+      turnEvents: Object.freeze([]), turnEventsLoading: false,
       hasOlder: false, loadingOlder: false, sends: Object.freeze([]), targetLabel: profile.label,
       targetGateway: transport.targetGateway, provenance: noProvenance, provenanceAvailable: false,
       activitySenderDisplayNames: new Map(),
@@ -475,6 +487,185 @@ class SessionRuntime implements ChatRuntime {
     this.toolController = undefined;
   }
 
+  private stopTurnEvents(): void {
+    this.turnEventEpoch++;
+    this.turnEventController?.abort();
+    this.turnEventConnection?.close();
+    this.turnEventConnection = undefined;
+    this.turnEventReadiness = undefined;
+    this.turnEventController = undefined;
+  }
+
+  private clearTurnEvents(): void {
+    this.turnEvents.clear();
+    this.turnEventOrdinals.clear();
+    this.turnEventLoadedTurns.clear();
+  }
+
+  private orderedTurnEvents(): readonly TurnEventRecord[] {
+    return Object.freeze([...this.turnEvents.values()].sort((left, right) => left.turnSeq - right.turnSeq ||
+      left.turnEventSeq - right.turnEventSeq || left.id.localeCompare(right.id)));
+  }
+
+  private putTurnEvent(event: TurnEventRecord): boolean {
+    if (event.sessionKey !== this.sessionKey) return false;
+    const ordinalKey = `${event.turnSeq}:${event.turnEventSeq}`;
+    const priorId = this.turnEventOrdinals.get(ordinalKey);
+    if (priorId && priorId !== event.id) {
+      throw new UnsupportedTargetError('Turn-event history contains a duplicate ordinal.');
+    }
+    const previous = this.turnEvents.get(event.id);
+    if (previous) {
+      if (JSON.stringify(previous) !== JSON.stringify(event)) {
+        throw new UnsupportedTargetError('An immutable turn event changed between history and live delivery.');
+      }
+      return false;
+    }
+    this.turnEventOrdinals.set(ordinalKey, event.id);
+    this.turnEvents.set(event.id, event);
+    if (event.toolCall) this.putTool(event.toolCall);
+    return true;
+  }
+
+  private replaceTurnEventTurns(turnSeqs: ReadonlySet<number>, events: readonly TurnEventRecord[]): void {
+    for (const [id, event] of this.turnEvents) {
+      if (turnSeqs.has(event.turnSeq)) this.turnEvents.delete(id);
+    }
+    for (const key of this.turnEventOrdinals.keys()) {
+      if (turnSeqs.has(Number(key.slice(0, key.indexOf(':'))))) this.turnEventOrdinals.delete(key);
+    }
+    for (const event of events) this.putTurnEvent(event);
+  }
+
+  private loadedTurnSeqs(records: readonly ConversationRecord[]): number[] {
+    return [...new Set(records.flatMap(record => record.kind === 'message' && record.turnSeq !== undefined
+      ? [record.turnSeq] : []))].sort((left, right) => left - right);
+  }
+
+  private markTurnEventsUnavailable(pending: Iterable<TurnEventRecord> = []): void {
+    this.turnEventHistoryUnavailable = true;
+    for (const event of pending) this.putTurnEvent(event);
+    this.stopTurnEvents();
+    this.publish({ turnEventsEnabled: false, turnEvents: this.orderedTurnEvents(),
+      turnEventsLoading: false, turnEventsError: undefined,
+      toolCallIndex: trimIndexBelow(this.toolIndex, this.state.hasOlder ? this.state.records[0]?.seq ?? 0 : 0) });
+  }
+
+  private failTurnEvents(error: unknown, pending: Iterable<TurnEventRecord> = [], retry = true): void {
+    for (const event of pending) {
+      try { this.putTurnEvent(event); } catch { /* Keep the verified snapshot and report the feed doubt. */ }
+    }
+    this.stopTurnEvents();
+    this.publish({ turnEvents: this.orderedTurnEvents(), turnEventsLoading: false,
+      turnEventsError: errorText(error),
+      toolCallIndex: trimIndexBelow(this.toolIndex, this.state.hasOlder ? this.state.records[0]?.seq ?? 0 : 0) });
+    if (retry) this.scheduleRebuild();
+  }
+
+  /** Subscribe before reading immutable events so live overlap and reload share one order. */
+  private async startTurnEvents(): Promise<void> {
+    this.stopTurnEvents();
+    if (!this.state.turnEventsEnabled || this.turnEventHistoryUnavailable ||
+        !this.transport.openTurnEventChanges || !this.transport.readTurnEvents ||
+        this.state.status !== 'ready' || this.disposed) return;
+    const epoch = this.turnEventEpoch;
+    const generation = this.generation;
+    const controller = new AbortController();
+    this.turnEventController = controller;
+    const current = () => this.isCurrent(generation) && epoch === this.turnEventEpoch && this.checkIdentity();
+    const turnSeqs = this.loadedTurnSeqs(this.state.records);
+    const requestedTurns = new Set(turnSeqs);
+    const liveDuringRead = new Map<string, TurnEventRecord>();
+    let readingSnapshot = true;
+    let openingFeed = true;
+    this.publish({ turnEventsLoading: this.turnEventLoadedTurns.size === 0 && !this.state.turnEventsError });
+    try {
+      this.turnEventReadiness = this.transport.openTurnEventChanges(this.sessionKey, {
+        onNotice: notice => {
+          if (!current()) return;
+          if (notice.operation !== 'turn-event') {
+            this.failTurnEvents(new UnsupportedTargetError('Turn-event subscription delivered an unsupported change.'),
+              liveDuringRead.values(), false);
+            return;
+          }
+          if (readingSnapshot) {
+            const previous = liveDuringRead.get(notice.event.id);
+            if (!previous) liveDuringRead.set(notice.event.id, notice.event);
+            else if (JSON.stringify(previous) !== JSON.stringify(notice.event)) {
+              this.failTurnEvents(new UnsupportedTargetError('An immutable turn event changed during its history read.'),
+                liveDuringRead.values(), false);
+            }
+            return;
+          }
+          try {
+            if (this.putTurnEvent(notice.event)) {
+              this.publish({ turnEvents: this.orderedTurnEvents(),
+                toolCallIndex: trimIndexBelow(this.toolIndex, this.state.hasOlder ? this.state.records[0]?.seq ?? 0 : 0) });
+            }
+          } catch (error) { this.failTurnEvents(error, [], !(error instanceof UnsupportedTargetError)); }
+        },
+        onDoubt: reason => { if (current()) this.failTurnEvents(new Error(reason), liveDuringRead.values()); },
+        onAuthorizationLost: reason => {
+          if (current()) this.failTurnEvents(new AuthorizationError(reason), liveDuringRead.values(), false);
+        },
+      }, controller.signal);
+      const connection = await this.turnEventReadiness;
+      if (!current()) { connection.close(); return; }
+      openingFeed = false;
+      this.turnEventConnection = connection;
+      const snapshot = await this.transport.readTurnEvents(this.sessionKey, turnSeqs, controller.signal);
+      if (!current()) return;
+      const combined = new Map<string, TurnEventRecord>();
+      for (const event of [...snapshot, ...liveDuringRead.values()]) {
+        const previous = combined.get(event.id);
+        if (!previous) combined.set(event.id, event);
+        else if (JSON.stringify(previous) !== JSON.stringify(event)) {
+          throw new UnsupportedTargetError('An immutable turn event changed between history and live delivery.');
+        }
+      }
+      this.replaceTurnEventTurns(requestedTurns, [...combined.values()]);
+      for (const turnSeq of turnSeqs) this.turnEventLoadedTurns.add(turnSeq);
+      for (const event of liveDuringRead.values()) {
+        if (!requestedTurns.has(event.turnSeq)) this.putTurnEvent(event);
+      }
+      readingSnapshot = false;
+      this.turnEventHistoryUnavailable = false;
+      this.publish({ turnEvents: this.orderedTurnEvents(), turnEventsLoading: false, turnEventsError: undefined,
+        toolCalls: Object.freeze([...this.tools.values()]),
+        toolCallIndex: trimIndexBelow(this.toolIndex, this.state.hasOlder ? this.state.records[0]?.seq ?? 0 : 0) });
+    } catch (error) {
+      if (!current()) return;
+      readingSnapshot = false;
+      if (error instanceof TurnEventHistoryUnavailableError || (openingFeed && error instanceof UnsupportedTargetError)) {
+        this.markTurnEventsUnavailable(liveDuringRead.values());
+      } else this.failTurnEvents(error, liveDuringRead.values(), !(error instanceof UnsupportedTargetError));
+    }
+  }
+
+  private async olderTurnEvents(page: ConversationPage): Promise<void> {
+    if (!this.state.turnEventsEnabled || this.turnEventHistoryUnavailable || !this.transport.readTurnEvents ||
+        !this.turnEventController || !page.records.length || this.state.turnEventsError) return;
+    const turnSeqs = this.loadedTurnSeqs(page.records).filter(turnSeq => !this.turnEventLoadedTurns.has(turnSeq));
+    if (!turnSeqs.length) return;
+    const epoch = this.turnEventEpoch;
+    const controller = this.turnEventController;
+    if (!controller) return;
+    try {
+      await this.turnEventReadiness;
+      if (epoch !== this.turnEventEpoch || this.disposed) return;
+      const events = await this.transport.readTurnEvents(this.sessionKey, turnSeqs, controller.signal);
+      if (epoch !== this.turnEventEpoch || this.disposed) return;
+      for (const event of events) this.putTurnEvent(event);
+      for (const turnSeq of turnSeqs) this.turnEventLoadedTurns.add(turnSeq);
+      this.publish({ turnEvents: this.orderedTurnEvents(), toolCalls: Object.freeze([...this.tools.values()]),
+        toolCallIndex: trimIndexBelow(this.toolIndex, this.state.hasOlder ? this.state.records[0]?.seq ?? 0 : 0) });
+    } catch (error) {
+      if (epoch !== this.turnEventEpoch || this.disposed || controller.signal.aborted) return;
+      if (error instanceof TurnEventHistoryUnavailableError) this.markTurnEventsUnavailable();
+      else this.failTurnEvents(error, [], !(error instanceof UnsupportedTargetError));
+    }
+  }
+
   private putTool(call: ToolCallRecord): void {
     if (call.sessionKey !== this.sessionKey) return;
     const previous = this.tools.get(call.id);
@@ -624,6 +815,7 @@ class SessionRuntime implements ChatRuntime {
   };
 
   retryToolCalls = (): void => { void this.startTools(); };
+  retryTurnEvents = (): void => { void this.startTurnEvents(); };
 
   private notifyHostSend(id: string, signal: HostSendSignal): void {
     for (const observer of [...(this.hostSendObservers.get(id) ?? [])]) observer(signal);
@@ -654,6 +846,8 @@ class SessionRuntime implements ChatRuntime {
     }
     this.generation++;
     this.stopTools();
+    this.stopTurnEvents();
+    this.clearTurnEvents();
     this.recordEventHistory?.stop();
     this.controller?.abort();
     this.connectionController?.abort();
@@ -686,6 +880,7 @@ class SessionRuntime implements ChatRuntime {
       identityChanged: true,
       statusDetail: 'Host principal or device changed. Open a new component lifetime.',
       toolCalls: Object.freeze([]), toolCallIndex: undefined, toolCallsLoading: false, toolCallsError: undefined,
+      turnEvents: Object.freeze([]), turnEventsLoading: false, turnEventsError: undefined,
       recordEvents: Object.freeze([]), recordEventsHasOlder: false, recordEventsLoading: false, recordEventsError: undefined,
       records: Object.freeze([]), sends: Object.freeze([]), hasOlder: false,
       session: undefined, agentDisplayName: undefined, provenance: Object.freeze([]),
@@ -794,6 +989,8 @@ class SessionRuntime implements ChatRuntime {
       }
       case 'tool':
         return false; // Only the separate optional category connection owns tool records.
+      case 'turn-event':
+        return false; // Ordered turn events have their own overlap-backed history connection.
       case 'unknown':
         // These frames still advance the transport sequence, but they do not
         // change the selected transcript or justify replacing its snapshot.
@@ -842,6 +1039,7 @@ class SessionRuntime implements ChatRuntime {
     }
     this.generation++;
     this.stopTools();
+    this.stopTurnEvents();
     this.controller?.abort();
     this.connection?.close();
     this.connection = undefined;
@@ -1087,6 +1285,8 @@ class SessionRuntime implements ChatRuntime {
     this.reconnectTimer = undefined;
     this.clearLiveFeedStatusTimers();
     this.stopTools();
+    this.stopTurnEvents();
+    this.clearTurnEvents();
     this.recordEventHistory?.stop();
     this.controller?.abort();
     this.connectionController?.abort();
@@ -1112,6 +1312,7 @@ class SessionRuntime implements ChatRuntime {
       generation: this.generation, status: 'unauthorized', statusDetail: reason,
       liveConnectionState: 'disconnected',
       toolCalls: Object.freeze([]), toolCallIndex: undefined, toolCallsLoading: false, toolCallsError: undefined,
+      turnEvents: Object.freeze([]), turnEventsLoading: false, turnEventsError: undefined,
       recordEvents: Object.freeze([]), recordEventsHasOlder: false, recordEventsLoading: false, recordEventsError: undefined,
       records: Object.freeze([]), sends: Object.freeze([]), session: undefined,
       agentDisplayName: undefined, provenance: noProvenance, provenanceAvailable: false, activeTurn: undefined,
@@ -1159,6 +1360,7 @@ class SessionRuntime implements ChatRuntime {
     this.generation++;
     const generation = this.generation;
     this.stopTools();
+    this.stopTurnEvents();
     this.controller?.abort();
     if (reusableConnection && this.connection === reusableConnection && this.connectionBinding) {
       this.connectionBinding.generation = generation;
@@ -1476,6 +1678,7 @@ class SessionRuntime implements ChatRuntime {
       else if (!this.connection && liveError) this.noteLiveFeedUnavailable();
       if (!this.connection || liveError || lateFeedNeedsCatchUp) this.retryRecordEvents();
       void this.startTools();
+      void this.startTurnEvents();
       for (const send of sends) {
         if (send.reconciled) this.notifyHostSend(send.clientMessageId, { kind: 'reconciled' });
       }
@@ -1596,6 +1799,7 @@ class SessionRuntime implements ChatRuntime {
       this.validatePage(page);
       if (page.hasOlder && page.oldestCursor === cursor) throw new InvalidCursorError('Older cursor did not advance.');
       await this.olderTools(page);
+      await this.olderTurnEvents(page);
       if (!this.isCurrent(generation) || !this.checkIdentity()) return;
       this.replaceHistoryRailDenials(page.railDenials ?? []);
       for (const record of page.records) this.put(record);
@@ -2122,6 +2326,7 @@ class SessionRuntime implements ChatRuntime {
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.clearLiveFeedStatusTimers();
     this.stopTools();
+    this.stopTurnEvents();
     this.recordEventHistory?.stop();
     this.controller?.abort();
     this.connectionController?.abort();

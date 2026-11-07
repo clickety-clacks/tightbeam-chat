@@ -3,10 +3,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { createTightbeamAdapter } from '../src/runtime';
 import { AuthorizationError, AttachmentUploadError, UnsupportedTargetError } from '../src/types';
 import { ToolHistoryUnavailableError } from '../src/toolHistory';
+import { projectTurnEvents } from '../src/turnEvents';
 import type {
   RuntimeState, ToolCallRecord, ToolCallRange, CanonicalMessage, CanonicalTransition, CanonicalTurn, ChangeCallbacks, ChatTransport,
   ConversationPage, ConversationRecord, HostIdentity, HumanSendResult,
-  HistoryRailDenial, HumanSubmission, SessionRecord, TargetObservation, TargetProfile,
+  HistoryRailDenial, HumanSubmission, SessionRecord, TargetObservation, TargetProfile, TurnEventRecord,
 } from '../src/types';
 
 const sessionKey = 's1';
@@ -129,9 +130,79 @@ class ControlledTransport implements ChatTransport {
   doubt() { this.callbacks?.onDoubt('connection lost'); }
 }
 
+class TurnEventTransport extends ControlledTransport {
+  turnEventCallbacks?: ChangeCallbacks;
+  eventRows: readonly TurnEventRecord[] = [];
+  eventReadHook?: (turnSeqs: readonly number[]) => Promise<readonly TurnEventRecord[]>;
+  openTurnEventChanges: NonNullable<ChatTransport['openTurnEventChanges']> = async (_key, callbacks) => {
+    this.turnEventCallbacks = callbacks;
+    return { close: () => { if (this.turnEventCallbacks === callbacks) this.turnEventCallbacks = undefined; } };
+  };
+  readTurnEvents: NonNullable<ChatTransport['readTurnEvents']> = async (_key, turnSeqs) => {
+    return this.eventReadHook ? this.eventReadHook(turnSeqs) : this.eventRows;
+  };
+  emitTurnEvent(event: TurnEventRecord) {
+    this.turnEventCallbacks?.onNotice({ operation: 'turn-event', event });
+  }
+}
+
+function turnEventCall(status: ToolCallRecord['status'], rowVersion: number): ToolCallRecord {
+  return { id: 'call-1', seq: 1, sessionKey, turnSeq: 7, afterMessageSeq: 11,
+    harnessToolCallId: 'invocation-1', title: 'Read source', kind: 'read', toolName: 'read_file',
+    status, rawInput: { path: 'source.ts' }, rawOutput: status === 'completed' ? { text: 'done' } : null,
+    content: null, truncated: [], startedAt: 100, endedAt: status === 'completed' ? 200 : null, rowVersion };
+}
+
+function turnEvent(id: string, turnEventSeq: number, kind: TurnEventRecord['kind'],
+  messageId: string | null, call?: ToolCallRecord, text?: string): TurnEventRecord {
+  return { id, sessionKey, turnSeq: 7, turnEventSeq, kind, messageId,
+    toolCallId: call?.id ?? null, content: kind === 'assistant.segment' ? { type: 'text', text } : null,
+    toolCall: call ?? null, rowVersion: 1 };
+}
+
 async function settle() { await vi.waitFor(() => {}, { timeout: 50 }); }
 
 describe('framework-independent runtime', () => {
+  it('unions live turn events with the history read and reloads the same ordinal sequence', async () => {
+    const transport = new TurnEventTransport();
+    const prompt = message(10, { id: 'prompt-7', role: 'user', sender: 'user:person', turnSeq: 7 });
+    const reply = message(11, { id: 'message-7', role: 'assistant', replyToMessageId: prompt.id, turnSeq: 7 });
+    transport.rows = [prompt, reply];
+    const started = turnEventCall('in_progress', 1);
+    const completed = turnEventCall('completed', 2);
+    const events = [
+      turnEvent('segment-1', 1, 'assistant.segment', reply.id, undefined, 'Before'),
+      turnEvent('tool-start', 2, 'tool.started', null, started),
+      turnEvent('segment-3', 3, 'assistant.segment', reply.id, undefined, 'After'),
+      turnEvent('tool-end', 4, 'tool.ended', null, completed),
+    ];
+    const snapshot = deferred<readonly TurnEventRecord[]>();
+    let readCount = 0;
+    transport.eventReadHook = () => {
+      readCount++;
+      return readCount === 1 ? snapshot.promise : Promise.resolve(events);
+    };
+
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+    await vi.waitFor(() => expect(transport.turnEventCallbacks).toBeDefined());
+    transport.emitTurnEvent(events[3]);
+    snapshot.resolve(events.slice(0, 3));
+    await vi.waitFor(() => expect(runtime.getSnapshot().turnEvents).toHaveLength(4));
+
+    const liveEntries = projectTurnEvents(runtime.getSnapshot().turnEvents!);
+    expect(runtime.getSnapshot().turnEvents!.map(event => event.turnEventSeq)).toEqual([1, 2, 3, 4]);
+    expect(liveEntries.map(entry => entry.kind)).toEqual(['assistant', 'tools', 'assistant']);
+    expect(liveEntries[1]).toMatchObject({ calls: [{ call: completed }] });
+
+    await runtime.rebuild({ restart: true });
+    await vi.waitFor(() => expect(readCount).toBe(2));
+    const reloadEntries = projectTurnEvents(runtime.getSnapshot().turnEvents!);
+    expect(runtime.getSnapshot().turnEvents!.map(event => event.turnEventSeq)).toEqual([1, 2, 3, 4]);
+    expect(reloadEntries).toEqual(liveEntries);
+    runtime.dispose();
+  });
+
   it('records only the configured operator’s newest loaded message under the exact full session key when opened', async () => {
     const fullSessionKey = 'agent:sample assistant with space';
     const transport = new ControlledTransport();
