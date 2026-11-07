@@ -96,6 +96,20 @@ export interface ToolCallRecord {
   readonly rowVersion: number;
 }
 
+/** An immutable assistant segment or tool lifecycle event ordered within one turn. */
+export interface TurnEventRecord {
+  readonly id: string;
+  readonly sessionKey: string;
+  readonly turnSeq: number;
+  readonly turnEventSeq: number;
+  readonly kind: 'assistant.segment' | 'tool.started' | 'tool.ended';
+  readonly messageId: string | null;
+  readonly toolCallId: string | null;
+  readonly content: Readonly<Record<string, unknown>> | null;
+  readonly toolCall: ToolCallRecord | null;
+  readonly rowVersion: number;
+}
+
 /** A durable occurrence from the selected session's record-event feed. */
 export interface SessionRecordEvent {
   readonly eventId: string;
@@ -152,6 +166,7 @@ export interface SessionRecord {
 export type ChangeNotice =
   | { readonly operation: 'record-event'; readonly event: SessionRecordEvent }
   | { readonly operation: 'tool'; readonly tool: ToolCallRecord }
+  | { readonly operation: 'turn-event'; readonly event: TurnEventRecord }
   | { readonly operation: 'upsert'; readonly record: ConversationRecord }
   | { readonly operation: 'rail-denial'; readonly id: string; readonly sessionKey: string;
       readonly principal: string; readonly verb: string; readonly rule: string; readonly origin?: string;
@@ -315,6 +330,10 @@ export interface ChatTransport {
   openToolChanges?(sessionKey: string, callbacks: ChangeCallbacks, signal: AbortSignal): Promise<ChangeConnection>;
   /** Exhaust the page chain for this fixed message-anchor range. */
   readToolCalls?(sessionKey: string, range: ToolCallRange, signal: AbortSignal): Promise<readonly ToolCallRecord[]>;
+  /** Separate optional stream for ordered assistant segments and tool events. */
+  openTurnEventChanges?(sessionKey: string, callbacks: ChangeCallbacks, signal: AbortSignal): Promise<ChangeConnection>;
+  /** Read all turn events for the requested loaded turns, oldest to newest. */
+  readTurnEvents?(sessionKey: string, turnSeqs: readonly number[], signal: AbortSignal): Promise<readonly TurnEventRecord[]>;
   /** Newest page by default; older pages use the opaque R1 cursor. */
   readRecordEvents?(sessionKey: string, before: string | undefined, signal: AbortSignal): Promise<RecordEventPage>;
   readTail(sessionKey: string, signal: AbortSignal): Promise<ConversationPage>;
@@ -398,6 +417,10 @@ export interface RuntimeState {
   readonly toolCallIndex?: ToolCallIndex;
   readonly toolCallsLoading?: boolean;
   readonly toolCallsError?: string;
+  readonly turnEventsEnabled?: boolean;
+  readonly turnEvents?: readonly TurnEventRecord[];
+  readonly turnEventsLoading?: boolean;
+  readonly turnEventsError?: string;
   readonly session?: SessionRecord;
   readonly provenance?: readonly TurnProvenance[];
   /** False until typed turn data is observed or retrieved for this runtime. */
@@ -456,6 +479,7 @@ export interface ChatRuntime {
   loadOlder(): Promise<void>;
   setToolCallsEnabled?(enabled: boolean): void;
   retryToolCalls?(): void;
+  retryTurnEvents?(): void;
   retryRecordEvents?(): void;
   send(content: string, clientMessageId?: string, hostSend?: HostSendContext): string | null;
   /** Prepare the whole selection before enabling Send; preview and submit the exact returned list. */

@@ -4,6 +4,7 @@ import { parseServiceHttpTarget } from '../server/chat-server.mjs';
 const runtime = { gatewayOrigin: 'https://gateway.example', principalKey: 'example-user' };
 const sessionKey = 'agent:example:linked-chat';
 const messagesPath = `/__chat/api/sessions/${encodeURIComponent(sessionKey)}/messages`;
+const turnEventsPath = `/__chat/api/sessions/${encodeURIComponent(sessionKey)}/turn-events`;
 
 function forwardedQuery(target) {
   expect(target).toMatchObject({ kind: 'transcript', gatewayOrigin: runtime.gatewayOrigin });
@@ -64,5 +65,32 @@ it('forwards selected-session record-event history and its opaque older cursor t
     expect(url.pathname).toBe(`/api/sessions/${encodeURIComponent(sessionKey)}/record-events`);
     expect(url.searchParams.get('asUser')).toBe(runtime.principalKey);
     expect(url.searchParams.get('before')).toBe(before ?? null);
+  }
+});
+
+it('forwards selected-session turn-event pages with only supported query parameters', () => {
+  const before = 'opaque + / turn cursor';
+  const query = new URLSearchParams({ limit: '500', turnSeq: '7', before });
+  const target = parseServiceHttpTarget(`${turnEventsPath}?${query}`, runtime);
+
+  expect(target).toMatchObject({ kind: 'transcript', gatewayOrigin: runtime.gatewayOrigin, sessionKey });
+  const forwarded = new URL(target.path, runtime.gatewayOrigin);
+  expect(forwarded.pathname).toBe(`/api/sessions/${encodeURIComponent(sessionKey)}/turn-events`);
+  expect([...forwarded.searchParams.entries()]).toEqual([
+    ['asUser', runtime.principalKey], ['limit', '500'], ['turnSeq', '7'], ['before', before],
+  ]);
+});
+
+it('rejects malformed, duplicated, or unlisted turn-event query parameters', () => {
+  for (const query of [
+    'limit=500',
+    'turnSeq=7',
+    'limit=501&turnSeq=7',
+    'limit=500&turnSeq=0',
+    'limit=500&turnSeq=7&before=',
+    'limit=500&turnSeq=7&turnSeq=8',
+    'limit=500&turnSeq=7&unexpected=value',
+  ]) {
+    expect(parseServiceHttpTarget(`${turnEventsPath}?${query}`, runtime)).toBeUndefined();
   }
 });

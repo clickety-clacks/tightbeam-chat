@@ -1,14 +1,16 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import { indexValues } from '../src/recordIndex';
 import { createTightbeamAdapter } from '../src/runtime';
 import { advanceReadMarkerForwardOnly } from '../src/readMarker';
 import {
-  createPublic019Transport, decodePublic019Message, decodePublic019Session, decodePublic019Turn, decodeRecordEvent, decodeToolCall,
+  createPublic019Transport, decodePublic019Message, decodePublic019Session, decodePublic019Turn, decodeRecordEvent, decodeToolCall, decodeTurnEvent,
   decodePublic019Notice, type Public019Channel, type Public019Host,
 } from '../src/public019';
 import { AuthorizationError, SessionNotFoundError, UnsupportedTargetError } from '../src/types';
 import { ToolHistoryUnavailableError } from '../src/toolHistory';
+import { TurnEventHistoryUnavailableError } from '../src/turnEvents';
 
 const sessionKey = 's-public';
 const identity = { principalKey: 'person-1', deviceId: 'device-1' };
@@ -64,6 +66,9 @@ function setup(heartbeatTimeoutMs?: number, observedVersion = version, historyIt
       }));
       if (path.includes('/tool-calls?')) return new Response(JSON.stringify({
         schemaVersion: 1, resource: 'tool calls', items: [], page: { hasMoreBefore: false },
+      }), { status: 200 });
+      if (path.includes('/turn-events?')) return new Response(JSON.stringify({
+        schemaVersion: 1, resource: 'turn events', items: [], page: { oldestCursor: null, hasMoreBefore: false },
       }), { status: 200 });
       if (path.includes('/turns?')) return new Response(JSON.stringify({
         schemaVersion: 1, resource: 'turns', items: turnItems, page: { hasMoreBefore: false },
@@ -635,6 +640,7 @@ describe('Gateway wire mapping and behavior checks', () => {
       'https://host.example/api/sessions/s-public/messages?limit=50&tail=true',
       'https://host.example/api/sessions/s-public/record-events?limit=50',
       'https://host.example/api/sessions/s-public/tool-calls?limit=50&afterMessageSeqFromInclusive=9',
+      'https://host.example/api/sessions/s-public/turn-events?limit=500&turnSeq=12',
     ]);
     expect(candidate.paths.some((path) => /^https:\/\/host\.example\/api\/turns\//.test(path))).toBe(false);
     expect(candidate.changes.closed).toBe(false);
@@ -1547,6 +1553,129 @@ describe('tool-call contract and transition category', () => {
     tools.close();
     expect(channels[0].closed).toBe(false);
     main.close();
+  });
+
+  it('decodes turn-event notices and pages REST history with the same per-turn ordinal', async () => {
+    const started = { ...call, turnSeq: 7, status: 'in_progress', rowVersion: 1 };
+    const completed = { ...call, turnSeq: 7, status: 'completed', rowVersion: 2, endedAt: 2000, rawOutput: { done: true } };
+    const segment1 = { id: 'event-1', sessionKey, turnSeq: 7, turnEventSeq: 1,
+      kind: 'assistant.segment', messageId: 'message-7', toolCallId: null,
+      content: { type: 'text', text: 'Before' }, toolCall: null, rowVersion: 1 };
+    const toolStart = { id: 'event-2', sessionKey, turnSeq: 7, turnEventSeq: 2,
+      kind: 'tool.started', messageId: null, toolCallId: call.id, content: null, toolCall: started, rowVersion: 1 };
+    const segment3 = { id: 'event-3', sessionKey, turnSeq: 7, turnEventSeq: 3,
+      kind: 'assistant.segment', messageId: 'message-7', toolCallId: null,
+      content: { type: 'text', text: 'After' }, toolCall: null, rowVersion: 1 };
+    const toolEnd = { id: 'event-4', sessionKey, turnSeq: 7, turnEventSeq: 4,
+      kind: 'tool.ended', messageId: null, toolCallId: call.id, content: null, toolCall: completed, rowVersion: 1 };
+    expect(decodeTurnEvent(segment1, sessionKey)).toMatchObject({ id: 'event-1', turnEventSeq: 1,
+      kind: 'assistant.segment', messageId: 'message-7', content: { text: 'Before' } });
+    expect(decodePublic019Notice({ type: 'change', schemaVersion: 2, class: 'message.segment_recorded',
+      resource: 'turn events', op: 'upsert', refs: { sessionKey, turnEventId: 'event-1' }, payload: segment1 }, sessionKey))
+      .toMatchObject({ operation: 'turn-event', event: { id: 'event-1', turnEventSeq: 1 } });
+
+    const channels: Channel[] = [];
+    const paths: URL[] = [];
+    const host: Public019Host = {
+      currentIdentity: () => identity,
+      fetch: async path => {
+        const url = new URL(path); paths.push(url);
+        const older = url.searchParams.has('before');
+        return new Response(JSON.stringify({ schemaVersion: 1, resource: 'turn events',
+          items: older ? [segment1, toolStart] : [segment3, toolEnd],
+          page: { oldestCursor: older ? 'oldest' : 'opaque-prior-page', hasMoreBefore: !older } }));
+      },
+      openAuthenticatedChanges: async () => {
+        const channel = new Channel(); channel.autoReady = true; channels.push(channel); return channel;
+      },
+      openAuthenticatedHuman: async () => new Channel(),
+    };
+    const { transport } = createPublic019Transport({ baseUrl: 'https://host.example', host });
+    const callbacks = { onNotice: vi.fn(), onDoubt: vi.fn() };
+    const controller = new AbortController();
+    const connection = await transport.openTurnEventChanges!(sessionKey, callbacks, controller.signal);
+    expect(channels[0].sent[0].filters).toEqual({ sessionKey,
+      classes: ['message.segment_recorded', 'tool_call.event_recorded'] });
+    channels[0].emit({ type: 'change', schemaVersion: 2, subscriptionId: `turn-events:${sessionKey}`, seq: 1,
+      class: 'message.segment_recorded', resource: 'turn events', op: 'upsert',
+      refs: { sessionKey, turnEventId: segment1.id }, payload: segment1 });
+    expect(callbacks.onNotice).toHaveBeenCalledWith(expect.objectContaining({ operation: 'turn-event',
+      event: expect.objectContaining({ id: 'event-1', turnEventSeq: 1 }) }));
+
+    const rows = await transport.readTurnEvents!(sessionKey, [7], controller.signal);
+    expect(rows.map(event => event.turnEventSeq)).toEqual([1, 2, 3, 4]);
+    expect(rows.map(event => event.id)).toEqual(['event-1', 'event-2', 'event-3', 'event-4']);
+    expect(rows[3].toolCall).toMatchObject({ status: 'completed', rowVersion: 2 });
+    expect(paths).toHaveLength(2);
+    expect(paths.every(url => url.searchParams.get('turnSeq') === '7')).toBe(true);
+    expect(paths[1].searchParams.get('before')).toBe('opaque-prior-page');
+    connection.close();
+  });
+
+  it('reports the event route as optional on older gateways and rejects an incomplete ordinal page', async () => {
+    const candidate = setup();
+    candidate.host.fetch = async () => new Response(JSON.stringify({ error: { code: 'not_found' } }), { status: 404 });
+    await expect(candidate.transport.readTurnEvents!(sessionKey, [7], new AbortController().signal))
+      .rejects.toBeInstanceOf(TurnEventHistoryUnavailableError);
+
+    candidate.host.fetch = async () => new Response(JSON.stringify({ schemaVersion: 1, resource: 'turn events',
+      items: [{ id: 'event-2', sessionKey, turnSeq: 7, turnEventSeq: 2, kind: 'assistant.segment',
+        messageId: 'message-7', toolCallId: null, content: { type: 'text', text: 'Missing first event' },
+        toolCall: null, rowVersion: 1 }], page: { hasMoreBefore: false } }));
+    await expect(candidate.transport.readTurnEvents!(sessionKey, [7], new AbortController().signal))
+      .rejects.toThrow('Turn-event history is missing an ordinal.');
+  });
+
+  it('falls back at runtime when an older Gateway returns 404 for turn-event history', async () => {
+    const prompt = { ...item, id: 'prompt-7', seq: 10, role: 'user', content: 'Question', sender: 'person-1',
+      replyToMessageId: null, turnSeq: 7 };
+    const reply = { ...item, id: 'reply-7', seq: 11, role: 'assistant', content: 'Answer', sender: 'agent:sample',
+      replyToMessageId: prompt.id, turnSeq: 7 };
+    const candidate = setup(undefined, version, [prompt, reply]);
+    const legacyTool = { id: 'legacy-call', seq: 1, sessionKey, turnSeq: 7, afterMessageSeq: 11,
+      harnessToolCallId: 'legacy-invocation', title: 'Read source', kind: 'read', toolName: 'read_file',
+      status: 'completed', rawInput: { path: 'source.ts' }, rawOutput: { text: 'done' }, content: null,
+      truncated: [], startedAt: 100, endedAt: 200, rowVersion: 1 };
+    const originalFetch = candidate.host.fetch;
+    let turnEventRequests = 0;
+    let toolHistoryRequests = 0;
+    candidate.host.fetch = async (path, init) => {
+      if (path.includes('/turn-events?')) {
+        turnEventRequests++;
+        return new Response(JSON.stringify({ error: { code: 'not_found' } }), { status: 404 });
+      }
+      if (path.includes('/tool-calls?')) {
+        toolHistoryRequests++;
+        return new Response(JSON.stringify({ schemaVersion: 1, resource: 'tool calls', items: [legacyTool],
+          page: { oldestCursor: null, hasMoreBefore: false } }), { status: 200 });
+      }
+      return originalFetch(path, init);
+    };
+
+    const runtime = createTightbeamAdapter(candidate.transport, candidate.profile).open(sessionKey);
+    await vi.waitFor(() => expect(candidate.changes.sent).toHaveLength(2));
+    candidate.changes.emit({ type: 'subscription_ready', subscriptionId: `chat:${sessionKey}` });
+    await vi.waitFor(() => expect(runtime.getSnapshot()).toMatchObject({
+      status: 'ready', turnEventsEnabled: false, turnEventsLoading: false, turnEventsError: undefined,
+      toolCallsEnabled: true, toolCallsLoading: false, toolCallsError: undefined,
+      conversationError: undefined, liveError: undefined,
+    }));
+
+    const state = runtime.getSnapshot();
+    expect(state.records.map(record => record.id)).toEqual(['prompt-7', 'reply-7']);
+    expect(state.records.map(record => record.kind === 'message' ? record.content : '')).toEqual(['Question', 'Answer']);
+    const visibleTools = [...indexValues(state.toolCallIndex)].flatMap(group => [...indexValues(group)]);
+    expect(visibleTools.map(({ id, title }) => ({ id, title }))).toEqual([{ id: 'legacy-call', title: 'Read source' }]);
+    expect(turnEventRequests).toBe(1);
+    expect(toolHistoryRequests).toBe(1);
+
+    const recoveryRevision = state.recoveryRevision;
+    const messageRequests = candidate.paths.filter(path => path.includes('/messages?')).length;
+    await new Promise(resolveDelay => setTimeout(resolveDelay, 300));
+    expect(runtime.getSnapshot().recoveryRevision).toBe(recoveryRevision);
+    expect(turnEventRequests).toBe(1);
+    expect(candidate.paths.filter(path => path.includes('/messages?'))).toHaveLength(messageRequests);
+    runtime.dispose();
   });
 });
 

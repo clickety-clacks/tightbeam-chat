@@ -9,6 +9,7 @@ import {
   type ChangeConnection,
   type ChangeCallbacks,
   type ToolCallRecord,
+  type TurnEventRecord,
   type AttachmentReference,
   type ChangeNotice,
   type CanonicalTurn,
@@ -27,6 +28,7 @@ import {
   type TargetProfile,
 } from './types';
 import { ToolHistoryUnavailableError } from './toolHistory';
+import { TurnEventHistoryUnavailableError } from './turnEvents';
 
 // Snapshot coverage is the Chat client's subscribe-before-REST overlap, not a
 // Gateway snapshot watermark.
@@ -415,6 +417,49 @@ export function decodeToolCall(value: unknown, sessionKey: string): ToolCallReco
   });
 }
 
+export function decodeTurnEvent(value: unknown, sessionKey: string): TurnEventRecord {
+  const row = record(value);
+  if (requiredString(row, 'sessionKey') !== sessionKey) {
+    throw new UnsupportedTargetError('Turn event belongs to a different session.');
+  }
+  const kind = row.kind;
+  if (!['assistant.segment', 'tool.started', 'tool.ended'].includes(String(kind))) {
+    throw new UnsupportedTargetError('Unknown turn-event kind.');
+  }
+  const turnSeq = positiveInteger(row, 'turnSeq');
+  const turnEventSeq = positiveInteger(row, 'turnEventSeq');
+  const messageId = readableOptionalString(row, 'messageId', 'turn event') ?? null;
+  const toolCallId = readableOptionalString(row, 'toolCallId', 'turn event') ?? null;
+  let content: Readonly<Record<string, unknown>> | null = null;
+  let toolCall: ToolCallRecord | null = null;
+  if (kind === 'assistant.segment') {
+    if (!messageId || toolCallId || !row.content || typeof row.content !== 'object' || Array.isArray(row.content)) {
+      throw new UnsupportedTargetError('Assistant turn event has an invalid message segment.');
+    }
+    content = Object.freeze({ ...(row.content as Record<string, unknown>) });
+    if (content.type !== 'text' || typeof content.text !== 'string') {
+      throw new UnsupportedTargetError('Assistant turn event does not contain a text segment.');
+    }
+    if (row.toolCall !== null && row.toolCall !== undefined) {
+      throw new UnsupportedTargetError('Assistant turn event unexpectedly contains a tool call.');
+    }
+  } else {
+    if (messageId || !toolCallId || !row.toolCall || typeof row.toolCall !== 'object' || Array.isArray(row.toolCall)) {
+      throw new UnsupportedTargetError('Tool turn event has an invalid tool-call reference.');
+    }
+    toolCall = decodeToolCall(row.toolCall, sessionKey);
+    if (toolCall.id !== toolCallId || toolCall.turnSeq !== turnSeq) {
+      throw new UnsupportedTargetError('Tool turn event does not match its tool-call reference.');
+    }
+    if (row.content !== null && row.content !== undefined) {
+      throw new UnsupportedTargetError('Tool turn event unexpectedly contains a message segment.');
+    }
+  }
+  return Object.freeze({ id: requiredString(row, 'id'), sessionKey, turnSeq, turnEventSeq,
+    kind: kind as TurnEventRecord['kind'], messageId, toolCallId, content, toolCall,
+    rowVersion: positiveInteger(row, 'rowVersion') });
+}
+
 /** A source-backed notice decoder; unrecognized frames remain sequenced observations. */
 export function decodePublic019Notice(value: unknown, sessionKey: string): ChangeNotice {
   const frame = record(value);
@@ -463,6 +508,7 @@ export function decodePublic019Notice(value: unknown, sessionKey: string): Chang
   const knownClass = frame.class === 'session_record_event.created' ||
     frame.class === 'message.created' || frame.class === 'transition.recorded' ||
     frame.class === 'tool_call.started' || frame.class === 'tool_call.ended' ||
+    frame.class === 'message.segment_recorded' || frame.class === 'tool_call.event_recorded' ||
     frame.class.startsWith('session.') || frame.class === 'turn.started' || frame.class === 'turn.ended';
   if (!knownClass) {
     logGatewayIncompatibility('change notice', 'Skipped an unknown change class.');
@@ -486,6 +532,21 @@ export function decodePublic019Notice(value: unknown, sessionKey: string): Chang
       return { operation: 'unknown', sessionKey, resource: frame.class };
     }
     return { operation: 'tool', tool: decodeToolCall(frame.payload, sessionKey) };
+  }
+  if (frame.class === 'message.segment_recorded' || frame.class === 'tool_call.event_recorded') {
+    if (frame.resource !== 'turn events' || frame.op !== 'upsert') {
+      logGatewayIncompatibility('turn-event notice', 'Skipped an unexpected resource or operation.');
+      return { operation: 'unknown', sessionKey, resource: frame.class };
+    }
+    const event = decodeTurnEvent(frame.payload, sessionKey);
+    if ((frame.class === 'message.segment_recorded' && event.kind !== 'assistant.segment') ||
+        (frame.class === 'tool_call.event_recorded' && event.kind === 'assistant.segment')) {
+      throw new UnsupportedTargetError('Turn-event notice class does not match its payload.');
+    }
+    if (record(frame.refs).turnEventId !== event.id) {
+      throw new UnsupportedTargetError('Turn-event notice reference does not match its payload.');
+    }
+    return { operation: 'turn-event', event };
   }
   if (frame.class.startsWith('session.')) {
     if (frame.resource !== 'sessions' || frame.op !== 'upsert') {
@@ -549,6 +610,11 @@ function isRecordEventsCollectionPath(path: string): boolean {
   catch { return false; }
 }
 
+function isTurnEventsCollectionPath(path: string): boolean {
+  try { return /^\/api\/sessions\/[^/]+\/turn-events$/.test(new URL(path, 'https://gateway.invalid').pathname); }
+  catch { return false; }
+}
+
 function authorizationFailureCode(value: unknown): boolean {
   if (typeof value !== 'string') return false;
   return ['unauthorized', 'forbidden', 'not_authorized', 'not_authenticated',
@@ -599,6 +665,9 @@ export function createPublic019Transport(config: Public019Config): { transport: 
       }
       if (response.status === 404 && isToolHistoryCollectionPath(path)) {
         throw new ToolHistoryUnavailableError('Tool history is unavailable.');
+      }
+      if (response.status === 404 && isTurnEventsCollectionPath(path)) {
+        throw new TurnEventHistoryUnavailableError('Reply ordering history is unavailable.');
       }
       throw new Error(`Tightbeam REST request failed with HTTP ${response.status}${code ? ` (${code})` : ''}.`);
     }
@@ -663,8 +732,10 @@ export function createPublic019Transport(config: Public019Config): { transport: 
       }), coverage: sessionKey };
   }
 
-  async function openChanges(sessionKey: string, callbacks: ChangeCallbacks, signal: AbortSignal, tools = false): Promise<ChangeConnection> {
+  async function openChanges(sessionKey: string, callbacks: ChangeCallbacks, signal: AbortSignal,
+    tools = false, turnEvents = false): Promise<ChangeConnection> {
       const channel = await config.host.openAuthenticatedChanges(signal);
+      const category = turnEvents ? 'turn-events' : tools ? 'tools' : 'chat';
       let closed = false;
       let ready = false;
       let railSubscriptionPending = false;
@@ -674,19 +745,19 @@ export function createPublic019Transport(config: Public019Config): { transport: 
       let stopListening = () => {};
       let readyTimer: ReturnType<typeof setTimeout> | undefined;
       let heartbeatTimer: ReturnType<typeof setTimeout> | undefined;
-      const subscriptionId = (tools ? 'tools:' : 'chat:') + sessionKey;
+      const subscriptionId = `${category}:${sessionKey}`;
       const railSubscriptionId = `rail:${sessionKey}`;
-      const hasRailSubscription = !tools;
+      const hasRailSubscription = category === 'chat';
       const close = () => {
         if (closed) return;
         closed = true;
-        if (!tools) activeSessions.delete(sessionKey);
+        if (category === 'chat') activeSessions.delete(sessionKey);
         if (readyTimer) clearTimeout(readyTimer);
         if (heartbeatTimer) clearTimeout(heartbeatTimer);
         stopListening();
         signal.removeEventListener('abort', onAbort);
-        if (!tools && typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisibilityChange);
-        if (!tools && typeof window !== 'undefined') {
+        if (category === 'chat' && typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisibilityChange);
+        if (category === 'chat' && typeof window !== 'undefined') {
           window.removeEventListener('pagehide', onPageHide);
           window.removeEventListener('pageshow', onPageShow);
           window.removeEventListener('online', onOnline);
@@ -733,8 +804,8 @@ export function createPublic019Transport(config: Public019Config): { transport: 
       };
       const onOnline = () => refreshAfterLifecycleChange('Refreshing the conversation feed after the network changed.');
       signal.addEventListener('abort', onAbort, { once: true });
-      if (!tools && typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisibilityChange);
-      if (!tools && typeof window !== 'undefined') {
+      if (category === 'chat' && typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisibilityChange);
+      if (category === 'chat' && typeof window !== 'undefined') {
         window.addEventListener('pagehide', onPageHide);
         window.addEventListener('pageshow', onPageShow);
         window.addEventListener('online', onOnline);
@@ -751,7 +822,7 @@ export function createPublic019Transport(config: Public019Config): { transport: 
           if (!ready) {
             if (frame.type === 'subscription_ready' && frame.subscriptionId === subscriptionId) {
               ready = true;
-              if (!tools) activeSessions.add(sessionKey);
+              if (category === 'chat') activeSessions.add(sessionKey);
               // An invalid_request without a subscription id is ambiguous until
               // the primary readiness frame arrives. Once it does, the optional
               // rail refusal cannot have prevented the conversation feed.
@@ -856,8 +927,10 @@ export function createPublic019Transport(config: Public019Config): { transport: 
           rejectReady(error);
         }, timeoutMs);
         try {
-          channel.send({ type: 'subscribe', protocolVersion: 2, subscriptionId, filters: { sessionKey, classes: tools ? ['tool_call.']
-              : ['message.created', 'transition.recorded', 'session.', 'turn.started', 'turn.ended', 'session_record_event.created'] } });
+          const classes = tools ? ['tool_call.'] : turnEvents
+            ? ['message.segment_recorded', 'tool_call.event_recorded']
+            : ['message.created', 'transition.recorded', 'session.', 'turn.started', 'turn.ended', 'session_record_event.created'];
+          channel.send({ type: 'subscribe', protocolVersion: 2, subscriptionId, filters: { sessionKey, classes } });
         } catch (error) { close(); rejectReady(error); }
         if (hasRailSubscription && !closed) {
           railSubscriptionPending = true;
@@ -1004,6 +1077,66 @@ export function createPublic019Transport(config: Public019Config): { transport: 
       page.coverage === session.sessionKey,
     openChanges,
     openToolChanges: (sessionKey, callbacks, signal) => openChanges(sessionKey, callbacks, signal, true),
+    openTurnEventChanges: (sessionKey, callbacks, signal) => openChanges(sessionKey, callbacks, signal, false, true),
+    async readTurnEvents(sessionKey, turnSeqs, signal): Promise<readonly TurnEventRecord[]> {
+      const requestedTurns = [...new Set(turnSeqs)].sort((left, right) => left - right);
+      const events: TurnEventRecord[] = [];
+      for (const turnSeq of requestedTurns) {
+        if (!Number.isSafeInteger(turnSeq) || turnSeq < 1) {
+          throw new UnsupportedTargetError('Turn-event history received an invalid turn sequence.');
+        }
+        let before: string | undefined;
+        const cursors = new Set<string>();
+        const turnEvents: TurnEventRecord[] = [];
+        while (true) {
+          const query = new URLSearchParams({ limit: '500', turnSeq: String(turnSeq) });
+          if (before) query.set('before', before);
+          const body = await get(`/api/sessions/${encodeURIComponent(sessionKey)}/turn-events?${query}`, signal);
+          if (body.schemaVersion !== 1 || body.resource !== 'turn events' || !Array.isArray(body.items)) {
+            logGatewayIncompatibility('turn-event history', 'Received an unexpected protocol envelope.');
+            throw new UnsupportedTargetError('Unexpected turn-event collection envelope.');
+          }
+          let page: Record<string, unknown>;
+          let oldestCursor: string | null;
+          try {
+            page = record(body.page);
+            oldestCursor = optionalString(page, 'oldestCursor') ?? null;
+          } catch (error) {
+            logDecodeFailure('turn-event page metadata', error);
+            throw new UnsupportedTargetError('Invalid turn-event page metadata.');
+          }
+          if (typeof page.hasMoreBefore !== 'boolean' || (page.hasMoreBefore && !oldestCursor)) {
+            logGatewayIncompatibility('turn-event history', 'Received an unusable page cursor.');
+            throw new UnsupportedTargetError('Invalid turn-event page cursor.');
+          }
+          for (const item of body.items) {
+            try {
+              const event = decodeTurnEvent(item, sessionKey);
+              if (event.turnSeq !== turnSeq) throw new UnsupportedTargetError('Turn event falls outside its requested turn.');
+              turnEvents.push(event);
+            } catch (error) {
+              logDecodeFailure('turn-event history item', error);
+              throw new UnsupportedTargetError('Turn-event history contains an unusable event.');
+            }
+          }
+          if (!page.hasMoreBefore) break;
+          if (!oldestCursor || cursors.has(oldestCursor)) {
+            throw new UnsupportedTargetError('Turn-event history cursor did not advance.');
+          }
+          cursors.add(oldestCursor);
+          before = oldestCursor;
+        }
+        turnEvents.sort((left, right) => left.turnEventSeq - right.turnEventSeq || left.id.localeCompare(right.id));
+        for (let index = 0; index < turnEvents.length; index++) {
+          if (turnEvents[index].turnEventSeq !== index + 1) {
+            throw new UnsupportedTargetError('Turn-event history is missing an ordinal.');
+          }
+        }
+        events.push(...turnEvents);
+      }
+      return Object.freeze(events.sort((left, right) => left.turnSeq - right.turnSeq ||
+        left.turnEventSeq - right.turnEventSeq || left.id.localeCompare(right.id)));
+    },
     async readRecordEvents(sessionKey, before, signal): Promise<RecordEventPage> {
       const query = new URLSearchParams({ limit: '50' });
       if (before) query.set('before', before);

@@ -273,6 +273,24 @@ export function parseServiceHttpTarget(rawUrl, runtime) {
         path: `/api/sessions/${encodeURIComponent(toolsSession)}/tool-calls?${query}` };
     }
 
+    const turnEvents = /^\/__chat\/api\/sessions\/([^/]+)\/turn-events$/.exec(request.pathname);
+    const turnEventsSession = turnEvents && decodeSessionPath(turnEvents[1]);
+    if (turnEventsSession) {
+      const allowed = new Set(['limit', 'turnSeq', 'before']);
+      const names = routeParams.map(([name]) => name);
+      if (new Set(names).size !== names.length || names.some((name) => !allowed.has(name)) ||
+          !names.includes('limit') || !names.includes('turnSeq')) return undefined;
+      for (const [name, value] of routeParams) {
+        if (name === 'before') { if (!value) return undefined; continue; }
+        if (!/^[0-9]+$/.test(value) || !Number.isSafeInteger(Number(value))) return undefined;
+        const number = Number(value);
+        if (number < 1 || (name === 'limit' && number > 500)) return undefined;
+      }
+      const query = new URLSearchParams([['asUser', runtime.principalKey], ...routeParams]);
+      return { kind: 'transcript', gatewayOrigin, sessionKey: turnEventsSession,
+        path: `/api/sessions/${encodeURIComponent(turnEventsSession)}/turn-events?${query}` };
+    }
+
     const trigger = /^\/__chat\/api\/sessions\/([^/]+)\/messages\/([^/]+)$/.exec(request.pathname);
     const triggerSession = trigger && decodeSessionPath(trigger[1]);
     const triggerMessage = trigger && decodeSessionPath(trigger[2]);

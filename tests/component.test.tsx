@@ -11,7 +11,7 @@ import { decodePublic019Message } from '../src/public019';
 import { AttachmentPreparationError } from '../src/types';
 import type {
   AttachmentInput, AttachmentReference, ToolCallIndex, ToolCallRecord, CanonicalMessage, CanonicalTurn, ChatRuntime, ConversationRecord, LocalSend, RuntimeState,
-  TightbeamAdapter, TurnProvenance,
+  TightbeamAdapter, TurnProvenance, TurnEventRecord,
 } from '../src/types';
 
 afterEach(() => {
@@ -4428,6 +4428,61 @@ describe('tool-call and transition display', () => {
     expect(keys.indexOf('record-event:' + event.eventId)).toBeLessThan(keys.indexOf('tool-after-event'));
     expect(view.container.querySelectorAll('.tb-chat-activity-tool-run-toggle')).toHaveLength(0);
     expect(view.container.querySelectorAll('details.tb-chat-activity-line.tb-chat-activity-tool')).toHaveLength(2);
+  });
+
+  it('renders reply chunks and adjacent tool calls in turn-event order without folding across a reply', () => {
+    const sessionKey = 'turn-event-timeline';
+    const prompt = row(sessionKey, 'prompt', 'Question', { seq: 1, role: 'user', sender: 'user:person', turnSeq: 7 });
+    const reply = row(sessionKey, 'reply', 'Stored full reply', { seq: 8, replyToMessageId: prompt.id, turnSeq: 7 });
+    const makeCall = (id: string, status: ToolCallRecord['status'], rowVersion: number): ToolCallRecord => ({
+      id, seq: id === 'call-a' ? 21 : 22, sessionKey, turnSeq: 7, afterMessageSeq: reply.seq,
+      harnessToolCallId: id, title: id === 'call-a' ? 'Call A' : 'Call B', kind: 'tool', toolName: null,
+      status, rawInput: { id }, rawOutput: status === 'completed' ? { done: id } : null,
+      content: null, truncated: [], startedAt: id === 'call-a' ? 100 : 200,
+      endedAt: status === 'completed' ? 300 : null, rowVersion,
+    });
+    const callAStarted = makeCall('call-a', 'in_progress', 1);
+    const callAEnded = makeCall('call-a', 'completed', 2);
+    const callBStarted = makeCall('call-b', 'in_progress', 1);
+    const callBEnded = makeCall('call-b', 'completed', 2);
+    const event = (id: string, turnEventSeq: number, kind: TurnEventRecord['kind'],
+      messageId: string | null, call?: ToolCallRecord, text?: string): TurnEventRecord => ({
+      id, sessionKey, turnSeq: 7, turnEventSeq, kind, messageId,
+      toolCallId: call?.id ?? null, content: kind === 'assistant.segment' ? { type: 'text', text } : null,
+      toolCall: call ?? null, rowVersion: 1,
+    });
+    const events = [
+      event('segment-1', 1, 'assistant.segment', reply.id, undefined, 'First response.'),
+      event('tool-a-start', 2, 'tool.started', null, callAStarted),
+      event('tool-b-start', 3, 'tool.started', null, callBStarted),
+      event('segment-4', 4, 'assistant.segment', reply.id, undefined, 'Second response.'),
+      event('tool-a-end', 5, 'tool.ended', null, callAEnded),
+      event('segment-6', 6, 'assistant.segment', reply.id, undefined, 'Final response.'),
+      event('tool-b-end', 7, 'tool.ended', null, callBEnded),
+    ];
+    const runtime = new FakeRuntime(sessionKey, { records: [prompt, reply], turnEventsEnabled: true,
+      turnEvents: events, toolCallsEnabled: true, toolCalls: [callAEnded, callBEnded] });
+    const view = render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+    const recordKeys = [...view.container.querySelectorAll<HTMLElement>('[data-record-key]')]
+      .map(element => element.dataset.recordKey);
+
+    expect(recordKeys).toEqual([
+      'prompt', 'turn-message:7:reply:1', 'turn-tools:7:call-a',
+      'turn-message:7:reply:4', 'turn-message:7:reply:6',
+    ]);
+    expect([...view.container.querySelectorAll<HTMLElement>('[data-scroll-key]')]
+      .map(element => element.dataset.scrollKey)).toEqual(recordKeys);
+    expect(view.container.querySelector('[data-record-key="reply"]')).toBeNull();
+    expect(view.container.querySelector('[data-record-key="turn-message:7:reply:1"]')?.textContent).toContain('First response.');
+    expect(view.container.querySelector('[data-record-key="turn-message:7:reply:4"]')?.textContent).toContain('Second response.');
+    expect(view.container.querySelector('[data-record-key="turn-message:7:reply:6"]')?.textContent).toContain('Final response.');
+
+    const fold = view.container.querySelector<HTMLElement>('[data-record-key="turn-tools:7:call-a"]')!;
+    const toggle = within(fold).getByRole('button', { name: /2 entries\. Latest: Call B · done/ });
+    expect(fold.classList.contains('tb-chat-activity-run')).toBe(true);
+    expect(fold.querySelector('.tb-chat-activity-run-count')?.textContent).toBe('×2');
+    fireEvent.click(toggle);
+    expect(fold.querySelectorAll('.tb-chat-activity-run-rows details.tb-chat-activity-tool')).toHaveLength(2);
   });
 
   it('keeps an unmatched send at submission time among tools, then uses its canonical anchor with the same scroll key', () => {

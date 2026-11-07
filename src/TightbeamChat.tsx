@@ -21,6 +21,7 @@ import { CHAT_RELEASE_VERSION, RELEASE_NOTES, recordSeenReleaseVersion, releaseN
 import { MarkdownImagePreview, MessageAttachments } from './MessageAttachments';
 import { isSettingsCommand } from './settingsCommand';
 import { stripProvenanceMarkup } from './displayText';
+import { projectTurnEvents } from './turnEvents';
 import './style.css';
 
 export interface RenderContext {
@@ -62,11 +63,13 @@ const toolHistoryErrorGraceMs = 1000;
 type TimelineItem =
   | { readonly kind: 'record-event'; readonly event: SessionRecordEvent }
   | { readonly kind: 'tool'; readonly call: ToolCallRecord }
+  | { readonly kind: 'turn-tool'; readonly entry: ActivityLine }
   | { readonly kind: 'transition'; readonly record: CanonicalTransition }
   | { readonly kind: 'activity'; readonly entry: ActivityLine }
-  | { readonly kind: 'activity-fold'; readonly entry: ActivityFold }
+  | { readonly kind: 'activity-fold'; readonly entry: ActivityFold; readonly turnEventSeq?: number }
   | { readonly kind: 'overflow'; readonly entry: ActivityOverflow }
-  | { readonly kind: 'bubble'; readonly bubble: Bubble; readonly scrollKey?: string }
+  | { readonly kind: 'bubble'; readonly bubble: Bubble; readonly scrollKey?: string;
+      readonly anchorSeq?: number; readonly turnEventSeq?: number }
   | { readonly kind: 'local'; readonly send: LocalSend; readonly canonical?: CanonicalMessage };
 
 function sendIdentity(value: Pick<LocalSend, 'sessionKey' | 'deviceId' | 'clientMessageId'>): string {
@@ -244,7 +247,7 @@ function messageSourceLabel(record: CanonicalMessage, defaultLabel: string): str
 function itemTime(item: TimelineItem): number | undefined {
   if (item.kind === 'tool') return item.call.startedAt;
   if (item.kind === 'record-event') return item.event.at;
-  if (item.kind === 'activity' || item.kind === 'activity-fold' || item.kind === 'overflow') return undefined;
+  if (item.kind === 'activity' || item.kind === 'activity-fold' || item.kind === 'overflow' || item.kind === 'turn-tool') return undefined;
   const value = item.kind === 'transition' ? item.record.createdAt
     : item.kind === 'bubble' ? item.bubble.record.createdAt
     : item.canonical?.createdAt ?? item.send.submittedAt;
@@ -257,6 +260,7 @@ interface TimelineAnchor {
   readonly item: TimelineItem;
   readonly record: Pick<ConversationRecord, 'id' | 'seq'>;
   readonly order: number;
+  readonly turnEventSeq?: number;
 }
 
 interface TimedTimelineAnchor {
@@ -281,23 +285,134 @@ function upperBoundByTime(items: readonly TimedTimelineAnchor[], time: number): 
   return low;
 }
 
+type TurnTimelineRow =
+  | { readonly kind: 'bubble'; readonly bubble: Bubble; readonly anchorSeq: number; readonly turnEventSeq: number }
+  | { readonly kind: 'tool'; readonly entry: ActivityLine; readonly anchorSeq: number; readonly turnEventSeq: number }
+  | { readonly kind: 'fold'; readonly entry: ActivityFold; readonly anchorSeq: number; readonly turnEventSeq: number };
+
+interface TurnTimelinePlan {
+  readonly rows: readonly TurnTimelineRow[];
+  readonly replacedMessageIds: ReadonlySet<string>;
+  readonly toolCallIds: ReadonlySet<string>;
+}
+
+function projectTurnTimeline(events: RuntimeState['turnEvents'], records: readonly ConversationRecord[],
+  bubbles: readonly Bubble[], activeTurn: TurnProvenance | undefined, agentName: string): TurnTimelinePlan {
+  if (!events?.length) return { rows: [], replacedMessageIds: new Set(), toolCallIds: new Set() };
+  const recordsById = new Map(records.filter((record): record is CanonicalMessage => record.kind === 'message')
+    .map(record => [record.id, record]));
+  const bubblesById = new Map(bubbles.filter(bubble => bubble.side === 'agent').map(bubble => [bubble.record.id, bubble]));
+  const byTurn = new Map<number, typeof events[number][]>();
+  for (const event of events) {
+    const rows = byTurn.get(event.turnSeq) ?? [];
+    rows.push(event);
+    byTurn.set(event.turnSeq, rows);
+  }
+  const rows: TurnTimelineRow[] = [];
+  const replacedMessageIds = new Set<string>();
+  const toolCallIds = new Set<string>();
+
+  for (const [turnSeq, turnEvents] of byTurn) {
+    const entries = projectTurnEvents(turnEvents);
+    const messageIds = new Set(turnEvents.flatMap(event => event.kind === 'assistant.segment' && event.messageId
+      ? [event.messageId] : []));
+    const turnBubbles = bubbles.filter(bubble => bubble.side === 'agent' &&
+      (bubble.record.turnSeq === turnSeq || messageIds.has(bubble.record.id)));
+    const runningOwnerTurn = activeTurn?.turn.seq === turnSeq && activeTurn.sourceKind === 'human' && activeTurn.trigger
+      ? activeTurn : undefined;
+    if (!turnBubbles.length && !runningOwnerTurn) continue;
+    if (turnBubbles.some(bubble => !messageIds.has(bubble.record.id))) continue;
+    if ([...messageIds].some(id => !bubblesById.has(id) && !runningOwnerTurn)) continue;
+
+    const parentSequences = turnBubbles.flatMap(bubble => {
+      const parent = bubble.record.replyToMessageId ? recordsById.get(bubble.record.replyToMessageId) : undefined;
+      return parent ? [parent.seq] : [];
+    });
+    const anchorSeq = runningOwnerTurn?.trigger?.seq ??
+      (parentSequences.length ? Math.min(...parentSequences) : Math.min(...turnBubbles.map(bubble => bubble.record.seq)));
+    if (!Number.isFinite(anchorSeq)) continue;
+
+    for (const entry of entries) {
+      if (entry.kind === 'assistant') {
+        const source = bubblesById.get(entry.messageId);
+        const baseRecord = source?.record;
+        const syntheticRecord: CanonicalMessage | undefined = !source && runningOwnerTurn
+          ? Object.freeze({ kind: 'message', id: entry.messageId, sessionKey: activeTurn!.turn.sessionKey,
+            seq: anchorSeq, rowVersion: 1, role: 'assistant', replyToMessageId: activeTurn!.trigger!.id,
+            turnSeq, content: entry.text, raw: Object.freeze({ turnSeq, messageId: entry.messageId,
+              turnEventIds: entry.eventIds }) })
+          : undefined;
+        const record = baseRecord
+          ? Object.freeze({ ...baseRecord, content: entry.text,
+            raw: Object.freeze({ ...baseRecord.raw, turnEventIds: entry.eventIds }) })
+          : syntheticRecord;
+        if (!record) continue;
+        const bubble: Bubble = { key: entry.id, record, side: 'agent', ownerScoped: true,
+          sender: source?.sender ?? sourceLabel('agent', agentName), displayContent: entry.text, derived: false };
+        rows.push({ kind: 'bubble', bubble, anchorSeq, turnEventSeq: entry.turnEventSeq });
+        if (source) replacedMessageIds.add(source.record.id);
+        continue;
+      }
+
+      const lines: ActivityLine[] = entry.calls.map(({ call, turnEventSeq }) => {
+        toolCallIds.add(call.id);
+        const title = call.title.trim() || call.toolName?.trim() || call.kind;
+        const status = call.status === 'pending' || call.status === 'in_progress' ? 'running'
+          : call.status === 'completed' ? 'done' : 'failed';
+        const gist = `${title} · ${status}`;
+        return { kind: 'tool', id: `tool:${call.id}`, runKey: entry.id, anchorSeq,
+          position: { sequence: anchorSeq, phase: 2, order: turnEventSeq }, gist,
+          accessibleText: `Tool call: ${gist}`, call };
+      });
+      if (lines.length === 1) {
+        rows.push({ kind: 'tool', entry: lines[0], anchorSeq, turnEventSeq: entry.turnEventSeq });
+      } else if (lines.length > 1) {
+        const summary = lines[lines.length - 1];
+        const fold: ActivityFold = { kind: 'fold', id: entry.id, runKey: entry.id,
+          activityKind: 'tool', lines, summary, anchorSeq, position: summary.position };
+        rows.push({ kind: 'fold', entry: fold, anchorSeq, turnEventSeq: entry.lastTurnEventSeq });
+      }
+    }
+  }
+  rows.sort((left, right) => left.anchorSeq - right.anchorSeq || left.turnEventSeq - right.turnEventSeq);
+  return { rows, replacedMessageIds, toolCallIds };
+}
+
 function composeTimeline(bubbles: readonly Bubble[], localSends: readonly LocalSend[],
   canonicalSends: ReadonlyMap<string, CanonicalMessage>,
   sendsByIdentity: ReadonlyMap<string, LocalSend>,
-  transitions: readonly CanonicalTransition[], activityItems: readonly MessageActivityItem[]): TimelineItem[] {
+  transitions: readonly CanonicalTransition[], activityItems: readonly MessageActivityItem[],
+  turnTimeline: TurnTimelinePlan): TimelineItem[] {
   const anchoredSendIdentities = new Set<string>();
-  const anchors: TimelineAnchor[] = bubbles.map((bubble, order) => {
+  const anchors: TimelineAnchor[] = bubbles.flatMap((bubble, order) => {
+    if (turnTimeline.replacedMessageIds.has(bubble.record.id)) return [];
     const identity = bubble.derived ? undefined : canonicalSendIdentity(bubble.record);
     const send = identity && !anchoredSendIdentities.has(identity) ? sendsByIdentity.get(identity) : undefined;
     if (identity && send) anchoredSendIdentities.add(identity);
     const item: TimelineItem = { kind: 'bubble', bubble, scrollKey: send ? `local-${send.clientMessageId}` : undefined };
-    return { item, record: bubble.record, order };
+    return [{ item, record: bubble.record, order }];
   });
   for (const record of transitions) anchors.push({ item: { kind: 'transition', record }, record, order: anchors.length });
   for (const entry of activityItems) {
     const item: TimelineItem = entry.kind === 'overflow' ? { kind: 'overflow', entry }
       : entry.kind === 'fold' ? { kind: 'activity-fold', entry } : { kind: 'activity', entry };
     anchors.push({ item, record: { id: entry.id, seq: entry.anchorSeq }, order: anchors.length });
+  }
+  for (const row of turnTimeline.rows) {
+    if (row.kind === 'bubble') {
+      const item: TimelineItem = { kind: 'bubble', bubble: row.bubble, scrollKey: row.bubble.key,
+        anchorSeq: row.anchorSeq, turnEventSeq: row.turnEventSeq };
+      anchors.push({ item, record: { id: row.bubble.key, seq: row.anchorSeq },
+        order: anchors.length, turnEventSeq: row.turnEventSeq });
+    } else if (row.kind === 'tool') {
+      const item: TimelineItem = { kind: 'turn-tool', entry: row.entry };
+      anchors.push({ item, record: { id: row.entry.id, seq: row.anchorSeq },
+        order: anchors.length, turnEventSeq: row.turnEventSeq });
+    } else {
+      const item: TimelineItem = { kind: 'activity-fold', entry: row.entry, turnEventSeq: row.turnEventSeq };
+      anchors.push({ item, record: { id: row.entry.id, seq: row.anchorSeq },
+        order: anchors.length, turnEventSeq: row.turnEventSeq });
+    }
   }
   const unmatched: UnmatchedTimelineItem[] = [];
   let order = anchors.length;
@@ -313,10 +428,14 @@ function composeTimeline(bubbles: readonly Bubble[], localSends: readonly LocalS
     order++;
   }
 
-  const anchorPriority = (item: TimelineItem) => item.kind === 'bubble' || (item.kind === 'local' && item.canonical) ? 0
-    : item.kind === 'transition' ? 1 : 2;
+  const anchorPriority = (item: TimelineItem) => item.kind === 'bubble' && item.turnEventSeq !== undefined ? 2
+    : item.kind === 'bubble' || (item.kind === 'local' && item.canonical) ? 0
+      : item.kind === 'transition' ? 1
+        : item.kind === 'turn-tool' || (item.kind === 'activity-fold' && item.turnEventSeq !== undefined) ? 2 : 3;
   anchors.sort((left, right) => left.record.seq - right.record.seq ||
-    anchorPriority(left.item) - anchorPriority(right.item) || left.order - right.order ||
+    anchorPriority(left.item) - anchorPriority(right.item) ||
+    (left.turnEventSeq ?? Number.POSITIVE_INFINITY) - (right.turnEventSeq ?? Number.POSITIVE_INFINITY) ||
+    left.order - right.order ||
     left.record.id.localeCompare(right.record.id));
 
   const timedAnchors: TimedTimelineAnchor[] = [];
@@ -379,10 +498,11 @@ function transcriptIndex(timeline: readonly TimelineItem[]) {
   let pending: TimelineItem[] = [];
   for (const item of timeline) {
     if (item.kind === 'record-event' || (item.kind === 'local' && !item.canonical)) { pending.push(item); continue; }
-    const anchor = item.kind === 'bubble' ? item.bubble.record.seq : item.kind === 'transition'
+    const anchor = item.kind === 'bubble' ? item.anchorSeq ?? item.bubble.record.seq : item.kind === 'transition'
       ? item.record.seq : item.kind === 'activity' || item.kind === 'overflow' ? item.entry.anchorSeq
         : item.kind === 'activity-fold' ? item.entry.anchorSeq
-          : item.kind === 'tool' ? item.call.afterMessageSeq : item.canonical!.seq;
+          : item.kind === 'turn-tool' ? item.entry.anchorSeq
+            : item.kind === 'tool' ? item.call.afterMessageSeq : item.canonical!.seq;
     for (const item of pending) placements.push({ item, beforeAnchor: anchor });
     pending = [];
     index = putIndex(index, anchor, [...(getIndex(index, anchor) ?? []), item]);
@@ -432,37 +552,39 @@ function placePending(placements: readonly PendingPlacement[], tools: ToolCallIn
   return { index, tail };
 }
 
-const IndexedTools = memo(function IndexedToolsBranch({ node, pending, render }: {
+const IndexedTools = memo(function IndexedToolsBranch({ node, pending, render, skipCallIds }: {
   node?: RecordIndex<ToolCallRecord>;
   pending?: RecordIndex<readonly TimelineItem[]>;
+  skipCallIds?: ReadonlySet<string>;
   render: (item: TimelineItem) => ReactNode;
 }): ReactNode {
   if (!node && !pending) return null;
   if (node?.value || pending?.value) return <>
     {pending?.value?.map(render)}
-    {node?.value && render({ kind: 'tool', call: node.value })}
+    {node?.value && !skipCallIds?.has(node.value.id) && render({ kind: 'tool', call: node.value })}
   </>;
   return <>
-    <IndexedTools node={node?.zero} pending={pending?.zero} render={render} />
-    <IndexedTools node={node?.one} pending={pending?.one} render={render} />
+    <IndexedTools node={node?.zero} pending={pending?.zero} render={render} skipCallIds={skipCallIds} />
+    <IndexedTools node={node?.one} pending={pending?.one} render={render} skipCallIds={skipCallIds} />
   </>;
 });
 
-const IndexedTimeline = memo(function IndexedTimelineBranch({ messages, tools, pending, render }: {
+const IndexedTimeline = memo(function IndexedTimelineBranch({ messages, tools, pending, render, skipToolCallIds }: {
   messages?: RecordIndex<readonly TimelineItem[]>;
   tools?: ToolCallIndex;
   pending?: RecordIndex<PendingAtAnchor>;
+  skipToolCallIds?: ReadonlySet<string>;
   render: (item: TimelineItem) => ReactNode;
 }): ReactNode {
   if (!messages && !tools && !pending) return null;
   if (messages?.value || tools?.value || pending?.value) return <>
     {pending?.value?.messages.map(render)}
     {messages?.value?.map(render)}
-    <IndexedTools node={tools?.value} pending={pending?.value?.tools} render={render} />
+    <IndexedTools node={tools?.value} pending={pending?.value?.tools} render={render} skipCallIds={skipToolCallIds} />
   </>;
   return <>
-    <IndexedTimeline messages={messages?.zero} tools={tools?.zero} pending={pending?.zero} render={render} />
-    <IndexedTimeline messages={messages?.one} tools={tools?.one} pending={pending?.one} render={render} />
+    <IndexedTimeline messages={messages?.zero} tools={tools?.zero} pending={pending?.zero} render={render} skipToolCallIds={skipToolCallIds} />
+    <IndexedTimeline messages={messages?.one} tools={tools?.one} pending={pending?.one} render={render} skipToolCallIds={skipToolCallIds} />
   </>;
 });
 
@@ -2331,6 +2453,11 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     for (const byAnchor of indexValues(tools)) calls.push(...indexValues(byAnchor));
     return calls;
   }, [tools]);
+  const turnTimeline = useMemo(() => projectTurnTimeline(
+    state.turnEventsEnabled ? state.turnEvents : undefined, state.records, bubbles, state.activeTurn, agentName),
+    [state.turnEventsEnabled, state.turnEvents, state.records, bubbles, state.activeTurn, agentName]);
+  const activityToolRecords = useMemo(() => toolRecords.filter(call => !turnTimeline.toolCallIds.has(call.id)),
+    [toolRecords, turnTimeline.toolCallIds]);
   const activityRecords = useMemo(() => state.records.filter((record): record is CanonicalMessage => record.kind === 'message'), [state.records]);
   const transitions = useMemo(() => state.records.filter((record): record is CanonicalTransition => record.kind === 'transition'), [state.records]);
   const activityPlan = useMemo(() => buildActivityTrail({
@@ -2343,7 +2470,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     transitions,
     localSendTimes,
     recordEventTimes,
-    tools: toolRecords,
+    tools: activityToolRecords,
     toolsEnabled: Boolean(state.toolCallsEnabled),
     turnStateAvailable: state.activityTurnStateAvailable === true,
     activeTurnRunning: state.activeTurn?.turn.status === 'running',
@@ -2359,11 +2486,13 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   }), [activityRecords, bubbles, transitions, localSendTimes, recordEventTimes, expandedRuns, shownRuns, state.activityTurnStateAvailable, state.activeTurn,
     state.liveRailDenials, state.historyRailDenials, state.sessionKey, state.activitySenderDisplayNames,
     state.session?.sessionKey, state.session?.clearedThroughSeq,
-    state.toolCallsEnabled, toolRecords]);
+    state.toolCallsEnabled, activityToolRecords]);
   const activityFoldIds = useMemo(() => new Set([
     ...activityPlan.messageItems.filter((item): item is ActivityFold => item.kind === 'fold').map(item => item.id),
     ...[...activityPlan.toolItems.values()].filter((item): item is ActivityFold => item.kind === 'fold').map(item => item.id),
-  ]), [activityPlan]);
+    ...turnTimeline.rows.filter((row): row is Extract<TurnTimelineRow, { kind: 'fold' }> => row.kind === 'fold')
+      .map(row => row.entry.id),
+  ]), [activityPlan, turnTimeline.rows]);
   useLayoutEffect(() => {
     setExpandedActivityRuns(prior => {
       const next = new Set([...prior].filter(id => activityFoldIds.has(id)));
@@ -2438,7 +2567,8 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     first?.focus({ preventScroll: true });
   }, [expandedRuns, viewport]);
   const timeline = useMemo(() => composeTimeline(bubbles, localSends, canonicalSends, sendsByIdentity,
-    transitions, activityPlan.messageItems), [activityPlan.messageItems, bubbles, canonicalSends, localSends, sendsByIdentity, transitions]);
+    transitions, activityPlan.messageItems, turnTimeline),
+    [activityPlan.messageItems, bubbles, canonicalSends, localSends, sendsByIdentity, transitions, turnTimeline]);
   const messageRows = useMemo(() => {
     const rows = new Map<string, { key: string; scrollKey: string; role: string; prompt: boolean; isFromReader: boolean }>();
     for (const item of timeline) {
@@ -2987,13 +3117,15 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
             <ActivityPillContents presentation={presentation} />
           </div>;
         }
-        if (item.kind === 'tool') {
-          const entry = activityPlan.toolItems.get(item.call.id);
+        if (item.kind === 'tool' || item.kind === 'turn-tool') {
+          const call = item.kind === 'tool' ? item.call : item.entry.call;
+          if (!call) return null;
+          const entry = item.kind === 'turn-tool' ? item.entry : activityPlan.toolItems.get(call.id);
           // The earlier-activity control is indexed once in messageItems. Tool
           // records hidden behind that control only point to it for filtering.
           if (entry?.kind === 'overflow') return null;
           if (entry?.kind === 'fold') {
-            if (entry.summary.call?.id !== item.call.id) return null;
+            if (entry.summary.call?.id !== call.id) return null;
             return <ActivityRunRow key={entry.id} entry={entry} expanded={expandedActivityRuns.has(entry.id)}
               toggle={toggleActivityRun} registerRow={reading.registerRow}
               preservePosition={reading.preserveVisiblePosition} reconcileLayout={reading.reconcileViewportLayout}
@@ -3001,7 +3133,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
               expandedToolCalls={expandedToolCalls} setToolCallExpanded={setToolCallExpanded}
               reveal={revealingActivityItems.has(entry.id)} onRevealComplete={finishActivityReveal} />;
           }
-          return <ToolCallRow key={'tool-' + item.call.id} call={item.call}
+          return <ToolCallRow key={'tool-' + call.id} call={call}
             entry={entry} registerRow={reading.registerRow}
             preservePosition={reading.preserveVisiblePosition} reconcileLayout={reading.reconcileViewportLayout}
             expandRun={expandRun}
@@ -3144,7 +3276,11 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
         {state.recordEventsError && <div role="status" className="tb-chat-caption">
           Activity history is unavailable. <button type="button" onClick={() => runtime.retryRecordEvents?.()}>Retry activity history</button>
         </div>}
-        <IndexedTimeline messages={transcript.index} tools={tools} pending={pending.index} render={renderItem} />
+        {state.turnEventsError && <div role="status" className="tb-chat-caption">
+          Reply ordering is not current. <button type="button" onClick={() => runtime.retryTurnEvents?.()}>Retry reply order</button>
+        </div>}
+        <IndexedTimeline messages={transcript.index} tools={tools} pending={pending.index}
+          skipToolCallIds={turnTimeline.toolCallIds} render={renderItem} />
         {pending.tail.map(renderItem)}
         {caption && state.activeTurn && <WorkingStateCaption caption={caption} turnSeq={state.activeTurn.turn.seq} />}
         {state.status === 'ready' && !state.conversationError && !state.sessionNotFound &&
