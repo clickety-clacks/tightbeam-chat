@@ -323,6 +323,7 @@ async function createBundleFixture(tag, sourceCommit, { noticeContent, includeEx
 async function createPackageSourceFixture(rootDir) {
   const files = [
     'bin/activity-summaries.mjs',
+    'scripts/pair-marker-device.mjs',
     'server/chat-server.mjs',
     'scripts/update-chat-release.mjs',
     'scripts/chat-release-updater.mjs',
@@ -450,7 +451,7 @@ describe('Chat release packaging and updater', () => {
     expect(noticeText).toContain('React 19.3.0, React DOM 19.3.0, and Scheduler 0.28.0');
     expect(noticeText).toContain('Copyright (c) Meta Platforms, Inc. and affiliates.');
     const files = [
-      'dist/chat-server/public/index.html', 'server/chat-server.mjs', 'bin/activity-summaries.mjs', 'scripts/update-chat-release.mjs',
+      'dist/chat-server/public/index.html', 'server/chat-server.mjs', 'bin/activity-summaries.mjs', 'scripts/pair-marker-device.mjs', 'scripts/update-chat-release.mjs',
       'scripts/chat-release-updater.mjs', 'scripts/chat-release-watch.mjs', 'packaging/tightbeam-chat.service',
       'packaging/tightbeam-chat-release-watch.service', 'packaging/tightbeam-chat-release-watch.timer',
       'LICENSE', 'THIRD_PARTY_NOTICES.md',
@@ -484,6 +485,7 @@ describe('Chat release packaging and updater', () => {
     expect(members).toContain('./public/index.html');
     expect(members).toContain('./server/chat-server.mjs');
     expect(members).toContain('./bin/activity-summaries.mjs');
+    expect(members).toContain('./bin/pair-marker-device.mjs');
     expect(members).not.toContain('./server/activity-summaries.mjs');
     expect(members).toContain('./bin/chat-release-watch.mjs');
     expect(members).toContain('./packaging/tightbeam-chat-release-watch.service');
@@ -494,6 +496,8 @@ describe('Chat release packaging and updater', () => {
       .toEqual(notices);
     expect(execFileSync('tar', ['-xOzf', result.assetPath, './bin/chat-release-watch.mjs']))
       .toEqual(await fs.readFile(path.join(rootDir, 'scripts/chat-release-watch.mjs')));
+    expect(execFileSync('tar', ['-xOzf', result.assetPath, './bin/pair-marker-device.mjs']))
+      .toEqual(await fs.readFile(path.join(rootDir, 'scripts/pair-marker-device.mjs')));
     expect(execFileSync('tar', ['-xOzf', result.assetPath, './packaging/tightbeam-chat-release-watch.service']))
       .toEqual(await fs.readFile(path.join(rootDir, 'packaging/tightbeam-chat-release-watch.service')));
     expect(execFileSync('tar', ['-xOzf', result.assetPath, './packaging/tightbeam-chat-release-watch.timer']))
