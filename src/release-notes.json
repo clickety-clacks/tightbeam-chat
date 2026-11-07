@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.97",
+    "items": [
+      {
+        "title": "Marker helper included in the release archive",
+        "description": "The v0.1.97 Chat release archive includes the existing marker helper; after installation it is available at `releases/v0.1.97/bin/pair-marker-device.mjs`. Chat does not run it automatically."
+      }
+    ]
+  },
+  {
     "version": "v0.1.96",
     "items": [
       {
