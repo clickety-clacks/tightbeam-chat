@@ -10,8 +10,9 @@ const USAGE = `Usage: node scripts/pair-marker-device.mjs \\
 
 The first run reports pair_pending and exits. After the device is approved
 through the Gateway's existing admin route, run the command again with the same
-device ID. A successful pair_result writes its raw token to a new mode-0600 file
-for CHAT_READ_MARKER_DEVICE_CREDENTIAL_FILE. Existing files are never replaced.
+device ID. Pairing an approved device rotates its token. A successful
+pair_result writes its raw token to a new mode-0600 file for
+CHAT_READ_MARKER_DEVICE_CREDENTIAL_FILE. Existing files are never replaced.
 
 Requires a Node.js runtime with the built-in WebSocket client.
 `;
@@ -152,6 +153,16 @@ async function saveCredential(outputPath, token) {
   }
 }
 
+async function ensureOutputPathAbsent(outputPath) {
+  try {
+    await fs.lstat(outputPath);
+  } catch (error) {
+    if (error?.code === 'ENOENT') return;
+    throw new Error('Could not verify that the output path is absent; refusing to pair.');
+  }
+  throw new Error('Output file already exists; refusing to pair or overwrite it.');
+}
+
 async function main() {
   let options;
   try {
@@ -164,6 +175,14 @@ async function main() {
 
   if (options.help) {
     process.stdout.write(USAGE);
+    return;
+  }
+
+  try {
+    await ensureOutputPathAbsent(options.outputPath);
+  } catch (error) {
+    process.stderr.write(`${error.message}\n`);
+    process.exitCode = 1;
     return;
   }
 
