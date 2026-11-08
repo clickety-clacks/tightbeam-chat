@@ -275,7 +275,9 @@ describe('private direct-entry Chat service bridge', () => {
     const configResponse = await fetch(`${chatOrigin}/chat-config.json`);
     const config = await configResponse.json();
     expect(config).toMatchObject({ gateway: gatewayOrigin, sessionKey: SESSION, principalKey: PRINCIPAL });
-    expect(config.deviceId).toMatch(/^chat_[a-f0-9]{24}$/);
+    const expectedDeviceId = 'chat_' + crypto.createHash('sha256')
+      .update(gatewayOrigin + '\0' + PRINCIPAL + '\0' + SESSION).digest('hex').slice(0, 24);
+    expect(config.deviceId).toBe(expectedDeviceId);
     expect(config.readMarkerRoute).toBe('gateway-configured-user');
     expect(JSON.stringify(config)).not.toContain(TOKEN);
 

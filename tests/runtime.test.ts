@@ -2296,15 +2296,22 @@ describe('attachment submission recovery', () => {
     }
   });
 
-  it('only reconciles canonical attachments with the same references in order, live and after rebuild', async () => {
+  it('reconciles REST attachment sends only by response message ID, send identity, and ordered references', async () => {
     const transport = new AttachmentsTransport();
+    transport.nextSend = async () => ({ outcome: 'accepted', messageId: 'm_named' });
     const runtime = await ready(transport);
     const events: unknown[] = [];
     runtime.observeHostSend(correlation, event => events.push(event));
     runtime.sendAttachments!('', [input('one'), input('two')], context);
     await vi.waitFor(() => expect(events).toEqual([{ kind: 'accepted' }]));
     const refs = transport.submissions[0].attachments!;
-    const row = message(9, { role: 'user', content: '', deviceId: 'device', clientMessageId: correlation,
+    const wrongMessageId = message(9, { id: 'm_other', role: 'user', content: '', deviceId: 'device', clientMessageId: correlation,
+      attachments: refs });
+    transport.rows.push(wrongMessageId);
+    transport.emit(wrongMessageId);
+    expect(runtime.getSnapshot().sends[0].reconciled).toBe(false);
+
+    const row = message(10, { id: 'm_named', role: 'user', content: '', deviceId: 'device', clientMessageId: correlation,
       attachments: [...refs].reverse() });
     transport.rows.push(row);
     transport.emit(row);
@@ -2321,10 +2328,10 @@ describe('attachment submission recovery', () => {
     runtime.dispose();
   });
 
-  it('re-asks a dropped post with the same manifest and no uploads, until acknowledged', async () => {
+  it('retries an ambiguous REST attachment post with identical send identity, content, and references', async () => {
     const transport = new AttachmentsTransport();
     let calls = 0;
-    transport.nextSend = async () => ++calls === 1 ? { outcome: 'retryable', reason: 'socket closed' } : { outcome: 'accepted' };
+    transport.nextSend = async () => ++calls === 1 ? { outcome: 'retryable', reason: 'response unavailable' } : { outcome: 'accepted' };
     const runtime = await ready(transport);
     runtime.sendAttachments!('', [input('file')], context);
     await vi.waitFor(() => expect(runtime.getSnapshot().sends[0].status).toBe('accepted'));
