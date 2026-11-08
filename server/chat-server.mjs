@@ -137,13 +137,6 @@ function loadRuntimeConfig(environment) {
   const publicOrigin = canonicalOrigin(environment.CHAT_PUBLIC_ORIGIN);
   const configuredGateway = canonicalOrigin(environment.CHAT_DEFAULT_GATEWAY_ORIGIN);
   const gatewayMap = loadGatewayMap(environment, configuredGateway);
-  let markerDeviceToken = '';
-  if (typeof environment.CHAT_READ_MARKER_DEVICE_CREDENTIAL_FILE === 'string' &&
-      environment.CHAT_READ_MARKER_DEVICE_CREDENTIAL_FILE) {
-    try {
-      markerDeviceToken = fs.readFileSync(environment.CHAT_READ_MARKER_DEVICE_CREDENTIAL_FILE, 'utf8').trim();
-    } catch {}
-  }
   const gatewayOrigin = gatewayMap.valid && configuredGateway && gatewayMap.gateways.has(configuredGateway)
     ? configuredGateway
     : undefined;
@@ -162,8 +155,8 @@ function loadRuntimeConfig(environment) {
       gateway: gatewayOrigin,
       sessionKey,
       ...(principalKey ? { principalKey, deviceId } : {}),
-      ...(markerDeviceToken && operatorPrincipalKey
-        ? { readMarkerRoute: 'gateway-user-device' }
+      ...(operatorPrincipalKey
+        ? { readMarkerRoute: 'gateway-configured-user' }
         : {}),
     }
     : {};
@@ -178,7 +171,6 @@ function loadRuntimeConfig(environment) {
     sessionKey,
     principalKey,
     deviceId,
-    markerDeviceToken,
   };
 }
 
@@ -403,10 +395,6 @@ function parseServiceWebSocketTarget(rawUrl, runtime) {
       }
       return { path: '/ws/changes?protocolVersion=2', kind: 'changes', gatewayOrigin, sessionKey: sessionKeys[0] };
     }
-    if (request.pathname === '/__chat/ws' &&
-        request.searchParams.getAll('protocolVersion').length === 0) {
-      return { path: '/ws', kind: 'human', gatewayOrigin, sessionKey: sessionKeys[0] };
-    }
     return undefined;
   } catch {
     return undefined;
@@ -455,7 +443,7 @@ function writeGatewayReply(response, reply) {
 
 async function serviceHttp(request, response, runtime) {
   if (request.method === 'POST' && request.url?.startsWith('/__chat/agent/dispatch')) {
-    await serviceMarkerDispatch(request, response, runtime);
+    await serviceAgentDispatch(request, response, runtime);
     return;
   }
   if (!serviceReady(runtime)) {
@@ -516,7 +504,7 @@ async function serviceHttp(request, response, runtime) {
   }
 }
 
-function parseServiceMarkerDispatchTarget(rawUrl, runtime) {
+function parseServiceAgentDispatchTarget(rawUrl, runtime) {
   try {
     const request = new URL(rawUrl, 'http://chat-service.invalid');
     if (request.origin !== 'http://chat-service.invalid' || request.pathname !== '/__chat/agent/dispatch' ||
@@ -532,16 +520,12 @@ function parseServiceMarkerDispatchTarget(rawUrl, runtime) {
   }
 }
 
-async function serviceMarkerDispatch(request, response, runtime) {
-  if (!runtime.markerDeviceToken || !runtime.operatorPrincipalKey) {
-    jsonResponse(response, 404, { error: { code: 'not_found' } });
-    return;
-  }
+async function serviceAgentDispatch(request, response, runtime) {
   if (!serviceReady(runtime)) {
     jsonResponse(response, 503, { error: { code: 'chat_service_unconfigured' } });
     return;
   }
-  const target = parseServiceMarkerDispatchTarget(request.url ?? '', runtime);
+  const target = parseServiceAgentDispatchTarget(request.url ?? '', runtime);
   if (!target) {
     jsonResponse(response, 404, { error: { code: 'not_found' } });
     return;
@@ -566,21 +550,21 @@ async function serviceMarkerDispatch(request, response, runtime) {
     jsonResponse(response, 400, { error: { code: 'invalid_request' } });
     return;
   }
-  if (!value || typeof value !== 'object' || Array.isArray(value) || value.verb !== 'read-marker-set') {
+  if (!value || typeof value !== 'object' || Array.isArray(value) ||
+      !['post', 'read-marker-set'].includes(value.verb)) {
     jsonResponse(response, 404, { error: { code: 'not_found' } });
     return;
   }
+  const forwardedBody = Buffer.from(JSON.stringify({ ...value, asUser: runtime.principalKey }));
 
   try {
     writeGatewayReply(response, await gatewayRequest(gateway, target.path, {
       method: 'POST',
       headers: {
-        authorization: `Bearer ${runtime.markerDeviceToken}`,
         'content-type': request.headers['content-type'] ?? 'application/json',
-        'content-length': String(body.length),
+        'content-length': String(forwardedBody.length),
       },
-      body,
-      authorize: false,
+      body: forwardedBody,
     }));
   } catch {
     jsonResponse(response, 502, { error: { code: 'gateway_unavailable' } });
@@ -656,10 +640,6 @@ function proxyServiceWebSocket(request, socket, head, target, runtime, gateway) 
       asUser: runtime.principalKey,
       sessionKey: target.sessionKey,
     };
-    if (target.kind === 'human') {
-      auth.deviceId = runtime.deviceId;
-      auth.subscriptions = ['chat'];
-    }
     remote.write(websocketClientTextFrame(auth));
     if (head.length) remote.write(head);
     socket.pipe(remote).pipe(socket);
@@ -690,7 +670,7 @@ function parseBridgeTarget(rawUrl) {
     if (forwarded.origin !== gateway || forwarded.username || forwarded.password || forwarded.hash) return undefined;
 
     const pathname = forwarded.pathname;
-    const websocket = pathname === '/ws' || pathname === '/ws/changes';
+    const websocket = pathname === '/ws/changes';
     const rest = pathname === '/version' || pathname === '/api/sessions' ||
       /^\/api\/sessions\/[^/]+(?:\/messages)?$/.test(pathname);
     if (!websocket && !rest) return undefined;

@@ -64,14 +64,12 @@ export interface Public019Host {
   /** A host-authorized fetch, including the appropriate bearer header for REST. */
   fetch(input: string, init: RequestInit): Promise<Response>;
   currentIdentity(): HostIdentity;
-  /** Set only when this host already routes marker access through a compatible user-device credential. */
-  readonly readMarkerRoute?: 'gateway-user-device';
-  /** The deployment-configured principal permitted to use the declared marker route. */
+  /** Set when marker reads and writes use the configured Chat user. */
+  readonly readMarkerRoute?: 'gateway-configured-user';
+  /** The configured Chat user permitted to use the declared marker route. */
   readonly readMarkerOperatorPrincipalKey?: string;
   /** Connect /ws/changes?protocolVersion=2, authenticate, then return a fresh socket. */
   openAuthenticatedChanges(signal: AbortSignal): Promise<Public019Channel>;
-  /** Connect /ws, authenticate as the human device, await sync_complete, then return a fresh socket. */
-  openAuthenticatedHuman(signal: AbortSignal): Promise<Public019Channel>;
 }
 
 export interface Public019Config {
@@ -950,7 +948,7 @@ export function createPublic019Transport(config: Public019Config): { transport: 
   const markerOperatorPrincipalKey = config.host.readMarkerOperatorPrincipalKey?.trim();
   const markerTransport: Pick<ChatTransport,
     'readMarkerOperatorPrincipalKey' | 'readReadMarker' | 'writeReadMarker'> =
-    config.host.readMarkerRoute === 'gateway-user-device' && markerOperatorPrincipalKey ? {
+    config.host.readMarkerRoute === 'gateway-configured-user' && markerOperatorPrincipalKey ? {
       readMarkerOperatorPrincipalKey: markerOperatorPrincipalKey,
       async readReadMarker(scopeKey, signal): Promise<ReadMarkerReadResult> {
         if (config.host.currentIdentity().principalKey !== markerOperatorPrincipalKey) return { supported: false };
@@ -997,6 +995,7 @@ export function createPublic019Transport(config: Public019Config): { transport: 
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
             verb: 'read-marker-set',
+            asUser: markerOperatorPrincipalKey,
             params: {
               scopeKey: request.scopeKey,
               marker: request.sequence,
@@ -1262,61 +1261,72 @@ export function createPublic019Transport(config: Public019Config): { transport: 
       if (!submission.clientMessageId.startsWith('c_')) {
         return { outcome: 'refused', reason: 'invalid_message_id' };
       }
+      if (!submittingIdentity.principalKey?.trim()) {
+        return { outcome: 'refused', reason: 'chat_service_unconfigured' };
+      }
       if (submittingIdentity.deviceId !== submission.deviceId) {
         return { outcome: 'refused', reason: 'Host device identity changed.' };
       }
-      let channel: Public019Channel;
-      try { channel = await config.host.openAuthenticatedHuman(signal); }
-      catch (error) {
-        if (error instanceof AuthorizationError) throw error;
-        if (signal.aborted) return { outcome: 'uncertain', reason: 'Human send was interrupted before connecting.' };
-        return { outcome: 'unreachable', reason: 'Not connected to the server.' };
-      }
-      const connectedIdentity = config.host.currentIdentity();
-      if (connectedIdentity.deviceId !== submittingIdentity.deviceId ||
-          connectedIdentity.principalKey !== submittingIdentity.principalKey) {
-        channel.close();
+      if (signal.aborted) return { outcome: 'unreachable', reason: 'Human send was interrupted before submission.' };
+      const currentIdentity = config.host.currentIdentity();
+      if (currentIdentity.deviceId !== submittingIdentity.deviceId ||
+          currentIdentity.principalKey !== submittingIdentity.principalKey) {
         return { outcome: 'refused', reason: 'Host principal changed before human send.' };
       }
-      return new Promise<HumanSendResult>((resolve) => {
-        let settled = false;
-        let stopListening = () => {};
-        const finish = (result: HumanSendResult) => {
-          if (settled) return;
-          settled = true;
-          stopListening();
-          signal.removeEventListener('abort', onAbort);
-          channel.close();
-          resolve(result);
-        };
-        const onAbort = () => finish({ outcome: 'uncertain', reason: 'Human send interrupted before acknowledgement.' });
-        signal.addEventListener('abort', onAbort, { once: true });
-        stopListening = channel.listen((raw) => {
-          try {
-            const frame = record(raw);
-            if (frame.type === 'ack' && frame.id === submission.clientMessageId) finish({ outcome: 'accepted' });
-            else if (frame.type === 'error' && frame.messageId === submission.clientMessageId) {
-              if (frame.code !== undefined && typeof frame.code !== 'string') {
-                logGatewayIncompatibility('human send response', 'Used the refusal-code fallback.');
-              }
-              finish({ outcome: 'refused', reason: typeof frame.code === 'string' && frame.code ? frame.code : 'refused' });
-            }
-          } catch (error) {
-            logDecodeFailure('human send response', error);
-          }
-        }, (event) => finish(event?.code === 1009
-          ? { outcome: 'refused', reason: 'payload_too_large' }
-          : { outcome: 'uncertain', reason: 'connection-closed-before-acknowledgement' }));
-        if (signal.aborted) onAbort();
-        else if (!settled) {
-          try {
-            channel.send({ type: 'message', id: submission.clientMessageId,
-              sessionKey: submission.sessionKey, content: submission.content,
-              ...(submission.attachments ? { attachments: submission.attachments } : {}) });
-            onSubmitted?.();
-          } catch { finish({ outcome: 'unreachable', reason: 'Human send connection closed before submission.' }); }
+      let request: Promise<Response>;
+      try {
+        request = config.host.fetch(`${baseUrl}/agent/dispatch`, {
+          method: 'POST', signal, cache: 'no-store',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            verb: 'post',
+            asUser: submittingIdentity.principalKey,
+            sessionKey: submission.sessionKey,
+            params: {
+              clientMessageId: submission.clientMessageId,
+              deviceId: submission.deviceId,
+              content: submission.content,
+              attachments: submission.attachments ?? [],
+            },
+          }),
+        });
+        onSubmitted?.();
+      } catch {
+        return { outcome: 'unreachable', reason: 'Not connected to the server.' };
+      }
+      let response: Response;
+      try { response = await request; }
+      catch {
+        return { outcome: signal.aborted ? 'uncertain' : 'retryable',
+          reason: signal.aborted ? 'Human send was interrupted after submission.' : 'Human send response was unavailable.' };
+      }
+      if (!response.ok) {
+        const error = await gatewayError(response);
+        const definitiveRefusal = new Set(['auth_failed', 'principal_required', 'not_found',
+          'invalid_message', 'payload_too_large', 'not_deliverable']);
+        if (error.code && (response.status < 500 || definitiveRefusal.has(error.code))) {
+          return { outcome: 'refused', reason: error.code };
         }
-      });
+        if (response.status >= 500) return { outcome: 'retryable', reason: error.code ?? `http-${response.status}` };
+        if (error.code) return { outcome: 'refused', reason: error.code };
+        return { outcome: 'refused', reason: response.status === 401 ? 'auth_failed'
+          : response.status === 403 ? 'principal_required' : `http-${response.status}` };
+      }
+      try {
+        const body = record(await response.json());
+        const result = record(body.result);
+        if ((result.outcome !== 'recorded' && result.outcome !== 'duplicate') ||
+            result.sessionKey !== submission.sessionKey || result.deviceId !== submission.deviceId ||
+            result.clientMessageId !== submission.clientMessageId || typeof result.messageId !== 'string' ||
+            !result.messageId || !Number.isSafeInteger(result.turnSeq)) {
+          logGatewayIncompatibility('human send response', 'Used the uncertain-result fallback.');
+          return { outcome: 'uncertain', reason: 'invalid-send-response' };
+        }
+        return { outcome: 'accepted', messageId: result.messageId };
+      } catch (error) {
+        logDecodeFailure('human send response', error);
+        return { outcome: 'uncertain', reason: 'invalid-send-response' };
+      }
     },
   };
   return { transport, profile };

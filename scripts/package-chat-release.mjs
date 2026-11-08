@@ -34,7 +34,6 @@ export async function packageChatRelease({
     path.join(webDir, 'index.html'),
     path.resolve(rootDir, 'server/chat-server.mjs'),
     path.resolve(rootDir, 'bin/activity-summaries.mjs'),
-    path.resolve(rootDir, 'scripts/pair-marker-device.mjs'),
     path.resolve(rootDir, 'scripts/update-chat-release.mjs'),
     path.resolve(rootDir, 'scripts/chat-release-updater.mjs'),
     path.resolve(rootDir, 'scripts/chat-release-watch.mjs'),
@@ -64,7 +63,6 @@ export async function packageChatRelease({
     }
     await fs.copyFile(path.resolve(rootDir, 'server/chat-server.mjs'), path.join(packageDir, 'server/chat-server.mjs'));
     await fs.copyFile(path.resolve(rootDir, 'bin/activity-summaries.mjs'), path.join(packageDir, 'bin/activity-summaries.mjs'));
-    await fs.copyFile(path.resolve(rootDir, 'scripts/pair-marker-device.mjs'), path.join(packageDir, 'bin/pair-marker-device.mjs'));
     await fs.copyFile(path.resolve(rootDir, 'scripts/update-chat-release.mjs'), path.join(packageDir, 'bin/update-chat-release.mjs'));
     await fs.copyFile(path.resolve(rootDir, 'scripts/chat-release-updater.mjs'), path.join(packageDir, 'bin/chat-release-updater.mjs'));
     await fs.copyFile(path.resolve(rootDir, 'scripts/chat-release-watch.mjs'), path.join(packageDir, 'bin/chat-release-watch.mjs'));

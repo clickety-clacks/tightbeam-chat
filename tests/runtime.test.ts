@@ -1523,6 +1523,28 @@ describe('framework-independent runtime', () => {
     runtime.dispose();
   });
 
+  it('reconciles an accepted REST send only with the message ID returned by Gateway', async () => {
+    const transport = new ControlledTransport();
+    transport.nextSend = async () => ({ outcome: 'accepted', messageId: 'm_named' });
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await runtime.rebuild();
+
+    const id = runtime.send('one REST send')!;
+    await vi.waitFor(() => expect(runtime.getSnapshot().sends[0]).toMatchObject({
+      status: 'accepted', acceptedMessageId: 'm_named', reconciled: false,
+    }));
+    transport.emit(message(9, { id: 'm_other', clientMessageId: id, deviceId: 'device',
+      content: 'one REST send', role: 'user' }));
+    expect(runtime.getSnapshot().sends[0].reconciled).toBe(false);
+    transport.emit(message(10, { id: 'm_named', clientMessageId: id, deviceId: 'device',
+      content: 'one REST send', role: 'user' }));
+
+    expect(runtime.getSnapshot().sends[0]).toMatchObject({
+      status: 'accepted', acceptedMessageId: 'm_named', reconciled: true,
+    });
+    runtime.dispose();
+  });
+
   it('reconciles a late accepted message before an explicit uncertain-send retry', async () => {
     const transport = new ControlledTransport();
     transport.nextSend = async () => ({ outcome: 'uncertain', reason: 'connection-closed-before-acknowledgement' });
@@ -1611,7 +1633,7 @@ describe('framework-independent runtime', () => {
     runtime.dispose();
   });
 
-  it('re-asks after a dropped send socket with the exact same ID and content', async () => {
+  it('re-asks after an ambiguous send result with the exact same ID and content', async () => {
     const transport = new ControlledTransport();
     transport.nextSend = async () => transport.submissions.length === 1
       ? { outcome: 'retryable', reason: 'socket closed before acknowledgement' }

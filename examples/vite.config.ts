@@ -51,7 +51,7 @@ function gatewayBridge(): Plugin {
         try {
           if (!allowed(req)) { socket.destroy(); return; }
           const route = target(req.url);
-          if (!route || !route.path.startsWith('/ws')) { socket.destroy(); return; }
+          if (!route || new URL(route.path, route.base).pathname !== '/ws/changes') { socket.destroy(); return; }
           const upstream = (route.base.protocol === 'https:' ? https : http).request(route.base, {
             path: route.path,
             headers: { host: route.base.host, connection: 'Upgrade', upgrade: 'websocket',
