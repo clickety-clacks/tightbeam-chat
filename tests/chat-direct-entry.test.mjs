@@ -404,9 +404,10 @@ describe('private direct-entry Chat service bridge', () => {
     expect(seen).toHaveLength(13);
   });
 
-  it('uses the shared Gateway credential and configured Chat user for sends and marker writes', async () => {
+  it('refreshes the Gateway CLI version after upgrades and preserves configured-user sends and marker writes', async () => {
     const scopeKey = 'agent:example:chat with spaces:session-read-position';
     const seen = [];
+    let gatewayVersion = '0.1.11';
     const gateway = http.createServer(async (request, response) => {
       const chunks = [];
       for await (const chunk of request) chunks.push(Buffer.from(chunk));
@@ -415,10 +416,10 @@ describe('private direct-entry Chat service bridge', () => {
         cliVersion: request.headers['x-tightbeam-cli-version'], body });
       response.setHeader('content-type', 'application/json');
       if (request.url === '/version') {
-        response.writeHead(200).end(JSON.stringify({ version: '0.1.11', protocolVersion: 1 }));
+        response.writeHead(200).end(JSON.stringify({ version: gatewayVersion, protocolVersion: 1 }));
         return;
       }
-      if (request.headers['x-tightbeam-cli-version'] !== '0.1.11') {
+      if (request.headers['x-tightbeam-cli-version'] !== gatewayVersion) {
         response.writeHead(426).end(JSON.stringify({ error: { code: 'incompatible_cli' } }));
         return;
       }
@@ -480,6 +481,7 @@ describe('private direct-entry Chat service bridge', () => {
     expect(markerRead.status).toBe(200);
     expect((await markerRead.json()).item).toEqual({ userId: OPERATOR_PRINCIPAL, scopeKey, marker: null });
 
+    gatewayVersion = '0.1.12';
     const initialSet = { verb: 'read-marker-set', asUser: 'client-supplied',
       params: { scopeKey, marker: '52', expectedCurrent: null } };
     const setResponse = await fetch(`${chatOrigin}/__chat/agent/dispatch`, {
@@ -507,7 +509,10 @@ describe('private direct-entry Chat service bridge', () => {
     expect(clearResponse.status).toBe(404);
 
     const postRequest = { verb: 'post', asUser: 'client-supplied', sessionKey: SESSION,
-      params: { clientMessageId: 'c_chat_send', deviceId: 'chat_fixture', content: 'hello', attachments: [] } };
+      params: { clientMessageId: 'c_chat_send', deviceId: 'chat_fixture', content: 'hello', attachments: [
+        { assetId: 'asset_fixture', mimeType: 'image/png', filename: 'photo.png', size: 12 },
+      ] } };
+    gatewayVersion = '0.1.13';
     const postResponse = await fetch(`${chatOrigin}/__chat/agent/dispatch`, {
       method: 'POST',
       headers: { origin: chatOrigin, 'content-type': 'application/json' },
@@ -516,6 +521,12 @@ describe('private direct-entry Chat service bridge', () => {
     expect(postResponse.status).toBe(200);
     expect(await postResponse.json()).toMatchObject({ result: { outcome: 'recorded', messageId: 'message-recorded' } });
 
+    const initialSetBody = JSON.stringify({ ...initialSet, asUser: OPERATOR_PRINCIPAL });
+    const postBody = JSON.stringify({ ...postRequest, asUser: OPERATOR_PRINCIPAL });
+    expect(seen.filter((row) => row.method === 'POST' && row.url === '/agent/dispatch' && row.body === initialSetBody)
+      .map((row) => row.cliVersion)).toEqual(['0.1.11', '0.1.12']);
+    expect(seen.filter((row) => row.method === 'POST' && row.url === '/agent/dispatch' && row.body === postBody)
+      .map((row) => row.cliVersion)).toEqual(['0.1.12', '0.1.13']);
     expect(seen).toEqual([
       {
         method: 'GET', url: '/version', authorization: undefined, cliVersion: undefined, body: '',
@@ -529,15 +540,29 @@ describe('private direct-entry Chat service bridge', () => {
       },
       {
         method: 'POST', url: '/agent/dispatch', authorization: `Bearer ${TOKEN}`, cliVersion: '0.1.11',
-        body: JSON.stringify({ ...initialSet, asUser: OPERATOR_PRINCIPAL }),
+        body: initialSetBody,
       },
       {
-        method: 'POST', url: '/agent/dispatch', authorization: `Bearer ${TOKEN}`, cliVersion: '0.1.11',
+        method: 'GET', url: '/version', authorization: undefined, cliVersion: undefined, body: '',
+      },
+      {
+        method: 'POST', url: '/agent/dispatch', authorization: `Bearer ${TOKEN}`, cliVersion: '0.1.12',
+        body: initialSetBody,
+      },
+      {
+        method: 'POST', url: '/agent/dispatch', authorization: `Bearer ${TOKEN}`, cliVersion: '0.1.12',
         body: JSON.stringify({ ...staleSet, asUser: OPERATOR_PRINCIPAL }),
       },
       {
-        method: 'POST', url: '/agent/dispatch', authorization: `Bearer ${TOKEN}`, cliVersion: '0.1.11',
-        body: JSON.stringify({ ...postRequest, asUser: OPERATOR_PRINCIPAL }),
+        method: 'POST', url: '/agent/dispatch', authorization: `Bearer ${TOKEN}`, cliVersion: '0.1.12',
+        body: postBody,
+      },
+      {
+        method: 'GET', url: '/version', authorization: undefined, cliVersion: undefined, body: '',
+      },
+      {
+        method: 'POST', url: '/agent/dispatch', authorization: `Bearer ${TOKEN}`, cliVersion: '0.1.13',
+        body: postBody,
       },
     ]);
   });
