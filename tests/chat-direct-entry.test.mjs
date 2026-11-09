@@ -362,7 +362,9 @@ describe('private direct-entry Chat service bridge', () => {
     expect(seen.map((row) => row.authorization)).toEqual([
       undefined, `Bearer ${TOKEN}`, `Bearer ${TOKEN}`, `Bearer ${TOKEN}`, `Bearer ${TOKEN}`, `Bearer ${TOKEN}`, `Bearer ${TOKEN}`, `Bearer ${TOKEN}`, `Bearer ${TOKEN}`,
     ]);
-    expect(seen.every((row) => !row.cliVersion && row.body === '')).toBe(true);
+    expect(seen[0].cliVersion).toBeUndefined();
+    expect(seen.every((row, index) => row.body === '' &&
+      (index === 0 ? row.cliVersion === undefined : row.cliVersion === '0.1.11'))).toBe(true);
 
     const wrongSession = await fetch(`${chatOrigin}/__chat/api/sessions/agent%3Aother${selectedGateway}`, { headers: { origin: chatOrigin } });
     expect(wrongSession.status).toBe(404);
@@ -409,8 +411,17 @@ describe('private direct-entry Chat service bridge', () => {
       const chunks = [];
       for await (const chunk of request) chunks.push(Buffer.from(chunk));
       const body = Buffer.concat(chunks).toString('utf8');
-      seen.push({ method: request.method, url: request.url, authorization: request.headers.authorization, body });
+      seen.push({ method: request.method, url: request.url, authorization: request.headers.authorization,
+        cliVersion: request.headers['x-tightbeam-cli-version'], body });
       response.setHeader('content-type', 'application/json');
+      if (request.url === '/version') {
+        response.writeHead(200).end(JSON.stringify({ version: '0.1.11', protocolVersion: 1 }));
+        return;
+      }
+      if (request.headers['x-tightbeam-cli-version'] !== '0.1.11') {
+        response.writeHead(426).end(JSON.stringify({ error: { code: 'incompatible_cli' } }));
+        return;
+      }
       if (request.method === 'GET' && request.url ===
           `/api/read-markers/${encodeURIComponent(scopeKey)}?asUser=${encodeURIComponent(OPERATOR_PRINCIPAL)}`) {
         response.writeHead(200).end(JSON.stringify({ schemaVersion: 1, resource: 'read markers',
@@ -507,21 +518,25 @@ describe('private direct-entry Chat service bridge', () => {
 
     expect(seen).toEqual([
       {
+        method: 'GET', url: '/version', authorization: undefined, cliVersion: undefined, body: '',
+      },
+      {
         method: 'GET',
         url: `/api/read-markers/${encodedScopeKey}?asUser=${encodeURIComponent(OPERATOR_PRINCIPAL)}`,
         authorization: `Bearer ${TOKEN}`,
+        cliVersion: '0.1.11',
         body: '',
       },
       {
-        method: 'POST', url: '/agent/dispatch', authorization: `Bearer ${TOKEN}`,
+        method: 'POST', url: '/agent/dispatch', authorization: `Bearer ${TOKEN}`, cliVersion: '0.1.11',
         body: JSON.stringify({ ...initialSet, asUser: OPERATOR_PRINCIPAL }),
       },
       {
-        method: 'POST', url: '/agent/dispatch', authorization: `Bearer ${TOKEN}`,
+        method: 'POST', url: '/agent/dispatch', authorization: `Bearer ${TOKEN}`, cliVersion: '0.1.11',
         body: JSON.stringify({ ...staleSet, asUser: OPERATOR_PRINCIPAL }),
       },
       {
-        method: 'POST', url: '/agent/dispatch', authorization: `Bearer ${TOKEN}`,
+        method: 'POST', url: '/agent/dispatch', authorization: `Bearer ${TOKEN}`, cliVersion: '0.1.11',
         body: JSON.stringify({ ...postRequest, asUser: OPERATOR_PRINCIPAL }),
       },
     ]);
@@ -1069,8 +1084,12 @@ describe('attachment byte routes', () => {
     let mismatch;
     const gateway = http.createServer(async (request, response) => {
       const url = new URL(request.url, 'http://gateway.invalid');
-      observations.push({ path: url.pathname, actingUser: url.searchParams.get('asUser'), auth: request.headers.authorization });
-      if (url.pathname === '/upload') {
+      observations.push({ path: url.pathname, actingUser: url.searchParams.get('asUser'), auth: request.headers.authorization,
+        cliVersion: request.headers['x-tightbeam-cli-version'] });
+      if (url.pathname === '/version') {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ version: '0.1.11', protocolVersion: 1 }));
+      } else if (url.pathname === '/upload') {
         if (rejectUpload) { request.resume(); response.writeHead(413, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'payload_too_large' })); return; }
         const chunks = []; for await (const chunk of request) chunks.push(chunk);
         const body = Buffer.concat(chunks);
@@ -1132,6 +1151,7 @@ describe('attachment byte routes', () => {
     expect(result).toEqual({ outcome: 'accepted', messageId: 'message-with-attachments' });
     expect(dispatches).toEqual([{ verb: 'post', asUser: PRINCIPAL, sessionKey: SESSION,
       params: { clientMessageId: 'c_assets', deviceId: 'device', content: '', attachments: refs } }]);
+    expect(observations.find(row => row.path === '/agent/dispatch')?.cliVersion).toBe('0.1.11');
     expect(observations.filter(row => row.path === '/upload' || row.path.startsWith('/download/'))
       .every(row => row.actingUser === PRINCIPAL && row.auth === `Bearer ${TOKEN}`)).toBe(true);
     for (const field of ['mimeType', 'size']) {
