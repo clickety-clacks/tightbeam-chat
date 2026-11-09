@@ -435,9 +435,20 @@ function gatewayCliVersion(gateway) {
   return gateway.cliVersionPromise;
 }
 
-async function gatewayRequest(gateway, path, { method = 'GET', headers = {}, body, authorize = true } = {}) {
+function isIncompatibleCliReply(reply) {
+  if (reply.status !== 426) return false;
+  try { return JSON.parse(reply.body.toString('utf8')).error?.code === 'incompatible_cli'; }
+  catch { return false; }
+}
+
+async function gatewayRequest(
+  gateway,
+  path,
+  { method = 'GET', headers = {}, body, authorize = true } = {},
+  retriedAfterVersionRefresh = false,
+) {
   const cliVersion = authorize ? await gatewayCliVersion(gateway) : undefined;
-  return new Promise((resolve, reject) => {
+  const reply = await new Promise((resolve, reject) => {
     const protocol = gateway.base.startsWith('https:') ? https : http;
     const request = protocol.request(gateway.base, {
       method,
@@ -468,6 +479,20 @@ async function gatewayRequest(gateway, path, { method = 'GET', headers = {}, bod
     request.on('error', reject);
     request.end(body);
   });
+
+  // serviceAgentDispatch validates these requests as post or read-marker-set before forwarding.
+  if (!retriedAfterVersionRefresh && authorize && path === '/agent/dispatch' &&
+      isIncompatibleCliReply(reply)) {
+    if (gateway.cliVersion === cliVersion) gateway.cliVersion = undefined;
+    let refreshedVersion;
+    try { refreshedVersion = await gatewayCliVersion(gateway); }
+    catch { return reply; }
+    if (refreshedVersion !== cliVersion) {
+      return gatewayRequest(gateway, path, { method, headers, body, authorize }, true);
+    }
+  }
+
+  return reply;
 }
 
 function writeGatewayReply(response, reply) {
