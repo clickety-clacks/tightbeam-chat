@@ -435,16 +435,9 @@ function gatewayCliVersion(gateway) {
   return gateway.cliVersionPromise;
 }
 
-function isGatewayCliVersionMismatch(reply) {
-  if (reply.status !== 426) return false;
-  try { return JSON.parse(reply.body.toString('utf8')).error?.code === 'incompatible_cli'; }
-  catch { return false; }
-}
-
-async function gatewayRequest(gateway, path, options = {}, retryOnCliVersionMismatch = true) {
-  const { method = 'GET', headers = {}, body, authorize = true } = options;
+async function gatewayRequest(gateway, path, { method = 'GET', headers = {}, body, authorize = true } = {}) {
   const cliVersion = authorize ? await gatewayCliVersion(gateway) : undefined;
-  const reply = await new Promise((resolve, reject) => {
+  return new Promise((resolve, reject) => {
     const protocol = gateway.base.startsWith('https:') ? https : http;
     const request = protocol.request(gateway.base, {
       method,
@@ -475,11 +468,6 @@ async function gatewayRequest(gateway, path, options = {}, retryOnCliVersionMism
     request.on('error', reject);
     request.end(body);
   });
-  if (authorize && retryOnCliVersionMismatch && isGatewayCliVersionMismatch(reply)) {
-    if (gateway.cliVersion === cliVersion) gateway.cliVersion = undefined;
-    return gatewayRequest(gateway, path, options, false);
-  }
-  return reply;
 }
 
 function writeGatewayReply(response, reply) {
