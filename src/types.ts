@@ -291,11 +291,11 @@ export interface HostSendContext {
 }
 
 export type HumanSendResult =
-  | { readonly outcome: 'accepted' }
+  | { readonly outcome: 'accepted'; readonly messageId?: string }
   | { readonly outcome: 'refused'; readonly reason: string }
-  /** The authenticated send socket ended before its response; repeat the exact submission. */
+  /** The REST send result was unavailable; repeat the exact submission. */
   | { readonly outcome: 'retryable'; readonly reason: string }
-  /** No authenticated send connection could be established. */
+  /** The send request could not be started. */
   | { readonly outcome: 'unreachable'; readonly reason: string }
   /** The message may have been accepted, but no response confirmed its delivery. */
   | { readonly outcome: 'uncertain'; readonly reason: string };
@@ -353,7 +353,7 @@ export interface ChatTransport {
   readonly targetGateway?: string;
   /** Establishes the elected target's snapshot/notice coverage rule. */
   proveCoverage(session: SessionRecord, page: ConversationPage, buffered: readonly ChangeNotice[]): boolean;
-  /** Separate authenticated human /ws post, resolved by ack/refusal, retry, or uncertainty. */
+  /** Human REST post, correlated by send identity and the returned message ID. */
   sendHuman(submission: HumanSubmission, signal: AbortSignal, onSubmitted?: () => void): Promise<HumanSendResult>;
 }
 
@@ -367,8 +367,10 @@ export interface LocalSend extends HumanSubmission {
   /** Every item has completed image preparation before the first upload. */
   readonly attachmentsPrepared?: boolean;
   readonly attachmentPhase?: 'preparing' | 'ready' | 'failed' | 'posted' | 'recovering';
-  /** True only after the transport submitted a frame (or received its ack). */
+  /** True only after the transport started the REST send request. */
   readonly postSubmitted?: boolean;
+  /** Gateway message ID named by a recorded or duplicate REST send result. */
+  readonly acceptedMessageId?: string;
   readonly attachmentFailure?: { readonly reason: 'upload-failed' | 'image-unreadable'; readonly detail: string; readonly attachmentIndex?: number };
   readonly submittedAt: string;
   readonly status: SendStatus;

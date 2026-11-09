@@ -63,12 +63,12 @@ describe('Chat entry selection', () => {
   });
 
   it('keeps the configured marker route scoped to its Gateway', () => {
-    const withMarkers = { ...configured, principalKey: 'fixture-principal', readMarkerRoute: 'gateway-user-device' as const };
+    const withMarkers = { ...configured, principalKey: 'fixture-principal', readMarkerRoute: 'gateway-configured-user' as const };
     const sameGateway = resolveEntrySelection(
       `?gateway=${encodeURIComponent(configured.gateway)}&session=${encodeURIComponent('agent:linked/chat')}`,
       withMarkers,
     );
-    expect(sameGateway.kind === 'selected' && sameGateway.target.readMarkerRoute).toBe('gateway-user-device');
+    expect(sameGateway.kind === 'selected' && sameGateway.target.readMarkerRoute).toBe('gateway-configured-user');
 
     const otherGateway = resolveEntrySelection(
       `?gateway=${encodeURIComponent('https://other.example')}&session=${encodeURIComponent('agent:other/chat')}`,
@@ -114,9 +114,9 @@ describe('private browser entry and same-origin gateway bridge', () => {
   it('exposes the configured marker route without forwarding browser credentials', async () => {
     const fetchSpy = vi.fn<typeof fetch>().mockResolvedValue(new Response('{}', { status: 200 }));
     vi.stubGlobal('fetch', fetchSpy);
-    const host = browserHost({ ...configured, principalKey: 'fixture-principal', readMarkerRoute: 'gateway-user-device' });
+    const host = browserHost({ ...configured, principalKey: 'fixture-principal', readMarkerRoute: 'gateway-configured-user' });
 
-    expect(host.readMarkerRoute).toBe('gateway-user-device');
+    expect(host.readMarkerRoute).toBe('gateway-configured-user');
     expect(host.readMarkerOperatorPrincipalKey).toBe('fixture-principal');
     await host.fetch('/__chat/agent/dispatch', {
       method: 'POST',
@@ -148,8 +148,8 @@ describe('private browser entry and same-origin gateway bridge', () => {
       path: '/api/sessions/current',
     });
     expect(parseGatewayBridgeTarget('/gateway/https%3A%2F%2Fgateway.example%3A8443/admin')).toBeUndefined();
-    expect(parseGatewayBridgeTarget('https://other.example/gateway/https%3A%2F%2Fgateway.example%3A8443/ws'))
-      .toBeUndefined();
+    expect(parseGatewayBridgeTarget('/gateway/https%3A%2F%2Fgateway.example%3A8443/ws')).toBeUndefined();
+    expect(() => gatewayBridgeUrl(page, gateway, '/ws', 'websocket')).toThrow('only the changes feed');
   });
 
   it('allows only matching browser origins at the bridge', () => {
@@ -159,45 +159,9 @@ describe('private browser entry and same-origin gateway bridge', () => {
     expect(sameOriginBridgeOrigin('not an origin', 'https://chat.private.example/')).toBe(false);
   });
 
-  it('does not time out a human socket after it opens while auth and sync answers are delayed', async () => {
-    vi.useFakeTimers();
-    vi.stubGlobal('WebSocket', FakeWebSocket as unknown as typeof WebSocket);
+  it('does not expose a human Clawline socket from the browser host', () => {
     const host = browserHost({ ...configured, gateway: 'https://gateway.example' });
-    const opening = host.openAuthenticatedHuman(new AbortController().signal);
-    let settled = false;
-    void opening.then(() => { settled = true; });
-    const socket = FakeWebSocket.instances[0]!;
-
-    socket.open();
-    await vi.advanceTimersByTimeAsync(16_000);
-    expect(settled).toBe(false);
-    expect(socket.closed).toBe(false);
-
-    socket.frame({ type: 'auth_result', success: true, userId: configured.principalKey,
-      sessionId: `conn_${configured.deviceId}`, sessionKeys: [configured.sessionKey] });
-    await vi.advanceTimersByTimeAsync(16_000);
-    expect(settled).toBe(false);
-
-    socket.frame({ type: 'sync_complete' });
-    const channel = await opening;
-    expect(settled).toBe(true);
-    channel.send({ type: 'message', id: 'c_send', sessionKey: configured.sessionKey, content: 'hello' });
-    expect(socket.sent).toEqual([JSON.stringify({ type: 'message', id: 'c_send',
-      sessionKey: configured.sessionKey, content: 'hello' })]);
-    channel.close();
-  });
-
-  it('reports a human socket that never opens as unreachable through a connection timeout', async () => {
-    vi.useFakeTimers();
-    vi.stubGlobal('WebSocket', FakeWebSocket as unknown as typeof WebSocket);
-    const host = browserHost({ ...configured, gateway: 'https://gateway.example' });
-    const opening = host.openAuthenticatedHuman(new AbortController().signal);
-    const rejected = expect(opening).rejects.toThrow('Chat connection timed out.');
-    const socket = FakeWebSocket.instances[0]!;
-
-    await vi.advanceTimersByTimeAsync(15_000);
-    await rejected;
-    expect(socket.closed).toBe(true);
+    expect('openAuthenticatedHuman' in host).toBe(false);
   });
 
   it('treats a non-authentication socket error as a local feature failure', async () => {

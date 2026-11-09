@@ -1523,6 +1523,28 @@ describe('framework-independent runtime', () => {
     runtime.dispose();
   });
 
+  it('reconciles an accepted REST send only with the message ID returned by Gateway', async () => {
+    const transport = new ControlledTransport();
+    transport.nextSend = async () => ({ outcome: 'accepted', messageId: 'm_named' });
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await runtime.rebuild();
+
+    const id = runtime.send('one REST send')!;
+    await vi.waitFor(() => expect(runtime.getSnapshot().sends[0]).toMatchObject({
+      status: 'accepted', acceptedMessageId: 'm_named', reconciled: false,
+    }));
+    transport.emit(message(9, { id: 'm_other', clientMessageId: id, deviceId: 'device',
+      content: 'one REST send', role: 'user' }));
+    expect(runtime.getSnapshot().sends[0].reconciled).toBe(false);
+    transport.emit(message(10, { id: 'm_named', clientMessageId: id, deviceId: 'device',
+      content: 'one REST send', role: 'user' }));
+
+    expect(runtime.getSnapshot().sends[0]).toMatchObject({
+      status: 'accepted', acceptedMessageId: 'm_named', reconciled: true,
+    });
+    runtime.dispose();
+  });
+
   it('reconciles a late accepted message before an explicit uncertain-send retry', async () => {
     const transport = new ControlledTransport();
     transport.nextSend = async () => ({ outcome: 'uncertain', reason: 'connection-closed-before-acknowledgement' });
@@ -1611,7 +1633,7 @@ describe('framework-independent runtime', () => {
     runtime.dispose();
   });
 
-  it('re-asks after a dropped send socket with the exact same ID and content', async () => {
+  it('re-asks after an ambiguous send result with the exact same ID and content', async () => {
     const transport = new ControlledTransport();
     transport.nextSend = async () => transport.submissions.length === 1
       ? { outcome: 'retryable', reason: 'socket closed before acknowledgement' }
@@ -2274,15 +2296,22 @@ describe('attachment submission recovery', () => {
     }
   });
 
-  it('only reconciles canonical attachments with the same references in order, live and after rebuild', async () => {
+  it('reconciles REST attachment sends only by response message ID, send identity, and ordered references', async () => {
     const transport = new AttachmentsTransport();
+    transport.nextSend = async () => ({ outcome: 'accepted', messageId: 'm_named' });
     const runtime = await ready(transport);
     const events: unknown[] = [];
     runtime.observeHostSend(correlation, event => events.push(event));
     runtime.sendAttachments!('', [input('one'), input('two')], context);
     await vi.waitFor(() => expect(events).toEqual([{ kind: 'accepted' }]));
     const refs = transport.submissions[0].attachments!;
-    const row = message(9, { role: 'user', content: '', deviceId: 'device', clientMessageId: correlation,
+    const wrongMessageId = message(9, { id: 'm_other', role: 'user', content: '', deviceId: 'device', clientMessageId: correlation,
+      attachments: refs });
+    transport.rows.push(wrongMessageId);
+    transport.emit(wrongMessageId);
+    expect(runtime.getSnapshot().sends[0].reconciled).toBe(false);
+
+    const row = message(10, { id: 'm_named', role: 'user', content: '', deviceId: 'device', clientMessageId: correlation,
       attachments: [...refs].reverse() });
     transport.rows.push(row);
     transport.emit(row);
@@ -2299,10 +2328,10 @@ describe('attachment submission recovery', () => {
     runtime.dispose();
   });
 
-  it('re-asks a dropped post with the same manifest and no uploads, until acknowledged', async () => {
+  it('retries an ambiguous REST attachment post with identical send identity, content, and references', async () => {
     const transport = new AttachmentsTransport();
     let calls = 0;
-    transport.nextSend = async () => ++calls === 1 ? { outcome: 'retryable', reason: 'socket closed' } : { outcome: 'accepted' };
+    transport.nextSend = async () => ++calls === 1 ? { outcome: 'retryable', reason: 'response unavailable' } : { outcome: 'accepted' };
     const runtime = await ready(transport);
     runtime.sendAttachments!('', [input('file')], context);
     await vi.waitFor(() => expect(runtime.getSnapshot().sends[0].status).toBe('accepted'));

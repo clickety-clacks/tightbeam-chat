@@ -56,7 +56,6 @@ describe('malformed Gateway history rendering', () => {
         return new Response('{}', { status: 404 });
       },
       openAuthenticatedChanges: async () => new ReadyChannel(),
-      openAuthenticatedHuman: async () => new ReadyChannel(),
     };
     const { transport, profile } = createPublic019Transport({ baseUrl: 'https://gateway.example', host });
     const adapter = createTightbeamAdapter(transport, profile);

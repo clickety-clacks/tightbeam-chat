@@ -3,7 +3,7 @@ export interface ChatTarget {
   readonly sessionKey: string;
   readonly principalKey: string;
   readonly deviceId: string;
-  readonly readMarkerRoute?: 'gateway-user-device';
+  readonly readMarkerRoute?: 'gateway-configured-user';
 }
 
 export interface RequestedChatTarget {
@@ -16,7 +16,7 @@ export interface ConfiguredChatTarget {
   readonly sessionKey?: string;
   readonly principalKey?: string;
   readonly deviceId?: string;
-  readonly readMarkerRoute?: 'gateway-user-device';
+  readonly readMarkerRoute?: 'gateway-configured-user';
 }
 
 /** Loads the deployment-owned, nonsecret default from the same origin as the page. */
@@ -53,7 +53,7 @@ export async function loadConfiguredChatTarget(
     typeof config.sessionKey === 'string' ? config.sessionKey : undefined,
     typeof config.principalKey === 'string' ? config.principalKey : undefined,
     typeof config.deviceId === 'string' ? config.deviceId : undefined,
-    config.readMarkerRoute === 'gateway-user-device' ? 'gateway-user-device' : undefined,
+    config.readMarkerRoute === 'gateway-configured-user' ? 'gateway-configured-user' : undefined,
   );
   if (!target) throw new Error('The Chat server returned an invalid default target.');
   return target;
@@ -88,7 +88,7 @@ function targetFrom(
   sessionKey: string | undefined,
   principalKey: string | undefined,
   deviceId: string | undefined,
-  readMarkerRoute: 'gateway-user-device' | undefined,
+  readMarkerRoute: 'gateway-configured-user' | undefined,
 ): ChatTarget | undefined {
   const normalizedGateway = canonicalGateway(gateway);
   if (!normalizedGateway || !sessionKey?.trim() || !principalKey?.trim() || !deviceId?.trim()) return undefined;
@@ -187,8 +187,8 @@ export function gatewayBridgeUrl(
       target.origin !== normalizedGateway || target.username || target.password || target.hash) {
     throw new Error('The bridge request must stay on the selected gateway.');
   }
-  if (transport === 'websocket' && target.pathname !== '/ws' && !target.pathname.startsWith('/ws/')) {
-    throw new Error('The WebSocket bridge supports only gateway WebSocket routes.');
+  if (transport === 'websocket' && target.pathname !== '/ws/changes') {
+    throw new Error('The WebSocket bridge supports only the changes feed.');
   }
 
   const bridge = new URL(`/gateway/${encodeURIComponent(normalizedGateway)}${target.pathname}${target.search}`, page.origin);
@@ -213,7 +213,7 @@ export function parseGatewayBridgeTarget(requestUrl: string): GatewayBridgeTarge
     if (!gateway) return undefined;
     const path = `${match[2]}${request.search}`;
     const pathname = new URL(path, gateway).pathname;
-    if (pathname !== '/version' && pathname !== '/ws' && pathname !== '/ws/changes' &&
+    if (pathname !== '/version' && pathname !== '/ws/changes' &&
         pathname !== '/api/sessions' && !pathname.startsWith('/api/sessions/') &&
         !/^\/api\/turns\/[1-9][0-9]*$/.test(pathname) && !/^\/api\/roles\/[^/]+$/.test(pathname)) return undefined;
     return { gateway, path };
