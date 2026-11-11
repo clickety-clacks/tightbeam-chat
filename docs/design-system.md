@@ -348,7 +348,7 @@ These are the hover, pressed and disabled looks for the small flat controls that
 - **Pressed**: the same 12% `accent` fill while the control is pressed, with or without a hover-capable pointer, so a touch press gets feedback.
 - **Disabled**: only where existing UI disables the control. `muted` text, the control's resting fill and border, no hover or pressed fill, default cursor, no opacity. Opacity stays reserved for the disabled send disc (4.11).
 - **Motion**: fill changes are immediate, with no transition, so R12 holds without a reduced-motion variant.
-- **Clawline adaptation**: Clawline defines hover only as a lift for bubbles and its theme toggle and has no pressed or disabled states. A lift on these small controls would compete with the raised controls in 3.6, so they take Chat's terracotta tint instead.
+- **Clawline adaptation**: Clawline defines hover as a lift for bubbles and its theme toggle, its only pressed state is the send button shrinking, and it has no disabled states. A lift on these small controls would compete with the raised controls in 3.6, so they take Chat's terracotta tint instead.
 
 ## 5. Navigation
 
@@ -396,9 +396,9 @@ Each departure keeps a Chat behavior or invariant the ask did not authorize chan
 
 ### 7.1 Tuner on iOS (WKWebView)
 
-- The web view is not opaque. Its background and under-page color are Tuner's own `nordicBackground` color, which matches Chat's current linen. While the page loads, during overscroll and around the page, the user sees that native color. Once Chat's surface changes, Tuner's color will not match until Tuner is updated (Q1).
+- The web view is not opaque. Its background and under-page color are Tuner's own `nordicBackground` color, which matches Chat's current linen. While the page loads, during overscroll and around the page, the user sees that native color. Tuner mirrors Chat's surface tokens here; that change is Tuner's, tracked under Tuner work items `wi_b803ee92` (Tuner design system) and `wi_721db8a4` (Tuner colour parity), not this document (Q1, resolved).
 - Tuner adds the native composer's height to the page's bottom safe area. Chat's bottom reserve, scroll-to-latest pill and composer position already read `env(safe-area-inset-bottom)`; the restyle must keep that.
-- In host composer mode Chat's composer is not drawn. The native composer uses SwiftUI glass with its own tint and an 11.5pt status dot. Section 4.11 does not apply to it (Q1).
+- In host composer mode Chat's composer is not drawn. The native composer uses SwiftUI glass with its own tint and an 11.5pt status dot. Section 4.11 does not apply to it. Tuner mirrors Chat's send and status colors there under the same Tuner work items (Q1, resolved).
 - Tuner's text zoom sets `-webkit-text-size-adjust` from 70% to 200%. WebKit applies that setting to text size; whether `rem` spacing and `rem` control sizes follow it in Tuner is not established and is to be measured in the restyle's Tuner screenshots. Radii in `px` do not scale. The composer textarea must stay at 16px or larger so iOS does not zoom the page on focus.
 - Tuner can force light or dark through `preferredColorScheme`. Whether WKWebView reports that to the page's `prefers-color-scheme` is not established (Q2).
 - `backdrop-filter` and `:has()` are supported in the WebKit versions Tuner targets (assumption A2).
@@ -408,7 +408,7 @@ Each departure keeps a Chat behavior or invariant the ask did not authorize chan
 - The page renders in a `WebEngineView` whose `zoomFactor` follows Tuner's text scale. Page zoom scales every length, including `px` radii and the grain tile.
 - A 34px glass sidebar toggle sits at the top-left corner, 12px from each edge, over the page. Chat's latest-prompt card is centered and does not reach that corner at normal widths (Q3).
 - Chat draws its own composer here.
-- Tuner's desktop palette is QML (`TunerPalette.qml`) and mirrors Chat's current tokens; it will not match the new surface until updated (Q1).
+- Tuner's desktop palette is QML (`TunerPalette.qml`) and mirrors Chat's tokens; keeping it matched is Tuner's work under the same Tuner work items (Q1, resolved).
 - `color-scheme` follows the system through Qt's style hints.
 
 ### 7.3 Standalone page and host composer example
@@ -533,7 +533,7 @@ Tests that pin today's exact values (palette constants, glass minimums 7.47 / 5.
 
 ## 12. Open questions
 
-- **Q1. Tuner palette parity. BLOCKING for Tuner screenshot acceptance only; NON-BLOCKING for this document and the in-page restyle.** Tuner paints its own linen around and under the page, and its native composer and desktop chrome use Tuner colors that mirror Chat's current tokens. After the restyle, Tuner shows a linen edge on overscroll and a non-Clawline composer in host composer mode. Matching them is a change in Tuner, outside this repository and this step. The product owner decides whether Tuner parity is part of this ask. Whatever that decision, it does not waive the restyle's Tuner screenshots, which Q2 and Q3 also depend on.
+- **Q1. Tuner palette parity. RESOLVED (Chat product owner, 2026-11-11, with the Tuner product owner).** Wherever Tuner frames or stands in for Chat, it mirrors Chat's tokens: the surface gradient, `accent` for send and `ok`, `caution` and `danger` for status, as in 3.1. That work is Tuner's, under Tuner work items `wi_b803ee92` and `wi_721db8a4`, outside this repository. This document needs no token change for it. Chat, Tuner and the Harklight client share Clawline `--shadow-bubble` (3.5) as their shadow source. The ruling does not waive the restyle's Tuner screenshots, which Q2 and Q3 depend on.
 - **Q2. Forced appearance in Tuner. NON-BLOCKING.** If WKWebView does not pass Tuner's forced light or dark setting to `prefers-color-scheme`, Chat follows the phone's setting rather than Tuner's. To verify in the restyle's Tuner screenshots.
 - **Q3. Desktop sidebar toggle overlap. NON-BLOCKING.** The 34px toggle at Tuner's top-left may overlap a long latest-prompt card on very narrow desktop windows. To check in screenshots.
 - **Q4. Avatars and content-aware type later. NON-BLOCKING.** Clawline treats avatars as essential landmarks. Adding them is a new component and needs a separate product decision.
