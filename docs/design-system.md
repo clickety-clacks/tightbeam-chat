@@ -239,23 +239,25 @@ Every widget below exists at Chat `19d721be`. Class names are the code's. "Light
 - **Light/dark**: the code block is dark in both themes (Clawline `#1e1e1e`). Inline code is light in light mode.
 - **Clawline adaptation**: Clawline code block, line measure and type.
 
-### 4.5 Image attachments and image viewer
+### 4.5 Received attachments and image viewer
 
-- **Anatomy**: `.tb-chat-image-attachments` list; `.tb-chat-image-frame` (4:3 while loading); `.tb-chat-image-preview-trigger` ("Enlarge *alt*"); `.tb-chat-image-loading`, `.tb-chat-image-unavailable`, `.tb-chat-image-retry`; `.tb-chat-markdown-image`; viewer `.tb-chat-image-overlay` with `.tb-chat-image-full`, `.tb-chat-image-close` ("Close image preview", drawn as `×`); the viewer heading is the image's alt text.
-- **States**: loading (frame on `code`, "Loading" label), loaded, unavailable (`muted` text), retry (button), focus, viewer open.
+- **Anatomy**: `.tb-chat-image-attachments` list; `.tb-chat-image-frame` (4:3 while loading); `.tb-chat-image-preview-trigger` ("Enlarge *alt*"); `.tb-chat-image-loading`, `.tb-chat-image-unavailable`, `.tb-chat-image-retry` ("Retry image preview"); `.tb-chat-markdown-image`; viewer `.tb-chat-image-overlay` with `.tb-chat-image-full`, `.tb-chat-image-close` ("Close image preview", drawn as `×`); the viewer heading is the image's alt text.
+- **States**: loading (frame on `code`, "Loading" label), loaded, unavailable (`muted` text), retry (button), focus, viewer open. Retry hover and pressed follow 4.17; retry is never disabled.
 - **Tokens**: frame radius 16px, image width up to `22rem` and max height `22rem` (kept; Clawline photo max 360px is 22.5rem); retry radius 8px; viewer frame elevation 3.
-- **Light/dark**: the viewer backdrop and close control keep their current literal white-on-dark treatment in `messageAttachments.css` in both themes, because a photo viewer is neutral by design.
-- **Clawline adaptation**: Clawline photo rules: rounded 16px corners, never full-flow width, chromeless when an image is alone.
+- **Alt text**: Chat draws no visible alt-text element. An image's alt text reaches the reader as the image's `alt`, the trigger's name "Enlarge *alt*", the unavailable frame's name "*alt*; preview unavailable", the loading frame's name "Loading *alt*" and the viewer heading, which is visually hidden. A Markdown image without alt text uses "Image". The `.tb-chat-image-alt` rule in `style.css` styles no element: Markdown images render as thumbnails through `.tb-chat-markdown-image`, so that rule gets no treatment here.
+- **Other received attachments** (`.tb-chat-attachments`, with `.tb-chat-attachment-content` wrapping the detail in the transcript's animated disclosure): a disclosure below the message body for attachments that are not images. Its summary reads "*n* attachment detail" or "*n* attachment details"; opening it shows the attachments as formatted text. Summary in body type at `.9rem`, `muted`; detail text in the monospace stack (3.2) at the code size `.8125rem` / 1.5, `muted`, wrapping with no horizontal page scroll (kept); no fill, no border, elevation 0. States: closed, open, summary focus ring (4.16). The summary has no hover or pressed treatment beyond the pointer cursor and is never disabled.
+- **Light/dark**: the viewer backdrop and close control keep their current literal white-on-dark treatment in `messageAttachments.css` in both themes, because a photo viewer is neutral by design. The attachment disclosure is a token switch.
+- **Clawline adaptation**: Clawline photo rules: rounded 16px corners, never full-flow width, chromeless when an image is alone. Clawline has no non-image attachment vocabulary, so the disclosure takes Chat's muted metadata voice and Clawline's code type.
 
 ### 4.6 Captions and runtime notices
 
 - **Caption** (`.tb-chat-caption`, `-neutral`, `-caution`, `-danger`): `.78rem`, a `•` lead, `muted` for neutral; caution and danger mixed at 94% with `background`.
-- **Caption buttons**: underlined text buttons, `2.75rem` minimum height, focus ring in `currentColor`.
+- **Caption buttons**: underlined text buttons, `2.75rem` minimum height, focus ring in `currentColor`. Hover thickens the underline, as links do (4.4); pressed shows the same thickened underline, with or without a hover-capable pointer. Color and fill stay the caption's, so the caption's contrast holds. Disabled: today only the "Retry tool history" button in the hidden placeholder that reserves the tool history status's space is disabled, and it is never visible. The existing disabled look stays for it: `muted` text, underline kept, no hover or pressed change, default cursor, no opacity.
 - **Render failure** (`.tb-chat-render-failure`): `danger` caption with buttons to show the raw transcript.
 - **Runtime notice** (`.tb-chat-runtime-notice`): a caption pinned near the top of the viewport, up to `46rem` wide. Neutral while loading ("Loading earlier messages…", `.tb-chat-history-loading`); danger with a button for history errors ("Retry loading messages"), session errors ("Reconnect") and a link ("Open the configured conversation"). It may carry the tool history status beside it.
 - **Tool history status** (`.tb-chat-tool-history-status`): "Loading tool history…" (neutral caption), or "Tool history is not current" with "Retry tool history" (danger caption).
 - **Active caption** (`.tb-chat-active-caption`): centered, `muted`, with an `ok` icon. Labelled "Active turn: …".
-- **States**: neutral, caution, danger, loading, retry focus.
+- **States**: neutral, caution, danger, loading, retry focus, button hover, button pressed, button disabled.
 - **Clawline adaptation**: Clawline's muted metadata voice. Captions and runtime notices are Chat-only and stay flat (elevation 0), in body type.
 
 ### 4.7 Transition marker
@@ -305,9 +307,10 @@ Every widget below exists at Chat `19d721be`. Class names are the code's. "Light
 
 - **Attachment options** (`.tb-chat-attachment-options`, "Add to message"): popover with "Choose photos", "Choose files", camera. `glass`, blur 16, saturate 180%, radius 16px, elevation 2. Option hover: `accent` mixed at 12%.
 - **Draft attachments** (`.tb-chat-draft-attachments`, "Attachments in this draft"): chips on `agent-surface` with 1px `border`, radius 16px; preview radius 8px; name, kind and type in `muted`; remove button ("Remove *name*"); error in `danger`; retry ("Retry attachment preparation").
-- **Attachment send** (`.tb-chat-attachment-send`, "Attachment send status"): heading, per-file items with status, reason and retry.
+- **Attachment send** (`.tb-chat-attachment-send`, "Attachment send status"): heading, per-file items with status, reason and retry ("Retry attachment send").
+- **Remove and retry controls**: the remove button (`.tb-chat-draft-attachment-remove`) and both retry buttons (`.tb-chat-attachment-send-retry`, "Retry attachment preparation" and "Retry attachment send") take hover and pressed from 4.17. "Retry attachment send" is disabled while Chat is unauthorized and then shows the 4.17 disabled treatment. The remove button and "Retry attachment preparation" are never disabled.
 - **Composer error** (`.tb-chat-composer-error`): `danger` text above the shell.
-- **States**: closed, open, option hover, focus, chip error, retry.
+- **States**: closed, open, option hover, focus, chip error, retry, remove and retry hover and pressed, send retry disabled.
 - **Clawline adaptation**: glass popover; chips are small "arriving" cards.
 
 ### 4.13 Camera dialog
@@ -322,8 +325,8 @@ Every widget below exists at Chat `19d721be`. Class names are the code's. "Light
 - **Anatomy**: `.tb-chat-overlay` backdrop; `.tb-chat-modal` (`role=dialog`, `aria-modal`), up to `42rem` wide; `.tb-chat-modal-header` with `h2` title and `.tb-chat-modal-close` ("Close *title*"); `.tb-chat-modal-content`.
 - **Pages**: "What's new" (release entries); "Settings" home with one `.tb-chat-settings-item` "Release notes ›"; "Release notes" with `.tb-chat-settings-back`.
 - **Release entry** (`.tb-chat-release-entry`): version heading and notes, separated by 1px `border`, radius 12px block.
-- **States**: open, close hover, focus ring, settings row hover raise and pressed.
-- **Tokens**: modal surface gradient `background` to `background-end`, smooth with no grain (R8), radius 24px, elevation 3; close 2.65rem circle on `agent-surface`; rows 2.9rem on `agent-surface`, radius 12px; backdrop `shadow` at 34%.
+- **States**: open, close hover, close pressed, focus ring, settings row hover raise and pressed. The close button is never disabled.
+- **Tokens**: modal surface gradient `background` to `background-end`, smooth with no grain (R8), radius 24px, elevation 3; close 2.65rem circle on `agent-surface`, and on hover and pressed `accent` mixed at 12% into `agent-surface` (4.17), border and `text` glyph unchanged; rows 2.9rem on `agent-surface`, radius 12px; backdrop `shadow` at 34%.
 - **Clawline adaptation**: a modal is a large card lifted off Clawline's surface: the same warm gradient without the grain (cards and bubbles stay smooth), top-lit device shadow, squircle radius.
 
 ### 4.15 Status popup
@@ -336,6 +339,16 @@ Every widget below exists at Chat `19d721be`. Class names are the code's. "Light
 ### 4.16 Focus ring
 
 All focusable controls show a 2px solid ring at offset 3px. Ring color is `accent`, except in captions and activity rows, which keep `currentColor`. Today the general ring uses `border`, which is nearly invisible on the surface. The adaptation makes the ring Clawline terracotta, which passes 3:1 against the surface in both themes.
+
+### 4.17 Small control states
+
+These are the hover, pressed and disabled looks for the small flat controls that do not raise (3.6): image retry (4.5), draft attachment remove and the attachment retry buttons (4.12), and modal close (4.14). Caption buttons have their own text-button treatment (4.6).
+
+- **Hover**: the control's fill becomes `accent` mixed at 12% over the surface it sits on, the value Chat already uses for attachment option hover (4.12). Applies only under `(hover: hover)`. Glyph, text color, border and size do not change, and nothing moves.
+- **Pressed**: the same 12% `accent` fill while the control is pressed, with or without a hover-capable pointer, so a touch press gets feedback.
+- **Disabled**: only where existing UI disables the control. `muted` text, the control's resting fill and border, no hover or pressed fill, default cursor, no opacity. Opacity stays reserved for the disabled send disc (4.11).
+- **Motion**: fill changes are immediate, with no transition, so R12 holds without a reduced-motion variant.
+- **Clawline adaptation**: Clawline defines hover only as a lift for bubbles and its theme toggle and has no pressed or disabled states. A lift on these small controls would compete with the raised controls in 3.6, so they take Chat's terracotta tint instead.
 
 ## 5. Navigation
 
@@ -459,6 +472,9 @@ Each requirement cites what it serves. Keywords follow RFC 2119 as clarified by 
 **R15. Host fit.** Chat SHALL keep reading the safe-area insets and SHALL keep the composer textarea at 16px or larger. Serves: platform constraints (e).
 *Example*: in Tuner on iOS with the native composer, the last message clears the native composer; focusing Chat's own textarea on iPhone does not zoom the page.
 
+**R16. Small control states.** WHILE a pointer that can hover is over image retry, draft attachment remove, an attachment retry button or modal close, or WHILE any of them is pressed, THE control SHALL show `accent` mixed at 12% over its surface with its glyph, text color, border and size unchanged; WHILE a caption button is hovered or pressed, its underline SHALL thicken with its color unchanged; WHILE one of these controls is disabled, it SHALL show `muted` text with no hover or pressed change and no opacity. Serves: the Chat product owner's revision request to "document hover, pressed and disabled visual states for caption buttons, image retry, attachment remove and retry, and modal close, including an existing semantic token for the close hover".
+*Example*: on desktop in light, hovering "Close Settings" fills the circle with `accent` at 12% over `agent-surface` and the `×` stays `text`; on a phone, pressing it shows the same fill; "Retry attachment send" while Chat is unauthorized shows `muted` text and no fill on press.
+
 ## 9. Evidence: contrast of the proposed palette
 
 Computed with the same math as `tests/theme.test.ts` (WCAG relative luminance, alpha compositing, sRGB mixing) for both surface gradient stops, the human gradient's two stops, and both glass tokens over each of the 29 color tokens in 3.1 as a backdrop (including `code-block` and the syntax colors). The computation script is kept with the work item's records, not in this repository. Lowest values per theme are in bold.
@@ -494,6 +510,7 @@ Computed with the same math as `tests/theme.test.ts` (WCAG relative luminance, a
 | pill inks on their 14% fill, worst over background-end (green, amber, orange, red, blue, purple, indigo, slate) | 4.81, 5.23, 4.93, 5.01, 5.29, **4.71**, 4.74, 4.92 | 6.38, 7.41, 6.28, 6.23, 6.86, 7.06, 7.22, 6.05 |
 | status dots ok, caution, danger, idle on composer glass (non-text, 3:1) | 7.58, 8.31, 8.06, 7.75 | 6.35, 7.60, 6.15, 5.97 |
 | send disc `accent` on composer glass (non-text, 3:1) | 5.29 | 5.01 |
+| text on the 4.17 hover fill (`accent` at 12%), worst over agent-surface, human-surface, human-surface-end, background, background-end and composer glass | 6.38 (over human-surface) | 8.02 (over human-surface) |
 
 Also checked: `transition` is less prominent than `text` on the surface, `transition` differs from `ok`, and `fjord`, `muted`, `teak` and `caution` are four distinct colors, as the current tests require.
 
