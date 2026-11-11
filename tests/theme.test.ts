@@ -83,32 +83,51 @@ function rule(css: string, selector: string): string {
 }
 
 const expectedLight: Tokens = {
-  background: '#F1EEE9', text: '#31302D', muted: '#5C5854', border: '#DEDAD3',
-  'agent-surface': '#E6E1D8', 'human-surface': '#DCE3DA', code: '#E2DCD2',
-  'syntax-keyword': '#693C8E', 'syntax-string': '#28623B', 'syntax-number': '#914A14',
-  'syntax-comment': '#625C55', 'syntax-title': '#175C80',
-  accent: '#526657', 'on-accent': '#F3F0EA', teak: '#7A5540', fjord: '#4D6470',
-  'pill-purple': '#6B3CC0',
-  ok: '#4E6547', caution: '#73592A', transition: '#6B6458', danger: '#A63A2A', idle: '#5C5854',
-  placeholder: '#53504C', glass: 'rgba(250,246,238,0.74)', 'composer-glass': 'rgba(250,246,238,0.94)',
-  'glass-edge': 'rgba(60,45,30,0.10)', shadow: 'rgb(60,45,30)',
+  background: '#F0EAE0', 'background-end': '#E8E0D4',
+  'agent-surface': '#FDF6EE', 'agent-surface-start': '#FFFDF9',
+  'human-surface': '#B8CEAF', 'human-surface-end': '#C8D9C0',
+  border: '#E2DAD0', code: '#E8E0D4', 'code-block': '#1E1E1E', 'code-block-text': '#E8E4E0',
+  text: '#3D3429', muted: '#5B5046', placeholder: '#584E45',
+  accent: '#A3553E', 'on-accent': '#F7F3EB', teak: '#744631', fjord: '#36505F',
+  'pill-purple': '#6A4290', 'pill-indigo': '#4B4F8A',
+  ok: '#405A3A', caution: '#614A18', transition: '#655A4E', danger: '#8E2F22', idle: '#5B5046',
+  'syntax-keyword': '#C9A6EF', 'syntax-string': '#9AD5A7', 'syntax-number': '#F0B66E',
+  'syntax-comment': '#B6ADA2', 'syntax-title': '#8FCFF0',
+  glass: 'rgba(255,255,255,0.74)', 'composer-glass': 'rgba(255,255,255,0.94)',
+  'glass-edge': 'rgba(255,255,255,0.60)', shadow: 'rgb(60,45,30)',
+  'bubble-highlight': 'rgba(255,255,255,0.15)', 'grain-opacity': '0.025',
   'composer-shadow-alpha': '12%',
 };
 
 const expectedDark: Tokens = {
-  background: '#161514', text: '#DDD9D1', muted: '#9E9992', border: '#2C2A27',
-  'agent-surface': '#24221F', 'human-surface': '#26302A', code: '#1C1B19',
+  background: '#1C1917', 'background-end': '#141210',
+  'agent-surface': '#292524', 'agent-surface-start': '#292524',
+  'human-surface': '#2D3B2A', 'human-surface-end': '#243322',
+  border: '#33302E', code: '#141210', 'code-block': '#1E1E1E', 'code-block-text': '#E8E4E0',
+  text: '#E8E4E0', muted: '#ADA39A', placeholder: '#D9D2CA',
+  accent: '#E07A5F', 'on-accent': '#1C1917', teak: '#D99A78', fjord: '#9DB5C4',
+  'pill-purple': '#C2AAE6', 'pill-indigo': '#AFB3EA',
+  ok: '#8DB487', caution: '#D4B67E', transition: '#B3A493', danger: '#F08C78', idle: '#ADA39A',
   'syntax-keyword': '#C9A6EF', 'syntax-string': '#9AD5A7', 'syntax-number': '#F0B66E',
   'syntax-comment': '#B6ADA2', 'syntax-title': '#8FCFF0',
-  accent: '#A5BAA9', 'on-accent': '#19211B', teak: '#C9A891', fjord: '#9FB4BF',
-  'pill-purple': '#C9B7F1',
-  ok: '#A5BC9C', caution: '#D8BE84', transition: '#B0A18D', danger: '#EE8B75', idle: '#9E9992',
-  placeholder: '#D2CDC6', glass: 'rgba(46,42,37,0.74)', 'composer-glass': 'rgba(46,42,37,0.94)',
-  'glass-edge': 'rgba(240,230,215,0.10)', shadow: '#000000',
+  glass: 'rgba(44,40,37,0.74)', 'composer-glass': 'rgba(44,40,37,0.94)',
+  'glass-edge': 'rgba(255,255,255,0.12)', shadow: '#000000',
+  'bubble-highlight': 'rgba(255,255,255,0.15)', 'grain-opacity': '0.04',
   'composer-shadow-alpha': '35%',
 };
 
-describe('Nordic theme', () => {
+const expectedGlassMinimums = {
+  light: {
+    glass: { text: 7.03, placeholder: 4.67 },
+    'composer-glass': { text: 10.85, placeholder: 7.21 },
+  },
+  dark: {
+    glass: { text: 5.49, placeholder: 4.64 },
+    'composer-glass': { text: 9.85, placeholder: 8.32 },
+  },
+} as const;
+
+describe('Chat theme', () => {
   it('defines the exact light and dark palette selected by system appearance', () => {
     const { light, dark } = tokenBlocks(themeCss);
     expect(light).toEqual(expectedLight);
@@ -124,13 +143,16 @@ describe('Nordic theme', () => {
       ['muted', 'background'], ['muted', 'agent-surface'], ['muted', 'human-surface'],
       ['fjord', 'background'], ['fjord', 'agent-surface'], ['fjord', 'human-surface'], ['fjord', 'code'],
       ['teak', 'code'], ['caution', 'human-surface'], ['danger', 'human-surface'], ['danger', 'background'],
-      ['syntax-keyword', 'code'], ['syntax-string', 'code'], ['syntax-number', 'code'],
-      ['syntax-comment', 'code'], ['syntax-title', 'code'],
+      ['code-block-text', 'code-block'],
+      ['syntax-keyword', 'code-block'], ['syntax-string', 'code-block'], ['syntax-number', 'code-block'],
+      ['syntax-comment', 'code-block'], ['syntax-title', 'code-block'],
       ['on-accent', 'accent'], ['muted', 'background'],
     ];
     const backdrops = [
-      'background', 'agent-surface', 'human-surface', 'code', 'border', 'text', 'muted',
-      'accent', 'on-accent', 'teak', 'fjord', 'ok', 'caution', 'danger',
+      'background', 'background-end', 'agent-surface', 'agent-surface-start', 'human-surface', 'human-surface-end',
+      'border', 'code', 'code-block', 'code-block-text', 'text', 'muted', 'placeholder', 'accent', 'on-accent',
+      'teak', 'fjord', 'pill-purple', 'pill-indigo', 'ok', 'caution', 'transition', 'danger', 'idle',
+      'syntax-keyword', 'syntax-string', 'syntax-number', 'syntax-comment', 'syntax-title',
     ];
 
     for (const [variant, tokens] of Object.entries({ light, dark })) {
@@ -139,15 +161,31 @@ describe('Nordic theme', () => {
         expect(ratio, `${variant}: ${foregroundName} on ${backgroundName}`).toBeGreaterThanOrEqual(4.5);
       }
 
-      const glass = tokenColor(tokens, 'glass');
+      const indigoInk = tokenColor(tokens, 'pill-indigo');
+      const indigoOnBackground = contrast(
+        indigoInk,
+        mix(indigoInk, tokenColor(tokens, 'background'), .14),
+      );
+      const indigoOnBackgroundEnd = contrast(
+        indigoInk,
+        mix(indigoInk, tokenColor(tokens, 'background-end'), .14),
+      );
+      expect(indigoOnBackground, `${variant}: indigo pill contrast on background`).toBeGreaterThanOrEqual(4.5);
+      expect(indigoOnBackgroundEnd, `${variant}: indigo pill contrast on background-end`).toBeGreaterThanOrEqual(4.5);
+      expect(indigoOnBackgroundEnd).toBeCloseTo(variant === 'light' ? 4.74 : 7.22, 1);
+
       const text = tokenColor(tokens, 'text');
       const placeholder = tokenColor(tokens, 'placeholder');
-      const textRatios = backdrops.map((name) => contrast(text, composite(glass, tokenColor(tokens, name))));
-      const placeholderRatios = backdrops.map((name) => contrast(placeholder, composite(glass, tokenColor(tokens, name))));
-      expect(Math.min(...textRatios), `${variant}: draft text on glass over every backdrop`).toBeGreaterThanOrEqual(4.5);
-      expect(Math.min(...placeholderRatios), `${variant}: placeholder on glass over every backdrop`).toBeGreaterThanOrEqual(4.5);
-      expect(Math.min(...textRatios)).toBeCloseTo(variant === 'light' ? 7.47 : 5.06, 1);
-      expect(Math.min(...placeholderRatios)).toBeCloseTo(variant === 'light' ? 4.54 : 4.50, 1);
+      for (const glassName of ['glass', 'composer-glass'] as const) {
+        const glass = tokenColor(tokens, glassName);
+        const textRatios = backdrops.map((name) => contrast(text, composite(glass, tokenColor(tokens, name))));
+        const placeholderRatios = backdrops.map((name) => contrast(placeholder, composite(glass, tokenColor(tokens, name))));
+        const expected = expectedGlassMinimums[variant as keyof typeof expectedGlassMinimums][glassName];
+        expect(Math.min(...textRatios), `${variant}: draft text on ${glassName} over every backdrop`).toBeGreaterThanOrEqual(4.5);
+        expect(Math.min(...placeholderRatios), `${variant}: placeholder on ${glassName} over every backdrop`).toBeGreaterThanOrEqual(4.5);
+        expect(Math.min(...textRatios)).toBeCloseTo(expected.text, 1);
+        expect(Math.min(...placeholderRatios)).toBeCloseTo(expected.placeholder, 1);
+      }
     }
   });
 
@@ -159,8 +197,8 @@ describe('Nordic theme', () => {
     expect(rule(componentCss, '.tb-chat-markdown a')).toContain('color: var(--tb-chat-fjord)');
     expect(rule(componentCss, '.tb-chat-markdown :not(pre) > code')).toContain('background: var(--tb-chat-code)');
     expect(rule(componentCss, '.tb-chat-markdown :not(pre) > code')).toContain('color: var(--tb-chat-teak)');
-    expect(rule(componentCss, '.tb-chat-code-scroll')).toContain('background: var(--tb-chat-code)');
-    expect(rule(componentCss, '.tb-chat-code-scroll code')).toContain('color: var(--tb-chat-text)');
+    expect(rule(componentCss, '.tb-chat-code-scroll')).toContain('background: var(--tb-chat-code-block)');
+    expect(rule(componentCss, '.tb-chat-code-scroll code')).toContain('color: var(--tb-chat-code-block-text)');
     expect(rule(componentCss, '.tb-chat-markdown th')).toContain('background: var(--tb-chat-code)');
     expect(rule(componentCss, '.tb-chat-markdown th')).toContain('color: var(--tb-chat-text)');
 
@@ -243,6 +281,12 @@ describe('Nordic theme', () => {
     expect(rule(componentCss, '.tb-chat-activity-agent')).toContain('color: var(--tb-chat-fjord)');
     expect(rule(componentCss, '.tb-chat-activity-substrate')).toContain('color: var(--tb-chat-muted)');
     expect(rule(componentCss, '.tb-chat-activity-tool')).toContain('color: var(--tb-chat-muted)');
+    expect(rule(componentCss, '.tb-chat-activity-pill')).toContain(
+      'background: color-mix(in srgb, var(--tb-chat-pill-ink) 14%, var(--tb-chat-background))',
+    );
+    expect(rule(componentCss, '.tb-chat-activity-pill-indigo')).toContain(
+      '--tb-chat-pill-ink: var(--tb-chat-pill-indigo)',
+    );
     // The summary button must outscore the base `.tb-chat button` color rule.
     expect(rule(componentCss, '.tb-chat button')).toContain('color: inherit');
     expect(rule(componentCss, '.tb-chat .tb-chat-activity-tool-run-toggle')).toContain('color: var(--tb-chat-caution)');
@@ -350,9 +394,9 @@ describe('Nordic theme', () => {
     const inputShell = rule(componentCss, '.tb-chat-input-shell');
     expect(inputShell).toContain('background: var(--tb-chat-composer-glass)');
     expect(inputShell).toContain('-webkit-backdrop-filter: blur(14px)');
-    expect(themeCss).toContain('--tb-chat-composer-glass: rgba(250,246,238,0.94)');
+    expect(themeCss).toContain('--tb-chat-composer-glass: rgba(255,255,255,0.94)');
     const darkTheme = themeCss.slice(themeCss.indexOf('@media (prefers-color-scheme: dark)'));
-    expect(darkTheme).toContain('--tb-chat-composer-glass: rgba(46,42,37,0.94)');
+    expect(darkTheme).toContain('--tb-chat-composer-glass: rgba(44,40,37,0.94)');
   });
 
   it('keeps fixed-control clearance while restoring compact tail spacing at the latest message', () => {
