@@ -171,6 +171,41 @@ describe('Chat theme', () => {
     expect(componentCss).toContain('transition: none');
   });
 
+  it('applies hover, pressed, and disabled states to the existing small controls', () => {
+    const hoverFill = 'background: color-mix(in srgb, var(--tb-chat-accent) 12%, transparent)';
+    const modalCloseFill = 'background: color-mix(in srgb, var(--tb-chat-agent-surface) 88%, var(--tb-chat-accent) 12%)';
+    const hoverSelectors = [
+      '.tb-chat-image-retry:not(:disabled):hover',
+      '.tb-chat-draft-attachment-remove:not(:disabled):hover',
+      '.tb-chat-attachment-send-retry:not(:disabled):hover',
+    ];
+    const pressedSelectors = hoverSelectors.map(selector => selector.replace(':hover', ':active'));
+    for (const selector of hoverSelectors) {
+      const hover = rule(componentCss, selector);
+      expect(hover).toContain(hoverFill);
+      expect(hover).not.toMatch(/transform|transition/);
+    }
+    for (const selector of pressedSelectors) {
+      const pressed = rule(componentCss, selector);
+      expect(pressed).toContain(hoverFill);
+      expect(pressed).not.toMatch(/transform|transition/);
+    }
+    for (const selector of ['.tb-chat-modal-close:not(:disabled):hover', '.tb-chat-modal-close:not(:disabled):active']) {
+      const state = rule(componentCss, selector);
+      expect(state).toContain(modalCloseFill);
+      expect(state).not.toMatch(/transform|transition/);
+    }
+
+    expect(rule(componentCss, '.tb-chat-caption button:not(:disabled):hover')).toContain('text-decoration-thickness: 2px');
+    expect(rule(componentCss, '.tb-chat-caption button:not(:disabled):active')).toContain('text-decoration-thickness: 2px');
+    expect(rule(componentCss, '.tb-chat-markdown a:hover')).toContain('text-decoration-thickness: 2px');
+    const disabledSendRetry = rule(componentCss, '.tb-chat-attachment-send-retry:disabled');
+    expect(disabledSendRetry).toContain('color: var(--tb-chat-muted)');
+    expect(disabledSendRetry).not.toContain('opacity');
+    expect(rule(componentCss, '.tb-chat-caption button:disabled')).toContain('color: var(--tb-chat-muted)');
+    expect(rule(componentCss, '.tb-chat button:disabled')).toContain('cursor: default');
+  });
+
   it('meets every contract text-contrast pairing after compositing the glass over all transcript backdrops', () => {
     const { light, dark } = tokenBlocks(themeCss);
     const expectedPairs: Array<[string, string]> = [

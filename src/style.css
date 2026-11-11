@@ -285,6 +285,7 @@ body {
 .tb-chat-markdown ul, .tb-chat-markdown ol { max-width: 65ch; margin: .5rem 0 .75rem; padding-inline-start: 1.5rem; }
 .tb-chat-markdown blockquote { max-width: 65ch; margin: .75rem 0; padding-inline-start: .75rem; border-inline-start: 3px solid var(--tb-chat-teak); color: var(--tb-chat-muted); }
 .tb-chat-markdown a { color: var(--tb-chat-fjord); text-decoration: underline; text-underline-offset: .15em; }
+.tb-chat-markdown a:hover { text-decoration-thickness: 2px; }
 .tb-chat-markdown hr { border-color: var(--tb-chat-border); }
 .tb-chat-markdown :not(pre) > code { padding: .08em .28em; border-radius: 6px; background: var(--tb-chat-code); color: var(--tb-chat-teak); font: .875em "SF Mono", ui-monospace, SFMono-Regular, Menlo, "Fira Code", monospace; }
 .tb-chat-code-scroll, .tb-chat-table-scroll {
@@ -389,7 +390,25 @@ body {
     box-shadow: 0 8px 30px color-mix(in srgb, var(--tb-chat-shadow) 12%, transparent),
       0 2px 6px color-mix(in srgb, var(--tb-chat-shadow) 8%, transparent);
   }
+  .tb-chat-image-retry:not(:disabled):hover,
+  .tb-chat-draft-attachment-remove:not(:disabled):hover,
+  .tb-chat-attachment-send-retry:not(:disabled):hover {
+    background: color-mix(in srgb, var(--tb-chat-accent) 12%, transparent);
+  }
+  .tb-chat-modal-close:not(:disabled):hover {
+    background: color-mix(in srgb, var(--tb-chat-agent-surface) 88%, var(--tb-chat-accent) 12%);
+  }
+  .tb-chat-caption button:not(:disabled):hover { text-decoration-thickness: 2px; }
 }
+.tb-chat-image-retry:not(:disabled):active,
+.tb-chat-draft-attachment-remove:not(:disabled):active,
+.tb-chat-attachment-send-retry:not(:disabled):active {
+  background: color-mix(in srgb, var(--tb-chat-accent) 12%, transparent);
+}
+.tb-chat-modal-close:not(:disabled):active {
+  background: color-mix(in srgb, var(--tb-chat-agent-surface) 88%, var(--tb-chat-accent) 12%);
+}
+.tb-chat-caption button:not(:disabled):active { text-decoration-thickness: 2px; }
 
 .tb-chat-caption {
   display: flex;
@@ -759,6 +778,7 @@ body {
   background: transparent;
   font-size: .72rem;
 }
+.tb-chat-attachment-send-retry:disabled { color: var(--tb-chat-muted); }
 .tb-chat-draft-attachment {
   position: relative;
   display: flex;
