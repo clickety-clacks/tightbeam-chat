@@ -50,8 +50,6 @@
   --tb-chat-bubble-highlight: rgba(255,255,255,0.15);
   --tb-chat-grain-opacity: 0.025;
 
-  /* Kept for the existing composer rule until its separate styling slice adopts elevation level 2. */
-  --tb-chat-composer-shadow-alpha: 12%;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -96,7 +94,5 @@
     --tb-chat-bubble-highlight: rgba(255,255,255,0.15);
     --tb-chat-grain-opacity: 0.04;
 
-    /* Kept for the existing composer rule until its separate styling slice adopts elevation level 2. */
-    --tb-chat-composer-shadow-alpha: 35%;
   }
 }

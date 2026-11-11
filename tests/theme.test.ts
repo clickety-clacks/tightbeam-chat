@@ -96,7 +96,6 @@ const expectedLight: Tokens = {
   glass: 'rgba(255,255,255,0.74)', 'composer-glass': 'rgba(255,255,255,0.94)',
   'glass-edge': 'rgba(255,255,255,0.60)', shadow: 'rgb(60,45,30)',
   'bubble-highlight': 'rgba(255,255,255,0.15)', 'grain-opacity': '0.025',
-  'composer-shadow-alpha': '12%',
 };
 
 const expectedDark: Tokens = {
@@ -113,7 +112,6 @@ const expectedDark: Tokens = {
   glass: 'rgba(44,40,37,0.74)', 'composer-glass': 'rgba(44,40,37,0.94)',
   'glass-edge': 'rgba(255,255,255,0.12)', shadow: '#000000',
   'bubble-highlight': 'rgba(255,255,255,0.15)', 'grain-opacity': '0.04',
-  'composer-shadow-alpha': '35%',
 };
 
 const expectedGlassMinimums = {
@@ -134,6 +132,43 @@ describe('Chat theme', () => {
     expect(dark).toEqual(expectedDark);
     expect(themeCss).toContain('color-scheme: light dark;');
     expect(themeCss).toContain('@media (prefers-color-scheme: dark)');
+  });
+
+  it('applies the approved surface, typography, spacing, elevation, focus, and motion treatments', () => {
+    const root = rule(componentCss, '.tb-chat');
+    expect(root).toContain('background: linear-gradient(180deg, var(--tb-chat-background), var(--tb-chat-background-end))');
+    expect(root).toContain('"DM Sans", system-ui');
+    const grain = rule(componentCss, '.tb-chat::before');
+    expect(grain).toContain('feTurbulence');
+    expect(grain).toContain('opacity: var(--tb-chat-grain-opacity)');
+
+    const viewport = rule(componentCss, '.tb-chat-viewport');
+    expect(viewport).toContain('--tb-chat-viewport-inline-padding: 1.5rem');
+    expect(viewport).toContain('gap: 1rem');
+    const phone = componentCss.slice(componentCss.indexOf('@media (max-width: 540px)'));
+    expect(phone).toContain('--tb-chat-viewport-inline-padding: 1rem');
+    expect(phone).toContain('gap: .75rem');
+    expect(phone).toContain('padding: .875rem 1rem');
+
+    const sender = rule(componentCss, '.tb-chat-bubble-sender');
+    expect(sender).toContain('font-size: .75rem');
+    expect(sender).toContain('letter-spacing: .3px');
+    expect(rule(componentCss, '.tb-chat-time')).toContain('font-variant-numeric: tabular-nums');
+    expect(rule(componentCss, '.tb-chat-markdown p')).toContain('max-width: 65ch');
+    expect(rule(componentCss, '.tb-chat-markdown h1')).toContain('font-size: 1.25rem');
+    expect(rule(componentCss, '.tb-chat-code-scroll code')).toContain('font: 400 .8125rem/1.5');
+    expect(rule(componentCss, '.tb-chat-code-scroll pre')).toContain('padding: 1rem');
+    expect(rule(componentCss, '.tb-chat-tool')).toContain('border-radius: 16px');
+    expect(rule(componentCss, '.tb-chat-activity-message-content')).toContain('font: 400 .9375rem/1.5');
+
+    const focus = rule(componentCss, '.tb-chat button:focus-visible, .tb-chat textarea:focus-visible, .tb-chat summary:focus-visible');
+    expect(focus).toContain('outline: 2px solid var(--tb-chat-accent)');
+    expect(focus).toContain('outline-offset: 3px');
+    expect(componentCss).toContain('.tb-chat-bubble:has(.tb-chat-bubble-body > .tb-chat-markdown > .tb-chat-code-scroll:only-child)');
+    expect(componentCss).toContain('translateY(-2px)');
+    expect(componentCss).toContain('@media (hover: hover)');
+    expect(componentCss).toContain('@media (prefers-reduced-motion: reduce)');
+    expect(componentCss).toContain('transition: none');
   });
 
   it('meets every contract text-contrast pairing after compositing the glass over all transcript backdrops', () => {
@@ -190,8 +225,15 @@ describe('Chat theme', () => {
   });
 
   it('maps approved transcript treatments and send states to their theme roles', () => {
-    expect(rule(componentCss, '.tb-chat-bubble')).toContain('background: var(--tb-chat-agent-surface)');
-    expect(rule(componentCss, '.tb-chat-bubble-human')).toContain('background: var(--tb-chat-human-surface)');
+    expect(rule(componentCss, '.tb-chat-bubble')).toContain(
+      'background: linear-gradient(180deg, var(--tb-chat-agent-surface-start), var(--tb-chat-agent-surface))',
+    );
+    expect(rule(componentCss, '.tb-chat-bubble-human')).toContain(
+      'background: linear-gradient(135deg, var(--tb-chat-human-surface), var(--tb-chat-human-surface-end))',
+    );
+    expect(rule(componentCss, '.tb-chat-bubble')).toContain('border-radius: 28px 28px 28px 4px');
+    expect(rule(componentCss, '.tb-chat-bubble-human')).toContain('border-radius: 28px 28px 4px 28px');
+    expect(rule(componentCss, '.tb-chat-bubble')).toContain('inset 0 1px 0 var(--tb-chat-bubble-highlight)');
     expect(rule(componentCss, '.tb-chat-markdown blockquote')).toContain('border-inline-start: 3px solid var(--tb-chat-teak)');
     expect(rule(componentCss, '.tb-chat-markdown blockquote')).toContain('color: var(--tb-chat-muted)');
     expect(rule(componentCss, '.tb-chat-markdown a')).toContain('color: var(--tb-chat-fjord)');
@@ -227,10 +269,12 @@ describe('Chat theme', () => {
   it('keeps the floating latest-prompt miniature aligned with the human bubble color and three-line limit', () => {
     const { light, dark } = tokenBlocks(themeCss);
     expect(rule(componentCss, '.tb-chat')).toContain('--tb-chat-safe-area-top: env(safe-area-inset-top, 0px)');
-    expect(rule(componentCss, '.tb-chat-latest-user-prompt')).toContain('background: var(--tb-chat-human-surface)');
+    expect(rule(componentCss, '.tb-chat-latest-user-prompt')).toContain(
+      'background: linear-gradient(135deg, var(--tb-chat-human-surface), var(--tb-chat-human-surface-end))',
+    );
     const promptButton = rule(componentCss, '.tb-chat-latest-user-prompt-jump');
-    expect(promptButton).toContain('font-size: .86rem');
-    expect(promptButton).toContain('padding: .22rem .25rem .4rem');
+    expect(promptButton).toContain('font-size: .9375rem');
+    expect(promptButton).toContain('padding: .5rem');
     const promptText = rule(componentCss, '.tb-chat-latest-user-prompt-text');
     expect(promptText).toContain('-webkit-line-clamp: 3');
     expect(promptText).toContain('max-height: 4.5em');
@@ -243,12 +287,29 @@ describe('Chat theme', () => {
     const { light, dark } = tokenBlocks(themeCss);
     const shell = rule(componentCss, '.tb-chat-input-shell');
     expect(shell).toContain('border: var(--tb-chat-input-border-width) solid var(--tb-chat-glass-edge)');
+    expect(shell).toContain('border-radius: 24px');
     expect(shell).toContain('background: var(--tb-chat-composer-glass)');
-    expect(shell).toContain('backdrop-filter: blur(14px)');
-    expect(shell).toContain('var(--tb-chat-composer-shadow-alpha)');
+    expect(shell).toContain('backdrop-filter: blur(16px) saturate(180%)');
+    expect(shell).toContain('var(--tb-chat-shadow) 4%');
+    expect(shell).toContain('var(--tb-chat-shadow) 8%');
+    expect(shell).toContain('var(--tb-chat-shadow) 6%');
+    expect(themeCss).not.toContain('--tb-chat-composer-shadow-alpha');
     expect(rule(componentCss, '.tb-chat-input-shell textarea::placeholder')).toContain('color: var(--tb-chat-placeholder)');
-    expect(rule(componentCss, '.tb-chat-scroll-latest')).toContain('var(--tb-chat-shadow) 12%');
-    expect(rule(componentCss, '.tb-chat-status-popup')).toContain('var(--tb-chat-shadow) 20%');
+    const latest = rule(componentCss, '.tb-chat-scroll-latest');
+    expect(latest).toContain('background: var(--tb-chat-composer-glass)');
+    expect(latest).toContain('backdrop-filter: blur(16px) saturate(180%)');
+    expect(latest).toContain('border: 1px solid var(--tb-chat-glass-edge)');
+    const popup = rule(componentCss, '.tb-chat-status-popup');
+    expect(popup).toContain('border-radius: 16px');
+    expect(popup).toContain('background: var(--tb-chat-background)');
+    expect(popup).not.toContain('backdrop-filter');
+    const options = rule(componentCss, '.tb-chat-attachment-options');
+    expect(options).toContain('background: var(--tb-chat-glass)');
+    expect(options).toContain('backdrop-filter: blur(16px) saturate(180%)');
+    expect(options).toContain('border-radius: 16px');
+    const hostHiddenPill = rule(componentCss, '.tb-chat-host-composer-hidden .tb-chat-scroll-latest');
+    expect(hostHiddenPill).toContain('bottom: calc(env(safe-area-inset-bottom) + 1.4rem)');
+    expect(hostHiddenPill).not.toContain('background: var(--tb-chat-accent)');
 
     const pills = rule(componentCss, '.tb-chat-send-actions button');
     expect(pills).toContain('background: transparent');
@@ -393,10 +454,15 @@ describe('Chat theme', () => {
   it('keeps scrolled message lettering muted beneath the composer glass', () => {
     const inputShell = rule(componentCss, '.tb-chat-input-shell');
     expect(inputShell).toContain('background: var(--tb-chat-composer-glass)');
-    expect(inputShell).toContain('-webkit-backdrop-filter: blur(14px)');
+    expect(inputShell).toContain('-webkit-backdrop-filter: blur(16px) saturate(180%)');
     expect(themeCss).toContain('--tb-chat-composer-glass: rgba(255,255,255,0.94)');
     const darkTheme = themeCss.slice(themeCss.indexOf('@media (prefers-color-scheme: dark)'));
     expect(darkTheme).toContain('--tb-chat-composer-glass: rgba(44,40,37,0.94)');
+    const darkStyles = componentCss.slice(componentCss.indexOf('@media (prefers-color-scheme: dark)'));
+    expect(darkStyles).toContain('var(--tb-chat-shadow) 30%');
+    expect(darkStyles).toContain('var(--tb-chat-shadow) 20%');
+    expect(darkStyles).toContain('var(--tb-chat-shadow) 40%');
+    expect(darkStyles).toContain('var(--tb-chat-shadow) 50%');
   });
 
   it('keeps fixed-control clearance while restoring compact tail spacing at the latest message', () => {
