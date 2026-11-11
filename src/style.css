@@ -312,11 +312,23 @@ body {
 .tb-chat-markdown table { border-collapse: collapse; width: max-content; max-width: none; }
 .tb-chat-markdown th, .tb-chat-markdown td { padding: .5rem .75rem; border: 1px solid var(--tb-chat-border); color: var(--tb-chat-text); text-align: start; }
 .tb-chat-markdown th { background: var(--tb-chat-code); }
-.tb-chat-attachments { margin-top: .55rem; color: var(--tb-chat-muted); font-size: .9rem; }
+.tb-chat-attachments { margin-top: .5rem; color: var(--tb-chat-muted); font-size: .9rem; }
 .tb-chat-attachments summary { cursor: pointer; }
 .tb-chat-attachments pre { max-width: 100%; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .tb-chat-fold-content { display: flow-root; min-width: 0; }
-.tb-chat-attachment-content { font-size: .9rem; }
+.tb-chat-attachment-content {
+  color: var(--tb-chat-muted);
+  font-family: "SF Mono", ui-monospace, SFMono-Regular, Menlo, "Fira Code", monospace;
+  font-size: .8125rem;
+  line-height: 1.5;
+}
+.tb-chat-attachment-content pre {
+  max-width: 100%;
+  overflow: visible;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+}
 .tb-chat-image-alt { color: var(--tb-chat-muted); font-style: italic; }
 .tb-chat-time { display: block; margin-top: .5rem; color: var(--tb-chat-muted); font-size: .6875rem; font-variant-numeric: tabular-nums; line-height: 1.2; text-align: end; }
 .tb-chat-send-indicator { display: flex; align-items: center; min-height: .9rem; margin: .35rem 0 0; }
