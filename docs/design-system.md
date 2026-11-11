@@ -30,7 +30,7 @@ Two Chat invariants outrank any Clawline value: every text pair stays at 4.5:1 o
 - **Token**: a CSS custom property named `--tb-chat-*`, defined only in `src/theme.css`. Color literals stay banned in `src/style.css`, `examples/site.css` and `examples/hostComposer.css`.
 - **Surface**: the page behind the transcript. Painted as Clawline's `--bg-surface-gradient`, top to bottom.
 - **Human bubble / agent bubble**: Chat's `.tb-chat-bubble-human` and `.tb-chat-bubble-agent`. They play Clawline's "self" and "other" roles.
-- **Glass**: a translucent, blurred layer over the transcript. Chat has two: `glass` (popovers) and `composer-glass` (the composer shell).
+- **Glass**: a translucent, blurred layer over the transcript. Chat has two glass tokens and exactly three glass widgets: `composer-glass` for the composer shell and the scroll-to-latest pill, and `glass` for the attachment options popover. Only `text`, `placeholder` and the composer's own controls sit on glass; `muted` never does. Every other popup and dialog is opaque.
 - **Elevation level**: one of the named shadow recipes in section 3.5.
 - **Host**: the program that embeds Chat. Today that is Tuner on iOS (WKWebView), Tuner on desktop (Qt WebEngine), or a plain browser page served by the Chat server.
 - **Host composer mode**: Chat with its own composer hidden because the host draws a native one (`.tb-chat-host-composer-hidden`).
@@ -63,7 +63,7 @@ Text:
 | --- | --- | --- | --- | --- |
 | `text` | Primary text | `--ink` / `--text-primary` | `#3D3429` | `#E8E4E0` |
 | `muted` | Sender, time, captions, secondary rows | `--stone`, adjusted darker (light) and lighter (dark) | `#5B5046` | `#ADA39A` |
-| `placeholder` | Composer placeholder | `--warm-brown` family, adjusted | `#5C5248` | `#D9D2CA` |
+| `placeholder` | Composer placeholder | `--warm-brown` family, adjusted | `#584E45` | `#D9D2CA` |
 
 Accents and activity inks:
 
@@ -241,7 +241,7 @@ Every widget below exists at Chat `19d721be`. Class names are the code's. "Light
 
 ### 4.5 Image attachments and image viewer
 
-- **Anatomy**: `.tb-chat-image-attachments` list; `.tb-chat-image-frame` (4:3 while loading); `.tb-chat-image-preview-trigger` ("Enlarge *alt*"); `.tb-chat-image-loading`, `.tb-chat-image-unavailable`, `.tb-chat-image-retry`; `.tb-chat-markdown-image`; viewer `.tb-chat-image-overlay` with `.tb-chat-image-full`, `.tb-chat-image-close` ("Close").
+- **Anatomy**: `.tb-chat-image-attachments` list; `.tb-chat-image-frame` (4:3 while loading); `.tb-chat-image-preview-trigger` ("Enlarge *alt*"); `.tb-chat-image-loading`, `.tb-chat-image-unavailable`, `.tb-chat-image-retry`; `.tb-chat-markdown-image`; viewer `.tb-chat-image-overlay` with `.tb-chat-image-full`, `.tb-chat-image-close` ("Close image preview", drawn as `×`); the viewer heading is the image's alt text.
 - **States**: loading (frame on `code`, "Loading" label), loaded, unavailable (`muted` text), retry (button), focus, viewer open.
 - **Tokens**: frame radius 16px, image width up to `22rem` and max height `22rem` (kept; Clawline photo max 360px is 22.5rem); retry radius 8px; viewer frame elevation 3.
 - **Light/dark**: the viewer backdrop and close control keep their current literal white-on-dark treatment in `messageAttachments.css` in both themes, because a photo viewer is neutral by design.
@@ -281,12 +281,13 @@ Every widget below exists at Chat `19d721be`. Class names are the code's. "Light
 ### 4.9 Latest-prompt card and scroll-to-latest pill
 
 - **Latest-prompt card** (`.tb-chat-latest-user-prompt`): centered at the top; `human-surface` gradient, radius 24px, elevation 1; text up to three lines with ellipsis; jump button ("Jump to user prompt") and dismiss `×` ("Dismiss user prompt preview").
-- **Scroll-to-latest pill** (`.tb-chat-scroll-latest`): bottom center above the composer, radius 999, `composer-glass` with `glass-edge`, blur, elevation 2.
+- **Scroll-to-latest pill** (`.tb-chat-scroll-latest`): bottom center above the composer, radius 999, `composer-glass` with `glass-edge`, blur, elevation 2, `text` label. Today it is opaque `background`; it becomes glass so it reads as the composer's companion.
 - **States**: hidden, shown, hover raise, pressed, focus ring.
 - **Clawline adaptation**: the card is a small "home" bubble lifted off the surface; the pill is a glass object like the composer.
 
 ### 4.10 Empty and loading transcript
 
+- **Connecting** (`.tb-chat-initial-caption`): before the runtime opens, the transcript region (`role=status`, "Conversation") shows only a loading status dot (`caution`) with the screen-reader text "Connecting".
 - **Empty**: "No messages yet." centered, `muted`, `.9375rem`.
 - **Loading earlier**: runtime notice (4.6).
 - **Clawline adaptation**: Clawline's muted metadata voice; no illustration.
@@ -322,15 +323,15 @@ Every widget below exists at Chat `19d721be`. Class names are the code's. "Light
 - **Pages**: "What's new" (release entries); "Settings" home with one `.tb-chat-settings-item` "Release notes ›"; "Release notes" with `.tb-chat-settings-back`.
 - **Release entry** (`.tb-chat-release-entry`): version heading and notes, separated by 1px `border`, radius 12px block.
 - **States**: open, close hover, focus ring, settings row hover raise and pressed.
-- **Tokens**: modal `background` with surface gradient and grain, radius 24px, elevation 3; close 2.65rem circle on `agent-surface`; rows 2.9rem on `agent-surface`, radius 12px; backdrop `shadow` at 34%.
-- **Clawline adaptation**: a modal is a large card on Clawline's surface: same grain, top-lit device shadow, squircle radius.
+- **Tokens**: modal surface gradient `background` to `background-end`, smooth with no grain (R8), radius 24px, elevation 3; close 2.65rem circle on `agent-surface`; rows 2.9rem on `agent-surface`, radius 12px; backdrop `shadow` at 34%.
+- **Clawline adaptation**: a modal is a large card lifted off Clawline's surface: the same warm gradient without the grain (cards and bubbles stay smooth), top-lit device shadow, squircle radius.
 
 ### 4.15 Status popup
 
 - **Anatomy**: `.tb-chat-status-popup` (`role=dialog`, "Connection details"), `.tb-chat-popup-heading` with close ("Close connection details"), a definition list.
-- **Tokens**: `background`, radius 16px, elevation 2, `muted` terms, `text` values.
+- **Tokens**: opaque `background` with no glass and no blur, radius 16px, elevation 2, `muted` terms, `text` values. It stays opaque because its `muted` terms would fail on glass (dark `muted` on `glass` over a light backdrop is 2.81:1).
 - **States**: open, close focus.
-- **Clawline adaptation**: Clawline card with top-lit shadow.
+- **Clawline adaptation**: Clawline card with top-lit shadow; not glass.
 
 ### 4.16 Focus ring
 
@@ -347,7 +348,7 @@ Chat has one screen, the transcript, plus overlays. Each element below is specif
 | Return to own last prompt | Latest-prompt card shows while the prompt is off screen | Card jump (4.9) | Scroll; dismiss `×` hides the card for that session |
 | Open connection details | Status dot in the composer | Status popup (4.15) | Close, Escape |
 | Add an attachment | `+` in the composer | Attachment options (4.12), camera (4.13) | Choose, Escape, outside tap |
-| Open settings | Type exactly `/settings` and send; or the host requests it (Tuner menu and shortcut) | Settings modal (4.14) | Close, Escape |
+| Open settings | Type exactly `/settings` and send; or a host that uses Chat's settings request opens it. Tuner's own Settings menu item and shortcut open Tuner's settings, not this modal, and this step adds no wiring between them | Settings modal (4.14) | Close, Escape |
 | Read release notes | Settings home row "Release notes ›" | Release notes page (4.14) | Back row to home; close |
 | See what changed | Opens itself once per new version, then records it as seen | What's new (4.14) | Close, Escape |
 | View an image | Tap an image | Image viewer (4.5) | Close, Escape |
@@ -385,7 +386,7 @@ Each departure keeps a Chat behavior or invariant the ask did not authorize chan
 - The web view is not opaque. Its background and under-page color are Tuner's own `nordicBackground` color, which matches Chat's current linen. While the page loads, during overscroll and around the page, the user sees that native color. Once Chat's surface changes, Tuner's color will not match until Tuner is updated (Q1).
 - Tuner adds the native composer's height to the page's bottom safe area. Chat's bottom reserve, scroll-to-latest pill and composer position already read `env(safe-area-inset-bottom)`; the restyle must keep that.
 - In host composer mode Chat's composer is not drawn. The native composer uses SwiftUI glass with its own tint and an 11.5pt status dot. Section 4.11 does not apply to it (Q1).
-- Tuner's text zoom sets `-webkit-text-size-adjust` from 70% to 200%. Type in `rem` and `em` scales; radii in `px` do not; spacing in `rem` scales. The composer textarea must stay at 16px or larger so iOS does not zoom the page on focus.
+- Tuner's text zoom sets `-webkit-text-size-adjust` from 70% to 200%. WebKit applies that setting to text size; whether `rem` spacing and `rem` control sizes follow it in Tuner is not established and is to be measured in the restyle's Tuner screenshots. Radii in `px` do not scale. The composer textarea must stay at 16px or larger so iOS does not zoom the page on focus.
 - Tuner can force light or dark through `preferredColorScheme`. Whether WKWebView reports that to the page's `prefers-color-scheme` is not established (Q2).
 - `backdrop-filter` and `:has()` are supported in the WebKit versions Tuner targets (assumption A2).
 
@@ -416,7 +417,7 @@ Each requirement cites what it serves. Keywords follow RFC 2119 as clarified by 
 **R1. Palette.** Chat SHALL define the light and dark token values in section 3.1 in `src/theme.css` and use no color literal in `src/style.css`, `examples/site.css` or `examples/hostComposer.css`. Serves: the ask (a) "color (light and dark)" and the existing literal ban.
 *Example*: in light, `getComputedStyle(root).getPropertyValue('--tb-chat-human-surface')` is `#B8CEAF`; grepping `style.css` for `#` color literals finds none.
 
-**R2. Legibility.** Every pair in section 9 SHALL measure at least 4.5:1 in both themes, including text and placeholder on `glass` over each backdrop token. Serves: Clawline "Meets WCAG AA (4.5:1 minimum)" and Chat's theme tests.
+**R2. Legibility.** Every pair in section 9 SHALL measure at least 4.5:1 in both themes, including `text` and `placeholder` on both `glass` and `composer-glass` over each of the 29 color tokens in 3.1 used as a backdrop, `code-block` among them. Serves: Clawline "Meets WCAG AA (4.5:1 minimum)" and Chat's theme tests.
 *Example*: `muted` on `human-surface` in light is 4.66, which passes; changing `muted` to Clawline stone `#A69B8D` makes it fail.
 
 **R3. Type.** Chat text SHALL render in DM Sans with the section 3.2 sizes, and SHALL fall back to `system-ui` while the font loads or if it is unavailable. Serves: the ask "DM Sans", (a) "type scale".
@@ -425,7 +426,7 @@ Each requirement cites what it serves. Keywords follow RFC 2119 as clarified by 
 **R4. Measure.** Paragraph, list and blockquote text inside a bubble SHALL wrap at no more than 65ch, while code, tables and images MAY extend to the bubble's width. Serves: Clawline OTW rule.
 *Example*: a 600-character paragraph next to a wide table: the table spans the bubble, the paragraph wraps at about 65 characters.
 
-**R5. Spacing.** New spacing values SHALL come from the 4px scale in 3.3. Serves: the ask "4px spacing base".
+**R5. Spacing.** New spacing values SHALL come from the 4px scale in 3.3, except the phone bubble padding, which keeps Clawline's 14px by 16px (`.875rem 1rem`) as the one off-scale value. Serves: the ask "4px spacing base"; Clawline phone bubble padding.
 *Example*: bubble padding computes to 16px by 20px at 1024px wide and 14px by 16px at 390px.
 
 **R6. Shape.** Human bubbles SHALL have a 4px bottom-right corner and agent bubbles a 4px bottom-left corner, with 28px on the other three. Serves: the ask "28px squircle radii"; Clawline teardrop.
@@ -440,13 +441,13 @@ Each requirement cites what it serves. Keywords follow RFC 2119 as clarified by 
 **R9. Accents.** The send disc, primary send action and focus ring SHALL use `accent` (terracotta); human bubbles SHALL use the sage surface. Serves: the ask "terracotta and sage accents".
 *Example*: in dark, the send disc fill computes to `#E07A5F` and the human bubble starts at `#2D3B2A`.
 
-**R10. Glass.** The composer shell, scroll-to-latest pill and popovers SHALL use their glass token with `blur(16px) saturate(180%)` and a `glass-edge` border, with no opaque panel behind the composer. Serves: Clawline liquid glass.
-*Example*: scrolling a code block under the composer shows it blurred through the shell.
+**R10. Glass.** The composer shell and scroll-to-latest pill SHALL use `composer-glass`, and the attachment options popover SHALL use `glass`, each with `blur(16px) saturate(180%)` and a `glass-edge` border, with no opaque panel behind the composer. No other widget SHALL use glass, and `muted` text SHALL NOT be placed on glass. Serves: Clawline liquid glass; R2.
+*Example*: scrolling a code block under the composer shows it blurred through the shell; the status popup and modals show no transcript through them.
 
 **R11. Chromeless.** WHEN a bubble's body holds only one code block, one image, or one table with five or fewer body rows, THE bubble SHALL paint no background, border or shadow and SHALL keep its padding. Serves: Clawline chromeless bubbles.
 *Example*: a bubble with only a fenced code block shows the dark block on the surface; the same block followed by a sentence shows the bubble.
 
-**R12. Motion.** Hover raise SHALL apply only to the controls in 3.6 and only under `(hover: hover)`; WHEN the user prefers reduced motion, Chat SHALL apply no transform, shimmer or color transition. Serves: Clawline hover and motion rules.
+**R12. Motion.** Hover raise SHALL apply only to the controls in 3.6 and only under `(hover: hover)`; WHEN the user prefers reduced motion, Chat SHALL apply no motion transform (hover raise), shimmer or color transition. Static centering transforms, such as the scroll pill's `translateX(-50%)`, are layout and stay. Serves: Clawline hover and motion rules.
 *Example*: on a touch device, tapping the scroll pill does not translate it; on desktop, hovering it raises it 2px.
 
 **R13. Appearance follows the system.** WHEN the system appearance changes, Chat SHALL switch token sets, with color transitions of 0.3s unless reduced motion applies. Serves: the ask "light default plus a full dark palette".
@@ -460,7 +461,7 @@ Each requirement cites what it serves. Keywords follow RFC 2119 as clarified by 
 
 ## 9. Evidence: contrast of the proposed palette
 
-Computed with the same math as `tests/theme.test.ts` (WCAG relative luminance, alpha compositing, sRGB mixing) for both surface gradient stops, the human gradient's two stops, and glass over every backdrop token. Lowest values per theme are in bold.
+Computed with the same math as `tests/theme.test.ts` (WCAG relative luminance, alpha compositing, sRGB mixing) for both surface gradient stops, the human gradient's two stops, and both glass tokens over each of the 29 color tokens in 3.1 as a backdrop (including `code-block` and the syntax colors). The computation script is kept with the work item's records, not in this repository. Lowest values per theme are in bold.
 
 | Pair | Light | Dark |
 | --- | --- | --- |
@@ -483,8 +484,10 @@ Computed with the same math as `tests/theme.test.ts` (WCAG relative luminance, a
 | code-block-text on code-block | 13.18 | 13.18 |
 | syntax keyword, string, number, comment, title on code-block | 8.09, 9.88, 9.23, 7.53, 9.81 | same |
 | on-accent on accent | 4.83 | 5.93 |
-| text on glass, worst of 16 backdrops | 7.48 | 5.49 |
-| placeholder on glass, worst of 16 backdrops | **4.67** | **4.64** |
+| text on `glass`, worst of 29 backdrops | 7.03 (over `code-block`) | 5.49 (over `text`) |
+| placeholder on `glass`, worst of 29 backdrops | **4.67** (over `code-block`) | **4.64** (over `text`) |
+| text on `composer-glass`, worst of 29 backdrops | 10.85 | 9.85 |
+| placeholder on `composer-glass`, worst of 29 backdrops | 7.21 | 8.32 |
 | transition on its 8% band over background / background-end | 5.05 / **4.63** | 6.33 / 6.86 |
 | caution caption (94% mix) over background / background-end | 6.08 / 5.60 | 8.08 / 8.59 |
 | danger caption (94% mix) over background / background-end | 6.04 / 5.57 | 6.56 / 6.98 |
@@ -513,7 +516,7 @@ Tests that pin today's exact values (palette constants, glass minimums 7.47 / 5.
 
 ## 12. Open questions
 
-- **Q1. Tuner palette parity. BLOCKING for Tuner screenshot acceptance only; NON-BLOCKING for this document and the in-page restyle.** Tuner paints its own linen around and under the page, and its native composer and desktop chrome use Tuner colors that mirror Chat's current tokens. After the restyle, Tuner shows a linen edge on overscroll and a non-Clawline composer in host composer mode. Matching them is a change in Tuner, outside this repository and this step. The product owner decides whether Tuner parity is part of this ask.
+- **Q1. Tuner palette parity. BLOCKING for Tuner screenshot acceptance only; NON-BLOCKING for this document and the in-page restyle.** Tuner paints its own linen around and under the page, and its native composer and desktop chrome use Tuner colors that mirror Chat's current tokens. After the restyle, Tuner shows a linen edge on overscroll and a non-Clawline composer in host composer mode. Matching them is a change in Tuner, outside this repository and this step. The product owner decides whether Tuner parity is part of this ask. Whatever that decision, it does not waive the restyle's Tuner screenshots, which Q2 and Q3 also depend on.
 - **Q2. Forced appearance in Tuner. NON-BLOCKING.** If WKWebView does not pass Tuner's forced light or dark setting to `prefers-color-scheme`, Chat follows the phone's setting rather than Tuner's. To verify in the restyle's Tuner screenshots.
 - **Q3. Desktop sidebar toggle overlap. NON-BLOCKING.** The 34px toggle at Tuner's top-left may overlap a long latest-prompt card on very narrow desktop windows. To check in screenshots.
 - **Q4. Avatars and content-aware type later. NON-BLOCKING.** Clawline treats avatars as essential landmarks. Adding them is a new component and needs a separate product decision.
