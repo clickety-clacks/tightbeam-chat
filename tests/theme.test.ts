@@ -161,6 +161,19 @@ describe('Chat theme', () => {
         expect(ratio, `${variant}: ${foregroundName} on ${backgroundName}`).toBeGreaterThanOrEqual(4.5);
       }
 
+      const indigoInk = tokenColor(tokens, 'pill-indigo');
+      const indigoOnBackground = contrast(
+        indigoInk,
+        mix(indigoInk, tokenColor(tokens, 'background'), .14),
+      );
+      const indigoOnBackgroundEnd = contrast(
+        indigoInk,
+        mix(indigoInk, tokenColor(tokens, 'background-end'), .14),
+      );
+      expect(indigoOnBackground, `${variant}: indigo pill contrast on background`).toBeGreaterThanOrEqual(4.5);
+      expect(indigoOnBackgroundEnd, `${variant}: indigo pill contrast on background-end`).toBeGreaterThanOrEqual(4.5);
+      expect(indigoOnBackgroundEnd).toBeCloseTo(variant === 'light' ? 4.74 : 7.22, 1);
+
       const text = tokenColor(tokens, 'text');
       const placeholder = tokenColor(tokens, 'placeholder');
       for (const glassName of ['glass', 'composer-glass'] as const) {
@@ -268,6 +281,12 @@ describe('Chat theme', () => {
     expect(rule(componentCss, '.tb-chat-activity-agent')).toContain('color: var(--tb-chat-fjord)');
     expect(rule(componentCss, '.tb-chat-activity-substrate')).toContain('color: var(--tb-chat-muted)');
     expect(rule(componentCss, '.tb-chat-activity-tool')).toContain('color: var(--tb-chat-muted)');
+    expect(rule(componentCss, '.tb-chat-activity-pill')).toContain(
+      'background: color-mix(in srgb, var(--tb-chat-pill-ink) 14%, var(--tb-chat-background))',
+    );
+    expect(rule(componentCss, '.tb-chat-activity-pill-indigo')).toContain(
+      '--tb-chat-pill-ink: var(--tb-chat-pill-indigo)',
+    );
     // The summary button must outscore the base `.tb-chat button` color rule.
     expect(rule(componentCss, '.tb-chat button')).toContain('color: inherit');
     expect(rule(componentCss, '.tb-chat .tb-chat-activity-tool-run-toggle')).toContain('color: var(--tb-chat-caution)');
