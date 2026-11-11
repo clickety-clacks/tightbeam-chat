@@ -119,7 +119,7 @@ let nextAnimationFrameId = 0;
 const rows = () => [...document.querySelectorAll<HTMLElement>('article[data-record-key]')];
 const styleSource = readFileSync(resolve(process.cwd(), 'src/style.css'), 'utf8');
 const hasStableActiveCaptionSlot =
-  /\.tb-chat-message-content\s*\{[^}]*--tb-chat-active-caption-height:\s*1\.1rem;[^}]*padding-block-end:\s*calc\(var\(--tb-chat-active-caption-height\)\s*\+\s*\.8rem\);/s.test(styleSource) &&
+  /\.tb-chat-message-content\s*\{[^}]*--tb-chat-active-caption-height:\s*1\.1rem;[^}]*padding-block-end:\s*calc\(var\(--tb-chat-active-caption-height\)\s*\+\s*[^)]+\);/s.test(styleSource) &&
   /\.tb-chat-active-caption\s*\{[^}]*position:\s*absolute;[^}]*height:\s*var\(--tb-chat-active-caption-height\);/s.test(styleSource);
 const keyboardInset = () => Number.parseFloat(document.querySelector<HTMLElement>('.tb-chat')?.style.getPropertyValue('--tb-chat-keyboard-inset') || '0') || 0;
 const followsKeyboardInset = styleSource.includes('max-height: calc(100% - var(--tb-chat-keyboard-inset, 0px));');
