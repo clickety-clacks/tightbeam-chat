@@ -1,64 +1,102 @@
+@font-face {
+  font-family: "DM Sans";
+  font-style: normal;
+  font-weight: 300 700;
+  font-display: swap;
+  src: url("./assets/fonts/dm-sans-latin.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
 :root {
   color-scheme: light dark;
-  --tb-chat-background: #F1EEE9;
-  --tb-chat-text: #31302D;
-  --tb-chat-muted: #5C5854;
-  --tb-chat-border: #DEDAD3;
-  --tb-chat-agent-surface: #E6E1D8;
-  --tb-chat-human-surface: #DCE3DA;
-  --tb-chat-code: #E2DCD2;
-  --tb-chat-syntax-keyword: #693C8E;
-  --tb-chat-syntax-string: #28623B;
-  --tb-chat-syntax-number: #914A14;
-  --tb-chat-syntax-comment: #625C55;
-  --tb-chat-syntax-title: #175C80;
-  --tb-chat-accent: #526657;
-  --tb-chat-on-accent: #F3F0EA;
-  --tb-chat-teak: #7A5540;
-  --tb-chat-fjord: #4D6470;
-  --tb-chat-pill-purple: #6B3CC0;
-  --tb-chat-ok: #4E6547;
-  --tb-chat-caution: #73592A;
-  --tb-chat-transition: #6B6458;
-  --tb-chat-danger: #A63A2A;
-  --tb-chat-idle: #5C5854;
-  --tb-chat-placeholder: #53504C;
-  --tb-chat-glass: rgba(250,246,238,0.74);
-  --tb-chat-composer-glass: rgba(250,246,238,0.94);
-  --tb-chat-glass-edge: rgba(60,45,30,0.10);
+
+  --tb-chat-background: #F0EAE0;
+  --tb-chat-background-end: #E8E0D4;
+  --tb-chat-agent-surface: #FDF6EE;
+  --tb-chat-agent-surface-start: #FFFDF9;
+  --tb-chat-human-surface: #B8CEAF;
+  --tb-chat-human-surface-end: #C8D9C0;
+  --tb-chat-border: #E2DAD0;
+  --tb-chat-code: #E8E0D4;
+  --tb-chat-code-block: #1E1E1E;
+  --tb-chat-code-block-text: #E8E4E0;
+
+  --tb-chat-text: #3D3429;
+  --tb-chat-muted: #5B5046;
+  --tb-chat-placeholder: #584E45;
+
+  --tb-chat-accent: #A3553E;
+  --tb-chat-on-accent: #F7F3EB;
+  --tb-chat-teak: #744631;
+  --tb-chat-fjord: #36505F;
+  --tb-chat-pill-purple: #6A4290;
+  --tb-chat-pill-indigo: #4B4F8A;
+  --tb-chat-ok: #405A3A;
+  --tb-chat-caution: #614A18;
+  --tb-chat-transition: #655A4E;
+  --tb-chat-danger: #8E2F22;
+  --tb-chat-idle: #5B5046;
+
+  --tb-chat-syntax-keyword: #C9A6EF;
+  --tb-chat-syntax-string: #9AD5A7;
+  --tb-chat-syntax-number: #F0B66E;
+  --tb-chat-syntax-comment: #B6ADA2;
+  --tb-chat-syntax-title: #8FCFF0;
+
+  --tb-chat-glass: rgba(255,255,255,0.74);
+  --tb-chat-composer-glass: rgba(255,255,255,0.94);
+  --tb-chat-glass-edge: rgba(255,255,255,0.60);
   --tb-chat-shadow: rgb(60,45,30);
+  --tb-chat-bubble-highlight: rgba(255,255,255,0.15);
+  --tb-chat-grain-opacity: 0.025;
+
+  /* Kept for the existing composer rule until its separate styling slice adopts elevation level 2. */
   --tb-chat-composer-shadow-alpha: 12%;
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --tb-chat-background: #161514;
-    --tb-chat-text: #DDD9D1;
-    --tb-chat-muted: #9E9992;
-    --tb-chat-border: #2C2A27;
-    --tb-chat-agent-surface: #24221F;
-    --tb-chat-human-surface: #26302A;
-    --tb-chat-code: #1C1B19;
+    --tb-chat-background: #1C1917;
+    --tb-chat-background-end: #141210;
+    --tb-chat-agent-surface: #292524;
+    --tb-chat-agent-surface-start: #292524;
+    --tb-chat-human-surface: #2D3B2A;
+    --tb-chat-human-surface-end: #243322;
+    --tb-chat-border: #33302E;
+    --tb-chat-code: #141210;
+    --tb-chat-code-block: #1E1E1E;
+    --tb-chat-code-block-text: #E8E4E0;
+
+    --tb-chat-text: #E8E4E0;
+    --tb-chat-muted: #ADA39A;
+    --tb-chat-placeholder: #D9D2CA;
+
+    --tb-chat-accent: #E07A5F;
+    --tb-chat-on-accent: #1C1917;
+    --tb-chat-teak: #D99A78;
+    --tb-chat-fjord: #9DB5C4;
+    --tb-chat-pill-purple: #C2AAE6;
+    --tb-chat-pill-indigo: #AFB3EA;
+    --tb-chat-ok: #8DB487;
+    --tb-chat-caution: #D4B67E;
+    --tb-chat-transition: #B3A493;
+    --tb-chat-danger: #F08C78;
+    --tb-chat-idle: #ADA39A;
+
     --tb-chat-syntax-keyword: #C9A6EF;
     --tb-chat-syntax-string: #9AD5A7;
     --tb-chat-syntax-number: #F0B66E;
     --tb-chat-syntax-comment: #B6ADA2;
     --tb-chat-syntax-title: #8FCFF0;
-    --tb-chat-accent: #A5BAA9;
-    --tb-chat-on-accent: #19211B;
-    --tb-chat-teak: #C9A891;
-    --tb-chat-fjord: #9FB4BF;
-    --tb-chat-pill-purple: #C9B7F1;
-    --tb-chat-ok: #A5BC9C;
-    --tb-chat-caution: #D8BE84;
-    --tb-chat-transition: #B0A18D;
-    --tb-chat-danger: #EE8B75;
-    --tb-chat-idle: #9E9992;
-    --tb-chat-placeholder: #D2CDC6;
-    --tb-chat-glass: rgba(46,42,37,0.74);
-    --tb-chat-composer-glass: rgba(46,42,37,0.94);
-    --tb-chat-glass-edge: rgba(240,230,215,0.10);
+
+    --tb-chat-glass: rgba(44,40,37,0.74);
+    --tb-chat-composer-glass: rgba(44,40,37,0.94);
+    --tb-chat-glass-edge: rgba(255,255,255,0.12);
     --tb-chat-shadow: #000000;
+    --tb-chat-bubble-highlight: rgba(255,255,255,0.15);
+    --tb-chat-grain-opacity: 0.04;
+
+    /* Kept for the existing composer rule until its separate styling slice adopts elevation level 2. */
     --tb-chat-composer-shadow-alpha: 35%;
   }
 }
