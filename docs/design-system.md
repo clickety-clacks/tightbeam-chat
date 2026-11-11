@@ -344,7 +344,7 @@ All focusable controls show a 2px solid ring at offset 3px. Ring color is `accen
 
 These are the hover, pressed and disabled looks for the small flat controls that do not raise (3.6): image retry (4.5), draft attachment remove and the attachment retry buttons (4.12), and modal close (4.14). Caption buttons have their own text-button treatment (4.6).
 
-- **Hover**: the control's fill becomes `accent` mixed at 12% over the surface it sits on, the value Chat already uses for attachment option hover (4.12). Applies only under `(hover: hover)`. Glyph, text color, border and size do not change, and nothing moves.
+- **Hover**: the control's fill becomes `accent` mixed at 12% over its resting surface: its own fill where that fill is opaque (modal close: `agent-surface`, so the circle never shows the modal gradient through it), otherwise the surface beneath it (image retry, draft remove, attachment retry). This is the value Chat already uses for attachment option hover (4.12). Applies only under `(hover: hover)`. Glyph, text color, border and size do not change, and nothing moves.
 - **Pressed**: the same 12% `accent` fill while the control is pressed, with or without a hover-capable pointer, so a touch press gets feedback.
 - **Disabled**: only where existing UI disables the control. `muted` text, the control's resting fill and border, no hover or pressed fill, default cursor, no opacity. Opacity stays reserved for the disabled send disc (4.11).
 - **Motion**: fill changes are immediate, with no transition, so R12 holds without a reduced-motion variant.
