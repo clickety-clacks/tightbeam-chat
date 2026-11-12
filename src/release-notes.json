@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.98",
+    "items": [
+      {
+        "title": "A refreshed conversation view",
+        "description": "Navigation, messages, Markdown, activity, prompts, the composer, dialogs, image previews, and received attachment details now share the updated visual design."
+      }
+    ]
+  },
+  {
     "version": "v0.1.97",
     "items": [
       {
