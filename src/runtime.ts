@@ -133,7 +133,6 @@ function matchingAttachments(send: LocalSend, row: CanonicalMessage): boolean {
 function matchesSend(send: LocalSend, row: ConversationRecord): row is CanonicalMessage {
   return row.kind === 'message' && row.sessionKey === send.sessionKey &&
     row.deviceId === send.deviceId && row.clientMessageId === send.clientMessageId &&
-    (send.acceptedMessageId === undefined || row.id === send.acceptedMessageId) &&
     matchingAttachments(send, row);
 }
 
@@ -143,7 +142,6 @@ function reconcileSend(send: LocalSend, row: CanonicalMessage): LocalSend {
       assetId: ref.assetId, mimeType: ref.mimeType, filename: ref.filename, size: ref.size,
     }))) : send.attachments;
   return Object.freeze({ ...send, status: 'accepted', reconciled: true, reason: undefined,
-    acceptedMessageId: row.id,
     ...(attachments ? { attachments, postSubmitted: true, attachmentPhase: 'posted' as const } : {}) });
 }
 
@@ -156,7 +154,7 @@ const retryableUncertainSendReasons = new Set([
   'connection-closed-before-acknowledgement', 'connection-unconfirmed',
 ]);
 
-/** Pace retries after an ambiguous REST send; a live request has no separate retry timer. */
+/** Pace only after a send socket has dropped; a live acknowledgement has no timeout. */
 function waitForHumanSendRetry(signal: AbortSignal, delayMs: number): Promise<boolean> {
   if (signal.aborted) return Promise.resolve(false);
   return new Promise((resolve) => {
@@ -2055,24 +2053,8 @@ class SessionRuntime implements ChatRuntime {
           result = { outcome: 'unreachable', reason: 'Not connected to the server.' };
         }
         if (controller.signal.aborted || !this.checkIdentity()) return;
-        let current = this.state.sends.find((send) => send.clientMessageId === submission.clientMessageId);
+        const current = this.state.sends.find((send) => send.clientMessageId === submission.clientMessageId);
         if (!current) return;
-        if (result.outcome === 'accepted' && result.messageId) {
-          const acceptedMessageId = result.messageId;
-          const prior = current;
-          const identityRow = [...this.rows.values()].find((row) => matchesSend(prior, row));
-          const namedRow = this.rows.get(acceptedMessageId);
-          if ((identityRow && identityRow.id !== acceptedMessageId) ||
-              (namedRow && !matchesSend({ ...prior, acceptedMessageId }, namedRow))) {
-            result = { outcome: 'uncertain', reason: 'accepted-message-mismatch' };
-            this.updateSend(submission.clientMessageId, send => ({ ...send, status: 'uncertain',
-              reconciled: false, reason: 'accepted-message-mismatch' }));
-          } else {
-            this.updateSend(submission.clientMessageId, send => ({ ...send, acceptedMessageId }));
-          }
-          current = this.state.sends.find((send) => send.clientMessageId === submission.clientMessageId);
-          if (!current) return;
-        }
         if (current.reconciled) {
           if (submission.attachments?.length) return;
           result = { outcome: 'accepted' };
@@ -2091,8 +2073,8 @@ class SessionRuntime implements ChatRuntime {
         }
         const shouldReask = result.outcome === 'retryable' || result.outcome === 'unreachable';
         if (!shouldReask) break;
-        // A REST request may fail before posting or lose its response after the Gateway has
-        // recorded the post. Re-ask with identical ID/content only when the
+        // A send socket may fail before posting or drop after the Gateway has
+        // accepted the post. Re-ask with identical ID/content only when the
         // target advertises dedupe, and stop after a small bounded number of
         // attempts. Exhaustion is unconfirmed, never a delivery failure.
         if (this.state.status === 'unauthorized') return;

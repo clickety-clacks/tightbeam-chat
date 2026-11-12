@@ -137,6 +137,13 @@ function loadRuntimeConfig(environment) {
   const publicOrigin = canonicalOrigin(environment.CHAT_PUBLIC_ORIGIN);
   const configuredGateway = canonicalOrigin(environment.CHAT_DEFAULT_GATEWAY_ORIGIN);
   const gatewayMap = loadGatewayMap(environment, configuredGateway);
+  let markerDeviceToken = '';
+  if (typeof environment.CHAT_READ_MARKER_DEVICE_CREDENTIAL_FILE === 'string' &&
+      environment.CHAT_READ_MARKER_DEVICE_CREDENTIAL_FILE) {
+    try {
+      markerDeviceToken = fs.readFileSync(environment.CHAT_READ_MARKER_DEVICE_CREDENTIAL_FILE, 'utf8').trim();
+    } catch {}
+  }
   const gatewayOrigin = gatewayMap.valid && configuredGateway && gatewayMap.gateways.has(configuredGateway)
     ? configuredGateway
     : undefined;
@@ -155,8 +162,8 @@ function loadRuntimeConfig(environment) {
       gateway: gatewayOrigin,
       sessionKey,
       ...(principalKey ? { principalKey, deviceId } : {}),
-      ...(operatorPrincipalKey
-        ? { readMarkerRoute: 'gateway-configured-user' }
+      ...(markerDeviceToken && operatorPrincipalKey
+        ? { readMarkerRoute: 'gateway-user-device' }
         : {}),
     }
     : {};
@@ -171,6 +178,7 @@ function loadRuntimeConfig(environment) {
     sessionKey,
     principalKey,
     deviceId,
+    markerDeviceToken,
   };
 }
 
@@ -395,6 +403,10 @@ function parseServiceWebSocketTarget(rawUrl, runtime) {
       }
       return { path: '/ws/changes?protocolVersion=2', kind: 'changes', gatewayOrigin, sessionKey: sessionKeys[0] };
     }
+    if (request.pathname === '/__chat/ws' &&
+        request.searchParams.getAll('protocolVersion').length === 0) {
+      return { path: '/ws', kind: 'human', gatewayOrigin, sessionKey: sessionKeys[0] };
+    }
     return undefined;
   } catch {
     return undefined;
@@ -405,50 +417,8 @@ function jsonResponse(response, status, value) {
   writeJson(response, status, value);
 }
 
-function gatewayCliVersionFromReply(reply) {
-  if (reply.status !== 200) throw new Error('Gateway version is unavailable.');
-  let version;
-  try { version = JSON.parse(reply.body.toString('utf8')).version; }
-  catch { throw new Error('Gateway version is unavailable.'); }
-  if (typeof version !== 'string' || !version.trim()) {
-    throw new Error('Gateway version is unavailable.');
-  }
-  return version;
-}
-
-function gatewayCliVersion(gateway) {
-  if (typeof gateway.cliVersion === 'string' && gateway.cliVersion.trim()) {
-    return Promise.resolve(gateway.cliVersion);
-  }
-  if (!gateway.cliVersionPromise) {
-    const pending = gatewayRequest(gateway, '/version', { authorize: false })
-      .then(gatewayCliVersionFromReply)
-      .then((version) => {
-        gateway.cliVersion = version;
-        return version;
-      })
-      .finally(() => {
-        if (gateway.cliVersionPromise === pending) gateway.cliVersionPromise = undefined;
-      });
-    gateway.cliVersionPromise = pending;
-  }
-  return gateway.cliVersionPromise;
-}
-
-function isIncompatibleCliReply(reply) {
-  if (reply.status !== 426) return false;
-  try { return JSON.parse(reply.body.toString('utf8')).error?.code === 'incompatible_cli'; }
-  catch { return false; }
-}
-
-async function gatewayRequest(
-  gateway,
-  path,
-  { method = 'GET', headers = {}, body, authorize = true } = {},
-  retriedAfterVersionRefresh = false,
-) {
-  const cliVersion = authorize ? await gatewayCliVersion(gateway) : undefined;
-  const reply = await new Promise((resolve, reject) => {
+function gatewayRequest(gateway, path, { method = 'GET', headers = {}, body, authorize = true } = {}) {
+  return new Promise((resolve, reject) => {
     const protocol = gateway.base.startsWith('https:') ? https : http;
     const request = protocol.request(gateway.base, {
       method,
@@ -457,42 +427,20 @@ async function gatewayRequest(
         ...(authorize ? { authorization: `Bearer ${gateway.token}` } : {}),
         accept: 'application/json',
         ...headers,
-        ...(authorize ? { 'x-tightbeam-cli-version': cliVersion } : {}),
       },
     }, (reply) => {
       const chunks = [];
       reply.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
-      reply.on('end', () => {
-        const result = {
-          status: reply.statusCode ?? 502,
-          contentType: reply.headers['content-type'] ?? 'application/json; charset=utf-8',
-          body: Buffer.concat(chunks),
-        };
-        if (path === '/version' && result.status === 200) {
-          try { gateway.cliVersion = gatewayCliVersionFromReply(result); }
-          catch { /* The next authenticated request will retry the version lookup. */ }
-        }
-        resolve(result);
-      });
+      reply.on('end', () => resolve({
+        status: reply.statusCode ?? 502,
+        contentType: reply.headers['content-type'] ?? 'application/json; charset=utf-8',
+        body: Buffer.concat(chunks),
+      }));
     });
     request.setTimeout(15000, () => request.destroy(new Error('Gateway request timed out')));
     request.on('error', reject);
     request.end(body);
   });
-
-  // serviceAgentDispatch validates these requests as post or read-marker-set before forwarding.
-  if (!retriedAfterVersionRefresh && authorize && path === '/agent/dispatch' &&
-      isIncompatibleCliReply(reply)) {
-    if (gateway.cliVersion === cliVersion) gateway.cliVersion = undefined;
-    let refreshedVersion;
-    try { refreshedVersion = await gatewayCliVersion(gateway); }
-    catch { return reply; }
-    if (refreshedVersion !== cliVersion) {
-      return gatewayRequest(gateway, path, { method, headers, body, authorize }, true);
-    }
-  }
-
-  return reply;
 }
 
 function writeGatewayReply(response, reply) {
@@ -507,7 +455,7 @@ function writeGatewayReply(response, reply) {
 
 async function serviceHttp(request, response, runtime) {
   if (request.method === 'POST' && request.url?.startsWith('/__chat/agent/dispatch')) {
-    await serviceAgentDispatch(request, response, runtime);
+    await serviceMarkerDispatch(request, response, runtime);
     return;
   }
   if (!serviceReady(runtime)) {
@@ -568,7 +516,7 @@ async function serviceHttp(request, response, runtime) {
   }
 }
 
-function parseServiceAgentDispatchTarget(rawUrl, runtime) {
+function parseServiceMarkerDispatchTarget(rawUrl, runtime) {
   try {
     const request = new URL(rawUrl, 'http://chat-service.invalid');
     if (request.origin !== 'http://chat-service.invalid' || request.pathname !== '/__chat/agent/dispatch' ||
@@ -584,12 +532,16 @@ function parseServiceAgentDispatchTarget(rawUrl, runtime) {
   }
 }
 
-async function serviceAgentDispatch(request, response, runtime) {
+async function serviceMarkerDispatch(request, response, runtime) {
+  if (!runtime.markerDeviceToken || !runtime.operatorPrincipalKey) {
+    jsonResponse(response, 404, { error: { code: 'not_found' } });
+    return;
+  }
   if (!serviceReady(runtime)) {
     jsonResponse(response, 503, { error: { code: 'chat_service_unconfigured' } });
     return;
   }
-  const target = parseServiceAgentDispatchTarget(request.url ?? '', runtime);
+  const target = parseServiceMarkerDispatchTarget(request.url ?? '', runtime);
   if (!target) {
     jsonResponse(response, 404, { error: { code: 'not_found' } });
     return;
@@ -614,21 +566,21 @@ async function serviceAgentDispatch(request, response, runtime) {
     jsonResponse(response, 400, { error: { code: 'invalid_request' } });
     return;
   }
-  if (!value || typeof value !== 'object' || Array.isArray(value) ||
-      !['post', 'read-marker-set'].includes(value.verb)) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || value.verb !== 'read-marker-set') {
     jsonResponse(response, 404, { error: { code: 'not_found' } });
     return;
   }
-  const forwardedBody = Buffer.from(JSON.stringify({ ...value, asUser: runtime.principalKey }));
 
   try {
     writeGatewayReply(response, await gatewayRequest(gateway, target.path, {
       method: 'POST',
       headers: {
+        authorization: `Bearer ${runtime.markerDeviceToken}`,
         'content-type': request.headers['content-type'] ?? 'application/json',
-        'content-length': String(forwardedBody.length),
+        'content-length': String(body.length),
       },
-      body: forwardedBody,
+      body,
+      authorize: false,
     }));
   } catch {
     jsonResponse(response, 502, { error: { code: 'gateway_unavailable' } });
@@ -704,6 +656,10 @@ function proxyServiceWebSocket(request, socket, head, target, runtime, gateway) 
       asUser: runtime.principalKey,
       sessionKey: target.sessionKey,
     };
+    if (target.kind === 'human') {
+      auth.deviceId = runtime.deviceId;
+      auth.subscriptions = ['chat'];
+    }
     remote.write(websocketClientTextFrame(auth));
     if (head.length) remote.write(head);
     socket.pipe(remote).pipe(socket);
@@ -734,7 +690,7 @@ function parseBridgeTarget(rawUrl) {
     if (forwarded.origin !== gateway || forwarded.username || forwarded.password || forwarded.hash) return undefined;
 
     const pathname = forwarded.pathname;
-    const websocket = pathname === '/ws/changes';
+    const websocket = pathname === '/ws' || pathname === '/ws/changes';
     const rest = pathname === '/version' || pathname === '/api/sessions' ||
       /^\/api\/sessions\/[^/]+(?:\/messages)?$/.test(pathname);
     if (!websocket && !rest) return undefined;

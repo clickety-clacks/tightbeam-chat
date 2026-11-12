@@ -8,7 +8,7 @@ import {
   createPublic019Transport, decodePublic019Message, decodePublic019Session, decodePublic019Turn, decodeRecordEvent, decodeToolCall, decodeTurnEvent,
   decodePublic019Notice, type Public019Channel, type Public019Host,
 } from '../src/public019';
-import { SessionNotFoundError, UnsupportedTargetError } from '../src/types';
+import { AuthorizationError, SessionNotFoundError, UnsupportedTargetError } from '../src/types';
 import { ToolHistoryUnavailableError } from '../src/toolHistory';
 import { TurnEventHistoryUnavailableError } from '../src/turnEvents';
 
@@ -49,29 +49,18 @@ class Channel implements Public019Channel {
 
 function setup(heartbeatTimeoutMs?: number, observedVersion = version, historyItems: unknown[] = [item],
   turnItems: unknown[] = [], turnStatus = 200, railDenials?: unknown,
-  markerOperatorPrincipalKey?: string, markerIdentity: { principalKey: string; deviceId: string } = identity) {
+  markerOperatorPrincipalKey?: string, markerIdentity = identity) {
   const changes = new Channel();
+  const human = new Channel();
   const paths: string[] = [];
-  const dispatches: Record<string, unknown>[] = [];
-  const dispatchResponses: Response[] = [];
   const host: Public019Host = {
     currentIdentity: () => markerIdentity,
     ...(markerOperatorPrincipalKey ? {
-      readMarkerRoute: 'gateway-configured-user',
+      readMarkerRoute: 'gateway-user-device',
       readMarkerOperatorPrincipalKey: markerOperatorPrincipalKey,
     } : {}),
-    fetch: async (path, init = {}) => {
+    fetch: async (path) => {
       paths.push(path);
-      if (init.method === 'POST' && new URL(path).pathname === '/agent/dispatch') {
-        const request = JSON.parse(String(init.body)) as Record<string, unknown>;
-        dispatches.push(request);
-        if (dispatchResponses.length) return dispatchResponses.shift()!;
-        const params = request.params as Record<string, unknown>;
-        return new Response(JSON.stringify({ result: { outcome: 'recorded',
-          sessionKey: request.sessionKey, deviceId: params.deviceId,
-          clientMessageId: params.clientMessageId, messageId: `message-${String(params.clientMessageId)}`,
-          turnSeq: 1 } }), { status: 200 });
-      }
       if (path.includes('/record-events?')) return new Response(JSON.stringify({
         schemaVersion: 1, resource: 'record events', items: [], page: { hasMoreBefore: false },
       }));
@@ -103,16 +92,17 @@ function setup(heartbeatTimeoutMs?: number, observedVersion = version, historyIt
       tools.autoReady = true;
       return tools;
     },
+    openAuthenticatedHuman: async () => human,
   };
   const { transport, profile } = createPublic019Transport({
     baseUrl: 'https://host.example', host,
     responseTimeoutMs: 1000, heartbeatTimeoutMs,
   });
-  return { transport, profile, paths, changes, dispatches, dispatchResponses, host };
+  return { transport, profile, paths, changes, human, host };
 }
 
 describe('Gateway wire mapping and behavior checks', () => {
-  it('keeps marker transport unavailable without a declared configured-user route', () => {
+  it('keeps marker transport unavailable without a declared user-device route', () => {
     const candidate = setup();
 
     expect(candidate.transport.readReadMarker).toBeUndefined();
@@ -124,7 +114,7 @@ describe('Gateway wire mapping and behavior checks', () => {
     const candidate = setup();
     const { transport } = createPublic019Transport({
       baseUrl: 'https://host.example',
-      host: { ...candidate.host, readMarkerRoute: 'gateway-configured-user', readMarkerOperatorPrincipalKey: '  ' },
+      host: { ...candidate.host, readMarkerRoute: 'gateway-user-device', readMarkerOperatorPrincipalKey: '  ' },
     });
 
     expect(transport.readReadMarker).toBeUndefined();
@@ -198,7 +188,7 @@ describe('Gateway wire mapping and behavior checks', () => {
     const requests: Array<{ input: string; init: RequestInit }> = [];
     let marker: string | null = null;
     const host: Public019Host = {
-      readMarkerRoute: 'gateway-configured-user',
+      readMarkerRoute: 'gateway-user-device',
       readMarkerOperatorPrincipalKey: operatorPrincipalKey,
       currentIdentity: () => ({ principalKey: operatorPrincipalKey, deviceId: 'fixture-device' }),
       fetch: async (input, init) => {
@@ -215,6 +205,7 @@ describe('Gateway wire mapping and behavior checks', () => {
         throw new Error(`Unexpected marker request: ${init.method} ${url.pathname}`);
       },
       openAuthenticatedChanges: async () => new Channel(),
+      openAuthenticatedHuman: async () => new Channel(),
     };
     const { transport } = createPublic019Transport({ baseUrl: 'https://gateway.example', host });
     const port = { readReadMarker: transport.readReadMarker!, writeReadMarker: transport.writeReadMarker! };
@@ -228,7 +219,6 @@ describe('Gateway wire mapping and behavior checks', () => {
     ]);
     expect(JSON.parse(String(requests[1].init.body))).toEqual({
       verb: 'read-marker-set',
-        asUser: operatorPrincipalKey,
       params: { scopeKey, marker: '90071992547409930', expectedCurrent: null },
     });
     expect(requests[0].input).toContain(encodeURIComponent(scopeKey));
@@ -242,7 +232,7 @@ describe('Gateway wire mapping and behavior checks', () => {
     let marker: number | string = 41;
     let conflictNextWrite = true;
     const host: Public019Host = {
-      readMarkerRoute: 'gateway-configured-user',
+      readMarkerRoute: 'gateway-user-device',
       readMarkerOperatorPrincipalKey: operatorPrincipalKey,
       currentIdentity: () => ({ principalKey: operatorPrincipalKey, deviceId: 'fixture-device' }),
       fetch: async (input, init) => {
@@ -268,6 +258,7 @@ describe('Gateway wire mapping and behavior checks', () => {
         throw new Error(`Unexpected marker request: ${init.method} ${url.pathname}`);
       },
       openAuthenticatedChanges: async () => new Channel(),
+      openAuthenticatedHuman: async () => new Channel(),
     };
     const { transport } = createPublic019Transport({ baseUrl: 'https://gateway.example', host });
 
@@ -420,7 +411,7 @@ describe('Gateway wire mapping and behavior checks', () => {
     expect(runtime.getSnapshot().records.map((record) => record.kind))
       .toEqual(['transition', 'message', 'transition']);
     expect(candidate.changes.sent).toHaveLength(2);
-    expect(candidate.dispatches).toHaveLength(0);
+    expect(candidate.human.sent).toHaveLength(0);
     runtime.dispose();
   });
 
@@ -482,7 +473,7 @@ describe('Gateway wire mapping and behavior checks', () => {
       'https://host.example/api/sessions/s-public/tool-calls?limit=50&afterMessageSeqFromInclusive=9',
     ]);
     expect(runtime.getSnapshot().records.map((record) => record.id)).toEqual(['m_1']);
-    expect(candidate.dispatches).toHaveLength(0);
+    expect(candidate.human.sent).toHaveLength(0);
     runtime.dispose();
   });
 
@@ -566,7 +557,8 @@ describe('Gateway wire mapping and behavior checks', () => {
     expect(runtime.getSnapshot().records.map((record) => record.id)).toEqual(['m_1']);
     const clientMessageId = runtime.send('Still available while activity status is unavailable');
     expect(clientMessageId).toBeTruthy();
-    await vi.waitFor(() => expect(candidate.dispatches).toHaveLength(1));
+    await vi.waitFor(() => expect(candidate.human.sent).toHaveLength(1));
+    candidate.human.emit({ type: 'ack', id: clientMessageId });
     await vi.waitFor(() => expect(runtime.getSnapshot().sends[0]?.status).toBe('accepted'));
     expect(runtime.getSnapshot().status).toBe('ready');
     runtime.dispose();
@@ -593,7 +585,8 @@ describe('Gateway wire mapping and behavior checks', () => {
 
     const clientMessageId = runtime.send('Chat remains available without the optional event feed');
     expect(clientMessageId).toBeTruthy();
-    await vi.waitFor(() => expect(candidate.dispatches).toHaveLength(1));
+    await vi.waitFor(() => expect(candidate.human.sent).toHaveLength(1));
+    candidate.human.emit({ type: 'ack', id: clientMessageId });
     await vi.waitFor(() => expect(runtime.getSnapshot().sends[0]?.status).toBe('accepted'));
     expect(runtime.getSnapshot().status).toBe('ready');
     runtime.dispose();
@@ -654,7 +647,8 @@ describe('Gateway wire mapping and behavior checks', () => {
 
     const clientMessageId = runtime.send('Still available');
     expect(clientMessageId).toBeTruthy();
-    await vi.waitFor(() => expect(candidate.dispatches).toHaveLength(1));
+    await vi.waitFor(() => expect(candidate.human.sent).toHaveLength(1));
+    candidate.human.emit({ type: 'ack', id: clientMessageId });
     await vi.waitFor(() => expect(runtime.getSnapshot().sends[0]?.status).toBe('accepted'));
     expect(runtime.getSnapshot().status).toBe('ready');
     runtime.dispose();
@@ -668,7 +662,7 @@ describe('Gateway wire mapping and behavior checks', () => {
     expect(candidate.paths.some((path) => path.endsWith('/version'))).toBe(false);
     candidate.changes.emit({ type: 'subscription_ready', subscriptionId: `chat:${sessionKey}` });
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
-    expect(candidate.dispatches).toHaveLength(0);
+    expect(candidate.human.sent).toHaveLength(0);
     expect(candidate.paths).toContain('https://host.example/api/sessions/s-public');
     expect(candidate.paths).toContain('https://host.example/api/sessions/s-public/messages?limit=50&tail=true');
     runtime.dispose();
@@ -728,20 +722,12 @@ describe('Gateway wire mapping and behavior checks', () => {
     let releaseTail!: () => void;
     const tailGate = new Promise<void>((resolve) => { releaseTail = resolve; });
     const changes = new Channel();
-    const dispatches: Record<string, unknown>[] = [];
+    const human = new Channel();
     let sessionReads = 0;
     let tailStarted = false;
     const host: Public019Host = {
       currentIdentity: () => identity,
-      fetch: async (path, init = {}) => {
-        if (init.method === 'POST') {
-          const request = JSON.parse(String(init.body)) as Record<string, unknown>;
-          dispatches.push(request);
-          const params = request.params as Record<string, unknown>;
-          return new Response(JSON.stringify({ result: { outcome: 'recorded',
-            sessionKey: request.sessionKey, deviceId: params.deviceId,
-            clientMessageId: params.clientMessageId, messageId: 'message-live-session', turnSeq: 10 } }), { status: 200 });
-        }
+      fetch: async (path) => {
         let body: unknown;
         if (path.endsWith('/version')) body = version;
         else if (path.includes('/messages?')) {
@@ -770,6 +756,7 @@ describe('Gateway wire mapping and behavior checks', () => {
       tools.autoReady = true;
       return tools;
     },
+      openAuthenticatedHuman: async () => human,
     };
     const { transport, profile } = createPublic019Transport({ baseUrl: 'https://host.example', host });
     const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
@@ -789,25 +776,15 @@ describe('Gateway wire mapping and behavior checks', () => {
     expect(runtime.getSnapshot().session?.activity).toBe('running');
     expect(runtime.getSnapshot().records.map((record) => record.id)).toEqual(['m_1']);
     expect(runtime.send('one human message')).toBeTruthy();
-    await vi.waitFor(() => expect(dispatches).toHaveLength(1));
+    await vi.waitFor(() => expect(human.sent).toHaveLength(1));
+    human.emit({ type: 'ack', id: human.sent[0].id });
     await vi.waitFor(() => expect(runtime.getSnapshot().sends[0].status).toBe('accepted'));
-    expect(dispatches[0]).toMatchObject({ verb: 'post', asUser: 'person-1' });
+    expect(human.sent).toHaveLength(1);
     runtime.dispose();
   });
 
-  it('keeps history and the REST send pending across ordinary observational notices', async () => {
+  it('keeps history and human acknowledgement live across ordinary observational notices', async () => {
     const base = setup();
-    const readFetch = base.host.fetch;
-    const sent: Record<string, unknown>[] = [];
-    let resolveDispatch!: (response: Response) => void;
-    const pendingDispatch = new Promise<Response>(resolve => { resolveDispatch = resolve; });
-    base.host.fetch = async (input, init) => {
-      if (init.method === 'POST' && new URL(input).pathname === '/agent/dispatch') {
-        sent.push(JSON.parse(String(init.body)) as Record<string, unknown>);
-        return pendingDispatch;
-      }
-      return readFetch(input, init);
-    };
     let releaseTail!: () => void;
     const tailGate = new Promise<void>((resolve) => { releaseTail = resolve; });
     let readingTail = false;
@@ -831,20 +808,16 @@ describe('Gateway wire mapping and behavior checks', () => {
     expect(runtime.getSnapshot().session?.sessionKey).toBe(sessionKey);
     const id = runtime.send('one exact human post');
     expect(id).toBeTruthy();
-    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    await vi.waitFor(() => expect(base.human.sent).toHaveLength(1));
     expect(runtime.getSnapshot().sends[0]).toMatchObject({ clientMessageId: id, status: 'pending' });
     base.changes.emit(accepted(2));
     base.changes.emit({ type: 'heartbeat', seq: 2 });
     expect(runtime.getSnapshot().status).toBe('ready');
     expect(runtime.getSnapshot().sends[0].status).toBe('pending');
     expect(base.changes.closed).toBe(false);
-    const request = sent[0];
-    const params = request.params as Record<string, unknown>;
-    resolveDispatch(new Response(JSON.stringify({ result: { outcome: 'recorded',
-      sessionKey: request.sessionKey, deviceId: params.deviceId, clientMessageId: params.clientMessageId,
-      messageId: 'm_rest_ack', turnSeq: 11 } }), { status: 200 }));
+    base.human.emit({ type: 'ack', id });
     await vi.waitFor(() => expect(runtime.getSnapshot().sends[0].status).toBe('accepted'));
-    expect(runtime.getSnapshot().sends[0].acceptedMessageId).toBe('m_rest_ack');
+    expect(base.human.sent).toHaveLength(1);
     runtime.dispose();
   });
 
@@ -1338,95 +1311,173 @@ describe('Gateway wire mapping and behavior checks', () => {
     }
   });
 
-  it('posts the §5.1 body and correlates recorded or duplicate results by message ID', async () => {
-    const candidate = setup();
-    const submission = { sessionKey, deviceId: 'device-1', clientMessageId: 'c_1', content: 'hello',
-      attachments: [{ assetId: 'asset_fixture', mimeType: 'image/png', filename: 'plot.png', size: 12 }] };
-    const submitted = vi.fn();
-    await expect(candidate.transport.sendHuman(submission, new AbortController().signal, submitted))
-      .resolves.toEqual({ outcome: 'accepted', messageId: 'message-c_1' });
-    expect(submitted).toHaveBeenCalledOnce();
-    expect(candidate.dispatches[0]).toEqual({ verb: 'post', asUser: 'person-1', sessionKey,
-      params: { clientMessageId: 'c_1', deviceId: 'device-1', content: 'hello', attachments: submission.attachments } });
+  it('sends human /ws frames with the same client ID and distinguishes ack, refusal and dropped sockets', async () => {
+    const accepted = setup();
+    const submission = { sessionKey, deviceId: 'device-1', clientMessageId: 'c_1', content: 'hello' };
+    const first = accepted.transport.sendHuman(submission, new AbortController().signal);
+    await vi.waitFor(() => expect(accepted.human.sent).toHaveLength(1));
+    expect(accepted.human.sent[0]).toEqual({ type: 'message', id: 'c_1', sessionKey, content: 'hello' });
+    accepted.human.emit({ type: 'ack', id: 'c_other' });
+    accepted.human.emit({ type: 'ack', id: 'c_1' });
+    expect(await first).toEqual({ outcome: 'accepted' });
 
-    candidate.dispatchResponses.push(new Response(JSON.stringify({ result: { outcome: 'duplicate',
-      sessionKey, deviceId: 'device-1', clientMessageId: 'c_1', messageId: 'message-original', turnSeq: 8 } }),
-    { status: 200 }));
-    await expect(candidate.transport.sendHuman(submission, new AbortController().signal))
-      .resolves.toEqual({ outcome: 'accepted', messageId: 'message-original' });
-    expect(candidate.dispatches).toHaveLength(2);
-    expect(candidate.dispatches[1]).toEqual(candidate.dispatches[0]);
-  });
-
-  it('keeps dispatch error codes and treats malformed success bodies as uncertain', async () => {
     const refused = setup();
-    refused.dispatchResponses.push(new Response(JSON.stringify({ error: { code: 'payload_too_large' } }),
-      { status: 400 }));
-    await expect(refused.transport.sendHuman({ sessionKey, deviceId: 'device-1',
-      clientMessageId: 'c_large', content: 'complete prompt' }, new AbortController().signal))
-      .resolves.toEqual({ outcome: 'refused', reason: 'payload_too_large' });
+    const second = refused.transport.sendHuman(submission, new AbortController().signal);
+    await vi.waitFor(() => expect(refused.human.sent).toHaveLength(1));
+    refused.human.emit({ type: 'error', code: 'invalid_message', messageId: 'c_1' });
+    expect(await second).toEqual({ outcome: 'refused', reason: 'invalid_message' });
 
     const uncertain = setup();
+    const third = uncertain.transport.sendHuman(submission, new AbortController().signal);
+    await vi.waitFor(() => expect(uncertain.human.sent).toHaveLength(1));
+    uncertain.human.disconnect({ code: 1006 });
+    expect(await third).toEqual({
+      outcome: 'uncertain', reason: 'connection-closed-before-acknowledgement',
+    });
+  });
+
+  it('keeps waiting for a usable send acknowledgement after a malformed response frame', async () => {
+    const candidate = setup();
     const log = vi.spyOn(console, 'error').mockImplementation(() => {});
-    uncertain.dispatchResponses.push(new Response(JSON.stringify({ result: { outcome: 'skipped' } }), { status: 200 }));
-    await expect(uncertain.transport.sendHuman({ sessionKey, deviceId: 'device-1',
-      clientMessageId: 'c_unclear', content: 'uncertain prompt' }, new AbortController().signal))
-      .resolves.toEqual({ outcome: 'uncertain', reason: 'invalid-send-response' });
+    const pending = candidate.transport.sendHuman({ sessionKey, deviceId: 'device-1',
+      clientMessageId: 'c_mixed_response', content: 'hello' }, new AbortController().signal);
+    await vi.waitFor(() => expect(candidate.human.sent).toHaveLength(1));
+
+    candidate.human.emit(null);
+    candidate.human.emit({ type: 'ack', id: 'c_mixed_response' });
+
+    await expect(pending).resolves.toEqual({ outcome: 'accepted' });
     expect(log).toHaveBeenCalledWith('[Chat] Gateway data incompatibility',
       expect.objectContaining({ site: 'human send response' }));
     log.mockRestore();
   });
 
-  it('reports submission only after starting REST and does not send without a configured Chat user', async () => {
+  it('sends the complete prompt once and maps a Gateway size refusal by matching ID', async () => {
+    const content = 'Keep this complete prompt unchanged.';
+    const submission = { sessionKey, deviceId: 'device-1', clientMessageId: 'c_size_refusal', content };
+
+    const refused = setup();
+    const refusedResult = refused.transport.sendHuman(submission, new AbortController().signal);
+    await vi.waitFor(() => expect(refused.human.sent).toHaveLength(1));
+    expect(refused.human.sent[0]).toEqual({ type: 'message', id: 'c_size_refusal', sessionKey, content });
+    refused.human.emit({ type: 'error', code: 'payload_too_large', messageId: 'c_size_refusal' });
+    await expect(refusedResult).resolves.toEqual({ outcome: 'refused', reason: 'payload_too_large' });
+    expect(refused.human.sent).toHaveLength(1);
+  });
+
+  it('maps a too-large WebSocket close to a size refusal without retrying the send', async () => {
     const candidate = setup();
-    const submitted = vi.fn();
+    const result = candidate.transport.sendHuman({ sessionKey, deviceId: 'device-1',
+      clientMessageId: 'c_frame_too_large', content: 'Keep the complete prompt.' }, new AbortController().signal);
+    await vi.waitFor(() => expect(candidate.human.sent).toHaveLength(1));
+
+    candidate.human.disconnect({ code: 1009 });
+    await expect(result).resolves.toEqual({ outcome: 'refused', reason: 'payload_too_large' });
+    expect(candidate.human.sent).toHaveLength(1);
+  });
+
+  it('refuses a malformed client message ID separately before opening the human socket', async () => {
+    const candidate = setup();
+    const open = vi.spyOn(candidate.host, 'openAuthenticatedHuman');
+
     await expect(candidate.transport.sendHuman({ sessionKey, deviceId: 'device-1',
       clientMessageId: 'invalid', content: 'hello' }, new AbortController().signal))
       .resolves.toEqual({ outcome: 'refused', reason: 'invalid_message_id' });
-    expect(candidate.dispatches).toHaveLength(0);
+    expect(open).not.toHaveBeenCalled();
+    expect(candidate.human.sent).toHaveLength(0);
+  });
 
-    const cancelled = new AbortController();
-    cancelled.abort();
-    await candidate.transport.sendHuman({ sessionKey, deviceId: 'device-1',
-      clientMessageId: 'c_cancel', content: 'hello' }, cancelled.signal, submitted);
-    expect(candidate.dispatches).toHaveLength(0);
+  it('reports frame submission only after sending, never just from opening a connection', async () => {
+    const candidate = setup();
+    let open!: (channel: Public019Channel) => void;
+    candidate.host.openAuthenticatedHuman = () => new Promise(resolve => { open = resolve; });
+    const submitted = vi.fn();
+    const controller = new AbortController();
+    const pending = candidate.transport.sendHuman({ sessionKey, deviceId: 'device-1',
+      clientMessageId: 'c_frame', content: 'hello' }, controller.signal, submitted);
     expect(submitted).not.toHaveBeenCalled();
+    open(candidate.human);
+    await vi.waitFor(() => expect(submitted).toHaveBeenCalledOnce());
+    expect(candidate.human.sent).toHaveLength(1);
+    candidate.human.emit({ type: 'ack', id: 'c_frame' });
+    expect(await pending).toEqual({ outcome: 'accepted' });
 
-    const unconfigured = setup(undefined, version, [item], [], 200, undefined, undefined,
-      { principalKey: '', deviceId: 'device-1' });
-    expect(await unconfigured.transport.sendHuman({ sessionKey, deviceId: 'device-1',
-      clientMessageId: 'c_unconfigured', content: 'hello' }, new AbortController().signal))
-      .toEqual({ outcome: 'refused', reason: 'chat_service_unconfigured' });
-    expect(unconfigured.dispatches).toHaveLength(0);
-    expect(unconfigured.transport.writeReadMarker).toBeUndefined();
+    const cancelled = setup();
+    cancelled.host.openAuthenticatedHuman = () => new Promise(resolve => { open = resolve; });
+    const beforeConnect = new AbortController();
+    const neverSubmitted = vi.fn();
+    const aborted = cancelled.transport.sendHuman({ sessionKey, deviceId: 'device-1',
+      clientMessageId: 'c_cancel', content: 'hello' }, beforeConnect.signal, neverSubmitted);
+    beforeConnect.abort();
+    open(cancelled.human);
+    await aborted;
+    expect(neverSubmitted).not.toHaveBeenCalled();
+    expect(cancelled.human.sent).toEqual([]);
   });
 
-  it('does not send if the configured principal changes before dispatch', async () => {
-    let reads = 0;
+  it('keeps waiting for a human acknowledgement beyond the general response timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      const candidate = setup();
+      const submission = { sessionKey, deviceId: 'device-1', clientMessageId: 'c_late', content: 'slow acknowledgement' };
+      const pending = candidate.transport.sendHuman(submission, new AbortController().signal);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(candidate.human.sent).toEqual([{ type: 'message', id: 'c_late', sessionKey, content: 'slow acknowledgement' }]);
+      let settled = false;
+      void pending.then(() => { settled = true; });
+
+      await vi.advanceTimersByTimeAsync(16_000);
+      expect(settled).toBe(false);
+      expect(candidate.human.sent).toHaveLength(1);
+      candidate.human.emit({ type: 'ack', id: 'c_late' });
+      await expect(pending).resolves.toEqual({ outcome: 'accepted' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reports a human socket that cannot be opened as unreachable before posting', async () => {
     const candidate = setup();
-    candidate.host.currentIdentity = () => ++reads === 1 ? identity
-      : { principalKey: 'other-principal', deviceId: 'device-1' };
+    candidate.host.openAuthenticatedHuman = async () => { throw new Error('socket unavailable'); };
     await expect(candidate.transport.sendHuman({ sessionKey, deviceId: 'device-1',
-      clientMessageId: 'c_changed', content: 'hello' }, new AbortController().signal))
-      .resolves.toMatchObject({ outcome: 'refused' });
-    expect(candidate.dispatches).toHaveLength(0);
+      clientMessageId: 'c_offline', content: 'offline message' }, new AbortController().signal))
+      .resolves.toEqual({ outcome: 'unreachable', reason: 'Not connected to the server.' });
+    expect(candidate.human.sent).toHaveLength(0);
   });
 
-  it('returns retryable for a network failure without changing send identity', async () => {
-    const candidate = setup();
-    const requests: { input: string; body: string }[] = [];
-    candidate.host.fetch = async (input, init) => {
-      requests.push({ input, body: String(init.body) });
-      throw new Error('network unavailable');
+  it('does not post when the host principal changes while opening the human socket', async () => {
+    const channel = new Channel();
+    let principal = 'person-1';
+    const host: Public019Host = {
+      currentIdentity: () => ({ principalKey: principal, deviceId: 'device-1' }),
+      fetch: async () => new Response(JSON.stringify(version), { status: 200 }),
+      openAuthenticatedChanges: async () => new Channel(),
+      openAuthenticatedHuman: async () => { principal = 'person-2'; return channel; },
     };
-    const submission = { sessionKey, deviceId: 'device-1', clientMessageId: 'c_retry', content: 'same text' };
-    await expect(candidate.transport.sendHuman(submission, new AbortController().signal))
-      .resolves.toMatchObject({ outcome: 'retryable' });
-    expect(requests).toHaveLength(1);
-    expect(JSON.parse(requests[0].body)).toMatchObject({
-      verb: 'post', asUser: 'person-1', sessionKey,
-      params: { clientMessageId: 'c_retry', deviceId: 'device-1', content: 'same text', attachments: [] },
-    });
+    const { transport } = createPublic019Transport({ baseUrl: 'https://host.example', host });
+    expect(await transport.sendHuman({ sessionKey, deviceId: 'device-1',
+      clientMessageId: 'c_1', content: 'hello' }, new AbortController().signal))
+      .toMatchObject({ outcome: 'refused' });
+    expect(channel.sent).toEqual([]);
+    expect(channel.closed).toBe(true);
+  });
+
+  it('preserves typed human authentication rejection without posting a frame', async () => {
+    const sendSpy = vi.spyOn(Channel.prototype, 'send');
+    const rejection = new AuthorizationError('device revoked');
+    const host: Public019Host = {
+      currentIdentity: () => identity,
+      fetch: async () => new Response(JSON.stringify(version), { status: 200 }),
+      openAuthenticatedChanges: async () => new Channel(),
+      openAuthenticatedHuman: async () => { throw rejection; },
+    };
+    const { transport } = createPublic019Transport({ baseUrl: 'https://host.example', host });
+    await expect(transport.sendHuman({ sessionKey, deviceId: 'device-1',
+      clientMessageId: 'c_1', content: 'hello' }, new AbortController().signal))
+      .rejects.toBe(rejection);
+    expect(sendSpy).not.toHaveBeenCalled();
+    sendSpy.mockRestore();
   });
 });
 
@@ -1485,6 +1536,7 @@ describe('tool-call contract and transition category', () => {
           page: { oldestCursor: older ? 'end' : 'opaque-next', hasMoreBefore: !older } }));
       },
       openAuthenticatedChanges: async () => { const channel = new Channel(); channel.autoReady = true; channels.push(channel); return channel; },
+      openAuthenticatedHuman: async () => new Channel(),
     };
     const { transport } = createPublic019Transport({ baseUrl: 'https://host.example', host });
     const controller = new AbortController();
@@ -1536,6 +1588,7 @@ describe('tool-call contract and transition category', () => {
       openAuthenticatedChanges: async () => {
         const channel = new Channel(); channel.autoReady = true; channels.push(channel); return channel;
       },
+      openAuthenticatedHuman: async () => new Channel(),
     };
     const { transport } = createPublic019Transport({ baseUrl: 'https://host.example', host });
     const callbacks = { onNotice: vi.fn(), onDoubt: vi.fn() };

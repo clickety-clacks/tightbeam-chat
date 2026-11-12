@@ -9,6 +9,7 @@ import { createChatServer } from '../server/chat-server.mjs';
 import { createPublic019Transport } from '../src/public019';
 
 const TOKEN = 'fixture-operator-credential';
+const MARKER_DEVICE_TOKEN = 'fixture-device-credential';
 const SESSION = 'agent:example:chat?tab=1';
 const LINKED_SESSION = 'agent:example:linked-chat';
 const PRINCIPAL = 'example-user';
@@ -84,6 +85,12 @@ async function writeGatewayDescriptor(baseDir, gatewayOrigin, token, { advertise
 async function writeGatewayMap(root, gateways) {
   const filename = path.join(root, 'gateway-map.json');
   await fs.writeFile(filename, JSON.stringify({ version: 1, gateways }), { mode: 0o600 });
+  return filename;
+}
+
+async function writePrivateCredential(root, token) {
+  const filename = path.join(root, 'read-marker-device-credential');
+  await fs.writeFile(filename, token, { mode: 0o600 });
   return filename;
 }
 
@@ -275,10 +282,8 @@ describe('private direct-entry Chat service bridge', () => {
     const configResponse = await fetch(`${chatOrigin}/chat-config.json`);
     const config = await configResponse.json();
     expect(config).toMatchObject({ gateway: gatewayOrigin, sessionKey: SESSION, principalKey: PRINCIPAL });
-    const expectedDeviceId = 'chat_' + crypto.createHash('sha256')
-      .update(gatewayOrigin + '\0' + PRINCIPAL + '\0' + SESSION).digest('hex').slice(0, 24);
-    expect(config.deviceId).toBe(expectedDeviceId);
-    expect(config.readMarkerRoute).toBe('gateway-configured-user');
+    expect(config.deviceId).toMatch(/^chat_[a-f0-9]{24}$/);
+    expect(config.readMarkerRoute).toBeUndefined();
     expect(JSON.stringify(config)).not.toContain(TOKEN);
 
     const chatReleaseResponse = await fetch(`${chatOrigin}/__chat/version`);
@@ -362,9 +367,7 @@ describe('private direct-entry Chat service bridge', () => {
     expect(seen.map((row) => row.authorization)).toEqual([
       undefined, `Bearer ${TOKEN}`, `Bearer ${TOKEN}`, `Bearer ${TOKEN}`, `Bearer ${TOKEN}`, `Bearer ${TOKEN}`, `Bearer ${TOKEN}`, `Bearer ${TOKEN}`, `Bearer ${TOKEN}`,
     ]);
-    expect(seen[0].cliVersion).toBeUndefined();
-    expect(seen.every((row, index) => row.body === '' &&
-      (index === 0 ? row.cliVersion === undefined : row.cliVersion === '0.1.11'))).toBe(true);
+    expect(seen.every((row) => !row.cliVersion && row.body === '')).toBe(true);
 
     const wrongSession = await fetch(`${chatOrigin}/__chat/api/sessions/agent%3Aother${selectedGateway}`, { headers: { origin: chatOrigin } });
     expect(wrongSession.status).toBe(404);
@@ -404,30 +407,15 @@ describe('private direct-entry Chat service bridge', () => {
     expect(seen).toHaveLength(13);
   });
 
-  it('refreshes the Gateway CLI version after upgrades for sends and marker writes', async () => {
+  it('keeps the configured operator credential private and uses it only for read-marker-set dispatch', async () => {
     const scopeKey = 'agent:example:chat with spaces:session-read-position';
     const seen = [];
-    let gatewayVersion = '0.1.11';
-    let failVersionLookup = false;
     const gateway = http.createServer(async (request, response) => {
       const chunks = [];
       for await (const chunk of request) chunks.push(Buffer.from(chunk));
       const body = Buffer.concat(chunks).toString('utf8');
-      seen.push({ method: request.method, url: request.url, authorization: request.headers.authorization,
-        cliVersion: request.headers['x-tightbeam-cli-version'], body });
+      seen.push({ method: request.method, url: request.url, authorization: request.headers.authorization, body });
       response.setHeader('content-type', 'application/json');
-      if (request.url === '/version') {
-        if (failVersionLookup) {
-          response.writeHead(503).end(JSON.stringify({ error: { code: 'temporarily_unavailable' } }));
-          return;
-        }
-        response.writeHead(200).end(JSON.stringify({ version: gatewayVersion, protocolVersion: 1 }));
-        return;
-      }
-      if (request.headers['x-tightbeam-cli-version'] !== gatewayVersion) {
-        response.writeHead(426).end(JSON.stringify({ error: { code: 'incompatible_cli' } }));
-        return;
-      }
       if (request.method === 'GET' && request.url ===
           `/api/read-markers/${encodeURIComponent(scopeKey)}?asUser=${encodeURIComponent(OPERATOR_PRINCIPAL)}`) {
         response.writeHead(200).end(JSON.stringify({ schemaVersion: 1, resource: 'read markers',
@@ -436,12 +424,6 @@ describe('private direct-entry Chat service bridge', () => {
       }
       if (request.method === 'POST' && request.url === '/agent/dispatch') {
         const value = JSON.parse(body);
-        if (value.verb === 'post') {
-          response.writeHead(200).end(JSON.stringify({ result: { outcome: 'recorded',
-            sessionKey: value.sessionKey, deviceId: value.params.deviceId,
-            clientMessageId: value.params.clientMessageId, messageId: 'message-recorded', turnSeq: 22 } }));
-          return;
-        }
         if (value.verb !== 'read-marker-set') {
           response.writeHead(404).end(JSON.stringify({ error: { code: 'not_found' } }));
           return;
@@ -461,6 +443,7 @@ describe('private direct-entry Chat service bridge', () => {
     const chatOrigin = `http://127.0.0.1:${chatPort}`;
     const { root, publicDir } = await temporaryDirectory();
     const gatewayBaseDir = await writeGatewayDescriptor(path.join(root, 'gateway-base'), gatewayOrigin, TOKEN);
+    const markerCredentialFile = await writePrivateCredential(root, MARKER_DEVICE_TOKEN);
     const chat = createChatServer({
       rootDir: root,
       publicDir,
@@ -470,6 +453,7 @@ describe('private direct-entry Chat service bridge', () => {
         CHAT_DEFAULT_GATEWAY_ORIGIN: gatewayOrigin,
         CHAT_DEFAULT_SESSION_KEY: scopeKey.slice(0, -':session-read-position'.length),
         CHAT_DEFAULT_PRINCIPAL_KEY: OPERATOR_PRINCIPAL,
+        CHAT_READ_MARKER_DEVICE_CREDENTIAL_FILE: markerCredentialFile,
         TIGHTBEAM_BASE_DIR: gatewayBaseDir,
       },
     });
@@ -477,7 +461,9 @@ describe('private direct-entry Chat service bridge', () => {
 
     const configResponse = await fetch(`${chatOrigin}/chat-config.json`);
     const configText = await configResponse.text();
-    expect(JSON.parse(configText)).toMatchObject({ readMarkerRoute: 'gateway-configured-user', principalKey: OPERATOR_PRINCIPAL });
+    expect(JSON.parse(configText)).toMatchObject({ readMarkerRoute: 'gateway-user-device', principalKey: OPERATOR_PRINCIPAL });
+    expect(configText).not.toContain(MARKER_DEVICE_TOKEN);
+    expect(configText).not.toContain(markerCredentialFile);
 
     const encodedScopeKey = encodeURIComponent(scopeKey);
     const markerRead = await fetch(`${chatOrigin}/__chat/api/read-markers/${encodedScopeKey}`, {
@@ -486,9 +472,7 @@ describe('private direct-entry Chat service bridge', () => {
     expect(markerRead.status).toBe(200);
     expect((await markerRead.json()).item).toEqual({ userId: OPERATOR_PRINCIPAL, scopeKey, marker: null });
 
-    gatewayVersion = '0.1.12';
-    const initialSet = { verb: 'read-marker-set', asUser: 'client-supplied',
-      params: { scopeKey, marker: '52', expectedCurrent: null } };
+    const initialSet = { verb: 'read-marker-set', params: { scopeKey, marker: '52', expectedCurrent: null } };
     const setResponse = await fetch(`${chatOrigin}/__chat/agent/dispatch`, {
       method: 'POST',
       headers: { origin: chatOrigin, 'content-type': 'application/json' },
@@ -496,8 +480,7 @@ describe('private direct-entry Chat service bridge', () => {
     });
     expect(setResponse.status).toBe(200);
 
-    const staleSet = { verb: 'read-marker-set', asUser: 'client-supplied',
-      params: { scopeKey, marker: '53', expectedCurrent: 'stale' } };
+    const staleSet = { verb: 'read-marker-set', params: { scopeKey, marker: '53', expectedCurrent: 'stale' } };
     const conflictResponse = await fetch(`${chatOrigin}/__chat/agent/dispatch`, {
       method: 'POST',
       headers: { origin: chatOrigin, 'content-type': 'application/json' },
@@ -513,73 +496,33 @@ describe('private direct-entry Chat service bridge', () => {
     });
     expect(clearResponse.status).toBe(404);
 
-    gatewayVersion = '0.1.13';
-    const attachments = [{ assetId: 'asset_r20', mimeType: 'image/png', filename: 'image.png', size: 4 }];
-    const postRequest = { verb: 'post', asUser: 'client-supplied', sessionKey: SESSION,
-      params: { clientMessageId: 'c_chat_send', deviceId: 'chat_fixture', content: 'hello', attachments } };
-    const postResponse = await fetch(`${chatOrigin}/__chat/agent/dispatch`, {
-      method: 'POST',
-      headers: { origin: chatOrigin, 'content-type': 'application/json' },
-      body: JSON.stringify(postRequest),
-    });
-    expect(postResponse.status).toBe(200);
-    expect(await postResponse.json()).toMatchObject({ result: { outcome: 'recorded', messageId: 'message-recorded' } });
-
-    gatewayVersion = '0.1.14';
-    failVersionLookup = true;
-    const refusedSet = { verb: 'read-marker-set', asUser: 'client-supplied',
-      params: { scopeKey, marker: '54', expectedCurrent: null } };
-    const refusedResponse = await fetch(`${chatOrigin}/__chat/agent/dispatch`, {
-      method: 'POST',
-      headers: { origin: chatOrigin, 'content-type': 'application/json' },
-      body: JSON.stringify(refusedSet),
-    });
-    expect(refusedResponse.status).toBe(426);
-    expect(await refusedResponse.json()).toEqual({ error: { code: 'incompatible_cli' } });
-
-    const versionRequest = () => ({
-      method: 'GET', url: '/version', authorization: undefined, cliVersion: undefined, body: '',
-    });
-    const dispatchRequest = (cliVersion, value) => ({
-      method: 'POST', url: '/agent/dispatch', authorization: `Bearer ${TOKEN}`, cliVersion,
-      body: JSON.stringify({ ...value, asUser: OPERATOR_PRINCIPAL }),
-    });
     expect(seen).toEqual([
-      versionRequest(),
       {
         method: 'GET',
         url: `/api/read-markers/${encodedScopeKey}?asUser=${encodeURIComponent(OPERATOR_PRINCIPAL)}`,
         authorization: `Bearer ${TOKEN}`,
-        cliVersion: '0.1.11',
         body: '',
       },
-      dispatchRequest('0.1.11', initialSet),
-      versionRequest(),
-      dispatchRequest('0.1.12', initialSet),
-      dispatchRequest('0.1.12', staleSet),
-      dispatchRequest('0.1.12', postRequest),
-      versionRequest(),
-      dispatchRequest('0.1.13', postRequest),
-      dispatchRequest('0.1.13', refusedSet),
-      versionRequest(),
+      {
+        method: 'POST', url: '/agent/dispatch', authorization: `Bearer ${MARKER_DEVICE_TOKEN}`,
+        body: JSON.stringify(initialSet),
+      },
+      {
+        method: 'POST', url: '/agent/dispatch', authorization: `Bearer ${MARKER_DEVICE_TOKEN}`,
+        body: JSON.stringify(staleSet),
+      },
     ]);
-    const forwardedPost = JSON.stringify({ ...postRequest, asUser: OPERATOR_PRINCIPAL });
-    expect(seen.filter((row) => row.url === '/agent/dispatch' && JSON.parse(row.body).verb === 'post')
-      .map((row) => row.body)).toEqual([forwardedPost, forwardedPost]);
   });
 
-  it('sends neither post nor marker writes when the configured Chat user is unset', async () => {
-    const seen = [];
-    const gateway = http.createServer(async (request, response) => {
-      seen.push({ method: request.method, url: request.url });
-      response.writeHead(404).end();
-    });
+  it('leaves read-marker access unsupported when the configured operator principal is unset', async () => {
+    const gateway = http.createServer((_request, response) => response.writeHead(404).end());
     const gatewayPort = await listen(gateway);
     const gatewayOrigin = `http://127.0.0.1:${gatewayPort}`;
     const chatPort = await unusedPort();
     const chatOrigin = `http://127.0.0.1:${chatPort}`;
     const { root, publicDir } = await temporaryDirectory();
     const gatewayBaseDir = await writeGatewayDescriptor(path.join(root, 'gateway-base'), gatewayOrigin, TOKEN);
+    const markerCredentialFile = await writePrivateCredential(root, MARKER_DEVICE_TOKEN);
     const chat = createChatServer({
       rootDir: root,
       publicDir,
@@ -588,6 +531,7 @@ describe('private direct-entry Chat service bridge', () => {
         CHAT_PUBLIC_ORIGIN: chatOrigin,
         CHAT_DEFAULT_GATEWAY_ORIGIN: gatewayOrigin,
         CHAT_DEFAULT_SESSION_KEY: SESSION,
+        CHAT_READ_MARKER_DEVICE_CREDENTIAL_FILE: markerCredentialFile,
         TIGHTBEAM_BASE_DIR: gatewayBaseDir,
       },
     });
@@ -607,15 +551,7 @@ describe('private direct-entry Chat service bridge', () => {
       headers: { origin: chatOrigin, 'content-type': 'application/json' },
       body: JSON.stringify({ verb: 'read-marker-set', params: { scopeKey: SESSION, marker: '9' } }),
     });
-    expect(markerWrite.status).toBe(503);
-    const post = await fetch(`${chatOrigin}/__chat/agent/dispatch`, {
-      method: 'POST',
-      headers: { origin: chatOrigin, 'content-type': 'application/json' },
-      body: JSON.stringify({ verb: 'post', sessionKey: SESSION,
-        params: { clientMessageId: 'c_unconfigured', deviceId: 'chat_fixture', content: 'hello', attachments: [] } }),
-    });
-    expect(post.status).toBe(503);
-    expect(seen).toEqual([]);
+    expect(markerWrite.status).toBe(404);
   });
 
   it('composes the canonical selected-history route with the real decoder across an agent reset', async () => {
@@ -713,6 +649,7 @@ describe('private direct-entry Chat service bridge', () => {
         return reply;
       },
       openAuthenticatedChanges: async () => { throw new Error('No socket needed for this history composition test.'); },
+      openAuthenticatedHuman: async () => { throw new Error('No socket needed for this history composition test.'); },
     };
     const { transport, profile } = createPublic019Transport({
       baseUrl: `${chatOrigin}/__chat`, host,
@@ -947,13 +884,13 @@ describe('private direct-entry Chat service bridge', () => {
     expect(observed).toEqual([]);
   });
 
-  it('keeps the changes feed alive and refuses the obsolete human socket route', async () => {
+  it('sends a masked control ping on the idle changes feed without pinging the human socket', async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
     const observed = [];
     const upstreamConnections = new Map();
     const gateway = http.createServer();
     gateway.on('upgrade', (request, socket) => {
-      const kind = 'changes';
+      const kind = request.url.startsWith('/ws/changes') ? 'changes' : 'human';
       observed.push({ kind, path: request.url, origin: request.headers.origin });
       socket.on('end', () => socket.end());
       socket.write(`HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: ${websocketHandshakeAccept(request.headers['sec-websocket-key'])}\r\n\r\n`);
@@ -1008,11 +945,6 @@ describe('private direct-entry Chat service bridge', () => {
           clearTimeout(timer);
           resolve({ response, socket, head });
         });
-        request.once('response', (response) => {
-          clearTimeout(timer);
-          response.resume();
-          resolve({ response, socket: response.socket, head: Buffer.alloc(0) });
-        });
         request.once('error', (error) => { clearTimeout(timer); reject(error); });
         request.end();
       });
@@ -1050,15 +982,30 @@ describe('private direct-entry Chat service bridge', () => {
     expect(vi.getTimerCount()).toBe(0);
 
     const human = await connect(`/__chat/ws?sessionKey=${encodeURIComponent(LINKED_SESSION)}&gateway=${encodeURIComponent(linkedAlias)}`);
-    expect(human.response.statusCode).toBe(404);
-    expect(observed.some((row) => row.path === '/ws')).toBe(false);
+    expect(human.response.statusCode).toBe(101);
+    const humanAuth = (await nextFrame(human.socket, human.head)).value;
+    const humanAuthRecord = observed.find((row) => row.kind === 'human' && row.auth);
+    expect(humanAuth).toMatchObject({ type: 'auth_result', success: true, userId: PRINCIPAL,
+      sessionId: `conn_${humanAuthRecord.auth.deviceId}` });
+    expect((await nextFrame(human.socket)).value).toEqual({ type: 'sync_complete' });
+    const humanUpstream = upstreamConnections.get('human');
+    expect(humanUpstream).toBeDefined();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(humanUpstream.bytes).toHaveLength(0);
+    const humanClosed = new Promise((resolve) => humanUpstream.socket.once('close', resolve));
+    human.socket.destroy();
+    await humanClosed;
 
     const changeAuth = observed.find((row) => row.kind === 'changes' && row.auth);
     expect(observed.filter((row) => row.auth).every((row) => row.masked)).toBe(true);
     expect(changeAuth.path).toBe('/ws/changes?protocolVersion=2');
     expect(changeAuth.origin).toBe(chatOrigin);
     expect(changeAuth.auth).toEqual({ type: 'auth', token: TOKEN, asUser: PRINCIPAL, sessionKey: LINKED_SESSION });
-    expect(observed.filter((row) => row.auth)).toHaveLength(1);
+    expect(humanAuthRecord.path).toBe('/ws');
+    expect(humanAuthRecord.auth).toMatchObject({
+      type: 'auth', token: TOKEN, asUser: PRINCIPAL, sessionKey: LINKED_SESSION, subscriptions: ['chat'],
+    });
+    expect(humanAuthRecord.auth.deviceId).toMatch(/^chat_[a-f0-9]{24}$/);
   });
 
   it('does not accept an environment token when the provisioned descriptor is missing or mismatched', async () => {
@@ -1105,17 +1052,12 @@ describe('attachment byte routes', () => {
   it('uploads and retrieves original bytes through the private proxy and maps the complete ordered human post', async () => {
     const assets = new Map();
     const observations = [];
-    const dispatches = [];
     let rejectUpload = false;
     let mismatch;
     const gateway = http.createServer(async (request, response) => {
       const url = new URL(request.url, 'http://gateway.invalid');
-      observations.push({ path: url.pathname, actingUser: url.searchParams.get('asUser'), auth: request.headers.authorization,
-        cliVersion: request.headers['x-tightbeam-cli-version'] });
-      if (url.pathname === '/version') {
-        response.writeHead(200, { 'content-type': 'application/json' });
-        response.end(JSON.stringify({ version: '0.1.11', protocolVersion: 1 }));
-      } else if (url.pathname === '/upload') {
+      observations.push({ path: url.pathname, actingUser: url.searchParams.get('asUser'), auth: request.headers.authorization });
+      if (url.pathname === '/upload') {
         if (rejectUpload) { request.resume(); response.writeHead(413, { 'content-type': 'application/json' }).end(JSON.stringify({ error: 'payload_too_large' })); return; }
         const chunks = []; for await (const chunk of request) chunks.push(chunk);
         const body = Buffer.concat(chunks);
@@ -1132,14 +1074,6 @@ describe('attachment byte routes', () => {
         if (!asset) { response.writeHead(404).end(); return; }
         response.writeHead(200, { 'content-type': asset.type, 'content-length': asset.bytes.length });
         response.end(asset.bytes);
-      } else if (url.pathname === '/agent/dispatch' && request.method === 'POST') {
-        const chunks = []; for await (const chunk of request) chunks.push(chunk);
-        const value = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-        dispatches.push(value);
-        response.writeHead(200, { 'content-type': 'application/json' });
-        response.end(JSON.stringify({ result: { outcome: 'recorded', sessionKey: value.sessionKey,
-          deviceId: value.params.deviceId, clientMessageId: value.params.clientMessageId,
-          messageId: 'message-with-attachments', turnSeq: 12 } }));
       } else response.writeHead(404).end();
     });
     const gatewayOrigin = `http://127.0.0.1:${await listen(gateway)}`;
@@ -1151,10 +1085,14 @@ describe('attachment byte routes', () => {
       environment: { CHAT_PUBLIC_ORIGIN: origin, CHAT_DEFAULT_GATEWAY_ORIGIN: gatewayOrigin,
         CHAT_DEFAULT_SESSION_KEY: SESSION, CHAT_DEFAULT_PRINCIPAL_KEY: PRINCIPAL, TIGHTBEAM_BASE_DIR: base } });
     await listen(chat, port);
+    const frames = [];
+    let onFrame;
     const host = {
       currentIdentity: () => ({ principalKey: PRINCIPAL, deviceId: 'device' }),
       fetch: (url, init) => fetch(url, { ...init, headers: { ...init.headers, origin } }),
       openAuthenticatedChanges: async () => { throw new Error('not used'); },
+      openAuthenticatedHuman: async () => ({ close() {}, listen(fn) { onFrame = fn; return () => {}; },
+        send(frame) { frames.push(frame); onFrame({ type: 'ack', id: frame.id }); } }),
     };
     const { transport } = createPublic019Transport({ baseUrl: origin + '/__chat', host });
     const original = [new Uint8Array([255]), Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aOLsAAAAASUVORK5CYII=', 'base64'),
@@ -1174,12 +1112,9 @@ describe('attachment byte routes', () => {
     }
     const result = await transport.sendHuman({ sessionKey: SESSION, deviceId: 'device', clientMessageId: 'c_assets',
       content: '', attachments: refs }, new AbortController().signal);
-    expect(result).toEqual({ outcome: 'accepted', messageId: 'message-with-attachments' });
-    expect(dispatches).toEqual([{ verb: 'post', asUser: PRINCIPAL, sessionKey: SESSION,
-      params: { clientMessageId: 'c_assets', deviceId: 'device', content: '', attachments: refs } }]);
-    expect(observations.find(row => row.path === '/agent/dispatch')?.cliVersion).toBe('0.1.11');
-    expect(observations.filter(row => row.path === '/upload' || row.path.startsWith('/download/'))
-      .every(row => row.actingUser === PRINCIPAL && row.auth === `Bearer ${TOKEN}`)).toBe(true);
+    expect(result.outcome).toBe('accepted');
+    expect(frames).toEqual([{ type: 'message', id: 'c_assets', sessionKey: SESSION, content: '', attachments: refs }]);
+    expect(observations.every(row => row.actingUser === PRINCIPAL && row.auth === `Bearer ${TOKEN}`)).toBe(true);
     for (const field of ['mimeType', 'size']) {
       mismatch = field;
       await expect(transport.uploadAttachment({ id: 'mismatch', filename: 'item.bin',

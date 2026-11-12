@@ -8,7 +8,7 @@ function isAuthorizationFailureCode(value: unknown): boolean {
     'authentication_failed', 'auth_failed'].includes(value.toLowerCase());
 }
 
-function chatSocketUrl(path: '/ws/changes', target: ChatTarget): URL {
+function chatSocketUrl(path: '/ws' | '/ws/changes', target: ChatTarget): URL {
   const url = new URL(`/__chat${path}`, window.location.origin);
   if (path === '/ws/changes') url.searchParams.set('protocolVersion', '2');
   url.searchParams.set('gateway', target.gateway);
@@ -21,10 +21,12 @@ function chatSocketUrl(path: '/ws/changes', target: ChatTarget): URL {
 export function browserHost(target: ChatTarget): Public019Host {
   const identity: HostIdentity = { principalKey: target.principalKey, deviceId: target.deviceId };
 
-  function open(path: '/ws/changes', signal: AbortSignal): Promise<Public019Channel> {
+  function open(path: '/ws' | '/ws/changes', signal: AbortSignal): Promise<Public019Channel> {
+    const human = path === '/ws';
     const socket = new WebSocket(chatSocketUrl(path, target));
     return new Promise((resolve, reject) => {
       let ready = false;
+      let authenticated = false;
       let frameListener: ((frame: unknown) => void) | undefined;
       let closeListener: ((event?: { code?: number }) => void) | undefined;
       let connectionTimer: ReturnType<typeof setTimeout> | undefined = setTimeout(
@@ -50,6 +52,11 @@ export function browserHost(target: ChatTarget): Public019Host {
         });
       };
       signal.addEventListener('abort', abort, { once: true });
+      socket.onopen = () => {
+        // For a human send, the connection may wait indefinitely for auth and
+        // sync frames. Only failure to open the socket is a connect timeout.
+        if (human) clearConnectionTimer();
+      };
       socket.onmessage = (event) => {
         try {
           const frame = JSON.parse(String(event.data));
@@ -59,15 +66,28 @@ export function browserHost(target: ChatTarget): Public019Host {
               fail(new AuthorizationError('The configured Chat identity was refused.'));
               return;
             }
-            if (frame.sessionKey !== target.sessionKey) {
-              fail(new AuthorizationError('The configured Chat conversation was refused.'));
-              return;
+            if (human) {
+              const sessionKeys = Array.isArray(frame.sessionKeys) ? frame.sessionKeys : [];
+              if (frame.sessionId !== `conn_${identity.deviceId}` || !sessionKeys.includes(target.sessionKey)) {
+                fail(new AuthorizationError('The configured Chat conversation was refused.'));
+                return;
+              }
+              authenticated = true;
+            } else {
+              if (frame.sessionKey !== target.sessionKey) {
+                fail(new AuthorizationError('The configured Chat conversation was refused.'));
+                return;
+              }
+              complete();
             }
+          } else if (human && frame.type === 'sync_complete' && authenticated) {
             complete();
           } else if (frame.type === 'error') {
             fail(isAuthorizationFailureCode(frame.code)
               ? new AuthorizationError('The configured Chat connection was refused.')
               : new Error('The Chat connection could not be established.'));
+          } else if (frame.type === 'auth_result') {
+            fail(new Error('Invalid Chat authentication response.'));
           }
         } catch {
           if (!ready) fail(new Error('Invalid Chat connection response.'));
@@ -112,5 +132,6 @@ export function browserHost(target: ChatTarget): Public019Host {
       });
     },
     openAuthenticatedChanges: (signal) => open('/ws/changes', signal),
+    openAuthenticatedHuman: (signal) => open('/ws', signal),
   };
 }
