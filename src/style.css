@@ -63,7 +63,7 @@ body {
   overflow-y: auto;
   /* Follow the visible viewport each keyboard frame so the latest message moves with it. */
   max-height: calc(100% - var(--tb-chat-keyboard-inset, 0px));
-  padding: calc(clamp(1rem, 3.5vw, 2rem) + var(--tb-chat-anchor-space, 0px)) var(--tb-chat-viewport-inline-padding)
+  padding: calc(max(clamp(1rem, 3.5vw, 2rem), var(--tb-chat-safe-area-top)) + var(--tb-chat-anchor-space, 0px)) var(--tb-chat-viewport-inline-padding)
     calc(var(--tb-chat-composer-reserved-height) + 4.5rem + var(--tb-chat-bottom-safe-area));
   overscroll-behavior: contain;
   scrollbar-gutter: stable;

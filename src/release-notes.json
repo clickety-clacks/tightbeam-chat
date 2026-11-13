@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.99",
+    "items": [
+      {
+        "title": "First message clears Tuner’s top toolbar",
+        "description": "At the top of a Tuner conversation, the first message now starts below the floating toolbar."
+      }
+    ]
+  },
+  {
     "version": "v0.1.98",
     "items": [
       {
