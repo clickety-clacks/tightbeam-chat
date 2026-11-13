@@ -5,6 +5,10 @@
       {
         "title": "First message clears Tuner’s top toolbar",
         "description": "At the top of a Tuner conversation, the first message now starts below the floating toolbar."
+      },
+      {
+        "title": "An icon-only scroll control",
+        "description": "The control for moving to the latest message now shows a down arrow without accompanying text."
       }
     ]
   },
