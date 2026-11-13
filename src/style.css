@@ -203,13 +203,18 @@ body {
 .tb-chat-latest-user-prompt-dismiss:hover { background: color-mix(in srgb, var(--tb-chat-human-surface) 78%, var(--tb-chat-text)); }
 .tb-chat-tool-history-status-placeholder { visibility: hidden; pointer-events: none; }
 .tb-chat-scroll-latest {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   position: absolute;
   z-index: 4;
   left: 50%;
   transform: translateX(-50%);
   max-width: calc(100% - 1.3rem);
   bottom: calc(var(--tb-chat-keyboard-inset, 0px) + var(--tb-chat-bottom-safe-area) + var(--tb-chat-composer-reserved-height) + 1.4rem);
-  padding: .5rem .75rem;
+  min-width: 44px;
+  min-height: 44px;
+  padding: .5rem;
   border: 1px solid var(--tb-chat-glass-edge);
   border-radius: 999px;
   color: var(--tb-chat-text);
@@ -220,6 +225,15 @@ body {
     0 8px 24px color-mix(in srgb, var(--tb-chat-shadow) 8%, transparent),
     0 16px 40px color-mix(in srgb, var(--tb-chat-shadow) 6%, transparent);
   transition: background .3s ease, color .3s ease, border-color .3s ease, box-shadow .3s ease, transform .2s ease;
+}
+.tb-chat-scroll-latest svg {
+  width: 1.2rem;
+  height: 1.2rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2.4;
 }
 .tb-chat-host-composer-hidden .tb-chat-scroll-latest {
   bottom: calc(env(safe-area-inset-bottom) + 1.4rem);

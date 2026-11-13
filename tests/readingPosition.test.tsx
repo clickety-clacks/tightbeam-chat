@@ -199,7 +199,7 @@ beforeEach(() => {
     }
     if (this.classList.contains('tb-chat-scroll-latest')) {
       const composerHidden = this.parentElement?.classList.contains('tb-chat-host-composer-hidden');
-      return rect(renderedViewportHeight() - (composerHidden ? 60 : 120), 40);
+      return rect(renderedViewportHeight() - (composerHidden ? 60 : 120), 44);
     }
     if (this.classList.contains('tb-chat-bubble-body')) {
       const row = this.closest<HTMLElement>('article[data-record-key]');
@@ -1572,7 +1572,8 @@ describe('conversation reading position', () => {
     act(() => runtime.publish({ records: [...initialRows, sentFromAnotherClient, receivedMessage(21), receivedMessage(22)] }));
 
     const revealButton = screen.getByRole('button', { name: '2 unseen messages' });
-    expect(revealButton.textContent).toContain(revealButton.getAttribute('aria-label'));
+    expect(revealButton.textContent).toBe('');
+    expect(revealButton.querySelector('svg[aria-hidden="true"]')).toBeTruthy();
     revealButton.focus();
     const firstBubble = box.querySelector<HTMLElement>('[data-scroll-key="message-21"]')!;
     const revealTop = box.scrollTop + firstBubble.getBoundingClientRect().bottom - revealButton.getBoundingClientRect().top;
@@ -1580,7 +1581,8 @@ describe('conversation reading position', () => {
 
     expect(scrollTo).toHaveBeenLastCalledWith({ top: revealTop, behavior: 'smooth' });
     const bottomButton = screen.getByRole('button', { name: 'Scroll to bottom' });
-    expect(bottomButton.textContent).toContain(bottomButton.getAttribute('aria-label'));
+    expect(bottomButton.textContent).toBe('');
+    expect(bottomButton.querySelector('svg[aria-hidden="true"]')).toBeTruthy();
     expect(bottomButton).toBe(revealButton);
     expect(document.activeElement).toBe(revealButton);
 
