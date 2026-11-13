@@ -338,6 +338,8 @@ describe('Chat theme', () => {
     expect(latest).toContain('background: var(--tb-chat-composer-glass)');
     expect(latest).toContain('backdrop-filter: blur(16px) saturate(180%)');
     expect(latest).toContain('border: 1px solid var(--tb-chat-glass-edge)');
+    expect(latest).toContain('min-width: 44px');
+    expect(latest).toContain('min-height: 44px');
     const popup = rule(componentCss, '.tb-chat-status-popup');
     expect(popup).toContain('border-radius: 16px');
     expect(popup).toContain('background: var(--tb-chat-background)');
