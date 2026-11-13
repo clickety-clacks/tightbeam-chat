@@ -200,7 +200,7 @@ function installViewportLayout(viewport: HTMLElement, trailingSpace = 200,
         return new DOMRect(0, bodyTop, width, Math.max(0, bodyBottom - bodyTop));
       }
     }
-    if (this.classList.contains('tb-chat-scroll-latest')) return new DOMRect(0, top + height - 120, width, 40);
+    if (this.classList.contains('tb-chat-scroll-latest')) return new DOMRect(0, top + height - 120, width, 44);
     if (this.classList.contains('tb-chat-composer')) return new DOMRect(0, top + height - 60, width, 60);
     const index = [...content.children].indexOf(this);
     if (index >= 0) {
@@ -521,8 +521,13 @@ describe('conversation surface', () => {
       // Start a new reader-scroll intent without moving the viewport. Each
       // control step must keep its own programmatic movement out of the marker.
       fireEvent.wheel(viewport, { deltaY: -1 });
-      fireEvent.click(screen.getByRole('button', { name: /^\d+ unseen messages?$/ }));
-      expect(screen.getByRole('button', { name: 'Scroll to bottom' })).toBeTruthy();
+      const unseenButton = screen.getByRole('button', { name: /^\d+ unseen messages?$/ });
+      expect(unseenButton.textContent).toBe('');
+      expect(unseenButton.querySelector('svg[aria-hidden="true"]')).toBeTruthy();
+      fireEvent.click(unseenButton);
+      const latestButton = screen.getByRole('button', { name: 'Scroll to bottom' });
+      expect(latestButton.textContent).toBe('');
+      expect(latestButton.querySelector('svg[aria-hidden="true"]')).toBeTruthy();
       expect(mark).not.toHaveBeenCalled();
 
       fireEvent.wheel(viewport, { deltaY: -1 });
