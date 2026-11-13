@@ -147,7 +147,7 @@ describe('Chat theme', () => {
     expect(viewport).toContain('gap: 1rem');
     expect(viewport).toContain('overflow-y: auto');
     expect(viewport).toContain(
-      'padding: calc(clamp(1rem, 3.5vw, 2rem) + var(--tb-chat-safe-area-top) + var(--tb-chat-anchor-space, 0px))',
+      'padding: calc(max(clamp(1rem, 3.5vw, 2rem), var(--tb-chat-safe-area-top)) + var(--tb-chat-anchor-space, 0px))',
     );
     const phone = componentCss.slice(componentCss.indexOf('@media (max-width: 540px)'));
     expect(phone).toContain('--tb-chat-viewport-inline-padding: 1rem');
