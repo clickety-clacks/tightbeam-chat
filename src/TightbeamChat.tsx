@@ -2657,11 +2657,14 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
       const heldPrompt = promptsByIdentity.get(heldSelection.identity);
       const heldRow = heldPrompt && reading.getRow(heldPrompt.scrollKey);
       const heldBottom = heldRow?.getBoundingClientRect().bottom;
+      const bubbleMatchesHeldPrompt = !promptHandoff || promptHandoff.identity === heldSelection.identity;
       if (heldSelection.identity !== stickyPromptIdentity || !heldPrompt || !Number.isFinite(heldBottom)) {
         promptSelectionHysteresis.current = null;
-      } else if (heldBottom! <= selectionLine) {
+      } else if (bubbleMatchesHeldPrompt && heldBottom! <= selectionLine) {
         // The new prompt has crossed the shorter bubble's edge, so the normal
-        // geometric selection now agrees with the handoff.
+        // geometric selection now agrees with the handoff. Until the bubble
+        // represents this prompt, keep the original crossing edge: its old
+        // height would otherwise select the next prompt and start a loop.
         promptSelectionHysteresis.current = null;
       } else if (heldBottom! <= heldSelection.crossingLine) {
         // Keep the prompt selected through the size change. On reverse scroll,
