@@ -1363,6 +1363,56 @@ describe('Gateway wire mapping and behavior checks', () => {
     expect(candidate.dispatches[1]).toEqual(candidate.dispatches[0]);
   });
 
+  it.each(['recorded', 'duplicate'] as const)(
+    'treats a held-send %s receipt with explicit null turnSeq as sent without a turn lookup', async outcome => {
+      const candidate = setup();
+      const submission = { sessionKey, deviceId: 'device-1', clientMessageId: `c_held_${outcome}`, content: 'held message' };
+      candidate.dispatchResponses.push(new Response(JSON.stringify({ result: {
+        outcome, sessionKey, deviceId: submission.deviceId, clientMessageId: submission.clientMessageId,
+        messageId: 'message-held', turnSeq: null,
+      } }), { status: 200 }));
+
+      await expect(candidate.transport.sendHuman(submission, new AbortController().signal))
+        .resolves.toEqual({ outcome: 'accepted', messageId: 'message-held' });
+      expect(candidate.dispatches).toHaveLength(1);
+      expect(candidate.paths.filter(path => {
+        const pathname = new URL(path).pathname;
+        return pathname === '/api/turns' || pathname.startsWith('/api/turns/') || pathname.endsWith('/turns') ||
+          pathname.endsWith('/turn-events');
+      })).toEqual([]);
+    },
+  );
+
+  it('keeps receipt identity, message ID, and sequence validation when turnSeq is null', async () => {
+    const invalidOverrides: Record<string, Record<string, unknown>> = {
+      outcome: { outcome: 'queued' },
+      session: { sessionKey: 'another-session' },
+      device: { deviceId: 'another-device' },
+      clientMessageId: { clientMessageId: 'c_another' },
+      emptyMessageId: { messageId: '' },
+      missingTurnSeq: { turnSeq: undefined },
+      nonnumericTurnSeq: { turnSeq: '12' },
+      fractionalTurnSeq: { turnSeq: 1.5 },
+    };
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      for (const [caseName, overrides] of Object.entries(invalidOverrides)) {
+        const candidate = setup();
+        const submission = { sessionKey, deviceId: 'device-1', clientMessageId: 'c_held_invalid', content: 'held message' };
+        candidate.dispatchResponses.push(new Response(JSON.stringify({ result: {
+          outcome: 'recorded', sessionKey, deviceId: submission.deviceId,
+          clientMessageId: submission.clientMessageId, messageId: 'message-held', turnSeq: null,
+          ...overrides,
+        } }), { status: 200 }));
+
+        await expect(candidate.transport.sendHuman(submission, new AbortController().signal), caseName)
+          .resolves.toEqual({ outcome: 'uncertain', reason: 'invalid-send-response' });
+      }
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   it('assesses ordered uploaded assets on the selected session with the post correlation', async () => {
     const candidate = setup();
     const references = [
