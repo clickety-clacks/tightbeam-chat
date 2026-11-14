@@ -11,6 +11,9 @@ import {
   type ToolCallRecord,
   type TurnEventRecord,
   type AttachmentReference,
+  type AttachmentAssessmentItem,
+  type AttachmentAssessmentResult,
+  type AttachmentDeliveryReason,
   type ChangeNotice,
   type CanonicalTurn,
   type ChatTransport,
@@ -507,6 +510,7 @@ export function decodePublic019Notice(value: unknown, sessionKey: string): Chang
   }
   const knownClass = frame.class === 'session_record_event.created' ||
     frame.class === 'message.created' || frame.class === 'transition.recorded' ||
+    frame.class === 'message.attachment_delivery.updated' ||
     frame.class === 'tool_call.started' || frame.class === 'tool_call.ended' ||
     frame.class === 'message.segment_recorded' || frame.class === 'tool_call.event_recorded' ||
     frame.class.startsWith('session.') || frame.class === 'turn.started' || frame.class === 'turn.ended';
@@ -516,6 +520,18 @@ export function decodePublic019Notice(value: unknown, sessionKey: string): Chang
   }
   const refs = record(frame.refs);
   if (refs.sessionKey !== sessionKey) throw new UnsupportedTargetError('Change frame has a different session reference.');
+  if (frame.class === 'message.attachment_delivery.updated') {
+    const payload = record(frame.payload);
+    if (payload.sessionKey !== sessionKey ||
+        typeof payload.messageId !== 'string' || !payload.messageId.trim() ||
+        typeof payload.clientMessageId !== 'string' || !payload.clientMessageId.trim() ||
+        typeof payload.assetId !== 'string' || !payload.assetId.trim() ||
+        (refs.messageId !== undefined && refs.messageId !== payload.messageId)) {
+      throw new UnsupportedTargetError('Attachment delivery notice has invalid message references.');
+    }
+    return { operation: 'attachment-delivery-delta', sessionKey,
+      messageId: payload.messageId, clientMessageId: payload.clientMessageId, assetId: payload.assetId };
+  }
   if (frame.class === 'session_record_event.created') {
     return { operation: 'record-event', event: decodeRecordEvent(frame.payload, sessionKey) };
   }
@@ -585,6 +601,99 @@ async function gatewayError(response: Response): Promise<{ code?: string; messag
     };
   } catch {
     return {};
+  }
+}
+
+function readMarkerValue(value: unknown): string | number | null | undefined {
+  if (value === null) return null;
+  if (typeof value === 'string' && /^(0|[1-9]\d*)$/.test(value)) return value;
+  if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) return value;
+  return undefined;
+}
+
+function isSessionDetailPath(path: string): boolean {
+  try { return /^\/api\/sessions\/[^/]+$/.test(new URL(path, 'https://gateway.invalid').pathname); }
+  catch { return false; }
+}
+
+function isToolHistoryCollectionPath(path: string): boolean {
+  try { return /^\/api\/sessions\/[^/]+\/tool-calls$/.test(new URL(path, 'https://gateway.invalid').pathname); }
+  catch { return false; }
+}
+
+function isRecordEventsCollectionPath(path: string): boolean {
+  try { return /^\/api\/sessions\/[^/]+\/record-events$/.test(new URL(path, 'https://gateway.invalid').pathname); }
+  catch { return false; }
+}
+
+function isTurnEventsCollectionPath(path: string): boolean {
+  try { return /^\/api\/sessions\/[^/]+\/turn-events$/.test(new URL(path, 'https://gateway.invalid').pathname); }
+  catch { return false; }
+}
+
+function authorizationFailureCode(value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+  return ['unauthorized', 'forbidden', 'not_authorized', 'not_authenticated',
+    'authentication_failed', 'auth_failed'].includes(value.toLowerCase());
+}
+
+/** Gateway REST history, protocol-2 changes, and human sending. */
+
+const unknownAssessmentMessage = 'Attachment delivery could not be confirmed.';
+
+function unknownAttachmentAssessment(sessionKey: string, clientMessageId: string,
+  assetIds: readonly string[], maxDeliverableAttachmentBytes?: number,
+  reason: AttachmentDeliveryReason = { code: 'assessment-unavailable', message: unknownAssessmentMessage }): AttachmentAssessmentResult {
+  return Object.freeze({ sessionKey, clientMessageId,
+    ...(maxDeliverableAttachmentBytes === undefined ? {} : { maxDeliverableAttachmentBytes }),
+    attachments: Object.freeze(assetIds.map(assetId => Object.freeze({
+      assetId, assessment: 'unknown' as const, reason: Object.freeze({ ...reason }),
+    }))),
+  });
+}
+
+function assessmentReason(value: unknown): AttachmentDeliveryReason | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const reason = value as Record<string, unknown>;
+  if (typeof reason.code !== 'string' || !reason.code.trim() ||
+      typeof reason.message !== 'string' || !reason.message.trim()) return undefined;
+  return Object.freeze({ code: reason.code, message: reason.message });
+}
+
+function decodeAssessmentRows(value: unknown, sessionKey: string, clientMessageId: string,
+  assetIds: readonly string[], requireLimit: boolean, forceUnknown: boolean): AttachmentAssessmentResult | undefined {
+  try {
+    const envelope = record(value);
+    if (envelope.sessionKey !== sessionKey || envelope.clientMessageId !== clientMessageId ||
+        !Array.isArray(envelope.attachments) || envelope.attachments.length !== assetIds.length) return undefined;
+    const limit = envelope.maxDeliverableAttachmentBytes;
+    if (requireLimit && (!Number.isSafeInteger(limit) || (limit as number) < 0)) return undefined;
+    const attachments: AttachmentAssessmentItem[] = [];
+    for (const [index, value] of envelope.attachments.entries()) {
+      const row = record(value);
+      if (row.assetId !== assetIds[index]) return undefined;
+      if (forceUnknown) {
+        if (row.assessment !== 'unknown') return undefined;
+        const reason = assessmentReason(row.reason);
+        if (!reason) return undefined;
+        attachments.push(Object.freeze({ assetId: assetIds[index], assessment: 'unknown', reason }));
+        continue;
+      }
+      if (row.assessment === 'will-deliver' && row.reason === null) {
+        attachments.push(Object.freeze({ assetId: assetIds[index], assessment: 'will-deliver', reason: null }));
+      } else if (row.assessment === 'will-not-deliver' || row.assessment === 'unknown') {
+        const reason = assessmentReason(row.reason);
+        if (!reason) return undefined;
+        attachments.push(Object.freeze({ assetId: assetIds[index], assessment: row.assessment, reason }));
+      } else return undefined;
+    }
+    return Object.freeze({ sessionKey, clientMessageId,
+      ...(Number.isSafeInteger(limit) && (limit as number) >= 0
+        ? { maxDeliverableAttachmentBytes: limit as number } : {}),
+      attachments: Object.freeze(attachments),
+    });
+  } catch {
+    return undefined;
   }
 }
 
@@ -929,7 +1038,8 @@ export function createPublic019Transport(config: Public019Config): { transport: 
         try {
           const classes = tools ? ['tool_call.'] : turnEvents
             ? ['message.segment_recorded', 'tool_call.event_recorded']
-            : ['message.created', 'transition.recorded', 'session.', 'turn.started', 'turn.ended', 'session_record_event.created'];
+            : ['message.created', 'message.attachment_delivery.updated', 'transition.recorded',
+              'session.', 'turn.started', 'turn.ended', 'session_record_event.created'];
           channel.send({ type: 'subscribe', protocolVersion: 2, subscriptionId, filters: { sessionKey, classes } });
         } catch (error) { close(); rejectReady(error); }
         if (hasRailSubscription && !closed) {
@@ -1256,6 +1366,66 @@ export function createPublic019Transport(config: Public019Config): { transport: 
         throw new Error('Attachment retrieval returned an incomplete file.');
       }
       return bytes;
+    },
+    async assessAttachments(request, signal): Promise<AttachmentAssessmentResult | undefined> {
+      const references = request.attachments ?? [];
+      const assetIds = references.map(reference => reference.assetId);
+      const fallback = () => unknownAttachmentAssessment(request.sessionKey, request.clientMessageId, assetIds);
+      if (!assetIds.length) return fallback();
+      if (signal.aborted) throw signal.reason ?? new Error('Attachment assessment was interrupted.');
+      const submittingIdentity = config.host.currentIdentity();
+      if (!submittingIdentity.principalKey?.trim()) return fallback();
+
+      const controller = new AbortController();
+      const relayAbort = () => controller.abort(signal.reason);
+      signal.addEventListener('abort', relayAbort, { once: true });
+      let timedOut = false;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        controller.abort(new Error('Attachment assessment timed out.'));
+      }, timeoutMs);
+      try {
+        const response = await config.host.fetch(`${baseUrl}/agent/dispatch`, {
+          method: 'POST', signal: controller.signal, cache: 'no-store',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            verb: 'assess_attachments',
+            asUser: submittingIdentity.principalKey,
+            sessionKey: request.sessionKey,
+            params: { clientMessageId: request.clientMessageId, assetIds },
+          }),
+        });
+        const body = record(await response.json());
+        if (signal.aborted) throw signal.reason ?? new Error('Attachment assessment was interrupted.');
+        if (timedOut) return fallback();
+        if (response.ok) {
+          const decoded = decodeAssessmentRows(body.result, request.sessionKey, request.clientMessageId,
+            assetIds, true, false);
+          if (decoded) return decoded;
+          logGatewayIncompatibility('attachment assessment', 'Used unknown for a malformed or mismatched result.');
+          return fallback();
+        }
+        if (!body.error || typeof body.error !== 'object' || Array.isArray(body.error)) return fallback();
+        const dispatchError = body.error as Record<string, unknown>;
+        if (response.status === 400 && dispatchError.code === 'invalid_message' &&
+            dispatchError.message === 'verb not allowed: assess_attachments') {
+          return undefined;
+        }
+        const decoded = decodeAssessmentRows(body, request.sessionKey, request.clientMessageId,
+          assetIds, false, true);
+        if (decoded) return decoded;
+        logGatewayIncompatibility('attachment assessment', 'Used unknown for an uncorrelated request error.');
+        return fallback();
+      } catch (error) {
+        if (signal.aborted) throw error;
+        logGatewayIncompatibility('attachment assessment', timedOut
+          ? 'The pre-send result timed out; delivery remains unknown.'
+          : 'The pre-send result was unavailable; delivery remains unknown.');
+        return fallback();
+      } finally {
+        clearTimeout(timer);
+        signal.removeEventListener('abort', relayAbort);
+      }
     },
     async sendHuman(submission: HumanSubmission, signal: AbortSignal, onSubmitted?: () => void): Promise<HumanSendResult> {
       const submittingIdentity = config.host.currentIdentity();

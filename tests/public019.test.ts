@@ -53,14 +53,20 @@ function setup(heartbeatTimeoutMs?: number, observedVersion = version, historyIt
   const changes = new Channel();
   const human = new Channel();
   const paths: string[] = [];
+  const dispatches: Record<string, unknown>[] = [];
+  const dispatchResponses: Response[] = [];
   const host: Public019Host = {
     currentIdentity: () => markerIdentity,
     ...(markerOperatorPrincipalKey ? {
       readMarkerRoute: 'gateway-user-device',
       readMarkerOperatorPrincipalKey: markerOperatorPrincipalKey,
     } : {}),
-    fetch: async (path) => {
+    fetch: async (path, init = {}) => {
       paths.push(path);
+      if (init.method === 'POST' && new URL(path).pathname === '/agent/dispatch') {
+        dispatches.push(JSON.parse(String(init.body)));
+        return dispatchResponses.shift() ?? new Response('{}', { status: 503 });
+      }
       if (path.includes('/record-events?')) return new Response(JSON.stringify({
         schemaVersion: 1, resource: 'record events', items: [], page: { hasMoreBefore: false },
       }));
@@ -98,7 +104,7 @@ function setup(heartbeatTimeoutMs?: number, observedVersion = version, historyIt
     baseUrl: 'https://host.example', host,
     responseTimeoutMs: 1000, heartbeatTimeoutMs,
   });
-  return { transport, profile, paths, changes, human, host };
+  return { transport, profile, paths, changes, human, host, dispatches, dispatchResponses };
 }
 
 describe('Gateway wire mapping and behavior checks', () => {
@@ -1311,6 +1317,89 @@ describe('Gateway wire mapping and behavior checks', () => {
     }
   });
 
+  it('assesses ordered uploaded assets on the selected session with the post correlation', async () => {
+    const candidate = setup();
+    const references = [
+      { assetId: 'asset-first', mimeType: 'application/octet-stream', filename: 'first.zip', size: 12 },
+      { assetId: 'asset-second', mimeType: 'application/pdf', filename: 'second.pdf', size: 24 },
+    ];
+    candidate.dispatchResponses.push(new Response(JSON.stringify({ result: {
+      sessionKey, clientMessageId: 'c_assess', maxDeliverableAttachmentBytes: 25_000_000,
+      attachments: [
+        { assetId: 'asset-first', assessment: 'will-deliver', reason: null },
+        { assetId: 'asset-second', assessment: 'will-not-deliver',
+          reason: { code: 'unsupported-delivery', message: 'This file will not reach the agent.' } },
+      ],
+    } }), { status: 200 }));
+    const result = await candidate.transport.assessAttachments!({ sessionKey, clientMessageId: 'c_assess',
+      attachments: references }, new AbortController().signal);
+    expect(candidate.dispatches).toEqual([{ verb: 'assess_attachments', asUser: 'person-1', sessionKey,
+      params: { clientMessageId: 'c_assess', assetIds: ['asset-first', 'asset-second'] } }]);
+    expect(result).toEqual({ sessionKey, clientMessageId: 'c_assess',
+      maxDeliverableAttachmentBytes: 25_000_000,
+      attachments: [
+        { assetId: 'asset-first', assessment: 'will-deliver', reason: null },
+        { assetId: 'asset-second', assessment: 'will-not-deliver',
+          reason: { code: 'unsupported-delivery', message: 'This file will not reach the agent.' } },
+      ],
+    });
+  });
+
+  it('recognizes the older Gateway unsupported-verb response without inventing unknown delivery rows', async () => {
+    const candidate = setup();
+    const request = { sessionKey, clientMessageId: 'c_legacy_gateway', attachments: [
+      { assetId: 'asset-one', mimeType: 'application/zip', filename: 'one.zip', size: 3 },
+    ] };
+    candidate.dispatchResponses.push(new Response(JSON.stringify({
+      error: { code: 'invalid_message', message: 'verb not allowed: assess_attachments' },
+    }), { status: 400 }));
+
+    await expect(candidate.transport.assessAttachments!(request, new AbortController().signal)).resolves.toBeUndefined();
+    expect(candidate.dispatches).toEqual([{ verb: 'assess_attachments', asUser: 'person-1', sessionKey,
+      params: { clientMessageId: request.clientMessageId, assetIds: ['asset-one'] } }]);
+
+    candidate.dispatchResponses.push(new Response(JSON.stringify({
+      error: { code: 'invalid_message', message: 'another request validation failed' },
+    }), { status: 400 }));
+    const invalidRequest = (await candidate.transport.assessAttachments!(request, new AbortController().signal))!;
+    expect(invalidRequest.attachments).toEqual([expect.objectContaining({
+      assetId: 'asset-one', assessment: 'unknown',
+    })]);
+  });
+
+  it('keeps request-level assessment failures and malformed responses explicitly unknown', async () => {
+    const candidate = setup();
+    const request = { sessionKey, clientMessageId: 'c_assess_error', attachments: [
+      { assetId: 'asset-one', mimeType: 'application/zip', filename: 'one.zip', size: 3 },
+      { assetId: 'asset-two', mimeType: 'text/plain', filename: 'two.txt', size: 4 },
+    ] };
+    candidate.dispatchResponses.push(new Response(JSON.stringify({
+      error: { code: 'assessment-unavailable', message: 'Attachment delivery could not be confirmed.' },
+      sessionKey, clientMessageId: request.clientMessageId, maxDeliverableAttachmentBytes: 25_000_000,
+      attachments: request.attachments.map(({ assetId }) => ({ assetId, assessment: 'unknown',
+        reason: { code: 'assessment-unavailable', message: 'Attachment delivery could not be confirmed.' } })),
+    }), { status: 503 }));
+    const errorResult = (await candidate.transport.assessAttachments!(request, new AbortController().signal))!;
+    expect(errorResult.attachments.map(row => row.assessment)).toEqual(['unknown', 'unknown']);
+    expect(errorResult.maxDeliverableAttachmentBytes).toBe(25_000_000);
+
+    candidate.dispatchResponses.push(new Response(JSON.stringify({ result: {
+      sessionKey: 'other-session', clientMessageId: request.clientMessageId,
+      maxDeliverableAttachmentBytes: 25_000_000,
+      attachments: [{ assetId: 'wrong-asset', assessment: 'will-deliver', reason: null }],
+    } }), { status: 200 }));
+    const malformedResult = (await candidate.transport.assessAttachments!(request, new AbortController().signal))!;
+    expect(malformedResult.attachments.map(row => [row.assetId, row.assessment, row.reason?.code])).toEqual([
+      ['asset-one', 'unknown', 'assessment-unavailable'], ['asset-two', 'unknown', 'assessment-unavailable'],
+    ]);
+
+    const unavailable = candidate.host.fetch;
+    candidate.host.fetch = async () => { throw new Error('synthetic network failure'); };
+    const networkResult = (await candidate.transport.assessAttachments!(request, new AbortController().signal))!;
+    expect(networkResult.attachments.map(row => row.assessment)).toEqual(['unknown', 'unknown']);
+    candidate.host.fetch = unavailable;
+  });
+
   it('sends human /ws frames with the same client ID and distinguishes ack, refusal and dropped sockets', async () => {
     const accepted = setup();
     const submission = { sessionKey, deviceId: 'device-1', clientMessageId: 'c_1', content: 'hello' };
@@ -1690,6 +1779,8 @@ it('decodes exact record-event notice coverage and reads the same live/history o
   expect(decodePublic019Message({ ...item, recordEventIds: [event.eventId] }, sessionKey))
     .toMatchObject({ recordEventIds: [event.eventId] });
   const paths: string[] = [];
+  const dispatches: Record<string, unknown>[] = [];
+  const dispatchResponses: Response[] = [];
   candidate.host.fetch = async path => {
     paths.push(path);
     return new Response(JSON.stringify({ schemaVersion: 1, resource: 'record events', items: [event],

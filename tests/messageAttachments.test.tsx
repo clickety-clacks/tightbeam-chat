@@ -154,4 +154,44 @@ describe('message image attachments', () => {
     expect(screen.getByText(/"notes.txt"/)).toBeTruthy();
     expect(screen.queryByText(/"assetId"/)).toBeNull();
   });
+
+  it('shows canonical delivery outcomes and reasons without changing image names', () => {
+    const data = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jFqkAAAAASUVORK5CYII=';
+    render(<MessageAttachments attachments={[
+      { type: 'image', mimeType: 'image/png', filename: 'still-visible.png', data,
+        delivery: { outcome: 'pending', reason: null } },
+      { type: 'image', mimeType: 'image/png', filename: 'delivered.png', data,
+        delivery: { outcome: 'delivered', reason: null } },
+    ]} />);
+    expect(screen.getByRole('img', { name: 'Image: still-visible.png' })).toBeTruthy();
+    expect(screen.getByText('Delivery pending')).toBeTruthy();
+    expect(screen.getByText('Delivered to the agent')).toBeTruthy();
+  });
+
+  it('renders a retained non-image delivery result and its reason in attachment details', () => {
+    render(<MessageAttachments attachments={[
+      { assetId: 'asset-4', mimeType: 'application/zip', filename: 'report.zip', size: 12,
+        delivery: { outcome: 'not-delivered', reason: {
+          code: 'unsupported-delivery', message: 'This file will not reach the agent.',
+        } } },
+    ]} />);
+    expect(screen.getByText('report.zip: Not delivered to the agent')).toBeTruthy();
+    const disclosure = screen.getByText('1 attachment detail').closest('details')!;
+    expect(disclosure.open).toBe(false);
+    expect(disclosure.querySelector('summary')?.textContent).not.toContain('This file will not reach the agent.');
+    expect(disclosure.querySelector('.tb-chat-attachment-details-list')?.textContent)
+      .toContain('This file will not reach the agent.');
+    fireEvent.click(screen.getByText('1 attachment detail'));
+    expect(screen.getByText('Not delivered to the agent')).toBeTruthy();
+    expect(screen.getByText('This file will not reach the agent.')).toBeTruthy();
+  });
+
+  it('does not add per-file delivery status when legacy history has no delivery field', () => {
+    render(<MessageAttachments attachments={[
+      { assetId: 'asset-5', mimeType: 'application/zip', filename: 'legacy.zip', size: 12 },
+    ]} />);
+    expect(screen.getByText('1 attachment detail')).toBeTruthy();
+    expect(screen.queryByText(/Delivery unknown/)).toBeNull();
+    expect(screen.queryByText('Delivered to the agent')).toBeNull();
+  });
 });
