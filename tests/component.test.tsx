@@ -3447,6 +3447,7 @@ describe('conversation surface', () => {
     render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
 
     expect(screen.getByText('Attachment exceeds the Gateway delivery limit')).toBeTruthy();
+    expect(screen.getByText('large.zip exceeds Gateway’s delivery limit of 25,000,000 bytes.')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Send anyway' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Restore draft to the composer' })).toBeTruthy();
   });
@@ -4791,6 +4792,25 @@ describe('tool-call and transition display', () => {
         animations.restore();
       }
     }
+  });
+
+  it('shows retained generic attachment outcome in the closed transcript disclosure', () => {
+    const sessionKey = 'closed-attachment-status';
+    const human = row(sessionKey, 'attachment-message', 'Inspect the attached report.', {
+      seq: 1, role: 'user', sender: 'user:person', turnSeq: 1, attachments: [{
+        assetId: 'asset-blocked', mimeType: 'application/zip', filename: 'blocked.zip', size: 32,
+        delivery: { outcome: 'not-delivered', reason: {
+          code: 'unsupported-delivery', message: 'This file will not reach the agent.',
+        } },
+      }],
+    });
+    const runtime = new FakeRuntime(sessionKey, { records: [human] });
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+
+    const disclosure = screen.getByText('1 attachment detail').closest('details')!;
+    expect(disclosure.open).toBe(false);
+    expect(screen.getByText('blocked.zip: Not delivered to the agent')).toBeTruthy();
+    expect(disclosure.querySelector('summary')?.textContent).not.toContain('This file will not reach the agent.');
   });
 });
 

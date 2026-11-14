@@ -100,6 +100,8 @@
 .tb-chat-attachment-delivery[data-outcome="not-delivered"],
 .tb-chat-attachment-delivery[data-outcome="unknown"] { color: var(--tb-chat-caution); }
 .tb-chat-attachment-delivery-reason { overflow-wrap: anywhere; }
+.tb-chat-attachment-summary-statuses { margin-inline-start: .4rem; color: var(--tb-chat-caution); font-weight: 600; overflow-wrap: anywhere; }
+.tb-chat-attachment-summary-statuses > span + span::before { content: ' · '; font-weight: 400; }
 .tb-chat-attachment-details-list {
   display: grid;
   gap: .75rem;

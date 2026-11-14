@@ -805,6 +805,28 @@ function isTranscriptImageAttachment(value: unknown): boolean {
   return typeof mimeType === 'string' && /^image\/[a-z0-9.+-]+$/i.test(mimeType.trim());
 }
 
+function attachmentDisclosureStatuses(attachments: readonly unknown[]): readonly {
+  readonly filename: string;
+  readonly outcome: 'pending' | 'not-delivered' | 'unknown';
+  readonly label: string;
+}[] {
+  return attachments.flatMap((attachment, index) => {
+    const item = attachment && typeof attachment === 'object' && !Array.isArray(attachment)
+      ? attachment as Record<string, unknown> : {};
+    const delivery = item.delivery && typeof item.delivery === 'object' && !Array.isArray(item.delivery)
+      ? item.delivery as Record<string, unknown> : {};
+    const rawOutcome = delivery.outcome;
+    const outcome = rawOutcome === 'pending' || rawOutcome === 'not-delivered' || rawOutcome === 'delivered'
+      ? rawOutcome : 'unknown';
+    if (outcome === 'delivered') return [];
+    const rawFilename = typeof item.filename === 'string' && item.filename.trim() ? item.filename
+      : typeof item.name === 'string' && item.name.trim() ? item.name : `Attachment ${index + 1}`;
+    const label = outcome === 'pending' ? 'Delivery pending'
+      : outcome === 'not-delivered' ? 'Not delivered to the agent' : 'Delivery unknown';
+    return [{ filename: formatVisibleIds(rawFilename), outcome, label }];
+  });
+}
+
 function AttachmentDetails({ record, readAttachment, preservePosition, reconcileLayout }: {
   readonly record: CanonicalMessage;
   readonly readAttachment?: ChatRuntime['readAttachment'];
@@ -842,12 +864,19 @@ function AttachmentDisclosure({ attachments, preservePosition, reconcileLayout }
 }) {
   const [expanded, setExpanded] = useState(false);
   const [contentPresent, setContentPresent] = useState(expanded);
+  const statuses = attachmentDisclosureStatuses(attachments);
   return <details className="tb-chat-attachments" open={expanded || contentPresent}>
     <summary aria-expanded={expanded} onClick={event => {
       event.preventDefault();
       preservePosition();
       setExpanded(value => !value);
-    }}>{attachments.length} attachment {attachments.length === 1 ? 'detail' : 'details'}</summary>
+    }}>
+      <span>{attachments.length} attachment {attachments.length === 1 ? 'detail' : 'details'}</span>
+      {statuses.length > 0 && <span className="tb-chat-attachment-summary-statuses">
+        {statuses.map((status, index) => <span key={`${status.filename}-${index}`}
+          data-outcome={status.outcome}>{status.filename}: {status.label}</span>)}
+      </span>}
+    </summary>
     <AnimatedFoldContent expanded={expanded} className="tb-chat-attachment-content"
       onPresenceChange={setContentPresent} onLayoutChange={reconcileLayout}>
       {() => <pre>{formatVisibleIds(JSON.stringify(attachments, null, 2))}</pre>}
@@ -1164,13 +1193,19 @@ function isKnownAttachmentOverLimit(send: LocalSend): boolean {
 
 function attachmentLimitRefusalText(send: LocalSend): string {
   const refusal = send.attachmentLimitRefusal;
-  if (!refusal) return 'Gateway refused this send because an attachment exceeds the delivery limit.';
+  const overLimitAssetIds = refusal?.offendingAssetIds ?? send.attachmentAssessment?.attachments
+    .filter(item => item.assessment === 'will-not-deliver' && item.reason?.code === 'over-limit')
+    .map(item => item.assetId) ?? [];
+  const limitBytes = refusal?.maxDeliverableAttachmentBytes ?? send.attachmentAssessment?.maxDeliverableAttachmentBytes;
   const filenames = send.attachmentItems?.filter(item => item.reference &&
-    refusal.offendingAssetIds.includes(item.reference.assetId)).map(item => formatVisibleIds(item.filename)) ?? [];
-  const limit = refusal.maxDeliverableAttachmentBytes.toLocaleString();
-  if (filenames.length === 1) return `${filenames[0]} exceeds Gateway’s delivery limit of ${limit} bytes.`;
-  if (filenames.length > 1) return `${filenames.join(', ')} exceed Gateway’s delivery limit of ${limit} bytes.`;
-  return refusal.message ?? `Gateway refused this send because an attachment exceeds its ${limit}-byte delivery limit.`;
+    overLimitAssetIds.includes(item.reference.assetId)).map(item => formatVisibleIds(item.filename)) ?? [];
+  if (Number.isSafeInteger(limitBytes) && (limitBytes ?? 0) > 0) {
+    const limit = limitBytes!.toLocaleString();
+    if (filenames.length === 1) return `${filenames[0]} exceeds Gateway’s delivery limit of ${limit} bytes.`;
+    if (filenames.length > 1) return `${filenames.join(', ')} exceed Gateway’s delivery limit of ${limit} bytes.`;
+    return `An attachment exceeds Gateway’s delivery limit of ${limit} bytes.`;
+  }
+  return refusal?.message ?? 'Gateway refused this send because an attachment exceeds the delivery limit.';
 }
 
 function attachmentSendHeading(send: AttachmentSendView): string {
@@ -1723,7 +1758,7 @@ const Composer = forwardRef<ComposerHandle, {
       {attachmentSendStates.map(send => {
         const attachmentItems = send.attachmentItems ?? [];
         const itemErrors = new Set(attachmentItems.flatMap(item => item.error ? [item.error] : []));
-        const submissionReason = send.reason === 'attachment_over_limit' ? attachmentLimitRefusalText(send)
+        const submissionReason = isKnownAttachmentOverLimit(send) ? attachmentLimitRefusalText(send)
           : send.reason && !itemErrors.has(send.reason) ? send.reason : undefined;
         const failed = send.status === 'failed' || send.status === 'uncertain';
         const retryUnavailable = send.reason === 'retry-unavailable';
@@ -3303,7 +3338,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
         const restoreLabel = attachmentItems.length > 0 ? 'Restore draft to the composer' : 'Restore text to the composer';
         const uncertaintyCopy = "We couldn't confirm whether this message was sent. Check the conversation before trying again.";
         const refusalCopy = refused
-          ? send.reason === 'attachment_over_limit'
+          ? isKnownAttachmentOverLimit(send)
             ? attachmentLimitRefusalText(send)
             : send.reason === 'payload_too_large'
             ? 'The server refused this prompt because it is too large. Shorten it and try again.'

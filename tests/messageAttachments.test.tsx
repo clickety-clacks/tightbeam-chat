@@ -175,6 +175,12 @@ describe('message image attachments', () => {
           code: 'unsupported-delivery', message: 'This file will not reach the agent.',
         } } },
     ]} />);
+    expect(screen.getByText('report.zip: Not delivered to the agent')).toBeTruthy();
+    const disclosure = screen.getByText('1 attachment detail').closest('details')!;
+    expect(disclosure.open).toBe(false);
+    expect(disclosure.querySelector('summary')?.textContent).not.toContain('This file will not reach the agent.');
+    expect(disclosure.querySelector('.tb-chat-attachment-details-list')?.textContent)
+      .toContain('This file will not reach the agent.');
     fireEvent.click(screen.getByText('1 attachment detail'));
     expect(screen.getByText('Not delivered to the agent')).toBeTruthy();
     expect(screen.getByText('This file will not reach the agent.')).toBeTruthy();
@@ -184,6 +190,7 @@ describe('message image attachments', () => {
     render(<MessageAttachments attachments={[
       { assetId: 'asset-5', mimeType: 'application/zip', filename: 'legacy.zip', size: 12 },
     ]} />);
+    expect(screen.getByText('legacy.zip: Delivery unknown')).toBeTruthy();
     fireEvent.click(screen.getByText('1 attachment detail'));
     expect(screen.getByText('Delivery unknown')).toBeTruthy();
     expect(screen.queryByText('Delivered to the agent')).toBeNull();

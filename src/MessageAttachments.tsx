@@ -328,7 +328,17 @@ export function MessageAttachments({ attachments, readAttachment }: {
         attachment={attachment} readAttachment={readAttachment} />)}
     </div>}
     {otherAttachments.length > 0 && <details className="tb-chat-attachments">
-      <summary>{otherAttachments.length} attachment {otherAttachments.length === 1 ? 'detail' : 'details'}</summary>
+      <summary>
+        <span>{otherAttachments.length} attachment {otherAttachments.length === 1 ? 'detail' : 'details'}</span>
+        <span className="tb-chat-attachment-summary-statuses">
+          {otherAttachments.flatMap((attachment, index) => {
+            const presentation = deliveryPresentation(attachment);
+            if (presentation.outcome === 'delivered') return [];
+            return [<span key={`${attachmentName(attachment, index)}-${index}`}
+              data-outcome={presentation.outcome}>{attachmentName(attachment, index)}: {presentation.label}</span>];
+          })}
+        </span>
+      </summary>
       <ul className="tb-chat-attachment-details-list">
         {otherAttachments.map((attachment, index) => <li key={index}>
           <strong>{attachmentName(attachment, index)}</strong>
