@@ -2103,7 +2103,7 @@ describe('attachment submission recovery', () => {
     uploads: string[] = [];
     assessmentRequests: Array<Pick<HumanSubmission, 'sessionKey' | 'clientMessageId' | 'attachments'>> = [];
     assessmentFactory?: (request: Pick<HumanSubmission, 'sessionKey' | 'clientMessageId' | 'attachments'>) =>
-      AttachmentAssessmentResult | Promise<AttachmentAssessmentResult>;
+      AttachmentAssessmentResult | undefined | Promise<AttachmentAssessmentResult | undefined>;
     failItem?: string;
     uploadGate?: ReturnType<typeof deferred<void>>;
     uploadSignals: AbortSignal[] = [];
@@ -2182,6 +2182,20 @@ describe('attachment submission recovery', () => {
     expect(transport.submissions[0]).toMatchObject({ sessionKey, clientMessageId: id,
       content: 'caption', attachments: [{ assetId: 'asset_first' }, { assetId: 'asset_second' }] });
     expect(transport.submissions[0].attachments).toBe(staged.attachments);
+    runtime.dispose();
+  });
+  it('keeps legacy send behavior when the Gateway explicitly lacks the assessment verb', async () => {
+    const transport = new AttachmentsTransport();
+    transport.assessmentFactory = () => undefined;
+    const runtime = await ready(transport);
+    const id = runtime.sendAttachments!('legacy Gateway send', [input('legacy')])!;
+    await vi.waitFor(() => expect(runtime.getSnapshot().sends[0].status).toBe('accepted'));
+    const send = runtime.getSnapshot().sends[0];
+    expect(transport.assessmentRequests).toHaveLength(1);
+    expect(transport.submissions).toHaveLength(1);
+    expect(transport.submissions[0].clientMessageId).toBe(id);
+    expect(send.attachmentAssessment).toBeUndefined();
+    expect(send.attachmentPhase).toBe('posted');
     runtime.dispose();
   });
   it('refuses the complete attachment set only for Gateway over-limit assessment', async () => {

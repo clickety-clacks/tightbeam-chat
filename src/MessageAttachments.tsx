@@ -86,8 +86,9 @@ function imageAttachment(value: unknown): ImageAttachment | undefined {
 }
 
 function deliveryPresentation(value: unknown): { readonly outcome: 'pending' | 'delivered' | 'not-delivered' | 'unknown';
-  readonly label: string; readonly reason?: string } {
+  readonly label: string; readonly reason?: string } | undefined {
   const item = objectRecord(value);
+  if (!item?.delivery || typeof item.delivery !== 'object' || Array.isArray(item.delivery)) return undefined;
   const delivery = objectRecord(item?.delivery);
   const rawOutcome = delivery?.outcome;
   const outcome = rawOutcome === 'pending' || rawOutcome === 'delivered' ||
@@ -104,6 +105,7 @@ function deliveryPresentation(value: unknown): { readonly outcome: 'pending' | '
 
 function AttachmentDeliveryStatus({ value }: { readonly value: unknown }) {
   const presentation = deliveryPresentation(value);
+  if (!presentation) return null;
   return <p className="tb-chat-attachment-delivery" data-outcome={presentation.outcome}>
     <span>{presentation.label}</span>
     {presentation.reason && <span className="tb-chat-attachment-delivery-reason">{presentation.reason}</span>}
@@ -333,7 +335,7 @@ export function MessageAttachments({ attachments, readAttachment }: {
         <span className="tb-chat-attachment-summary-statuses">
           {otherAttachments.flatMap((attachment, index) => {
             const presentation = deliveryPresentation(attachment);
-            if (presentation.outcome === 'delivered') return [];
+            if (!presentation || presentation.outcome === 'delivered') return [];
             return [<span key={`${attachmentName(attachment, index)}-${index}`}
               data-outcome={presentation.outcome}>{attachmentName(attachment, index)}: {presentation.label}</span>];
           })}

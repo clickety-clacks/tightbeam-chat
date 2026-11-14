@@ -1391,6 +1391,28 @@ describe('Gateway wire mapping and behavior checks', () => {
     });
   });
 
+  it('recognizes the older Gateway unsupported-verb response without inventing unknown delivery rows', async () => {
+    const candidate = setup();
+    const request = { sessionKey, clientMessageId: 'c_legacy_gateway', attachments: [
+      { assetId: 'asset-one', mimeType: 'application/zip', filename: 'one.zip', size: 3 },
+    ] };
+    candidate.dispatchResponses.push(new Response(JSON.stringify({
+      error: { code: 'invalid_message', message: 'verb not allowed: assess_attachments' },
+    }), { status: 400 }));
+
+    await expect(candidate.transport.assessAttachments!(request, new AbortController().signal)).resolves.toBeUndefined();
+    expect(candidate.dispatches).toEqual([{ verb: 'assess_attachments', asUser: 'person-1', sessionKey,
+      params: { clientMessageId: request.clientMessageId, assetIds: ['asset-one'] } }]);
+
+    candidate.dispatchResponses.push(new Response(JSON.stringify({
+      error: { code: 'invalid_message', message: 'another request validation failed' },
+    }), { status: 400 }));
+    const invalidRequest = (await candidate.transport.assessAttachments!(request, new AbortController().signal))!;
+    expect(invalidRequest.attachments).toEqual([expect.objectContaining({
+      assetId: 'asset-one', assessment: 'unknown',
+    })]);
+  });
+
   it('keeps request-level assessment failures and malformed responses explicitly unknown', async () => {
     const candidate = setup();
     const request = { sessionKey, clientMessageId: 'c_assess_error', attachments: [
@@ -1403,7 +1425,7 @@ describe('Gateway wire mapping and behavior checks', () => {
       attachments: request.attachments.map(({ assetId }) => ({ assetId, assessment: 'unknown',
         reason: { code: 'assessment-unavailable', message: 'Attachment delivery could not be confirmed.' } })),
     }), { status: 503 }));
-    const errorResult = await candidate.transport.assessAttachments!(request, new AbortController().signal);
+    const errorResult = (await candidate.transport.assessAttachments!(request, new AbortController().signal))!;
     expect(errorResult.attachments.map(row => row.assessment)).toEqual(['unknown', 'unknown']);
     expect(errorResult.maxDeliverableAttachmentBytes).toBe(25_000_000);
 
@@ -1412,14 +1434,14 @@ describe('Gateway wire mapping and behavior checks', () => {
       maxDeliverableAttachmentBytes: 25_000_000,
       attachments: [{ assetId: 'wrong-asset', assessment: 'will-deliver', reason: null }],
     } }), { status: 200 }));
-    const malformedResult = await candidate.transport.assessAttachments!(request, new AbortController().signal);
+    const malformedResult = (await candidate.transport.assessAttachments!(request, new AbortController().signal))!;
     expect(malformedResult.attachments.map(row => [row.assetId, row.assessment, row.reason?.code])).toEqual([
       ['asset-one', 'unknown', 'assessment-unavailable'], ['asset-two', 'unknown', 'assessment-unavailable'],
     ]);
 
     const unavailable = candidate.host.fetch;
     candidate.host.fetch = async () => { throw new Error('synthetic network failure'); };
-    const networkResult = await candidate.transport.assessAttachments!(request, new AbortController().signal);
+    const networkResult = (await candidate.transport.assessAttachments!(request, new AbortController().signal))!;
     expect(networkResult.attachments.map(row => row.assessment)).toEqual(['unknown', 'unknown']);
     candidate.host.fetch = unavailable;
   });

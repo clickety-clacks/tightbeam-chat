@@ -359,9 +359,9 @@ export interface ChatTransport {
   readonly readMarkerOperatorPrincipalKey?: string;
   attachmentCapabilities?(sessionKey: string): AttachmentCapabilities | undefined;
   uploadAttachment?(input: AttachmentInput, signal: AbortSignal): Promise<AttachmentReference>;
-  /** Assess the exact uploaded asset IDs before posting the matching message. */
+  /** Assess the exact uploaded asset IDs before posting; undefined means the Gateway lacks this verb. */
   assessAttachments?(request: Pick<HumanSubmission, 'sessionKey' | 'clientMessageId' | 'attachments'>,
-    signal: AbortSignal): Promise<AttachmentAssessmentResult>;
+    signal: AbortSignal): Promise<AttachmentAssessmentResult | undefined>;
   readAttachment?(reference: AttachmentReference, signal: AbortSignal): Promise<Blob>;
   inspectTarget(signal: AbortSignal): Promise<TargetObservation>;
   openChanges(sessionKey: string, callbacks: ChangeCallbacks, signal: AbortSignal): Promise<ChangeConnection>;

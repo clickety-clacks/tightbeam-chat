@@ -2131,16 +2131,23 @@ class SessionRuntime implements ChatRuntime {
       const submission: HumanSubmission = Object.freeze({ sessionKey: ready.sessionKey, deviceId: ready.deviceId,
         clientMessageId: ready.clientMessageId, content: ready.content, attachments });
       this.updateSend(id, send => ({ ...send, attachments, attachmentPhase: 'assessing' }));
-      let assessment: AttachmentAssessmentResult;
+      let assessment: AttachmentAssessmentResult | undefined;
       try {
         assessment = this.transport.assessAttachments
           ? await this.transport.assessAttachments(submission, controller.signal)
-          : localUnknownAssessment(submission.sessionKey, submission.clientMessageId, attachments);
+          : undefined;
       } catch {
         if (controller.signal.aborted || !this.checkIdentity()) return;
         assessment = localUnknownAssessment(submission.sessionKey, submission.clientMessageId, attachments);
       }
       if (controller.signal.aborted || !this.checkIdentity()) return;
+      if (assessment === undefined) {
+        this.updateSend(id, send => ({ ...send, attachments, attachmentPhase: 'ready',
+          attachmentAssessment: undefined }));
+        this.sendControllers.delete(id);
+        await this.post(submission);
+        return;
+      }
       assessment = normalizeAttachmentAssessment(assessment, submission.sessionKey,
         submission.clientMessageId, attachments);
       if (hasKnownOverLimit(assessment)) {

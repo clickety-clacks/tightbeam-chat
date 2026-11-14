@@ -186,13 +186,12 @@ describe('message image attachments', () => {
     expect(screen.getByText('This file will not reach the agent.')).toBeTruthy();
   });
 
-  it('shows missing legacy delivery evidence as unknown rather than delivered', () => {
+  it('does not add per-file delivery status when legacy history has no delivery field', () => {
     render(<MessageAttachments attachments={[
       { assetId: 'asset-5', mimeType: 'application/zip', filename: 'legacy.zip', size: 12 },
     ]} />);
-    expect(screen.getByText('legacy.zip: Delivery unknown')).toBeTruthy();
-    fireEvent.click(screen.getByText('1 attachment detail'));
-    expect(screen.getByText('Delivery unknown')).toBeTruthy();
+    expect(screen.getByText('1 attachment detail')).toBeTruthy();
+    expect(screen.queryByText(/Delivery unknown/)).toBeNull();
     expect(screen.queryByText('Delivered to the agent')).toBeNull();
   });
 });

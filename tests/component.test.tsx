@@ -4812,6 +4812,22 @@ describe('tool-call and transition display', () => {
     expect(screen.getByText('blocked.zip: Not delivered to the agent')).toBeTruthy();
     expect(disclosure.querySelector('summary')?.textContent).not.toContain('This file will not reach the agent.');
   });
+
+  it('preserves legacy attachment disclosure without adding a delivery status', () => {
+    const sessionKey = 'legacy-attachment-history';
+    const human = row(sessionKey, 'legacy-attachment-message', 'Inspect the attached report.', {
+      seq: 1, role: 'user', sender: 'user:person', turnSeq: 1, attachments: [{
+        assetId: 'asset-legacy', mimeType: 'application/zip', filename: 'legacy.zip', size: 32,
+      }],
+    });
+    const runtime = new FakeRuntime(sessionKey, { records: [human] });
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+
+    const disclosure = screen.getByText('1 attachment detail').closest('details')!;
+    expect(disclosure.open).toBe(false);
+    expect(disclosure.querySelector('summary')?.textContent).not.toContain('Delivery unknown');
+    expect(screen.queryByText('Not delivered to the agent')).toBeNull();
+  });
 });
 
 it('reopens waiting summary delivery on live-feed recovery while conversation status remains ready', async () => {

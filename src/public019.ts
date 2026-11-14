@@ -1360,7 +1360,7 @@ export function createPublic019Transport(config: Public019Config): { transport: 
       }
       return bytes;
     },
-    async assessAttachments(request, signal): Promise<AttachmentAssessmentResult> {
+    async assessAttachments(request, signal): Promise<AttachmentAssessmentResult | undefined> {
       const references = request.attachments ?? [];
       const assetIds = references.map(reference => reference.assetId);
       const fallback = () => unknownAttachmentAssessment(request.sessionKey, request.clientMessageId, assetIds);
@@ -1399,6 +1399,11 @@ export function createPublic019Transport(config: Public019Config): { transport: 
           return fallback();
         }
         if (!body.error || typeof body.error !== 'object' || Array.isArray(body.error)) return fallback();
+        const dispatchError = body.error as Record<string, unknown>;
+        if (response.status === 400 && dispatchError.code === 'invalid_message' &&
+            dispatchError.message === 'verb not allowed: assess_attachments') {
+          return undefined;
+        }
         const decoded = decodeAssessmentRows(body, request.sessionKey, request.clientMessageId,
           assetIds, false, true);
         if (decoded) return decoded;

@@ -813,6 +813,7 @@ function attachmentDisclosureStatuses(attachments: readonly unknown[]): readonly
   return attachments.flatMap((attachment, index) => {
     const item = attachment && typeof attachment === 'object' && !Array.isArray(attachment)
       ? attachment as Record<string, unknown> : {};
+    if (!item.delivery || typeof item.delivery !== 'object' || Array.isArray(item.delivery)) return [];
     const delivery = item.delivery && typeof item.delivery === 'object' && !Array.isArray(item.delivery)
       ? item.delivery as Record<string, unknown> : {};
     const rawOutcome = delivery.outcome;
@@ -1214,7 +1215,6 @@ function attachmentSendHeading(send: AttachmentSendView): string {
   }
   if (send.status === 'uncertain') return 'Attachment delivery is uncertain';
   if (send.status === 'failed') return 'Attachment send failed';
-  if (send.attachmentPhase === 'assessing') return 'Checking attachment delivery…';
   if (send.attachmentPhase === 'confirmation') return 'Review attachment delivery';
   if (send.attachmentPhase === 'posted') return 'Sending message…';
   return 'Preparing attachments…';
@@ -1224,7 +1224,6 @@ function pendingAttachmentStatusText(item: PendingSendAttachment, send: Attachme
   if (item.status === 'pending') return 'Waiting to upload';
   if (item.status === 'uploading') return 'Uploading';
   if (item.status === 'failed') return 'Upload failed';
-  if (send.attachmentPhase === 'assessing') return 'Checking delivery';
   if (send.attachmentPhase === 'confirmation') return 'Delivery needs review';
   if (send.reason === 'attachment_over_limit') {
     return send.attachmentLimitRefusal?.offendingAssetIds.includes(item.reference?.assetId ?? '')
