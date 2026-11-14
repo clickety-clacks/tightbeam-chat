@@ -6,6 +6,7 @@ import { ToolHistoryUnavailableError } from '../src/toolHistory';
 import { projectTurnEvents } from '../src/turnEvents';
 import type {
   RuntimeState, ToolCallRecord, ToolCallRange, CanonicalMessage, CanonicalTransition, CanonicalTurn, ChangeCallbacks, ChatTransport,
+  AttachmentAssessmentResult,
   ConversationPage, ConversationRecord, HostIdentity, HumanSendResult,
   HistoryRailDenial, HumanSubmission, SessionRecord, TargetObservation, TargetProfile, TurnEventRecord,
 } from '../src/types';
@@ -2100,6 +2101,9 @@ describe('attachment submission recovery', () => {
   const input = (id: string) => ({ id, filename: id + '.bin', bytes: new Blob([new Uint8Array([0, 128, 255])]) });
   class AttachmentsTransport extends ControlledTransport {
     uploads: string[] = [];
+    assessmentRequests: Array<Pick<HumanSubmission, 'sessionKey' | 'clientMessageId' | 'attachments'>> = [];
+    assessmentFactory?: (request: Pick<HumanSubmission, 'sessionKey' | 'clientMessageId' | 'attachments'>) =>
+      AttachmentAssessmentResult | Promise<AttachmentAssessmentResult>;
     failItem?: string;
     uploadGate?: ReturnType<typeof deferred<void>>;
     uploadSignals: AbortSignal[] = [];
@@ -2109,6 +2113,15 @@ describe('attachment submission recovery', () => {
       await this.uploadGate?.promise;
       if (this.failItem === item.id) throw new Error('Upload interrupted');
       return { assetId: 'asset_' + item.id, mimeType: 'application/octet-stream', filename: item.filename, size: item.bytes.size };
+    };
+    assessAttachments = async (request: Pick<HumanSubmission, 'sessionKey' | 'clientMessageId' | 'attachments'>) => {
+      this.assessmentRequests.push(request);
+      if (this.assessmentFactory) return await this.assessmentFactory(request);
+      return { sessionKey: request.sessionKey, clientMessageId: request.clientMessageId,
+        maxDeliverableAttachmentBytes: 25_000_000,
+        attachments: (request.attachments ?? []).map(({ assetId }) => ({ assetId,
+          assessment: 'will-deliver' as const, reason: null })),
+      };
     };
   }
   async function ready(transport: AttachmentsTransport) {
@@ -2139,6 +2152,122 @@ describe('attachment submission recovery', () => {
     expect(Object.isFrozen(transport.submissions[0].attachments)).toBe(true);
     expect(Object.isFrozen(transport.submissions[0].attachments![0])).toBe(true);
     expect(runtime.getSnapshot().sends[0].status).toBe('accepted');
+    runtime.dispose();
+  });
+  it('warns on non-size non-delivery and unknown assessments, then posts only after explicit proceed', async () => {
+    const transport = new AttachmentsTransport();
+    transport.assessmentFactory = request => {
+      const attachments = request.attachments ?? [];
+      return { sessionKey: request.sessionKey, clientMessageId: request.clientMessageId,
+        maxDeliverableAttachmentBytes: 25_000_000,
+        attachments: [
+          { assetId: attachments[0].assetId, assessment: 'will-not-deliver',
+            reason: { code: 'unsupported-delivery', message: 'This file will not reach the agent.' } },
+          { assetId: attachments[1].assetId, assessment: 'unknown',
+            reason: { code: 'assessment-unavailable', message: 'Delivery could not be confirmed.' } },
+        ],
+      };
+    };
+    const runtime = await ready(transport);
+    const id = runtime.sendAttachments!('caption', [input('first'), input('second')])!;
+    await vi.waitFor(() => expect(runtime.getSnapshot().sends[0].attachmentPhase).toBe('confirmation'));
+    const staged = runtime.getSnapshot().sends[0];
+    expect(transport.assessmentRequests[0]).toMatchObject({ sessionKey, clientMessageId: id,
+      attachments: [{ assetId: 'asset_first' }, { assetId: 'asset_second' }] });
+    expect(transport.submissions).toEqual([]);
+    expect(staged.attachmentAssessment?.attachments.map(item => item.assessment))
+      .toEqual(['will-not-deliver', 'unknown']);
+    expect(runtime.confirmAttachmentSend!(id)).toBe(true);
+    await vi.waitFor(() => expect(transport.submissions).toHaveLength(1));
+    expect(transport.submissions[0]).toMatchObject({ sessionKey, clientMessageId: id,
+      content: 'caption', attachments: [{ assetId: 'asset_first' }, { assetId: 'asset_second' }] });
+    expect(transport.submissions[0].attachments).toBe(staged.attachments);
+    runtime.dispose();
+  });
+  it('refuses the complete attachment set only for Gateway over-limit assessment', async () => {
+    const transport = new AttachmentsTransport();
+    transport.assessmentFactory = request => ({ sessionKey: request.sessionKey,
+      clientMessageId: request.clientMessageId, maxDeliverableAttachmentBytes: 25_000_000,
+      attachments: (request.attachments ?? []).map(({ assetId }, index) => index === 0
+        ? { assetId, assessment: 'will-not-deliver' as const,
+          reason: { code: 'over-limit', message: 'This file exceeds the delivery limit.' } }
+        : { assetId, assessment: 'will-deliver' as const, reason: null }),
+    });
+    const runtime = await ready(transport);
+    const id = runtime.sendAttachments!('caption', [input('large'), input('small')])!;
+    await vi.waitFor(() => expect(runtime.getSnapshot().sends[0].status).toBe('failed'));
+    const refused = runtime.getSnapshot().sends[0];
+    expect(refused.clientMessageId).toBe(id);
+    expect(refused.attachmentPhase).toBe('failed');
+    expect(refused.reason).toBe('This file exceeds the delivery limit.');
+    expect(transport.submissions).toEqual([]);
+    expect(runtime.confirmAttachmentSend!(id)).toBe(false);
+    runtime.dispose();
+  });
+  it('keeps a known Gateway over-limit refusal blocking across retry', async () => {
+    const transport = new AttachmentsTransport();
+    transport.assessmentFactory = request => ({ sessionKey: request.sessionKey,
+      clientMessageId: request.clientMessageId, maxDeliverableAttachmentBytes: 25_000_000,
+      attachments: (request.attachments ?? []).map(({ assetId }) => ({ assetId,
+        assessment: 'will-not-deliver' as const,
+        reason: { code: 'over-limit', message: 'This file exceeds the delivery limit.' },
+      })),
+    });
+    const runtime = await ready(transport);
+    const id = runtime.sendAttachments!('caption', [input('large')])!;
+    await vi.waitFor(() => expect(runtime.getSnapshot().sends[0].status).toBe('failed'));
+    transport.assessmentFactory = request => ({ sessionKey: request.sessionKey,
+      clientMessageId: request.clientMessageId, attachments: (request.attachments ?? []).map(({ assetId }) => ({
+        assetId, assessment: 'unknown' as const,
+        reason: { code: 'assessment-unavailable', message: 'Delivery could not be confirmed.' },
+      })),
+    });
+
+    await runtime.retryAttachmentSend!(id);
+    await runtime.retrySend(id);
+
+    expect(transport.assessmentRequests).toHaveLength(1);
+    expect(transport.submissions).toEqual([]);
+    expect(runtime.getSnapshot().sends[0].attachmentAssessment?.attachments[0].reason?.code).toBe('over-limit');
+    runtime.dispose();
+  });
+  it('keeps a post-time Gateway over-limit refusal blocking and retains its file details', async () => {
+    const transport = new AttachmentsTransport();
+    transport.nextSend = async () => ({ outcome: 'refused', reason: 'attachment_over_limit',
+      attachmentLimitRefusal: { offendingAssetIds: ['asset_large'],
+        maxDeliverableAttachmentBytes: 25_000_000, message: 'This file exceeds the delivery limit.' },
+    });
+    const runtime = await ready(transport);
+    const id = runtime.sendAttachments!('caption', [input('large')])!;
+    await vi.waitFor(() => expect(runtime.getSnapshot().sends[0].reason).toBe('attachment_over_limit'));
+
+    await runtime.retryAttachmentSend!(id);
+    await runtime.retrySend(id);
+
+    expect(transport.submissions).toHaveLength(1);
+    expect(runtime.getSnapshot().sends[0].attachmentLimitRefusal).toEqual({
+      offendingAssetIds: ['asset_large'], maxDeliverableAttachmentBytes: 25_000_000,
+      message: 'This file exceeds the delivery limit.',
+    });
+    runtime.dispose();
+  });
+  it('refreshes canonical attachment state when the delivery notice arrives as a delta', async () => {
+    const transport = new AttachmentsTransport();
+    const pendingAttachment = { assetId: 'asset_file', mimeType: 'application/zip', filename: 'sample.zip', size: 8,
+      delivery: { outcome: 'pending', reason: null } };
+    const pending = message(9, { role: 'user', clientMessageId: 'c_delivery', attachments: [pendingAttachment] });
+    const delivered = { ...pending, rowVersion: 10,
+      attachments: [{ ...pendingAttachment, delivery: { outcome: 'delivered', reason: null } }] };
+    transport.rows.push(pending);
+    transport.messageDetails.set(pending.id, delivered);
+    const runtime = await ready(transport);
+    await vi.waitFor(() => expect(runtime.getSnapshot().records.some(record => record.id === pending.id)).toBe(true));
+    transport.callbacks!.onNotice({ operation: 'attachment-delivery-delta', sessionKey,
+      messageId: pending.id, clientMessageId: 'c_delivery', assetId: 'asset_file' });
+    await vi.waitFor(() => expect(transport.readMessageCalls).toContain(pending.id));
+    await vi.waitFor(() => expect(runtime.getSnapshot().records.find(record => record.id === pending.id)
+      ?.kind === 'message' && (runtime.getSnapshot().records.find(record => record.id === pending.id) as CanonicalMessage)
+      .attachments?.[0]).toMatchObject({ delivery: { outcome: 'delivered', reason: null } }));
     runtime.dispose();
   });
   it('supports attachment-only posts and preserves the manifest after refusal without uploading again', async () => {

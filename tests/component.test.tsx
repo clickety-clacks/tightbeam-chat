@@ -68,6 +68,8 @@ class FakeRuntime implements ChatRuntime {
   sendResult: string | null = 'fixture-send';
   attachmentSendResult: string | null = 'fixture-attachment-send';
   attachmentSubmissions: Array<{ content: string; inputs: readonly { id: string; filename: string; bytes: Blob }[] }> = [];
+  confirmedAttachmentSends: string[] = [];
+  cancelledAttachmentSends: string[] = [];
   readAttachment?: ChatRuntime['readAttachment'];
   retried: string[] = [];
   loadOlderCalls = 0;
@@ -107,6 +109,8 @@ class FakeRuntime implements ChatRuntime {
     this.attachmentSubmissions.push({ content, inputs });
     return this.attachmentSendResult;
   };
+  confirmAttachmentSend = (id: string) => { this.confirmedAttachmentSends.push(id); return true; };
+  cancelAttachmentSend = (id: string) => { this.cancelledAttachmentSends.push(id); return true; };
   retrySend = async (id: string) => { this.retried.push(id); };
   observeHostSend = () => () => {};
   refreshHostSend = async () => 'absent' as const;
@@ -3401,6 +3405,71 @@ describe('conversation surface', () => {
     expect(screen.getByText(`Submission reason: ${submissionReason}`)).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Retry attachment send' }));
     expect(runtime.retried).toEqual([clientMessageId]);
+  });
+
+  it('shows the pre-send delivery warning and offers an explicit proceed action', () => {
+    const sessionKey = 'attachment-assessment-confirmation';
+    const clientMessageId = 'c_assessment-confirmation';
+    const reference: AttachmentReference = { assetId: 'asset-zip', mimeType: 'application/zip',
+      filename: 'results.zip', size: 64 };
+    const runtime = new FakeRuntime(sessionKey, { sends: [{
+      sessionKey, deviceId: 'device', clientMessageId, content: 'inspect this', submittedAt: new Date().toISOString(),
+      status: 'pending', reconciled: false, attachments: [reference], attachmentPhase: 'confirmation',
+      attachmentAssessment: { sessionKey, clientMessageId, maxDeliverableAttachmentBytes: 25_000_000,
+        attachments: [{ assetId: reference.assetId, assessment: 'will-not-deliver',
+          reason: { code: 'unsupported-delivery', message: 'This file will not reach the agent.' } }] },
+      attachmentItems: [{ id: 'zip-item', filename: reference.filename, bytes: new Blob(['zip']),
+        status: 'ready', reference }],
+    } as unknown as LocalSend] });
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+
+    expect(screen.getByText('Review attachment delivery')).toBeTruthy();
+    expect(screen.getByRole('alert').textContent).toContain('This file will not reach the agent.');
+    fireEvent.click(screen.getByRole('button', { name: 'Send anyway' }));
+    expect(runtime.confirmedAttachmentSends).toEqual([clientMessageId]);
+  });
+
+  it('does not offer proceed for a known over-limit assessment', () => {
+    const sessionKey = 'attachment-assessment-over-limit';
+    const clientMessageId = 'c_assessment-over-limit';
+    const reference: AttachmentReference = { assetId: 'asset-large', mimeType: 'application/zip',
+      filename: 'large.zip', size: 128 };
+    const runtime = new FakeRuntime(sessionKey, { sends: [{
+      sessionKey, deviceId: 'device', clientMessageId, content: 'inspect this', submittedAt: new Date().toISOString(),
+      status: 'failed', reconciled: false, reason: 'This file exceeds the delivery limit.', attachmentPhase: 'failed',
+      attachments: [reference],
+      attachmentAssessment: { sessionKey, clientMessageId, maxDeliverableAttachmentBytes: 25_000_000,
+        attachments: [{ assetId: reference.assetId, assessment: 'will-not-deliver',
+          reason: { code: 'over-limit', message: 'This file exceeds the delivery limit.' } }] },
+      attachmentItems: [{ id: 'large-item', filename: reference.filename, bytes: new Blob(['large']),
+        status: 'ready', reference }],
+    } as unknown as LocalSend] });
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+
+    expect(screen.getByText('Attachment exceeds the Gateway delivery limit')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Send anyway' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Restore draft to the composer' })).toBeTruthy();
+  });
+
+  it('keeps a post-time over-limit refusal plain and non-retryable', () => {
+    const sessionKey = 'attachment-post-over-limit';
+    const clientMessageId = 'c_post-over-limit';
+    const reference: AttachmentReference = { assetId: 'asset-large', mimeType: 'application/zip',
+      filename: 'large.zip', size: 25_000_001 };
+    const runtime = new FakeRuntime(sessionKey, { sends: [{
+      sessionKey, deviceId: 'device', clientMessageId, content: 'inspect this', submittedAt: new Date().toISOString(),
+      status: 'failed', reconciled: false, reason: 'attachment_over_limit', attachmentPhase: 'posted',
+      attachments: [reference], postSubmitted: true,
+      attachmentLimitRefusal: { offendingAssetIds: [reference.assetId], maxDeliverableAttachmentBytes: 25_000_000 },
+      attachmentItems: [{ id: 'large-item', filename: reference.filename, bytes: new Blob(['large']),
+        status: 'ready', reference }],
+    } as unknown as LocalSend] });
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+
+    expect(screen.getByText('Attachment exceeds the Gateway delivery limit')).toBeTruthy();
+    expect(screen.getByText('large.zip exceeds Gateway’s delivery limit of 25,000,000 bytes.')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Retry message' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Restore draft to the composer' })).toBeTruthy();
   });
 
   it('restores a failed attachment send with its original Blob and filename', async () => {

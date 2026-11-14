@@ -20,6 +20,7 @@ interface ImageAttachment {
   readonly reference?: ImageAttachmentReference;
   readonly alt: string;
   readonly filename?: string;
+  readonly delivery?: unknown;
 }
 
 function objectRecord(value: unknown): Record<string, unknown> | undefined {
@@ -80,7 +81,40 @@ function imageAttachment(value: unknown): ImageAttachment | undefined {
     reference,
     alt: formatVisibleIds(filename ? 'Image: ' + filename : 'Image attachment'),
     filename: filename ? formatVisibleIds(filename) : undefined,
+    delivery: item.delivery,
   };
+}
+
+function deliveryPresentation(value: unknown): { readonly outcome: 'pending' | 'delivered' | 'not-delivered' | 'unknown';
+  readonly label: string; readonly reason?: string } {
+  const item = objectRecord(value);
+  const delivery = objectRecord(item?.delivery);
+  const rawOutcome = delivery?.outcome;
+  const outcome = rawOutcome === 'pending' || rawOutcome === 'delivered' ||
+      rawOutcome === 'not-delivered' || rawOutcome === 'unknown'
+    ? rawOutcome : 'unknown';
+  const reason = objectRecord(delivery?.reason);
+  const reasonText = outcome !== 'delivered' && typeof reason?.message === 'string' && reason.message.trim()
+    ? formatVisibleIds(reason.message) : undefined;
+  const label = outcome === 'pending' ? 'Delivery pending'
+    : outcome === 'delivered' ? 'Delivered to the agent'
+      : outcome === 'not-delivered' ? 'Not delivered to the agent' : 'Delivery unknown';
+  return { outcome, label, ...(reasonText ? { reason: reasonText } : {}) };
+}
+
+function AttachmentDeliveryStatus({ value }: { readonly value: unknown }) {
+  const presentation = deliveryPresentation(value);
+  return <p className="tb-chat-attachment-delivery" data-outcome={presentation.outcome}>
+    <span>{presentation.label}</span>
+    {presentation.reason && <span className="tb-chat-attachment-delivery-reason">{presentation.reason}</span>}
+  </p>;
+}
+
+function attachmentName(value: unknown, index: number): string {
+  const item = objectRecord(value);
+  const name = typeof item?.filename === 'string' && item.filename.trim() ? item.filename
+    : typeof item?.name === 'string' && item.name.trim() ? item.name : `Attachment ${index + 1}`;
+  return formatVisibleIds(name);
 }
 
 function InlineImagePreview({ src, alt, onImageError }: {
@@ -270,6 +304,7 @@ function ImageAttachmentView({ attachment, readAttachment }: {
         ? <ReferencedImagePreview attachment={attachment} readAttachment={readAttachment} />
         : <ImageUnavailable alt={attachment.alt} />}
     {attachment.filename && <figcaption>{attachment.filename}</figcaption>}
+    <AttachmentDeliveryStatus value={{ delivery: attachment.delivery }} />
   </figure>;
 }
 
@@ -294,7 +329,13 @@ export function MessageAttachments({ attachments, readAttachment }: {
     </div>}
     {otherAttachments.length > 0 && <details className="tb-chat-attachments">
       <summary>{otherAttachments.length} attachment {otherAttachments.length === 1 ? 'detail' : 'details'}</summary>
-      <pre>{formatVisibleIds(JSON.stringify(otherAttachments, null, 2))}</pre>
+      <ul className="tb-chat-attachment-details-list">
+        {otherAttachments.map((attachment, index) => <li key={index}>
+          <strong>{attachmentName(attachment, index)}</strong>
+          <AttachmentDeliveryStatus value={attachment} />
+          <pre>{formatVisibleIds(JSON.stringify(attachment, null, 2))}</pre>
+        </li>)}
+      </ul>
     </details>}
   </>;
 }

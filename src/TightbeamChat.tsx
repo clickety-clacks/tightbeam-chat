@@ -7,7 +7,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { AttachmentPreparationError } from './types';
 import { highlightRecognizedCode } from './markdownHighlight';
-import type { AttachmentInput, ChatRuntime, CanonicalMessage, CanonicalTransition, ToolCallRecord, ToolCallIndex, ConversationRecord, LocalSend, RuntimeState, TightbeamAdapter, TurnProvenance } from './types';
+import type { AttachmentInput, AttachmentReference, ChatRuntime, CanonicalMessage, CanonicalTransition, ToolCallRecord, ToolCallIndex, ConversationRecord, LocalSend, RuntimeState, TightbeamAdapter, TurnProvenance } from './types';
 import { projectMessages, type HumanMember } from './messageVisibility';
 import { ActivitySummaryProvider, useActivitySummary } from './ActivitySummaryView';
 import type { SummaryAnswer, ActivitySummaryTransport } from './activitySummaries';
@@ -1101,12 +1101,13 @@ type PendingSendAttachmentStatus = 'pending' | 'uploading' | 'ready' | 'failed';
 
 interface PendingSendAttachment extends ComposerAttachmentInput {
   readonly status: PendingSendAttachmentStatus;
+  readonly reference?: AttachmentReference;
   readonly error?: string;
 }
 
 type AttachmentSendView = LocalSend & {
   readonly attachmentItems?: readonly PendingSendAttachment[];
-  readonly attachmentPhase?: 'preparing' | 'failed' | 'posted';
+  readonly attachmentPhase?: 'preparing' | 'assessing' | 'confirmation' | 'failed' | 'posted';
 };
 
 function newAttachmentId(): string {
@@ -1156,9 +1157,30 @@ function errorReason(error: unknown): string {
   return 'the browser did not provide a reason';
 }
 
+function isKnownAttachmentOverLimit(send: LocalSend): boolean {
+  return send.reason === 'attachment_over_limit' || send.attachmentAssessment?.attachments.some(item =>
+    item.assessment === 'will-not-deliver' && item.reason?.code === 'over-limit') === true;
+}
+
+function attachmentLimitRefusalText(send: LocalSend): string {
+  const refusal = send.attachmentLimitRefusal;
+  if (!refusal) return 'Gateway refused this send because an attachment exceeds the delivery limit.';
+  const filenames = send.attachmentItems?.filter(item => item.reference &&
+    refusal.offendingAssetIds.includes(item.reference.assetId)).map(item => formatVisibleIds(item.filename)) ?? [];
+  const limit = refusal.maxDeliverableAttachmentBytes.toLocaleString();
+  if (filenames.length === 1) return `${filenames[0]} exceeds Gateway’s delivery limit of ${limit} bytes.`;
+  if (filenames.length > 1) return `${filenames.join(', ')} exceed Gateway’s delivery limit of ${limit} bytes.`;
+  return refusal.message ?? `Gateway refused this send because an attachment exceeds its ${limit}-byte delivery limit.`;
+}
+
 function attachmentSendHeading(send: AttachmentSendView): string {
+  if (isKnownAttachmentOverLimit(send)) {
+    return 'Attachment exceeds the Gateway delivery limit';
+  }
   if (send.status === 'uncertain') return 'Attachment delivery is uncertain';
   if (send.status === 'failed') return 'Attachment send failed';
+  if (send.attachmentPhase === 'assessing') return 'Checking attachment delivery…';
+  if (send.attachmentPhase === 'confirmation') return 'Review attachment delivery';
   if (send.attachmentPhase === 'posted') return 'Sending message…';
   return 'Preparing attachments…';
 }
@@ -1167,6 +1189,15 @@ function pendingAttachmentStatusText(item: PendingSendAttachment, send: Attachme
   if (item.status === 'pending') return 'Waiting to upload';
   if (item.status === 'uploading') return 'Uploading';
   if (item.status === 'failed') return 'Upload failed';
+  if (send.attachmentPhase === 'assessing') return 'Checking delivery';
+  if (send.attachmentPhase === 'confirmation') return 'Delivery needs review';
+  if (send.reason === 'attachment_over_limit') {
+    return send.attachmentLimitRefusal?.offendingAssetIds.includes(item.reference?.assetId ?? '')
+      ? 'Over the Gateway delivery limit' : 'Not sent because another file exceeded the Gateway limit';
+  }
+  if (send.attachmentAssessment?.attachments.some(result =>
+    result.assetId === item.reference?.assetId && result.assessment === 'will-not-deliver' &&
+    result.reason?.code === 'over-limit')) return 'Over the Gateway delivery limit';
   if (send.status === 'uncertain') return 'Uploaded; delivery uncertain';
   if (send.status === 'failed') return 'Uploaded; message post failed';
   return 'Uploaded; message not confirmed';
@@ -1692,9 +1723,11 @@ const Composer = forwardRef<ComposerHandle, {
       {attachmentSendStates.map(send => {
         const attachmentItems = send.attachmentItems ?? [];
         const itemErrors = new Set(attachmentItems.flatMap(item => item.error ? [item.error] : []));
-        const submissionReason = send.reason && !itemErrors.has(send.reason) ? send.reason : undefined;
+        const submissionReason = send.reason === 'attachment_over_limit' ? attachmentLimitRefusalText(send)
+          : send.reason && !itemErrors.has(send.reason) ? send.reason : undefined;
         const failed = send.status === 'failed' || send.status === 'uncertain';
         const retryUnavailable = send.reason === 'retry-unavailable';
+        const blockedOverLimit = isKnownAttachmentOverLimit(send);
         return <div className="tb-chat-attachment-send" key={send.clientMessageId}>
           <p className="tb-chat-attachment-send-heading" role={failed ? 'alert' : 'status'}>
             {formatVisibleIds(attachmentSendHeading(send))}
@@ -1709,7 +1742,34 @@ const Composer = forwardRef<ComposerHandle, {
           {submissionReason && <p className="tb-chat-attachment-send-reason" role={failed ? 'alert' : 'status'}>
             Submission reason: {formatVisibleIds(submissionReason)}
           </p>}
-          {failed && !retryUnavailable && <button type="button" className="tb-chat-attachment-send-retry"
+          {send.attachmentPhase === 'confirmation' && <div className="tb-chat-attachment-assessment" role="alert">
+            <p>Gateway reports that some files will not reach the agent or delivery is unknown. You can send these attachments anyway.</p>
+            <ul>
+              {send.attachmentAssessment?.attachments.filter(item => item.assessment !== 'will-deliver').map(item => {
+                const filename = attachmentItems.find(file => file.reference?.assetId === item.assetId)?.filename ?? 'Attachment';
+                const status = item.assessment === 'will-not-deliver'
+                  ? item.reason?.message ?? 'This file will not reach the agent.' : 'Delivery is unknown.';
+                return <li key={item.assetId}>
+                  <strong>{formatVisibleIds(filename)}</strong>: {formatVisibleIds(status)}
+                  {item.assessment === 'unknown' && item.reason?.message && <> {formatVisibleIds(item.reason.message)}</>}
+                </li>;
+              })}
+            </ul>
+            <div className="tb-chat-attachment-assessment-actions">
+              <button type="button" className="tb-chat-attachment-send-retry"
+                disabled={state.status === 'unauthorized'}
+                onClick={() => runtime.confirmAttachmentSend?.(send.clientMessageId)}>Send anyway</button>
+              <button type="button" className="tb-chat-attachment-send-retry"
+                onClick={() => {
+                  if (draft.length > 0 || attachmentsRef.current.length > 0) {
+                    setAcquisitionError('Clear the current draft before keeping this send in the draft. Both drafts are still preserved.');
+                    return;
+                  }
+                  if (runtime.cancelAttachmentSend?.(send.clientMessageId)) restoreDraft(send.content, attachmentItems);
+                }}>Keep in draft</button>
+            </div>
+          </div>}
+          {failed && !retryUnavailable && !blockedOverLimit && <button type="button" className="tb-chat-attachment-send-retry"
             disabled={state.status === 'unauthorized'} onClick={() => void runtime.retrySend(send.clientMessageId)}>
             Retry attachment send
           </button>}
@@ -3232,15 +3292,20 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
         const hostManaged = send.hostSend !== undefined;
         const attachmentItems = (send as AttachmentSendView).attachmentItems ?? [];
         const retryUnavailable = send.reason === 'retry-unavailable';
+        const blockedOverLimit = isKnownAttachmentOverLimit(send);
+        const awaitingAttachmentDecision = send.attachmentPhase === 'assessing' || send.attachmentPhase === 'confirmation';
         const refused = send.status === 'failed' && !send.reconciled;
         const uncertain = send.status === 'uncertain' && !send.reconciled;
         const retryableUncertainty = uncertain && !retryUnavailable && (attachmentItems.length > 0 ||
           send.reason === 'connection-closed-before-acknowledgement' || send.reason === 'connection-unconfirmed');
-        const retryAvailable = !hostManaged && !retryUnavailable && (refused || retryableUncertainty);
+        const retryAvailable = !hostManaged && !retryUnavailable && !blockedOverLimit && (refused || retryableUncertainty);
+        const restoreAvailable = !hostManaged && !retryUnavailable && (refused || uncertain);
         const restoreLabel = attachmentItems.length > 0 ? 'Restore draft to the composer' : 'Restore text to the composer';
         const uncertaintyCopy = "We couldn't confirm whether this message was sent. Check the conversation before trying again.";
         const refusalCopy = refused
-          ? send.reason === 'payload_too_large'
+          ? send.reason === 'attachment_over_limit'
+            ? attachmentLimitRefusalText(send)
+            : send.reason === 'payload_too_large'
             ? 'The server refused this prompt because it is too large. Shorten it and try again.'
             : send.reason === 'invalid_message_id'
               ? 'This message could not be sent because its ID is invalid.'
@@ -3248,6 +3313,10 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
           : undefined;
         const announcement = send.reconciled
           ? 'Your message is in the conversation.'
+          : awaitingAttachmentDecision
+            ? send.attachmentPhase === 'confirmation'
+              ? 'Attachment delivery needs your review before this message can be sent.'
+              : 'Checking whether attachments will reach the agent.'
           : refused
             ? refusalCopy
               ? `Your message was not sent. ${refusalCopy}`
@@ -3265,18 +3334,18 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
           <div className="tb-chat-bubble-body">{markdownBody(stripProvenanceMarkup(send.content))}</div>
           {refusalCopy && <p className="tb-chat-send-refusal" aria-hidden="true">{refusalCopy}</p>}
           {uncertain && <p className="tb-chat-send-uncertainty" aria-hidden="true">{uncertaintyCopy}</p>}
-          {!send.reconciled && <div className="tb-chat-send-indicator" data-send-status={send.status} aria-hidden="true">
+          {!send.reconciled && !awaitingAttachmentDecision && <div className="tb-chat-send-indicator" data-send-status={send.status} aria-hidden="true">
             {refused ? <span className="tb-chat-send-error">!</span> : uncertain
               ? <span className="tb-chat-send-uncertain-mark">?</span> : <span className="tb-chat-send-spinner" />}
           </div>}
           <span className="tb-chat-sr-only" role={refused ? 'alert' : 'status'} aria-atomic="true">{formatVisibleIds(announcement)}</span>
-          {retryAvailable && <div className="tb-chat-send-actions">
-            <button type="button" disabled={state.status === 'unauthorized'}
+          {(retryAvailable || restoreAvailable) && <div className="tb-chat-send-actions">
+            {retryAvailable && <button type="button" disabled={state.status === 'unauthorized'}
               onClick={() => void runtime.retrySend(send.clientMessageId)}>
               {retryableUncertainty ? 'Check and retry' : 'Retry message'}
-            </button>
-            {state.status === 'unauthorized' && <span>Access to this conversation is unavailable.</span>}
-            <button type="button" onClick={() => composer.current?.restore(send.content, attachmentItems)}>{restoreLabel}</button>
+            </button>}
+            {retryAvailable && state.status === 'unauthorized' && <span>Access to this conversation is unavailable.</span>}
+            {restoreAvailable && <button type="button" onClick={() => composer.current?.restore(send.content, attachmentItems)}>{restoreLabel}</button>}
           </div>}
           <time className="tb-chat-time" dateTime={time.dateTime}>{time.text}</time>
         </article>;

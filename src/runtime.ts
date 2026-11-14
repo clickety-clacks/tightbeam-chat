@@ -13,6 +13,9 @@ import {
   type AttachmentInput,
   type AttachmentItem,
   type AttachmentReference,
+  type AttachmentAssessmentItem,
+  type AttachmentAssessmentResult,
+  type AttachmentDeliveryReason,
   type ToolCallIndex,
   type ToolCallRange,
   type ChangeConnection,
@@ -145,6 +148,68 @@ function reconcileSend(send: LocalSend, row: CanonicalMessage): LocalSend {
   return Object.freeze({ ...send, status: 'accepted', reconciled: true, reason: undefined,
     acceptedMessageId: row.id,
     ...(attachments ? { attachments, postSubmitted: true, attachmentPhase: 'posted' as const } : {}) });
+}
+
+function localUnknownAssessment(sessionKey: string, clientMessageId: string,
+  attachments: readonly AttachmentReference[], reason: AttachmentDeliveryReason = {
+    code: 'assessment-unavailable', message: 'Attachment delivery could not be confirmed.',
+  }): AttachmentAssessmentResult {
+  return Object.freeze({ sessionKey, clientMessageId,
+    attachments: Object.freeze(attachments.map(({ assetId }) => Object.freeze({
+      assetId, assessment: 'unknown' as const, reason: Object.freeze({ ...reason }),
+    }))),
+  });
+}
+
+function normalizeAttachmentAssessment(value: unknown, sessionKey: string, clientMessageId: string,
+  references: readonly AttachmentReference[]): AttachmentAssessmentResult {
+  const fallback = () => localUnknownAssessment(sessionKey, clientMessageId, references);
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return fallback();
+  const result = value as Record<string, unknown>;
+  if (result.sessionKey !== sessionKey || result.clientMessageId !== clientMessageId ||
+      !Array.isArray(result.attachments) || result.attachments.length !== references.length ||
+      (result.maxDeliverableAttachmentBytes !== undefined &&
+        (!Number.isSafeInteger(result.maxDeliverableAttachmentBytes) ||
+          (result.maxDeliverableAttachmentBytes as number) < 0))) return fallback();
+  const attachments: AttachmentAssessmentItem[] = [];
+  for (const [index, value] of result.attachments.entries()) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return fallback();
+    const row = value as Record<string, unknown>;
+    if (row.assetId !== references[index].assetId) return fallback();
+    if (row.assessment === 'will-deliver' && row.reason === null) {
+      attachments.push(Object.freeze({ assetId: references[index].assetId,
+        assessment: 'will-deliver', reason: null }));
+      continue;
+    }
+    if ((row.assessment === 'will-not-deliver' || row.assessment === 'unknown') &&
+        row.reason && typeof row.reason === 'object' && !Array.isArray(row.reason)) {
+      const reason = row.reason as Record<string, unknown>;
+      if (typeof reason.code === 'string' && reason.code.trim() &&
+          typeof reason.message === 'string' && reason.message.trim()) {
+        attachments.push(Object.freeze({ assetId: references[index].assetId,
+          assessment: row.assessment, reason: Object.freeze({ code: reason.code, message: reason.message }) }));
+        continue;
+      }
+    }
+    return fallback();
+  }
+  if (result.maxDeliverableAttachmentBytes === undefined &&
+      attachments.some(item => item.assessment !== 'unknown')) return fallback();
+  return Object.freeze({ sessionKey, clientMessageId,
+    ...(result.maxDeliverableAttachmentBytes === undefined ? {} : {
+      maxDeliverableAttachmentBytes: result.maxDeliverableAttachmentBytes as number,
+    }),
+    attachments: Object.freeze(attachments),
+  });
+}
+
+function hasKnownOverLimit(assessment: AttachmentAssessmentResult): boolean {
+  return assessment.attachments.some(item =>
+    item.assessment === 'will-not-deliver' && item.reason?.code === 'over-limit');
+}
+
+function needsAttachmentConfirmation(assessment: AttachmentAssessmentResult): boolean {
+  return assessment.attachments.some(item => item.assessment !== 'will-deliver');
 }
 
 const noProvenance: readonly TurnProvenance[] = Object.freeze([]);
@@ -935,6 +1000,24 @@ class SessionRuntime implements ChatRuntime {
     }
   }
 
+  private async refreshAttachmentDelivery(notice: Extract<ChangeNotice, { operation: 'attachment-delivery-delta' }>,
+    generation: number): Promise<void> {
+    const signal = this.controller?.signal;
+    if (!this.transport.readMessage || !signal || signal.aborted) return;
+    try {
+      const record = await this.transport.readMessage(this.sessionKey, notice.messageId, signal);
+      if (!this.isCurrent(generation) || !this.checkIdentity() || signal.aborted || record.kind !== 'message' ||
+          record.sessionKey !== this.sessionKey || record.id !== notice.messageId ||
+          record.clientMessageId !== notice.clientMessageId || !Array.isArray(record.attachments) ||
+          !record.attachments.some(value => value && typeof value === 'object' && !Array.isArray(value) &&
+            (value as Record<string, unknown>).assetId === notice.assetId)) return;
+      this.put(record);
+      if (!this.initializing) this.publish({ records: recordsFrom(this.rows), ...this.activityStatePatch() });
+    } catch {
+      // A delta carries no canonical state. Leave the last read intact if its refresh fails.
+    }
+  }
+
   private apply(notice: ChangeNotice): boolean {
     switch (notice.operation) {
       case 'record-event':
@@ -946,6 +1029,11 @@ class SessionRuntime implements ChatRuntime {
         this.put(record);
         return true;
       }
+      case 'attachment-delivery-delta':
+        if (notice.sessionKey === this.sessionKey) {
+          void this.refreshAttachmentDelivery(notice, this.generation);
+        }
+        return false;
       case 'rail-denial': {
         if (notice.sessionKey !== this.sessionKey || notice.principal !== `session:${this.sessionKey}` ||
             !notice.verb.trim() || !notice.rule.trim() || this.liveRailDenials.has(notice.id)) return false;
@@ -1862,6 +1950,28 @@ class SessionRuntime implements ChatRuntime {
     return clientMessageId;
   };
 
+  confirmAttachmentSend = (clientMessageId: string): boolean => {
+    if (this.disposed || !this.checkIdentity() || this.state.status !== 'ready' ||
+        this.sendControllers.has(clientMessageId)) return false;
+    const send = this.state.sends.find(item => item.clientMessageId === clientMessageId);
+    if (!send || send.attachmentPhase !== 'confirmation' || send.postSubmitted || !send.attachmentItems?.length ||
+        !send.attachments || !send.attachmentAssessment || hasKnownOverLimit(send.attachmentAssessment) ||
+        send.attachments.length !== send.attachmentItems.length) return false;
+    const submission: HumanSubmission = Object.freeze({ sessionKey: send.sessionKey, deviceId: send.deviceId,
+      clientMessageId: send.clientMessageId, content: send.content, attachments: send.attachments });
+    this.updateSend(clientMessageId, current => ({ ...current, attachmentPhase: 'ready' }));
+    void this.post(submission);
+    return true;
+  };
+
+  cancelAttachmentSend = (clientMessageId: string): boolean => {
+    if (this.disposed || !this.checkIdentity() || this.sendControllers.has(clientMessageId)) return false;
+    const send = this.state.sends.find(item => item.clientMessageId === clientMessageId);
+    if (!send || send.attachmentPhase !== 'confirmation' || send.postSubmitted) return false;
+    this.publish({ sends: Object.freeze(this.state.sends.filter(item => item.clientMessageId !== clientMessageId)) });
+    return true;
+  };
+
   prepareAttachmentInputs = (inputs: readonly AttachmentInput[], signal: AbortSignal) =>
     prepareAttachmentInputs(inputs, signal, this.transport.attachmentCapabilities?.(this.sessionKey));
 
@@ -2020,7 +2130,33 @@ class SessionRuntime implements ChatRuntime {
       const attachments = Object.freeze(ready.attachmentItems!.map(item => item.reference!));
       const submission: HumanSubmission = Object.freeze({ sessionKey: ready.sessionKey, deviceId: ready.deviceId,
         clientMessageId: ready.clientMessageId, content: ready.content, attachments });
-      this.updateSend(id, send => ({ ...send, attachments, attachmentPhase: 'ready' }));
+      this.updateSend(id, send => ({ ...send, attachments, attachmentPhase: 'assessing' }));
+      let assessment: AttachmentAssessmentResult;
+      try {
+        assessment = this.transport.assessAttachments
+          ? await this.transport.assessAttachments(submission, controller.signal)
+          : localUnknownAssessment(submission.sessionKey, submission.clientMessageId, attachments);
+      } catch {
+        if (controller.signal.aborted || !this.checkIdentity()) return;
+        assessment = localUnknownAssessment(submission.sessionKey, submission.clientMessageId, attachments);
+      }
+      if (controller.signal.aborted || !this.checkIdentity()) return;
+      assessment = normalizeAttachmentAssessment(assessment, submission.sessionKey,
+        submission.clientMessageId, attachments);
+      if (hasKnownOverLimit(assessment)) {
+        const refusal = assessment.attachments.find(item => item.assessment === 'will-not-deliver' &&
+          item.reason?.code === 'over-limit')?.reason;
+        this.updateSend(id, send => ({ ...send, status: 'failed', reason: refusal?.message ?? 'Attachment exceeds the Gateway delivery limit.',
+          attachmentPhase: 'failed', attachmentAssessment: assessment }));
+        this.notifyHostSend(id, { kind: 'failed', reason: 'refused', detail: 'attachment_over_limit' });
+        return;
+      }
+      if (needsAttachmentConfirmation(assessment)) {
+        this.updateSend(id, send => ({ ...send, status: 'pending', reason: undefined,
+          attachmentPhase: 'confirmation', attachmentAssessment: assessment }));
+        return;
+      }
+      this.updateSend(id, send => ({ ...send, attachments, attachmentPhase: 'ready', attachmentAssessment: assessment }));
       this.sendControllers.delete(id);
       await this.post(submission);
     } catch (error) {
@@ -2132,7 +2268,8 @@ class SessionRuntime implements ChatRuntime {
         return result.outcome === 'accepted'
           ? { ...send, status: 'accepted', reason: undefined, postSubmitted: true }
           : result.outcome === 'refused'
-            ? { ...send, status: 'failed', reason: result.reason }
+            ? { ...send, status: 'failed', reason: result.reason,
+              ...(result.attachmentLimitRefusal ? { attachmentLimitRefusal: result.attachmentLimitRefusal } : {}) }
             : { ...send, status: 'uncertain', reason: result.reason };
       });
       if (result.outcome === 'accepted') this.notifyHostSend(submission.clientMessageId, { kind: 'accepted' });
@@ -2183,7 +2320,9 @@ class SessionRuntime implements ChatRuntime {
         ? item.reason !== 'retry-unavailable'
         : retryableUncertainSendReasons.has(item.reason ?? '')));
     if (!send || !mayRetry(send) || send.reconciled || this.retryingSends.has(clientMessageId) ||
-        this.sendControllers.has(clientMessageId)) return;
+        this.sendControllers.has(clientMessageId) ||
+        send.reason === 'attachment_over_limit' ||
+        (send.attachmentItems && send.attachmentAssessment && hasKnownOverLimit(send.attachmentAssessment))) return;
     if (send.attachmentItems) {
       if (send.attachmentPhase === 'recovering') return;
       if (!send.postSubmitted) {
