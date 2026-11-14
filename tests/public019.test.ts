@@ -396,7 +396,7 @@ describe('Gateway wire mapping and behavior checks', () => {
     const runtime = createTightbeamAdapter(candidate.transport, candidate.profile).open(sessionKey);
     await vi.waitFor(() => expect(candidate.changes.sent).toEqual([
       { type: 'subscribe', protocolVersion: 2, subscriptionId: `chat:${sessionKey}`,
-        filters: { sessionKey, classes: ['message.created', 'transition.recorded', 'session.', 'turn.started', 'turn.ended', 'session_record_event.created'] } },
+        filters: { sessionKey, classes: ['message.created', 'message.attachment_delivery.updated', 'transition.recorded', 'session.', 'turn.started', 'turn.ended', 'session_record_event.created'] } },
       { type: 'subscribe', protocolVersion: 2, subscriptionId: `rail:${sessionKey}`,
         filters: { sessionKey, classes: ['rail.denied'] } },
     ]));
@@ -467,7 +467,7 @@ describe('Gateway wire mapping and behavior checks', () => {
     const runtime = createTightbeamAdapter(candidate.transport, candidate.profile).open(sessionKey);
     await vi.waitFor(() => expect(candidate.changes.sent[0]).toEqual({
       type: 'subscribe', protocolVersion: 2, subscriptionId: `chat:${sessionKey}`,
-      filters: { sessionKey, classes: ['message.created', 'transition.recorded', 'session.', 'turn.started', 'turn.ended', 'session_record_event.created'] },
+      filters: { sessionKey, classes: ['message.created', 'message.attachment_delivery.updated', 'transition.recorded', 'session.', 'turn.started', 'turn.ended', 'session_record_event.created'] },
     }));
     expect(candidate.changes.sent[1]).toEqual({ type: 'subscribe', protocolVersion: 2,
       subscriptionId: `rail:${sessionKey}`, filters: { sessionKey, classes: ['rail.denied'] } });
@@ -629,7 +629,7 @@ describe('Gateway wire mapping and behavior checks', () => {
 
     await vi.waitFor(() => expect(candidate.changes.sent[0]).toEqual({
       type: 'subscribe', protocolVersion: 2, subscriptionId: `chat:${sessionKey}`,
-      filters: { sessionKey, classes: ['message.created', 'transition.recorded', 'session.', 'turn.started', 'turn.ended', 'session_record_event.created'] },
+      filters: { sessionKey, classes: ['message.created', 'message.attachment_delivery.updated', 'transition.recorded', 'session.', 'turn.started', 'turn.ended', 'session_record_event.created'] },
     }));
     candidate.changes.emit({ type: 'subscription_ready', subscriptionId: `chat:${sessionKey}` });
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
@@ -685,7 +685,7 @@ describe('Gateway wire mapping and behavior checks', () => {
     await vi.waitFor(() => expect(candidate.changes.sent).toHaveLength(2));
     expect(candidate.changes.sent[0]).toEqual({
       type: 'subscribe', protocolVersion: 2, subscriptionId: `chat:${sessionKey}`,
-      filters: { sessionKey, classes: ['message.created', 'transition.recorded', 'session.', 'turn.started', 'turn.ended', 'session_record_event.created'] },
+      filters: { sessionKey, classes: ['message.created', 'message.attachment_delivery.updated', 'transition.recorded', 'session.', 'turn.started', 'turn.ended', 'session_record_event.created'] },
     });
     expect(candidate.changes.sent[1]).toEqual({ type: 'subscribe', protocolVersion: 2,
       subscriptionId: `rail:${sessionKey}`, filters: { sessionKey, classes: ['rail.denied'] } });
@@ -1067,6 +1067,11 @@ describe('Gateway wire mapping and behavior checks', () => {
     };
     expect(decodePublic019Notice(notice, sessionKey)).toMatchObject({ operation: 'upsert',
       record: { id: 'm_1', createdAt: '2026-10-12T00:00:00.000Z', raw: { at: item.at } } });
+    expect(decodePublic019Notice({ ...notice, class: 'message.attachment_delivery.updated', op: 'observe',
+      payload: { messageId: 'm_1', sessionKey, clientMessageId: 'c_1', assetId: 'asset-1',
+        delivery: { outcome: 'delivered', reason: null } } }, sessionKey)).toEqual({
+      operation: 'attachment-delivery-delta', sessionKey, messageId: 'm_1', clientMessageId: 'c_1', assetId: 'asset-1',
+    });
     expect(decodePublic019Notice({ ...notice, class: 'rail.denied', resource: undefined, op: 'observe',
       occurredAt: 1791763201000,
       refs: { sessionKey, principal: `session:${sessionKey}`, railDenialId: 14, origin: 'chat' },
@@ -1212,7 +1217,7 @@ describe('Gateway wire mapping and behavior checks', () => {
     }, new AbortController().signal);
     await vi.waitFor(() => expect(changes.sent).toHaveLength(2));
     expect(changes.sent[0]).toEqual({ type: 'subscribe', protocolVersion: 2,
-      subscriptionId: 'chat:s-public', filters: { sessionKey, classes: ['message.created', 'transition.recorded', 'session.', 'turn.started', 'turn.ended', 'session_record_event.created'] } });
+      subscriptionId: 'chat:s-public', filters: { sessionKey, classes: ['message.created', 'message.attachment_delivery.updated', 'transition.recorded', 'session.', 'turn.started', 'turn.ended', 'session_record_event.created'] } });
     expect(changes.sent[1]).toEqual({ type: 'subscribe', protocolVersion: 2,
       subscriptionId: 'rail:s-public', filters: { sessionKey, classes: ['rail.denied'] } });
     changes.emit({ type: 'subscription_ready', subscriptionId: 'chat:s-public' });
@@ -1358,6 +1363,89 @@ describe('Gateway wire mapping and behavior checks', () => {
     expect(candidate.dispatches[1]).toEqual(candidate.dispatches[0]);
   });
 
+  it('assesses ordered uploaded assets on the selected session with the post correlation', async () => {
+    const candidate = setup();
+    const references = [
+      { assetId: 'asset-first', mimeType: 'application/octet-stream', filename: 'first.zip', size: 12 },
+      { assetId: 'asset-second', mimeType: 'application/pdf', filename: 'second.pdf', size: 24 },
+    ];
+    candidate.dispatchResponses.push(new Response(JSON.stringify({ result: {
+      sessionKey, clientMessageId: 'c_assess', maxDeliverableAttachmentBytes: 25_000_000,
+      attachments: [
+        { assetId: 'asset-first', assessment: 'will-deliver', reason: null },
+        { assetId: 'asset-second', assessment: 'will-not-deliver',
+          reason: { code: 'unsupported-delivery', message: 'This file will not reach the agent.' } },
+      ],
+    } }), { status: 200 }));
+    const result = await candidate.transport.assessAttachments!({ sessionKey, clientMessageId: 'c_assess',
+      attachments: references }, new AbortController().signal);
+    expect(candidate.dispatches).toEqual([{ verb: 'assess_attachments', asUser: 'person-1', sessionKey,
+      params: { clientMessageId: 'c_assess', assetIds: ['asset-first', 'asset-second'] } }]);
+    expect(result).toEqual({ sessionKey, clientMessageId: 'c_assess',
+      maxDeliverableAttachmentBytes: 25_000_000,
+      attachments: [
+        { assetId: 'asset-first', assessment: 'will-deliver', reason: null },
+        { assetId: 'asset-second', assessment: 'will-not-deliver',
+          reason: { code: 'unsupported-delivery', message: 'This file will not reach the agent.' } },
+      ],
+    });
+  });
+
+  it('recognizes the older Gateway unsupported-verb response without inventing unknown delivery rows', async () => {
+    const candidate = setup();
+    const request = { sessionKey, clientMessageId: 'c_legacy_gateway', attachments: [
+      { assetId: 'asset-one', mimeType: 'application/zip', filename: 'one.zip', size: 3 },
+    ] };
+    candidate.dispatchResponses.push(new Response(JSON.stringify({
+      error: { code: 'invalid_message', message: 'verb not allowed: assess_attachments' },
+    }), { status: 400 }));
+
+    await expect(candidate.transport.assessAttachments!(request, new AbortController().signal)).resolves.toBeUndefined();
+    expect(candidate.dispatches).toEqual([{ verb: 'assess_attachments', asUser: 'person-1', sessionKey,
+      params: { clientMessageId: request.clientMessageId, assetIds: ['asset-one'] } }]);
+
+    candidate.dispatchResponses.push(new Response(JSON.stringify({
+      error: { code: 'invalid_message', message: 'another request validation failed' },
+    }), { status: 400 }));
+    const invalidRequest = (await candidate.transport.assessAttachments!(request, new AbortController().signal))!;
+    expect(invalidRequest.attachments).toEqual([expect.objectContaining({
+      assetId: 'asset-one', assessment: 'unknown',
+    })]);
+  });
+
+  it('keeps request-level assessment failures and malformed responses explicitly unknown', async () => {
+    const candidate = setup();
+    const request = { sessionKey, clientMessageId: 'c_assess_error', attachments: [
+      { assetId: 'asset-one', mimeType: 'application/zip', filename: 'one.zip', size: 3 },
+      { assetId: 'asset-two', mimeType: 'text/plain', filename: 'two.txt', size: 4 },
+    ] };
+    candidate.dispatchResponses.push(new Response(JSON.stringify({
+      error: { code: 'assessment-unavailable', message: 'Attachment delivery could not be confirmed.' },
+      sessionKey, clientMessageId: request.clientMessageId, maxDeliverableAttachmentBytes: 25_000_000,
+      attachments: request.attachments.map(({ assetId }) => ({ assetId, assessment: 'unknown',
+        reason: { code: 'assessment-unavailable', message: 'Attachment delivery could not be confirmed.' } })),
+    }), { status: 503 }));
+    const errorResult = (await candidate.transport.assessAttachments!(request, new AbortController().signal))!;
+    expect(errorResult.attachments.map(row => row.assessment)).toEqual(['unknown', 'unknown']);
+    expect(errorResult.maxDeliverableAttachmentBytes).toBe(25_000_000);
+
+    candidate.dispatchResponses.push(new Response(JSON.stringify({ result: {
+      sessionKey: 'other-session', clientMessageId: request.clientMessageId,
+      maxDeliverableAttachmentBytes: 25_000_000,
+      attachments: [{ assetId: 'wrong-asset', assessment: 'will-deliver', reason: null }],
+    } }), { status: 200 }));
+    const malformedResult = (await candidate.transport.assessAttachments!(request, new AbortController().signal))!;
+    expect(malformedResult.attachments.map(row => [row.assetId, row.assessment, row.reason?.code])).toEqual([
+      ['asset-one', 'unknown', 'assessment-unavailable'], ['asset-two', 'unknown', 'assessment-unavailable'],
+    ]);
+
+    const unavailable = candidate.host.fetch;
+    candidate.host.fetch = async () => { throw new Error('synthetic network failure'); };
+    const networkResult = (await candidate.transport.assessAttachments!(request, new AbortController().signal))!;
+    expect(networkResult.attachments.map(row => row.assessment)).toEqual(['unknown', 'unknown']);
+    candidate.host.fetch = unavailable;
+  });
+
   it('keeps dispatch error codes and treats malformed success bodies as uncertain', async () => {
     const refused = setup();
     refused.dispatchResponses.push(new Response(JSON.stringify({ error: { code: 'payload_too_large' } }),
@@ -1375,6 +1463,26 @@ describe('Gateway wire mapping and behavior checks', () => {
     expect(log).toHaveBeenCalledWith('[Chat] Gateway data incompatibility',
       expect.objectContaining({ site: 'human send response' }));
     log.mockRestore();
+  });
+
+  it('decodes a correlated post-time over-limit refusal without weakening its stable code', async () => {
+    const candidate = setup();
+    const submission = { sessionKey, deviceId: 'device-1', clientMessageId: 'c_post_over_limit', content: 'inspect',
+      attachments: [
+        { assetId: 'asset-small', mimeType: 'application/zip', filename: 'small.zip', size: 12 },
+        { assetId: 'asset-large', mimeType: 'application/octet-stream', filename: 'large.bin', size: 25_000_001 },
+      ] };
+    candidate.dispatchResponses.push(new Response(JSON.stringify({
+      error: { code: 'attachment_over_limit', message: 'This file exceeds the delivery limit.' },
+      sessionKey, clientMessageId: submission.clientMessageId,
+      maxDeliverableAttachmentBytes: 25_000_000, offendingAssetIds: ['asset-large'],
+    }), { status: 413 }));
+
+    await expect(candidate.transport.sendHuman(submission, new AbortController().signal)).resolves.toEqual({
+      outcome: 'refused', reason: 'attachment_over_limit',
+      attachmentLimitRefusal: { offendingAssetIds: ['asset-large'],
+        maxDeliverableAttachmentBytes: 25_000_000, message: 'This file exceeds the delivery limit.' },
+    });
   });
 
   it('reports submission only after starting REST and does not send without a configured Chat user', async () => {

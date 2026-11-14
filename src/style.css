@@ -793,6 +793,17 @@ body {
   overflow-wrap: anywhere;
 }
 .tb-chat-attachment-send-reason { color: var(--tb-chat-caution); }
+.tb-chat-attachment-assessment {
+  display: grid;
+  gap: .35rem;
+  color: var(--tb-chat-caution);
+  font-size: .72rem;
+  line-height: 1.35;
+}
+.tb-chat-attachment-assessment p { margin: 0; }
+.tb-chat-attachment-assessment ul { margin: 0; padding-inline-start: 1.1rem; }
+.tb-chat-attachment-assessment li { overflow-wrap: anywhere; }
+.tb-chat-attachment-assessment-actions { display: flex; flex-wrap: wrap; gap: .4rem; }
 .tb-chat-attachment-send-retry {
   justify-self: start;
   padding: .3rem .55rem;

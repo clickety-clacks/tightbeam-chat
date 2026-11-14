@@ -168,6 +168,9 @@ export type ChangeNotice =
   | { readonly operation: 'tool'; readonly tool: ToolCallRecord }
   | { readonly operation: 'turn-event'; readonly event: TurnEventRecord }
   | { readonly operation: 'upsert'; readonly record: ConversationRecord }
+  /** A committed attachment outcome notice; the canonical row must be refreshed. */
+  | { readonly operation: 'attachment-delivery-delta'; readonly sessionKey: string;
+      readonly messageId: string; readonly clientMessageId: string; readonly assetId: string }
   | { readonly operation: 'rail-denial'; readonly id: string; readonly sessionKey: string;
       readonly principal: string; readonly verb: string; readonly rule: string; readonly origin?: string;
       readonly payload?: Readonly<Record<string, unknown>>; readonly occurredAt?: number; readonly afterMessageSeq?: number }
@@ -263,6 +266,39 @@ export interface HumanSubmission {
   readonly attachments?: readonly AttachmentReference[];
 }
 
+export interface AttachmentDeliveryReason {
+  readonly code: string;
+  readonly message: string;
+}
+
+export type AttachmentAssessmentValue = 'will-deliver' | 'will-not-deliver' | 'unknown';
+
+export interface AttachmentAssessmentItem {
+  readonly assetId: string;
+  readonly assessment: AttachmentAssessmentValue;
+  readonly reason: AttachmentDeliveryReason | null;
+}
+
+export interface AttachmentAssessmentResult {
+  readonly sessionKey: string;
+  readonly clientMessageId: string;
+  readonly maxDeliverableAttachmentBytes?: number;
+  readonly attachments: readonly AttachmentAssessmentItem[];
+}
+
+export type AttachmentDeliveryOutcome = 'pending' | 'delivered' | 'not-delivered' | 'unknown';
+
+export interface AttachmentDelivery {
+  readonly outcome: AttachmentDeliveryOutcome;
+  readonly reason: AttachmentDeliveryReason | null;
+}
+
+export interface AttachmentLimitRefusal {
+  readonly offendingAssetIds: readonly string[];
+  readonly maxDeliverableAttachmentBytes: number;
+  readonly message?: string;
+}
+
 /** A session message position that Chat may record for the configured operator. */
 export interface ReadMarkerCandidate {
   readonly userId: string;
@@ -292,7 +328,7 @@ export interface HostSendContext {
 
 export type HumanSendResult =
   | { readonly outcome: 'accepted'; readonly messageId?: string }
-  | { readonly outcome: 'refused'; readonly reason: string }
+  | { readonly outcome: 'refused'; readonly reason: string; readonly attachmentLimitRefusal?: AttachmentLimitRefusal }
   /** The REST send result was unavailable; repeat the exact submission. */
   | { readonly outcome: 'retryable'; readonly reason: string }
   /** The send request could not be started. */
@@ -323,6 +359,9 @@ export interface ChatTransport {
   readonly readMarkerOperatorPrincipalKey?: string;
   attachmentCapabilities?(sessionKey: string): AttachmentCapabilities | undefined;
   uploadAttachment?(input: AttachmentInput, signal: AbortSignal): Promise<AttachmentReference>;
+  /** Assess the exact uploaded asset IDs before posting; undefined means the Gateway lacks this verb. */
+  assessAttachments?(request: Pick<HumanSubmission, 'sessionKey' | 'clientMessageId' | 'attachments'>,
+    signal: AbortSignal): Promise<AttachmentAssessmentResult | undefined>;
   readAttachment?(reference: AttachmentReference, signal: AbortSignal): Promise<Blob>;
   inspectTarget(signal: AbortSignal): Promise<TargetObservation>;
   openChanges(sessionKey: string, callbacks: ChangeCallbacks, signal: AbortSignal): Promise<ChangeConnection>;
@@ -366,7 +405,11 @@ export interface LocalSend extends HumanSubmission {
   readonly attachmentItems?: readonly AttachmentItem[];
   /** Every item has completed image preparation before the first upload. */
   readonly attachmentsPrepared?: boolean;
-  readonly attachmentPhase?: 'preparing' | 'ready' | 'failed' | 'posted' | 'recovering';
+  readonly attachmentPhase?: 'preparing' | 'assessing' | 'confirmation' | 'ready' | 'failed' | 'posted' | 'recovering';
+  /** Gateway prediction only; it never becomes a retained delivery outcome. */
+  readonly attachmentAssessment?: AttachmentAssessmentResult;
+  /** Gateway's authoritative post-time refusal when the advisory assessment became stale. */
+  readonly attachmentLimitRefusal?: AttachmentLimitRefusal;
   /** True only after the transport started the REST send request. */
   readonly postSubmitted?: boolean;
   /** Gateway message ID named by a recorded or duplicate REST send result. */
@@ -487,6 +530,10 @@ export interface ChatRuntime {
   /** Prepare the whole selection before enabling Send; preview and submit the exact returned list. */
   prepareAttachmentInputs?(inputs: readonly AttachmentInput[], signal: AbortSignal): Promise<readonly AttachmentInput[]>;
   sendAttachments?(content: string, inputs: readonly AttachmentInput[], context?: AttachmentSubmissionContext): string | null;
+  /** Continue a non-size delivery warning after the user explicitly proceeds. */
+  confirmAttachmentSend?(clientMessageId: string): boolean;
+  /** Restore an assessed, unposted attachment send to the editable draft. */
+  cancelAttachmentSend?(clientMessageId: string): boolean;
   getAttachmentCapabilities?(): AttachmentCapabilities | undefined;
   /** Retry retained upload bytes by ID; callers cannot replace the frozen manifest. */
   retryAttachmentSend?(clientMessageId: string, context?: AttachmentSubmissionContext): Promise<void>;
