@@ -2427,7 +2427,7 @@ describe('conversation reading position', () => {
     expect(targetForPreview()?.dataset.recordKey).toBe('message-6');
   });
 
-  it('pins a prompt at the preview bottom line and animates it back when it crosses down', () => {
+  it('pins a prompt at the bubble bottom edge and animates it back when it crosses down', () => {
     latestPromptOverlayHeight = 60;
     const { box } = setup();
     const chat = box.closest<HTMLElement>('.tb-chat')!;
@@ -2477,6 +2477,71 @@ describe('conversation reading position', () => {
     expect(screen.queryByRole('button', { name: 'Jump to user prompt' })).toBeNull();
     expect(crossingPrompt.style.visibility).not.toBe('hidden');
     expect(animate).toHaveBeenCalledTimes(2);
+  });
+
+  it('slides a pinned prompt off when the next prompt reaches its bottom edge, then pins at that same edge', () => {
+    const { box } = setup();
+    latestPromptOverlayHeight = 100;
+    const chat = box.closest<HTMLElement>('.tb-chat')!;
+    const pinnedPrompt = box.querySelector<HTMLElement>('[data-scroll-key="message-5"]')!;
+    const nextPrompt = box.querySelector<HTMLElement>('[data-scroll-key="message-6"]')!;
+    const bubbleBottom = () => chat.querySelector<HTMLElement>('.tb-chat-latest-user-prompt-measurement')!
+      .getBoundingClientRect().bottom;
+
+    readAt(box, 450);
+    let completed = 0;
+    const finishMotions = () => {
+      while (completed < animate.mock.results.length) {
+        const motion = animate.mock.results[completed++].value;
+        if (motion.onfinish) act(() => motion.onfinish());
+      }
+    };
+    finishMotions();
+    expect(bubbleBottom()).toBe(110);
+    expect(screen.getByRole('button', { name: 'Jump to user prompt' }).textContent).toBe('Message 5');
+    expect(pinnedPrompt.style.visibility).toBe('hidden');
+    expect(String((animate.mock.calls.at(-1)![0] as Keyframe[])[0].transform)).not.toContain('scale(');
+
+    box.scrollTop = 458;
+    fireEvent.scroll(box);
+    expect(nextPrompt.getBoundingClientRect().top).toBe(bubbleBottom());
+    expect(screen.getByRole('button', { name: 'Jump to user prompt' }).textContent).toBe('Message 5');
+    const beforeAdvance = animate.mock.calls.length;
+
+    box.scrollTop = 459;
+    fireEvent.scroll(box);
+    expect(nextPrompt.getBoundingClientRect().top).toBeLessThan(bubbleBottom());
+    expect(screen.getByRole('button', { name: 'Jump to user prompt' }).textContent).toBe('Message 5');
+    expect(animate).toHaveBeenCalledTimes(beforeAdvance + 1);
+    const advanceFrames = animate.mock.calls[beforeAdvance][0] as Keyframe[];
+    expect(String(advanceFrames[0].transform)).not.toContain('scale(');
+    expect(Number.parseFloat(String(advanceFrames[1].transform).match(/translateY\((-?[\d.]+)px\)/)?.[1] ?? '0'))
+      .toBeLessThan(0);
+    expect(advanceFrames[0].width).toBe(advanceFrames[1].width);
+    act(() => animate.mock.results[beforeAdvance].value.onfinish());
+    expect(screen.queryByRole('button', { name: 'Jump to user prompt' })).toBeNull();
+    expect(pinnedPrompt.style.visibility).not.toBe('hidden');
+
+    box.scrollTop = 537;
+    fireEvent.scroll(box);
+    expect(nextPrompt.getBoundingClientRect().bottom).toBeGreaterThan(bubbleBottom());
+    expect(screen.queryByRole('button', { name: 'Jump to user prompt' })).toBeNull();
+
+    box.scrollTop = 538;
+    fireEvent.scroll(box);
+    expect(nextPrompt.getBoundingClientRect().bottom).toBe(bubbleBottom());
+    expect(screen.getByRole('button', { name: 'Jump to user prompt' }).textContent).toBe('Message 6');
+    expect(nextPrompt.style.visibility).toBe('hidden');
+    expect(animate).toHaveBeenCalledTimes(beforeAdvance + 2);
+    const morphFrames = animate.mock.calls[beforeAdvance + 1][0] as Keyframe[];
+    expect(String(morphFrames[0].transform)).not.toContain('scale(');
+    expect(morphFrames[0].height).not.toBe(morphFrames[1].height);
+
+    latestPromptOverlayHeight = 60;
+    notifyResizeObserver(chat.querySelector('.tb-chat-latest-user-prompt-measurement')!);
+    expect(bubbleBottom()).toBe(70);
+    expect(screen.getByRole('button', { name: 'Jump to user prompt' }).textContent).toBe('Message 6');
+    expect(nextPrompt.style.visibility).toBe('hidden');
   });
 
   it('moves the prompt instantly with reduced motion enabled', () => {
