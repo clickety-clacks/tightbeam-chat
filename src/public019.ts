@@ -1485,7 +1485,7 @@ export function createPublic019Transport(config: Public019Config): { transport: 
         if ((result.outcome !== 'recorded' && result.outcome !== 'duplicate') ||
             result.sessionKey !== submission.sessionKey || result.deviceId !== submission.deviceId ||
             result.clientMessageId !== submission.clientMessageId || typeof result.messageId !== 'string' ||
-            !result.messageId || !Number.isSafeInteger(result.turnSeq)) {
+            !result.messageId || (result.turnSeq !== null && !Number.isSafeInteger(result.turnSeq))) {
           logGatewayIncompatibility('human send response', 'Used the uncertain-result fallback.');
           return { outcome: 'uncertain', reason: 'invalid-send-response' };
         }
