@@ -1413,6 +1413,71 @@ describe('Gateway wire mapping and behavior checks', () => {
     }
   });
 
+  it('links a held send to its later carrier turn before reading turn history', async () => {
+    const historyItems: unknown[] = [];
+    const candidate = setup(undefined, version, historyItems);
+    const submission = { sessionKey, deviceId: 'device-1',
+      clientMessageId: 'c_11111111-1111-4111-8111-111111111111', content: 'held message' };
+    const receipt = (outcome: 'recorded' | 'duplicate', turnSeq: number | null) => new Response(JSON.stringify({ result: {
+      outcome, sessionKey, deviceId: submission.deviceId, clientMessageId: submission.clientMessageId,
+      messageId: 'message-held', turnSeq,
+    } }), { status: 200 });
+    candidate.dispatchResponses.push(receipt('recorded', null), receipt('duplicate', null), receipt('duplicate', 42));
+
+    const runtime = createTightbeamAdapter(candidate.transport, candidate.profile).open(sessionKey);
+    await vi.waitFor(() => expect(candidate.changes.sent).toHaveLength(2));
+    candidate.changes.emit({ type: 'subscription_ready', subscriptionId: `chat:${sessionKey}` });
+    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+
+    expect(runtime.send(submission.content, submission.clientMessageId)).toBe(submission.clientMessageId);
+    await vi.waitFor(() => expect(runtime.getSnapshot().sends[0]).toMatchObject({
+      status: 'accepted', acceptedMessageId: 'message-held', reconciled: false,
+    }));
+    const turnHistoryPaths = () => candidate.paths.filter(path => {
+      const url = new URL(path);
+      return url.pathname.endsWith('/turns') || url.pathname.endsWith('/turn-events');
+    });
+    expect(turnHistoryPaths()).toEqual([]);
+
+    await expect(candidate.transport.sendHuman(submission, new AbortController().signal))
+      .resolves.toEqual({ outcome: 'accepted', messageId: 'message-held' });
+    expect(turnHistoryPaths()).toEqual([]);
+
+    const heldMessage: Record<string, unknown> = { ...item, id: 'message-held', seq: 10, role: 'user', sender: 'user:person-1',
+      messageType: 'chat', deviceId: submission.deviceId, clientMessageId: submission.clientMessageId,
+      content: submission.content, turnSeq: null, rowVersion: 10 };
+    const emitMessage = (payload: typeof heldMessage, seq: number) => candidate.changes.emit({
+      type: 'change', schemaVersion: 2, subscriptionId: `chat:${sessionKey}`, seq,
+      class: 'message.created', resource: 'messages', op: 'upsert', refs: { sessionKey, messageId: 'message-held' }, payload,
+    });
+    emitMessage(heldMessage, 1);
+    await vi.waitFor(() => expect(runtime.getSnapshot().sends[0]).toMatchObject({
+      acceptedMessageId: 'message-held', reconciled: true,
+    }));
+    expect(runtime.getSnapshot().records.map(record => record.id)).toEqual(['message-held']);
+
+    const deliveredMessage = { ...heldMessage, turnSeq: 42 };
+    emitMessage(deliveredMessage, 2);
+    candidate.changes.emit({ type: 'change', schemaVersion: 2, subscriptionId: `chat:${sessionKey}`, seq: 3,
+      class: 'turn.started', resource: 'turns', op: 'upsert', refs: { sessionKey, turnSeq: 42 },
+      payload: { seq: 42, rowVersion: 1, sessionKey, status: 'running', messageId: 'message-held',
+        origin: 'user:person-1', triggerSource: 'batch', batchMemberCount: 1 } });
+    await vi.waitFor(() => expect(runtime.getSnapshot().activeTurn).toMatchObject({
+      sourceKind: 'human', turn: { seq: 42, status: 'running' },
+    }));
+
+    await expect(candidate.transport.sendHuman(submission, new AbortController().signal))
+      .resolves.toEqual({ outcome: 'accepted', messageId: 'message-held' });
+    expect(candidate.dispatches).toHaveLength(3);
+    expect(candidate.dispatches[1]).toEqual(candidate.dispatches[0]);
+    expect(candidate.dispatches[2]).toEqual(candidate.dispatches[0]);
+    runtime.retryTurnEvents?.();
+    await vi.waitFor(() => expect(turnHistoryPaths().length).toBeGreaterThan(0));
+    expect(turnHistoryPaths().map(path => new URL(path).searchParams.get('turnSeq'))).toEqual(['42']);
+    expect(runtime.getSnapshot().records.map(record => record.id)).toEqual(['message-held']);
+    runtime.dispose();
+  });
+
   it('assesses ordered uploaded assets on the selected session with the post correlation', async () => {
     const candidate = setup();
     const references = [
