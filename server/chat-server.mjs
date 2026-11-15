@@ -137,6 +137,14 @@ function loadRuntimeConfig(environment) {
   const publicOrigin = canonicalOrigin(environment.CHAT_PUBLIC_ORIGIN);
   const configuredGateway = canonicalOrigin(environment.CHAT_DEFAULT_GATEWAY_ORIGIN);
   const gatewayMap = loadGatewayMap(environment, configuredGateway);
+  const restHumanSendEnabled = environment.CHAT_REST_HUMAN_SEND === '1';
+  let markerDeviceToken = '';
+  if (!restHumanSendEnabled && typeof environment.CHAT_READ_MARKER_DEVICE_CREDENTIAL_FILE === 'string' &&
+      environment.CHAT_READ_MARKER_DEVICE_CREDENTIAL_FILE) {
+    try {
+      markerDeviceToken = fs.readFileSync(environment.CHAT_READ_MARKER_DEVICE_CREDENTIAL_FILE, 'utf8').trim();
+    } catch {}
+  }
   const gatewayOrigin = gatewayMap.valid && configuredGateway && gatewayMap.gateways.has(configuredGateway)
     ? configuredGateway
     : undefined;
@@ -150,15 +158,15 @@ function loadRuntimeConfig(environment) {
   const deviceId = gatewayOrigin && principalKey && sessionKey.trim()
     ? `chat_${crypto.createHash('sha256').update(`${gatewayOrigin}\0${principalKey}\0${sessionKey}`).digest('hex').slice(0, 24)}`
     : '';
-  const restHumanSendEnabled = environment.CHAT_REST_HUMAN_SEND === '1';
+  const readMarkerRoute = !operatorPrincipalKey ? undefined
+    : restHumanSendEnabled ? 'gateway-configured-user'
+      : markerDeviceToken ? 'gateway-user-device' : undefined;
   const configuredTarget = gatewayOrigin && sessionKey.trim()
     ? {
       gateway: gatewayOrigin,
       sessionKey,
       ...(principalKey ? { principalKey, deviceId } : {}),
-      ...(operatorPrincipalKey
-        ? { readMarkerRoute: 'gateway-configured-user' }
-        : {}),
+      ...(readMarkerRoute ? { readMarkerRoute } : {}),
       ...(restHumanSendEnabled ? { restHumanSendEnabled: true } : {}),
     }
     : {};
@@ -171,6 +179,7 @@ function loadRuntimeConfig(environment) {
     gatewayMapValid: gatewayMap.valid,
     gateways: gatewayMap.gateways,
     restHumanSendEnabled,
+    markerDeviceToken,
     sessionKey,
     principalKey,
     deviceId,
@@ -627,16 +636,25 @@ async function serviceAgentDispatch(request, response, runtime) {
     jsonResponse(response, 404, { error: { code: 'not_found' } });
     return;
   }
-  const forwardedBody = Buffer.from(JSON.stringify({ ...value, asUser: runtime.principalKey }));
+  const useDeviceMarkerCredential = value.verb === 'read-marker-set' && !runtime.restHumanSendEnabled;
+  if (useDeviceMarkerCredential && (!runtime.markerDeviceToken || !runtime.operatorPrincipalKey)) {
+    jsonResponse(response, 404, { error: { code: 'not_found' } });
+    return;
+  }
+  const forwardedBody = useDeviceMarkerCredential
+    ? body
+    : Buffer.from(JSON.stringify({ ...value, asUser: runtime.principalKey }));
 
   try {
     writeGatewayReply(response, await gatewayRequest(gateway, target.path, {
       method: 'POST',
       headers: {
+        ...(useDeviceMarkerCredential ? { authorization: `Bearer ${runtime.markerDeviceToken}` } : {}),
         'content-type': request.headers['content-type'] ?? 'application/json',
         'content-length': String(forwardedBody.length),
       },
       body: forwardedBody,
+      ...(useDeviceMarkerCredential ? { authorize: false } : {}),
     }));
   } catch {
     jsonResponse(response, 502, { error: { code: 'gateway_unavailable' } });

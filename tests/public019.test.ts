@@ -214,6 +214,22 @@ describe('Gateway wire mapping and behavior checks', () => {
     expect(new URL(requestUrl).pathname).toBe(`/api/roles/${encodeURIComponent(roleName)}`);
   });
 
+  it('omits configured-user identity from device-authenticated marker writes', async () => {
+    const candidate = setup(undefined, version, [item], [], 200, undefined, operatorPrincipalKey);
+    const host: Public019Host = {
+      ...candidate.host,
+      readMarkerRoute: 'gateway-user-device',
+      currentIdentity: () => ({ principalKey: operatorPrincipalKey, deviceId: 'fixture-device' }),
+    };
+    const { transport } = createPublic019Transport({ baseUrl: 'https://host.example', host });
+    const result = await transport.writeReadMarker!({ userId: operatorPrincipalKey, scopeKey: 'scope',
+      sequence: '9', expectedCurrent: null }, new AbortController().signal);
+
+    expect(result).toBe('written');
+    expect(candidate.dispatches).toEqual([{ verb: 'read-marker-set',
+      params: { scopeKey: 'scope', marker: '9', expectedCurrent: null } }]);
+  });
+
   it('encodes the full scope key and retains the higher marker after a conditional-write conflict', async () => {
     const scopeKey = 'agent:sample assistant with space:session-read-position';
     const requests: Array<{ input: string; init: RequestInit }> = [];
