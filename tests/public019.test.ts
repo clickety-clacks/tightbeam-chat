@@ -393,7 +393,7 @@ describe('Gateway wire mapping and behavior checks', () => {
     const runtime = createTightbeamAdapter(candidate.transport, candidate.profile).open(sessionKey);
     await vi.waitFor(() => expect(candidate.changes.sent).toEqual([
       { type: 'subscribe', protocolVersion: 2, subscriptionId: `chat:${sessionKey}`,
-        filters: { sessionKey, classes: ['message.created', 'transition.recorded', 'session.', 'turn.started', 'turn.ended', 'session_record_event.created'] } },
+        filters: { sessionKey, classes: ['message.created', 'message.attachment_delivery.updated', 'transition.recorded', 'session.', 'turn.started', 'turn.ended', 'session_record_event.created'] } },
       { type: 'subscribe', protocolVersion: 2, subscriptionId: `rail:${sessionKey}`,
         filters: { sessionKey, classes: ['rail.denied'] } },
     ]));
@@ -464,7 +464,7 @@ describe('Gateway wire mapping and behavior checks', () => {
     const runtime = createTightbeamAdapter(candidate.transport, candidate.profile).open(sessionKey);
     await vi.waitFor(() => expect(candidate.changes.sent[0]).toEqual({
       type: 'subscribe', protocolVersion: 2, subscriptionId: `chat:${sessionKey}`,
-      filters: { sessionKey, classes: ['message.created', 'transition.recorded', 'session.', 'turn.started', 'turn.ended', 'session_record_event.created'] },
+      filters: { sessionKey, classes: ['message.created', 'message.attachment_delivery.updated', 'transition.recorded', 'session.', 'turn.started', 'turn.ended', 'session_record_event.created'] },
     }));
     expect(candidate.changes.sent[1]).toEqual({ type: 'subscribe', protocolVersion: 2,
       subscriptionId: `rail:${sessionKey}`, filters: { sessionKey, classes: ['rail.denied'] } });
@@ -628,7 +628,7 @@ describe('Gateway wire mapping and behavior checks', () => {
 
     await vi.waitFor(() => expect(candidate.changes.sent[0]).toEqual({
       type: 'subscribe', protocolVersion: 2, subscriptionId: `chat:${sessionKey}`,
-      filters: { sessionKey, classes: ['message.created', 'transition.recorded', 'session.', 'turn.started', 'turn.ended', 'session_record_event.created'] },
+      filters: { sessionKey, classes: ['message.created', 'message.attachment_delivery.updated', 'transition.recorded', 'session.', 'turn.started', 'turn.ended', 'session_record_event.created'] },
     }));
     candidate.changes.emit({ type: 'subscription_ready', subscriptionId: `chat:${sessionKey}` });
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
@@ -685,7 +685,7 @@ describe('Gateway wire mapping and behavior checks', () => {
     await vi.waitFor(() => expect(candidate.changes.sent).toHaveLength(2));
     expect(candidate.changes.sent[0]).toEqual({
       type: 'subscribe', protocolVersion: 2, subscriptionId: `chat:${sessionKey}`,
-      filters: { sessionKey, classes: ['message.created', 'transition.recorded', 'session.', 'turn.started', 'turn.ended', 'session_record_event.created'] },
+      filters: { sessionKey, classes: ['message.created', 'message.attachment_delivery.updated', 'transition.recorded', 'session.', 'turn.started', 'turn.ended', 'session_record_event.created'] },
     });
     expect(candidate.changes.sent[1]).toEqual({ type: 'subscribe', protocolVersion: 2,
       subscriptionId: `rail:${sessionKey}`, filters: { sessionKey, classes: ['rail.denied'] } });
@@ -1046,6 +1046,11 @@ describe('Gateway wire mapping and behavior checks', () => {
     };
     expect(decodePublic019Notice(notice, sessionKey)).toMatchObject({ operation: 'upsert',
       record: { id: 'm_1', createdAt: '2026-10-12T00:00:00.000Z', raw: { at: item.at } } });
+    expect(decodePublic019Notice({ ...notice, class: 'message.attachment_delivery.updated', op: 'observe',
+      payload: { messageId: 'm_1', sessionKey, clientMessageId: 'c_1', assetId: 'asset-1',
+        delivery: { outcome: 'delivered', reason: null } } }, sessionKey)).toEqual({
+      operation: 'attachment-delivery-delta', sessionKey, messageId: 'm_1', clientMessageId: 'c_1', assetId: 'asset-1',
+    });
     expect(decodePublic019Notice({ ...notice, class: 'rail.denied', resource: undefined, op: 'observe',
       occurredAt: 1791763201000,
       refs: { sessionKey, principal: `session:${sessionKey}`, railDenialId: 14, origin: 'chat' },
@@ -1191,7 +1196,7 @@ describe('Gateway wire mapping and behavior checks', () => {
     }, new AbortController().signal);
     await vi.waitFor(() => expect(changes.sent).toHaveLength(2));
     expect(changes.sent[0]).toEqual({ type: 'subscribe', protocolVersion: 2,
-      subscriptionId: 'chat:s-public', filters: { sessionKey, classes: ['message.created', 'transition.recorded', 'session.', 'turn.started', 'turn.ended', 'session_record_event.created'] } });
+      subscriptionId: 'chat:s-public', filters: { sessionKey, classes: ['message.created', 'message.attachment_delivery.updated', 'transition.recorded', 'session.', 'turn.started', 'turn.ended', 'session_record_event.created'] } });
     expect(changes.sent[1]).toEqual({ type: 'subscribe', protocolVersion: 2,
       subscriptionId: 'rail:s-public', filters: { sessionKey, classes: ['rail.denied'] } });
     changes.emit({ type: 'subscription_ready', subscriptionId: 'chat:s-public' });
@@ -1779,8 +1784,6 @@ it('decodes exact record-event notice coverage and reads the same live/history o
   expect(decodePublic019Message({ ...item, recordEventIds: [event.eventId] }, sessionKey))
     .toMatchObject({ recordEventIds: [event.eventId] });
   const paths: string[] = [];
-  const dispatches: Record<string, unknown>[] = [];
-  const dispatchResponses: Response[] = [];
   candidate.host.fetch = async path => {
     paths.push(path);
     return new Response(JSON.stringify({ schemaVersion: 1, resource: 'record events', items: [event],

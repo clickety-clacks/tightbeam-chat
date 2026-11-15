@@ -604,41 +604,6 @@ async function gatewayError(response: Response): Promise<{ code?: string; messag
   }
 }
 
-function readMarkerValue(value: unknown): string | number | null | undefined {
-  if (value === null) return null;
-  if (typeof value === 'string' && /^(0|[1-9]\d*)$/.test(value)) return value;
-  if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) return value;
-  return undefined;
-}
-
-function isSessionDetailPath(path: string): boolean {
-  try { return /^\/api\/sessions\/[^/]+$/.test(new URL(path, 'https://gateway.invalid').pathname); }
-  catch { return false; }
-}
-
-function isToolHistoryCollectionPath(path: string): boolean {
-  try { return /^\/api\/sessions\/[^/]+\/tool-calls$/.test(new URL(path, 'https://gateway.invalid').pathname); }
-  catch { return false; }
-}
-
-function isRecordEventsCollectionPath(path: string): boolean {
-  try { return /^\/api\/sessions\/[^/]+\/record-events$/.test(new URL(path, 'https://gateway.invalid').pathname); }
-  catch { return false; }
-}
-
-function isTurnEventsCollectionPath(path: string): boolean {
-  try { return /^\/api\/sessions\/[^/]+\/turn-events$/.test(new URL(path, 'https://gateway.invalid').pathname); }
-  catch { return false; }
-}
-
-function authorizationFailureCode(value: unknown): boolean {
-  if (typeof value !== 'string') return false;
-  return ['unauthorized', 'forbidden', 'not_authorized', 'not_authenticated',
-    'authentication_failed', 'auth_failed'].includes(value.toLowerCase());
-}
-
-/** Gateway REST history, protocol-2 changes, and human sending. */
-
 const unknownAssessmentMessage = 'Attachment delivery could not be confirmed.';
 
 function unknownAttachmentAssessment(sessionKey: string, clientMessageId: string,
