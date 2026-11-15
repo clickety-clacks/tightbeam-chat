@@ -178,6 +178,65 @@ afterEach(async () => {
 });
 
 describe('private direct-entry Chat service bridge', () => {
+  it('forwards attachment assessment with the configured upload identity and preserves legacy unsupported-verb behavior', async () => {
+    const seen = [];
+    let supported = false;
+    const gateway = http.createServer(async (request, response) => {
+      if (request.method === 'GET' && request.url === '/version') {
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify({ version: '0.1.14' }));
+        return;
+      }
+      const chunks = [];
+      for await (const chunk of request) chunks.push(Buffer.from(chunk));
+      const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+      seen.push({ url: request.url, authorization: request.headers.authorization, body });
+      response.setHeader('content-type', 'application/json');
+      if (!supported) {
+        response.writeHead(400).end(JSON.stringify({ error: {
+          code: 'invalid_message', message: 'verb not allowed: assess_attachments',
+        } }));
+      } else response.end(JSON.stringify({ result: {
+        sessionKey: body.sessionKey, clientMessageId: body.params.clientMessageId, maxDeliverableAttachmentBytes: 25_000_000,
+        attachments: body.params.assetIds.map(assetId => ({ assetId, assessment: 'will-deliver', reason: null })),
+      } }));
+    });
+    const gatewayOrigin = `http://127.0.0.1:${await listen(gateway)}`;
+    const chatPort = await unusedPort();
+    const chatOrigin = `http://127.0.0.1:${chatPort}`;
+    const { root, publicDir } = await temporaryDirectory();
+    const gatewayBaseDir = await writeGatewayDescriptor(path.join(root, 'gateway-base'), gatewayOrigin, TOKEN);
+    const chat = createChatServer({ rootDir: root, publicDir,
+      releaseInfo: { tag: 'v0.1.100', sourceCommit: '1234567890abcdef1234567890abcdef12345678' },
+      environment: { CHAT_PUBLIC_ORIGIN: chatOrigin, CHAT_DEFAULT_GATEWAY_ORIGIN: gatewayOrigin,
+        CHAT_DEFAULT_SESSION_KEY: SESSION, CHAT_DEFAULT_PRINCIPAL_KEY: PRINCIPAL,
+        TIGHTBEAM_BASE_DIR: gatewayBaseDir },
+    });
+    await listen(chat, chatPort);
+    const { transport } = createPublic019Transport({ baseUrl: `${chatOrigin}/__chat`, host: {
+      currentIdentity: () => ({ principalKey: 'caller-value', deviceId: 'fixture-device' }),
+      fetch: (input, init) => fetch(input, { ...init, headers: { ...init?.headers, origin: chatOrigin } }),
+    } });
+    const request = { sessionKey: SESSION, clientMessageId: 'c_assess_wire',
+      attachments: [{ assetId: 'asset-photo', mimeType: 'image/png', filename: 'photo.png', size: 8 }] };
+    // Undefined is the runtime's existing no-warning/no-confirmation legacy path.
+    await expect(transport.assessAttachments(request, new AbortController().signal)).resolves.toBeUndefined();
+    expect(seen).toEqual([{ url: '/agent/dispatch', authorization: `Bearer ${TOKEN}`,
+      body: { verb: 'assess_attachments', asUser: PRINCIPAL, sessionKey: SESSION,
+        params: { clientMessageId: request.clientMessageId, assetIds: ['asset-photo'] } } }]);
+    supported = true;
+    await expect(transport.assessAttachments(request, new AbortController().signal)).resolves.toMatchObject({
+      sessionKey: SESSION, clientMessageId: request.clientMessageId,
+      attachments: [{ assetId: 'asset-photo', assessment: 'will-deliver', reason: null }],
+    });
+    const unsupported = await fetch(`${chatOrigin}/__chat/agent/dispatch`, {
+      method: 'POST', headers: { origin: chatOrigin, 'content-type': 'application/json' },
+      body: JSON.stringify({ verb: 'not-a-supported-verb' }),
+    });
+    expect(unsupported.status).toBe(404);
+    expect(seen).toHaveLength(2);
+  });
+
   it('keeps the credential server-side and maps linked-session REST to detail and transcript operations', async () => {
     const seen = [];
     const afterCursor = 'opaque / cursor:m_1';

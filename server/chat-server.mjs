@@ -480,7 +480,7 @@ async function gatewayRequest(
     request.end(body);
   });
 
-  // serviceAgentDispatch validates these requests as post or read-marker-set before forwarding.
+  // serviceAgentDispatch validates these requests as post, read-marker-set or assess_attachments before forwarding.
   if (!retriedAfterVersionRefresh && authorize && path === '/agent/dispatch' &&
       isIncompatibleCliReply(reply)) {
     if (gateway.cliVersion === cliVersion) gateway.cliVersion = undefined;
@@ -615,7 +615,7 @@ async function serviceAgentDispatch(request, response, runtime) {
     return;
   }
   if (!value || typeof value !== 'object' || Array.isArray(value) ||
-      !['post', 'read-marker-set'].includes(value.verb)) {
+      !['post', 'read-marker-set', 'assess_attachments'].includes(value.verb)) {
     jsonResponse(response, 404, { error: { code: 'not_found' } });
     return;
   }
