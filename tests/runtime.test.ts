@@ -2353,7 +2353,7 @@ describe('attachment submission recovery', () => {
   it('shares caller identity capture with web input and rejects mismatched targets without starting work', async () => {
     const transport = new AttachmentsTransport();
     const runtime = await ready(transport);
-    expect(runtime.getAttachmentCapabilities!()).toBeUndefined();
+    expect(runtime.getAttachmentCapabilities!()).toEqual({});
     expect(runtime.sendAttachments!('', [input('file')], { ...context, expectedSessionKey: 'another' })).toBeNull();
     expect(runtime.sendAttachments!('', [input('file')], { ...context, clientMessageId: 'invalid' })).toBeNull();
     expect(transport.uploads).toEqual([]);

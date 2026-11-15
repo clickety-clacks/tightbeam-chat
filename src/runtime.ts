@@ -1923,7 +1923,7 @@ class SessionRuntime implements ChatRuntime {
   getAttachmentCapabilities = () => {
     if (this.disposed || !this.checkIdentity() || this.state.status !== 'ready' ||
         !this.transport.uploadAttachment) return undefined;
-    return this.transport.attachmentCapabilities?.(this.sessionKey);
+    return this.transport.attachmentCapabilities?.(this.sessionKey) ?? Object.freeze({});
   };
 
   sendAttachments = (content: string, inputs: readonly AttachmentInput[],
@@ -2034,9 +2034,22 @@ class SessionRuntime implements ChatRuntime {
     if (context && (context.expectedSessionKey !== this.sessionKey || context.clientMessageId !== id)) return;
     if (this.disposed || !this.checkIdentity() || this.sendControllers.has(id)) return;
     const prior = this.state.sends.find(send => send.clientMessageId === id);
-    if (!prior?.attachmentItems || prior.reconciled || !['failed', 'uncertain'].includes(prior.status)) return;
+    if (!prior?.attachmentItems) return;
+    const resumedLifetime = context?.hostSend && prior.hostSend &&
+      context.hostSend.lifetimeId !== prior.hostSend.lifetimeId;
+    if (!prior.reconciled && !['failed', 'uncertain'].includes(prior.status) && !resumedLifetime) return;
     // This entry retries retained upload bytes, never caller-replaced text or files.
     if (context?.hostSend) this.updateSend(id, send => ({ ...send, hostSend: Object.freeze({ ...context.hostSend! }) }));
+    if (prior.reconciled) {
+      this.notifyHostSend(id, { kind: 'reconciled' });
+      return;
+    }
+    // Page hiding stops work without declaring an outcome. A user retry in the
+    // restored page resumes that interrupted send: uploads keep their bytes,
+    // and posted sends check canonical history before deduplicated resubmission.
+    if (resumedLifetime && (prior.status === 'pending' || prior.status === 'accepted')) {
+      this.updateSend(id, send => ({ ...send, status: send.postSubmitted ? 'uncertain' : 'failed' }));
+    }
     await this.retrySend(id);
   };
 
@@ -2156,7 +2169,18 @@ class SessionRuntime implements ChatRuntime {
         this.notifyHostSend(id, { kind: 'failed', reason: 'refused', detail: 'attachment_over_limit' });
         return;
       }
-      if (needsAttachmentConfirmation(assessment)) {
+      // Native composers have no web confirmation controls. An unknown or
+      // failed assessment cannot pause their send; only actual Gateway reports
+      // may describe a delivery outcome.
+      if (ready.hostSend && assessment.attachments.some(item => item.assessment === 'unknown') &&
+          !assessment.attachments.some(item => item.assessment === 'will-not-deliver')) {
+        this.updateSend(id, send => ({ ...send, attachments, attachmentPhase: 'ready',
+          attachmentAssessment: undefined }));
+        this.sendControllers.delete(id);
+        await this.post(submission);
+        return;
+      }
+      if (!ready.hostSend && needsAttachmentConfirmation(assessment)) {
         this.updateSend(id, send => ({ ...send, status: 'pending', reason: undefined,
           attachmentPhase: 'confirmation', attachmentAssessment: assessment }));
         return;

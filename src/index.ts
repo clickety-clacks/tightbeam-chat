@@ -3,6 +3,7 @@ export type { TightbeamChatProps, RenderContext } from './TightbeamChat';
 export { createTightbeamAdapter } from './runtime';
 export { HOST_COMMAND_NAME, HOST_DECLARATION_NAME } from './hostComposer';
 export type {
+  HostComposerAttachment,
   HostComposerCommand,
   HostComposerCommandEntry,
   HostComposerDeclaration,

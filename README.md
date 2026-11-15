@@ -104,7 +104,7 @@ window.__TIGHTBEAM_CHAT_COMMAND__({
 });
 ```
 
-The first `ready` arrives only after the selected-session subscription and canonical history catch-up are ready. Its fields are `version: 1`, `lifetimeId`, `sessionKey`, `gatewayOrigin`, `agentDisplayName`, and `capabilities: { text: true, reconnect: true }`. It carries no credential, token, device secret, model or harness detail. V1 accepts text only; attachment composition is not advertised and may be added in a future version.
+The first `ready` arrives only after the selected-session subscription and canonical history catch-up are ready. Its fields are `version: 1`, `lifetimeId`, `sessionKey`, `gatewayOrigin`, `agentDisplayName`, and `capabilities: { text: true, reconnect: true }`. It carries no credential, token, device secret, model or harness detail. V1 also accepts JPEG/PNG photos when the optional `capabilities.attachments` field is present; see the [native photo contract](docs/host-composer.md#native-photos) for the base64 envelope and retry rules.
 
 Immediately after each `ready`, Chat sends `connection` with that lifetime and one of `connected`, `reconnecting`, or `disconnected`. It sends another `connection` event only when the live-feed state changes. This is the same state shown by standalone Chat's status dot. Connection events never change send availability or any send attempt. The host keeps sending enabled from `ready` until `unavailable` or `lifetime-ended`, even while updates reconnect or are disconnected.
 
