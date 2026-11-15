@@ -772,6 +772,7 @@ describe('private direct-entry Chat service bridge', () => {
         return reply;
       },
       openAuthenticatedChanges: async () => { throw new Error('No socket needed for this history composition test.'); },
+      openAuthenticatedHuman: async () => { throw new Error('No socket needed for this history composition test.'); },
     };
     const { transport, profile } = createPublic019Transport({
       baseUrl: `${chatOrigin}/__chat`, host,
@@ -1006,13 +1007,13 @@ describe('private direct-entry Chat service bridge', () => {
     expect(observed).toEqual([]);
   });
 
-  it('keeps the changes feed alive and refuses the obsolete human socket route', async () => {
+  it('keeps the changes feed alive and preserves the default human socket route', async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
     const observed = [];
     const upstreamConnections = new Map();
     const gateway = http.createServer();
     gateway.on('upgrade', (request, socket) => {
-      const kind = 'changes';
+      const kind = request.url.startsWith('/ws/changes') ? 'changes' : 'human';
       observed.push({ kind, path: request.url, origin: request.headers.origin });
       socket.on('end', () => socket.end());
       socket.write(`HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: ${websocketHandshakeAccept(request.headers['sec-websocket-key'])}\r\n\r\n`);
@@ -1109,15 +1110,26 @@ describe('private direct-entry Chat service bridge', () => {
     expect(vi.getTimerCount()).toBe(0);
 
     const human = await connect(`/__chat/ws?sessionKey=${encodeURIComponent(LINKED_SESSION)}&gateway=${encodeURIComponent(linkedAlias)}`);
-    expect(human.response.statusCode).toBe(404);
-    expect(observed.some((row) => row.path === '/ws')).toBe(false);
+    expect(human.response.statusCode).toBe(101);
+    await vi.waitFor(() => expect(observed.some((row) => row.kind === 'human' && row.auth)).toBe(true));
+    const humanAuth = observed.find((row) => row.kind === 'human' && row.auth);
+    expect(humanAuth.path).toBe('/ws');
+    expect(humanAuth.origin).toBe(chatOrigin);
+    expect(humanAuth.auth).toEqual({ type: 'auth', token: TOKEN, asUser: PRINCIPAL,
+      sessionKey: LINKED_SESSION, deviceId: `chat_${crypto.createHash('sha256')
+        .update(`${gatewayOrigin}\0${PRINCIPAL}\0${SESSION}`).digest('hex').slice(0, 24)}`, subscriptions: ['chat'] });
+    const humanUpstream = upstreamConnections.get('human');
+    expect(humanUpstream).toBeDefined();
+    const humanClosed = new Promise((resolve) => humanUpstream.socket.once('close', resolve));
+    human.socket.destroy();
+    await humanClosed;
 
     const changeAuth = observed.find((row) => row.kind === 'changes' && row.auth);
     expect(observed.filter((row) => row.auth).every((row) => row.masked)).toBe(true);
     expect(changeAuth.path).toBe('/ws/changes?protocolVersion=2');
     expect(changeAuth.origin).toBe(chatOrigin);
     expect(changeAuth.auth).toEqual({ type: 'auth', token: TOKEN, asUser: PRINCIPAL, sessionKey: LINKED_SESSION });
-    expect(observed.filter((row) => row.auth)).toHaveLength(1);
+    expect(observed.filter((row) => row.auth)).toHaveLength(2);
   });
 
   it('does not accept an environment token when the provisioned descriptor is missing or mismatched', async () => {
@@ -1214,8 +1226,10 @@ describe('attachment byte routes', () => {
       currentIdentity: () => ({ principalKey: PRINCIPAL, deviceId: 'device' }),
       fetch: (url, init) => fetch(url, { ...init, headers: { ...init.headers, origin } }),
       openAuthenticatedChanges: async () => { throw new Error('not used'); },
+      openAuthenticatedHuman: async () => { throw new Error('not used'); },
     };
-    const { transport } = createPublic019Transport({ baseUrl: origin + '/__chat', host });
+    const { transport } = createPublic019Transport({ baseUrl: origin + '/__chat', host,
+      restHumanSendEnabled: true });
     const original = [new Uint8Array([255]), Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aOLsAAAAASUVORK5CYII=', 'base64'),
       new Uint8Array(20 * 1024 * 1024).fill(173)];
     const refs = [];

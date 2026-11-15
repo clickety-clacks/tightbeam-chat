@@ -51,6 +51,7 @@ function setup(heartbeatTimeoutMs?: number, observedVersion = version, historyIt
   turnItems: unknown[] = [], turnStatus = 200, railDenials?: unknown,
   markerOperatorPrincipalKey?: string, markerIdentity: { principalKey: string; deviceId: string } = identity) {
   const changes = new Channel();
+  const humanSend = new Channel();
   const paths: string[] = [];
   const dispatches: Record<string, unknown>[] = [];
   const dispatchResponses: Response[] = [];
@@ -103,15 +104,35 @@ function setup(heartbeatTimeoutMs?: number, observedVersion = version, historyIt
       tools.autoReady = true;
       return tools;
     },
+    openAuthenticatedHuman: async () => humanSend,
   };
   const { transport, profile } = createPublic019Transport({
     baseUrl: 'https://host.example', host,
+    restHumanSendEnabled: true,
     responseTimeoutMs: 1000, heartbeatTimeoutMs,
   });
-  return { transport, profile, paths, changes, dispatches, dispatchResponses, host };
+  return { transport, profile, paths, changes, humanSend, dispatches, dispatchResponses, host };
 }
 
 describe('Gateway wire mapping and behavior checks', () => {
+  it('keeps the authenticated WebSocket human-send path as the default', async () => {
+    const candidate = setup();
+    const { transport } = createPublic019Transport({ baseUrl: 'https://host.example', host: candidate.host });
+    const submission = { sessionKey, deviceId: 'device-1', clientMessageId: 'c_legacy', content: 'legacy send',
+      attachments: [{ assetId: 'asset_fixture', mimeType: 'image/png', filename: 'plot.png', size: 12 }] };
+    const submitted = vi.fn();
+    const result = transport.sendHuman(submission, new AbortController().signal, submitted);
+
+    await vi.waitFor(() => expect(candidate.humanSend.sent).toHaveLength(1));
+    expect(candidate.humanSend.sent[0]).toEqual({ type: 'message', id: 'c_legacy', sessionKey,
+      content: 'legacy send', attachments: submission.attachments });
+    expect(candidate.dispatches).toEqual([]);
+    expect(submitted).toHaveBeenCalledOnce();
+    candidate.humanSend.emit({ type: 'ack', id: 'c_legacy' });
+    await expect(result).resolves.toEqual({ outcome: 'accepted' });
+    expect(candidate.humanSend.closed).toBe(true);
+  });
+
   it('keeps marker transport unavailable without a declared configured-user route', () => {
     const candidate = setup();
 
@@ -215,6 +236,7 @@ describe('Gateway wire mapping and behavior checks', () => {
         throw new Error(`Unexpected marker request: ${init.method} ${url.pathname}`);
       },
       openAuthenticatedChanges: async () => new Channel(),
+      openAuthenticatedHuman: async () => new Channel(),
     };
     const { transport } = createPublic019Transport({ baseUrl: 'https://gateway.example', host });
     const port = { readReadMarker: transport.readReadMarker!, writeReadMarker: transport.writeReadMarker! };
@@ -268,6 +290,7 @@ describe('Gateway wire mapping and behavior checks', () => {
         throw new Error(`Unexpected marker request: ${init.method} ${url.pathname}`);
       },
       openAuthenticatedChanges: async () => new Channel(),
+      openAuthenticatedHuman: async () => new Channel(),
     };
     const { transport } = createPublic019Transport({ baseUrl: 'https://gateway.example', host });
 
@@ -770,8 +793,10 @@ describe('Gateway wire mapping and behavior checks', () => {
       tools.autoReady = true;
       return tools;
     },
+    openAuthenticatedHuman: async () => new Channel(),
     };
-    const { transport, profile } = createPublic019Transport({ baseUrl: 'https://host.example', host });
+    const { transport, profile } = createPublic019Transport({ baseUrl: 'https://host.example', host,
+      restHumanSendEnabled: true });
     const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
     await vi.waitFor(() => expect(changes.sent).toHaveLength(2));
     changes.emit({ type: 'subscription_ready', subscriptionId: 'chat:s-public' });
@@ -1708,6 +1733,7 @@ describe('tool-call contract and transition category', () => {
           page: { oldestCursor: older ? 'end' : 'opaque-next', hasMoreBefore: !older } }));
       },
       openAuthenticatedChanges: async () => { const channel = new Channel(); channel.autoReady = true; channels.push(channel); return channel; },
+      openAuthenticatedHuman: async () => new Channel(),
     };
     const { transport } = createPublic019Transport({ baseUrl: 'https://host.example', host });
     const controller = new AbortController();
@@ -1759,6 +1785,7 @@ describe('tool-call contract and transition category', () => {
       openAuthenticatedChanges: async () => {
         const channel = new Channel(); channel.autoReady = true; channels.push(channel); return channel;
       },
+      openAuthenticatedHuman: async () => new Channel(),
     };
     const { transport } = createPublic019Transport({ baseUrl: 'https://host.example', host });
     const callbacks = { onNotice: vi.fn(), onDoubt: vi.fn() };

@@ -4,6 +4,7 @@ export interface ChatTarget {
   readonly principalKey: string;
   readonly deviceId: string;
   readonly readMarkerRoute?: 'gateway-configured-user';
+  readonly restHumanSendEnabled?: boolean;
 }
 
 export interface RequestedChatTarget {
@@ -17,6 +18,7 @@ export interface ConfiguredChatTarget {
   readonly principalKey?: string;
   readonly deviceId?: string;
   readonly readMarkerRoute?: 'gateway-configured-user';
+  readonly restHumanSendEnabled?: boolean;
 }
 
 /** Loads the deployment-owned, nonsecret default from the same origin as the page. */
@@ -54,6 +56,7 @@ export async function loadConfiguredChatTarget(
     typeof config.principalKey === 'string' ? config.principalKey : undefined,
     typeof config.deviceId === 'string' ? config.deviceId : undefined,
     config.readMarkerRoute === 'gateway-configured-user' ? 'gateway-configured-user' : undefined,
+    config.restHumanSendEnabled === true,
   );
   if (!target) throw new Error('The Chat server returned an invalid default target.');
   return target;
@@ -89,6 +92,7 @@ function targetFrom(
   principalKey: string | undefined,
   deviceId: string | undefined,
   readMarkerRoute: 'gateway-configured-user' | undefined,
+  restHumanSendEnabled: boolean,
 ): ChatTarget | undefined {
   const normalizedGateway = canonicalGateway(gateway);
   if (!normalizedGateway || !sessionKey?.trim() || !principalKey?.trim() || !deviceId?.trim()) return undefined;
@@ -98,11 +102,13 @@ function targetFrom(
     principalKey,
     deviceId,
     ...(readMarkerRoute ? { readMarkerRoute } : {}),
+    ...(restHumanSendEnabled ? { restHumanSendEnabled: true } : {}),
   };
 }
 
 function configuredTarget(value: ConfiguredChatTarget | undefined): ChatTarget | undefined {
-  return targetFrom(value?.gateway, value?.sessionKey, value?.principalKey, value?.deviceId, value?.readMarkerRoute);
+  return targetFrom(value?.gateway, value?.sessionKey, value?.principalKey, value?.deviceId,
+    value?.readMarkerRoute, value?.restHumanSendEnabled === true);
 }
 
 function wellFormedQuery(search: string): boolean {
@@ -151,12 +157,13 @@ export function resolveEntrySelection(
       canRecoverToConfigured: false,
     };
   }
-  const { readMarkerRoute, ...configuredIdentity } = fallback;
+  const { readMarkerRoute, restHumanSendEnabled, ...configuredIdentity } = fallback;
   const target: ChatTarget = {
     ...configuredIdentity,
     gateway,
     sessionKey,
     ...(gateway === fallback.gateway && readMarkerRoute ? { readMarkerRoute } : {}),
+    ...(gateway === fallback.gateway && restHumanSendEnabled ? { restHumanSendEnabled: true } : {}),
   };
   return {
     kind: 'selected',
@@ -187,8 +194,8 @@ export function gatewayBridgeUrl(
       target.origin !== normalizedGateway || target.username || target.password || target.hash) {
     throw new Error('The bridge request must stay on the selected gateway.');
   }
-  if (transport === 'websocket' && target.pathname !== '/ws/changes') {
-    throw new Error('The WebSocket bridge supports only the changes feed.');
+  if (transport === 'websocket' && target.pathname !== '/ws/changes' && target.pathname !== '/ws') {
+    throw new Error('The WebSocket bridge supports only Chat feeds and human sends.');
   }
 
   const bridge = new URL(`/gateway/${encodeURIComponent(normalizedGateway)}${target.pathname}${target.search}`, page.origin);
@@ -213,7 +220,7 @@ export function parseGatewayBridgeTarget(requestUrl: string): GatewayBridgeTarge
     if (!gateway) return undefined;
     const path = `${match[2]}${request.search}`;
     const pathname = new URL(path, gateway).pathname;
-    if (pathname !== '/version' && pathname !== '/ws/changes' &&
+    if (pathname !== '/version' && pathname !== '/ws' && pathname !== '/ws/changes' &&
         pathname !== '/api/sessions' && !pathname.startsWith('/api/sessions/') &&
         !/^\/api\/turns\/[1-9][0-9]*$/.test(pathname) && !/^\/api\/roles\/[^/]+$/.test(pathname)) return undefined;
     return { gateway, path };

@@ -31,6 +31,16 @@ describe('direct browser entry', () => {
     expect((await load(undefined)).readMarkerRoute).toBeUndefined();
   });
 
+  it('enables REST human sending only when explicitly advertised by the server', async () => {
+    const load = async (restHumanSendEnabled: unknown) => loadConfiguredChatTarget(async () => new Response(
+      JSON.stringify({ ...defaultTarget, restHumanSendEnabled }), { status: 200 },
+    ));
+
+    expect((await load(true)).restHumanSendEnabled).toBe(true);
+    expect((await load(false)).restHumanSendEnabled).toBeUndefined();
+    expect((await load('1')).restHumanSendEnabled).toBeUndefined();
+  });
+
   it('keeps Chat and sending available when conversation endpoints are unavailable', async () => {
     const fetchSpy = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
       error: { code: 'chat_gateway_unavailable' },

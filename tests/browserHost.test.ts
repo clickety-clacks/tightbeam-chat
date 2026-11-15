@@ -148,8 +148,12 @@ describe('private browser entry and same-origin gateway bridge', () => {
       path: '/api/sessions/current',
     });
     expect(parseGatewayBridgeTarget('/gateway/https%3A%2F%2Fgateway.example%3A8443/admin')).toBeUndefined();
-    expect(parseGatewayBridgeTarget('/gateway/https%3A%2F%2Fgateway.example%3A8443/ws')).toBeUndefined();
-    expect(() => gatewayBridgeUrl(page, gateway, '/ws', 'websocket')).toThrow('only the changes feed');
+    expect(parseGatewayBridgeTarget('/gateway/https%3A%2F%2Fgateway.example%3A8443/ws')).toEqual({
+      gateway, path: '/ws',
+    });
+    expect(gatewayBridgeUrl(page, gateway, '/ws', 'websocket').href)
+      .toBe('wss://chat.private.example/gateway/https%3A%2F%2Fgateway.example%3A8443/ws');
+    expect(() => gatewayBridgeUrl(page, gateway, '/ws/admin', 'websocket')).toThrow('only Chat feeds and human sends');
   });
 
   it('allows only matching browser origins at the bridge', () => {
@@ -159,9 +163,24 @@ describe('private browser entry and same-origin gateway bridge', () => {
     expect(sameOriginBridgeOrigin('not an origin', 'https://chat.private.example/')).toBe(false);
   });
 
-  it('does not expose a human Clawline socket from the browser host', () => {
+  it('opens the prior authenticated human-send socket only after auth and sync complete', async () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket as unknown as typeof WebSocket);
     const host = browserHost({ ...configured, gateway: 'https://gateway.example' });
-    expect('openAuthenticatedHuman' in host).toBe(false);
+    const opening = host.openAuthenticatedHuman(new AbortController().signal);
+    const socket = FakeWebSocket.instances[0]!;
+    socket.open();
+    socket.frame({ type: 'auth_result', success: true, userId: configured.principalKey,
+      sessionId: `conn_${configured.deviceId}`, sessionKeys: [configured.sessionKey] });
+    socket.frame({ type: 'sync_complete' });
+
+    const channel = await opening;
+    expect(new URL(socket.url).pathname).toBe('/__chat/ws');
+    channel.send({ type: 'message', id: 'c_test', sessionKey: configured.sessionKey, content: 'hello' });
+    expect(JSON.parse(socket.sent[0]!)).toEqual({
+      type: 'message', id: 'c_test', sessionKey: configured.sessionKey, content: 'hello',
+    });
+    channel.close();
+    expect(socket.closed).toBe(true);
   });
 
   it('treats a non-authentication socket error as a local feature failure', async () => {
