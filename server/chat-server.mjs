@@ -417,6 +417,42 @@ function jsonResponse(response, status, value) {
   writeJson(response, status, value);
 }
 
+function gatewayCliVersionFromReply(reply) {
+  if (reply.status !== 200) throw new Error('Gateway version is unavailable.');
+  let version;
+  try { version = JSON.parse(reply.body.toString('utf8')).version; }
+  catch { throw new Error('Gateway version is unavailable.'); }
+  if (typeof version !== 'string' || !version.trim()) {
+    throw new Error('Gateway version is unavailable.');
+  }
+  return version;
+}
+
+function gatewayCliVersion(gateway) {
+  if (typeof gateway.cliVersion === 'string' && gateway.cliVersion.trim()) {
+    return Promise.resolve(gateway.cliVersion);
+  }
+  if (!gateway.cliVersionPromise) {
+    const pending = gatewayRequest(gateway, '/version', { authorize: false })
+      .then(gatewayCliVersionFromReply)
+      .then((version) => {
+        gateway.cliVersion = version;
+        return version;
+      })
+      .finally(() => {
+        if (gateway.cliVersionPromise === pending) gateway.cliVersionPromise = undefined;
+      });
+    gateway.cliVersionPromise = pending;
+  }
+  return gateway.cliVersionPromise;
+}
+
+function isIncompatibleCliReply(reply) {
+  if (reply.status !== 426) return false;
+  try { return JSON.parse(reply.body.toString('utf8')).error?.code === 'incompatible_cli'; }
+  catch { return false; }
+}
+
 function gatewayRequest(gateway, path, { method = 'GET', headers = {}, body, authorize = true } = {}) {
   return new Promise((resolve, reject) => {
     const protocol = gateway.base.startsWith('https:') ? https : http;
@@ -441,6 +477,22 @@ function gatewayRequest(gateway, path, { method = 'GET', headers = {}, body, aut
     request.on('error', reject);
     request.end(body);
   });
+}
+
+// Assessment alone needs the versioned dispatch contract; all existing routes
+// keep their original request and credential handling.
+async function assessmentGatewayRequest(gateway, path, options) {
+  const cliVersion = await gatewayCliVersion(gateway);
+  const withVersion = version => ({ ...options,
+    headers: { ...options.headers, 'x-tightbeam-cli-version': version } });
+  const reply = await gatewayRequest(gateway, path, withVersion(cliVersion));
+  if (!isIncompatibleCliReply(reply)) return reply;
+  if (gateway.cliVersion === cliVersion) gateway.cliVersion = undefined;
+  let refreshedVersion;
+  try { refreshedVersion = await gatewayCliVersion(gateway); }
+  catch { return reply; }
+  return refreshedVersion !== cliVersion
+    ? gatewayRequest(gateway, path, withVersion(refreshedVersion)) : reply;
 }
 
 function writeGatewayReply(response, reply) {
@@ -581,7 +633,7 @@ async function serviceMarkerDispatch(request, response, runtime) {
     ? Buffer.from(JSON.stringify({ ...value, asUser: runtime.principalKey })) : body;
 
   try {
-    writeGatewayReply(response, await gatewayRequest(gateway, target.path, {
+    writeGatewayReply(response, await (assessment ? assessmentGatewayRequest : gatewayRequest)(gateway, target.path, {
       method: 'POST',
       headers: {
         ...(!assessment ? { authorization: `Bearer ${runtime.markerDeviceToken}` } : {}),

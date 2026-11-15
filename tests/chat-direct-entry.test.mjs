@@ -7,6 +7,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createChatServer } from '../server/chat-server.mjs';
 import { createPublic019Transport } from '../src/public019';
+import { createTightbeamAdapter } from '../src/runtime';
 
 const TOKEN = 'fixture-operator-credential';
 const MARKER_DEVICE_TOKEN = 'fixture-device-credential';
@@ -185,20 +186,31 @@ afterEach(async () => {
 });
 
 describe('private direct-entry Chat service bridge', () => {
-  it('forwards attachment assessment with the configured upload identity and preserves legacy unsupported-verb behavior', async () => {
+  it.each(['web', 'native'])('refreshes the assessment version and ends in an ordinary %s send when the Gateway lacks the verb', async mode => {
     const seen = [];
     let supported = false;
+    let versionReads = 0;
+    const humanFrames = [];
     const gateway = http.createServer(async (request, response) => {
       if (request.method === 'GET' && request.url === '/version') {
         response.setHeader('content-type', 'application/json');
-        response.end(JSON.stringify({ version: '0.1.14' }));
+        response.end(JSON.stringify({ version: ++versionReads === 1 ? '0.1.13' : '0.1.14' }));
+        return;
+      }
+      if (request.method !== 'POST' || request.url !== '/agent/dispatch') {
+        response.writeHead(404, { 'content-type': 'application/json' }).end(JSON.stringify({ error: { code: 'not_found' } }));
         return;
       }
       const chunks = [];
       for await (const chunk of request) chunks.push(Buffer.from(chunk));
       const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-      seen.push({ url: request.url, authorization: request.headers.authorization, body });
+      seen.push({ url: request.url, authorization: request.headers.authorization,
+        cliVersion: request.headers['x-tightbeam-cli-version'], body });
       response.setHeader('content-type', 'application/json');
+      if (request.headers['x-tightbeam-cli-version'] !== '0.1.14') {
+        response.writeHead(426).end(JSON.stringify({ error: { code: 'incompatible_cli' } }));
+        return;
+      }
       if (!supported) {
         response.writeHead(400).end(JSON.stringify({ error: {
           code: 'invalid_message', message: 'verb not allowed: assess_attachments',
@@ -222,15 +234,53 @@ describe('private direct-entry Chat service bridge', () => {
     await listen(chat, chatPort);
     const { transport } = createPublic019Transport({ baseUrl: `${chatOrigin}/__chat`, host: {
       currentIdentity: () => ({ principalKey: 'caller-value', deviceId: 'fixture-device' }),
+      openAuthenticatedHuman: async () => {
+        let onFrame;
+        return { listen: handler => { onFrame = handler; return () => {}; }, close: () => {},
+          send: frame => { humanFrames.push(frame); queueMicrotask(() => onFrame({ type: 'ack', id: frame.id })); } };
+      },
       fetch: (input, init) => fetch(input, { ...init, headers: { ...init?.headers, origin: chatOrigin } }),
     } });
-    const request = { sessionKey: SESSION, clientMessageId: 'c_assess_wire',
+    const request = { sessionKey: SESSION, clientMessageId: 'c_12345678-1234-4234-8234-123456789012',
       attachments: [{ assetId: 'asset-photo', mimeType: 'image/png', filename: 'photo.png', size: 8 }] };
-    // Undefined is the runtime's existing no-warning/no-confirmation legacy path.
-    await expect(transport.assessAttachments(request, new AbortController().signal)).resolves.toBeUndefined();
-    expect(seen).toEqual([{ url: '/agent/dispatch', authorization: `Bearer ${TOKEN}`,
-      body: { verb: 'assess_attachments', asUser: PRINCIPAL, sessionKey: SESSION,
-        params: { clientMessageId: request.clientMessageId, assetIds: ['asset-photo'] } } }]);
+    const capabilities = { newestTail: true, stableOlderCursor: true, retainedHistoryAcrossResets: true,
+      orderedTransitions: true, snapshotCoverage: true, versionedNotices: true,
+      humanSendDedupe: true, authoritativeTurnProvenance: true };
+    const profile = { identity: 'fixture:versioned-assessment-wire', label: 'TEST FIXTURE', capabilities };
+    const runtime = createTightbeamAdapter({ ...transport,
+      inspectTarget: async () => profile,
+      readSession: async sessionKey => ({ sessionKey, rowVersion: 1, raw: {} }),
+      readTail: async () => ({ records: [], oldestCursor: null, hasOlder: false, coverage: 'fixture' }),
+      proveCoverage: () => true, openChanges: async () => ({ close: () => {} }),
+      uploadAttachment: async input => ({ assetId: 'asset-photo', filename: input.filename,
+        mimeType: input.bytes.type, size: input.bytes.size }),
+    }, profile).open(SESSION);
+    // Image conversion is covered separately; this node test exercises the
+    // runtime, real HTTP bridge, Gateway-version exchange and WS send adapter.
+    runtime.prepareAttachmentInputs = async inputs => inputs;
+    const phases = [];
+    const stop = runtime.subscribe(() => phases.push(runtime.getSnapshot().sends[0]?.attachmentPhase));
+    try {
+      await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+      const sendId = runtime.sendAttachments('keep this caption', [{ id: 'photo', filename: 'photo.png',
+        bytes: new Blob([new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])], { type: 'image/png' }) }], {
+        expectedSessionKey: SESSION, clientMessageId: request.clientMessageId,
+        ...(mode === 'native' ? { hostSend: { lifetimeId: 'fixture-lifetime', attempt: 1 } } : {}),
+      });
+      expect(sendId).toBe(request.clientMessageId);
+      await vi.waitFor(() => expect(runtime.getSnapshot().sends[0]?.status).toBe('accepted'));
+      expect(runtime.getSnapshot().sends[0].attachmentAssessment).toBeUndefined();
+      expect(phases).not.toContain('confirmation');
+      expect(humanFrames).toEqual([{ type: 'message', id: request.clientMessageId, sessionKey: SESSION,
+        content: 'keep this caption', attachments: [{ assetId: 'asset-photo', filename: 'photo.png', mimeType: 'image/png', size: 8 }] }]);
+    } finally { stop(); runtime.dispose(); }
+    expect(versionReads).toBe(2);
+    expect(seen.map(row => row.cliVersion)).toEqual(['0.1.13', '0.1.14']);
+    expect(seen.map(row => row.body)).toEqual([1, 2].map(() => ({
+      verb: 'assess_attachments', asUser: PRINCIPAL, sessionKey: SESSION,
+      params: { clientMessageId: request.clientMessageId, assetIds: ['asset-photo'] },
+    })));
+    expect(seen.every(row => row.url === '/agent/dispatch' && row.authorization === `Bearer ${TOKEN}`)).toBe(true);
     supported = true;
     await expect(transport.assessAttachments(request, new AbortController().signal)).resolves.toMatchObject({
       sessionKey: SESSION, clientMessageId: request.clientMessageId,
@@ -241,7 +291,7 @@ describe('private direct-entry Chat service bridge', () => {
       body: JSON.stringify({ verb: 'not-a-supported-verb' }),
     });
     expect(unsupported.status).toBe(404);
-    expect(seen).toHaveLength(2);
+    expect(seen).toHaveLength(3);
   });
 
   it('keeps the credential server-side and maps linked-session REST to detail and transcript operations', async () => {
