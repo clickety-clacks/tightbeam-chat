@@ -18,10 +18,10 @@ This file holds the conventions every agent and contributor follows here.
 A feature too big for one short-lived branch lands on `main` in small, reviewed slices, hidden behind a flag until it is ready.
 
 - **Off by default.** A new flag ships off, so `main` and every release behave exactly as before until the flag is turned on.
-- **One flag per feature.** If a feature seems to need several flags, split the feature.
+- **Prefer one flag per feature.** A feature that seems to need many flags is usually better split into smaller features.
 - **The old path keeps working.** While the flag is off, existing behavior must be unchanged and still covered by the checks. Test both the on and off states of anything the flag touches.
 - **Recorded.** Every flag has an entry in `docs/feature-flags.md`: name, purpose, owner, the work item it belongs to, its current default, and the condition for removing it.
-- **Turning it on is a reviewed change.** Making a flag default to on is its own small pull request, and that's when the feature counts as released.
+- **Turning it on is a reviewed change.** Making a flag default to on is its own small pull request. Merging it puts the feature on `main`; users get it with the first published release that contains that commit.
 - **Removal is part of the feature.** Once a flag has been on in a published release and the feature is accepted, delete the flag, the off path and its tests in a follow-up pull request, and remove its entry. The feature isn't done until its flag is gone.
 - **Branch by abstraction** is the alternative when you're replacing an existing mechanism rather than adding a new one. Put the old implementation behind an interface, build the new one alongside it, switch over, then delete the old one.
 - Flags are for unfinished features. Don't use them for per-user settings or permanent configuration.
