@@ -615,7 +615,7 @@ async function serviceAgentDispatch(request, response, runtime) {
     return;
   }
   if (!value || typeof value !== 'object' || Array.isArray(value) ||
-      !['post', 'read-marker-set'].includes(value.verb)) {
+      !['post', 'read-marker-set', 'assess_attachments'].includes(value.verb)) {
     jsonResponse(response, 404, { error: { code: 'not_found' } });
     return;
   }
