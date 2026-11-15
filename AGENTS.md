@@ -7,7 +7,7 @@ This file holds the conventions every agent and contributor follows here.
 `main` is the only long-lived branch. Everything is built on it, and every release is tagged from it.
 
 - Work on a short-lived branch cut from current `main`. Merge it back within a day or two through a pull request. If a change can't land that quickly, make it smaller, or land it behind a feature flag (below). Never keep it on a long-running branch.
-- Keep `main` releasable at every commit. A pull request merges only when the Chat checks pass and an independent reviewer who didn't write it has reviewed it clean.
+- Keep `main` releasable at every commit. A pull request merges to `main` when its checks show no failure that `main` doesn't already have. Don't hold it for review: independent review by someone who didn't write it runs alongside the work, and any finding gets fixed in a follow-up pull request.
 - Rebase or merge `main` into your branch often, so it never drifts far from `main`.
 - Delete the branch when it merges.
 - Don't create release branches, candidate branches or notes branches. A release is a tag on a `main` commit, and its release notes land on `main` like any other change.
@@ -30,7 +30,7 @@ A feature too big for one short-lived branch lands on `main` in small, reviewed 
 
 Releases go through CI and need no human approval.
 
-- Tag a reviewed `main` commit as `vMAJOR.MINOR.PATCH`. The tag workflow runs the checks and builds the release assets as a draft.
+- Every change in a release must have had a clean independent review before the release is tagged. Tag that `main` commit as `vMAJOR.MINOR.PATCH`. The tag workflow runs the checks and builds the release assets as a draft.
 - Check the draft's asset, checksum, provenance and notes against the tagged commit, then publish it. Publishing a stable release triggers the automatic installer on deployed hosts. Don't ask for approval before tagging or publishing.
 - Escalate only for a real problem: a failing check you can't fix, or a release that would break something users rely on.
 - If a published release is bad, ship a fix or revert it from `main` as the next release. Don't patch a deployment by hand.
