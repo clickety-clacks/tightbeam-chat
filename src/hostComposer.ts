@@ -1,4 +1,4 @@
-import type { ChatRuntime, HostSendSignal, RuntimeState } from './types';
+import type { AttachmentCapabilities, AttachmentInput, ChatRuntime, HostSendSignal, RuntimeState } from './types';
 import { isSettingsCommand } from './settingsCommand';
 
 /** Public, fixed in-page names for host-composer protocol version 1. */
@@ -11,7 +11,7 @@ export type HostComposerEvent =
   | { readonly event: 'declined'; readonly reason: 'malformed-declaration' | 'unsupported-version' }
   | { readonly event: 'ready'; readonly version: 1; readonly lifetimeId: string; readonly sessionKey: string;
       readonly gatewayOrigin: string; readonly agentDisplayName: string;
-      readonly capabilities: { readonly text: true; readonly reconnect: true } }
+      readonly capabilities: { readonly text: true; readonly reconnect: true; readonly attachments?: AttachmentCapabilities } }
   | { readonly event: 'connection'; readonly version: 1; readonly lifetimeId: string; readonly state: HostConnectionState }
   | { readonly event: 'unavailable'; readonly version: 1; readonly lifetimeId: string; readonly reason: string }
   | { readonly event: 'overlay'; readonly version: 1; readonly lifetimeId: string; readonly open: boolean }
@@ -19,7 +19,7 @@ export type HostComposerEvent =
       readonly reason: 'target-changed' | 'identity-changed' | 'disposed' | 'unloading' }
   | { readonly event: 'rejected'; readonly lifetimeId: unknown; readonly correlationId: unknown;
       readonly reason: 'not-ready' | 'target-mismatch' | 'invalid-correlation' | 'empty' |
-        'attempt-in-flight' | 'already-delivered' | 'correlation-conflict' | 'local-command' }
+        'attempt-in-flight' | 'already-delivered' | 'correlation-conflict' | 'local-command' | 'invalid-attachments' }
   | { readonly event: 'accepted'; readonly lifetimeId: string; readonly correlationId: string; readonly attempt: number }
   | { readonly event: 'delivered'; readonly lifetimeId: string; readonly correlationId: string; readonly attempt: number }
   | { readonly event: 'failed'; readonly lifetimeId: string; readonly correlationId: string; readonly attempt: number;
@@ -32,6 +32,13 @@ export interface HostComposerDeclaration {
   readonly onEvent: (event: HostComposerEvent) => void;
 }
 
+/** JSON-safe native photo input; bytes follow the web attachment preparation path. */
+export interface HostComposerAttachment {
+  readonly filename: string;
+  readonly mimeType: string;
+  readonly data: string;
+}
+
 export interface HostComposerSendCommand {
   readonly type: 'send';
   readonly lifetimeId: unknown;
@@ -39,6 +46,7 @@ export interface HostComposerSendCommand {
   readonly correlationId: unknown;
   readonly content: unknown;
   readonly retry?: unknown;
+  readonly attachments?: unknown;
 }
 
 export interface HostComposerReconnectCommand {
@@ -140,6 +148,8 @@ export class HostComposerBridge {
   private readonly command: HostComposerCommandEntry;
   private snapshot: HostComposerSnapshot = Object.freeze({ ...emptySnapshot, optedIn: true });
   private current: Lifetime | undefined;
+  // Preserve original wire identity even when image preparation replaces upload bytes.
+  private readonly manifests = new WeakMap<ChatRuntime, Map<string, string>>();
   private suspendedRuntime: ChatRuntime | undefined;
   private disposed = false;
   private settingsRequestRevision = 0;
@@ -222,6 +232,7 @@ export class HostComposerBridge {
   detach(reason: 'target-changed' | 'identity-changed' | 'disposed' | 'unloading'): void {
     const lifetime = this.current;
     if (!lifetime) return;
+    lifetime.runtime.endAttachmentLifetime?.(lifetime.lifetimeId, reason);
     const outcomeCanChange = reason === 'target-changed' || reason === 'identity-changed';
     for (const attempt of [...lifetime.attempts.values()]) {
       if (attempt.settled) continue;
@@ -260,7 +271,8 @@ export class HostComposerBridge {
         this.emit({
           event: 'ready', version: 1, lifetimeId: lifetime.lifetimeId, sessionKey: lifetime.sessionKey,
           gatewayOrigin, agentDisplayName: state.agentDisplayName ?? state.session?.displayName ?? '',
-          capabilities: Object.freeze({ text: true, reconnect: true }),
+          capabilities: Object.freeze({ text: true, reconnect: true,
+            ...(this.photoCapabilities(lifetime.runtime) ? { attachments: this.photoCapabilities(lifetime.runtime) } : {}) }),
         });
         lifetime.hasBeenReady = true;
         this.emitConnection(lifetime, state, true);
@@ -314,6 +326,32 @@ export class HostComposerBridge {
     } catch { return undefined; }
   }
 
+  private photoCapabilities(runtime: ChatRuntime): AttachmentCapabilities | undefined {
+    if (!runtime.sendAttachments || !runtime.retryAttachmentSend || !runtime.recoverAttachmentSend) return undefined;
+    const capabilities = runtime.getAttachmentCapabilities?.();
+    if (!capabilities) return undefined;
+    const mediaTypes = ['image/jpeg', 'image/png'].filter(type => !capabilities.mediaTypes || capabilities.mediaTypes.includes(type));
+    return mediaTypes.length ? Object.freeze({ ...capabilities, mediaTypes: Object.freeze(mediaTypes) }) : undefined;
+  }
+
+  private decodeAttachments(raw: unknown, correlationId: string, runtime: ChatRuntime): readonly AttachmentInput[] {
+    if (raw === undefined) return [];
+    if (!Array.isArray(raw)) throw new Error('Invalid attachment list.');
+    if (!raw.length) return [];
+    const capabilities = this.photoCapabilities(runtime);
+    return Object.freeze(raw.map((item, index) => {
+      if (!isObject(item) || typeof item.filename !== 'string' || !item.filename.trim() ||
+          typeof item.mimeType !== 'string' || !capabilities?.mediaTypes?.includes(item.mimeType) ||
+          typeof item.data !== 'string' || !item.data.length ||
+          !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(item.data)) throw new Error('Invalid attachment.');
+      const binary = atob(item.data);
+      if (!binary.length || btoa(binary) !== item.data) throw new Error('Invalid attachment bytes.');
+      const bytes = Uint8Array.from(binary, char => char.charCodeAt(0));
+      return Object.freeze({ id: `${correlationId}:${index}`, filename: item.filename,
+        bytes: new Blob([bytes], { type: item.mimeType }) });
+    }));
+  }
+
   private receive(command: HostComposerCommand): void {
     if (this.disposed || !isObject(command)) return;
     if (command.type === 'reconnect') {
@@ -333,7 +371,9 @@ export class HostComposerBridge {
     const reject = (reason: Extract<HostComposerEvent, { event: 'rejected' }>['reason']) => {
       this.emit({ event: 'rejected', lifetimeId: command.lifetimeId, correlationId, reason });
     };
-    if (isSettingsCommand(command.content)) {
+    const hasAttachments = command.attachments !== undefined &&
+      (!Array.isArray(command.attachments) || command.attachments.length > 0);
+    if (!hasAttachments && isSettingsCommand(command.content)) {
       this.settingsRequestRevision++;
       this.publish();
       return reject('local-command');
@@ -347,7 +387,15 @@ export class HostComposerBridge {
     }
     if (command.lifetimeId !== lifetime.lifetimeId || command.sessionKey !== lifetime.sessionKey) return reject('target-mismatch');
     if (typeof correlationId !== 'string' || !correlationPattern.test(correlationId)) return reject('invalid-correlation');
-    if (typeof command.content !== 'string' || !command.content.trim()) return reject('empty');
+    if (typeof command.content !== 'string' || (!command.content.trim() && !hasAttachments)) return reject('empty');
+    let inputs: readonly AttachmentInput[];
+    try { inputs = this.decodeAttachments(command.attachments, correlationId, lifetime.runtime); }
+    catch { return reject('invalid-attachments'); }
+    const manifest = JSON.stringify(inputs.map((input, index) => ({ filename: input.filename,
+      mimeType: input.bytes.type, data: (command.attachments as HostComposerAttachment[])[index].data })));
+    let manifests = this.manifests.get(lifetime.runtime);
+    if (!manifests) { manifests = new Map(); this.manifests.set(lifetime.runtime, manifests); }
+
 
     const retry = command.retry === true;
     const priorAttempt = lifetime.attempts.get(correlationId);
@@ -356,10 +404,13 @@ export class HostComposerBridge {
     if (priorSend?.hostSend?.lifetimeId === lifetime.lifetimeId && priorSend.hostSend.outcome === 'delivered') {
       return reject('already-delivered');
     }
-    if (priorSend && (!priorSend.hostSend || !retry || priorSend.content !== command.content)) {
+    if (priorSend && (!priorSend.hostSend || !retry || priorSend.content !== command.content ||
+        Boolean(priorSend.attachmentItems?.length) !== Boolean(inputs.length) ||
+        (inputs.length > 0 && manifests.get(correlationId) !== manifest))) {
       return reject('correlation-conflict');
     }
 
+    if (inputs.length) manifests.set(correlationId, manifest);
     const attempt: Attempt = {
       correlationId,
       number: priorSend?.hostSend?.lifetimeId === lifetime.lifetimeId ? priorSend.hostSend.attempt + 1 : 1,
@@ -369,7 +420,23 @@ export class HostComposerBridge {
     attempt.stopObserving = lifetime.runtime.observeHostSend(correlationId, (signal) => this.onSendSignal(lifetime, attempt, signal));
     this.publish();
     const hostSend = { lifetimeId: lifetime.lifetimeId, attempt: attempt.number } as const;
-    if (retry) lifetime.runtime.retryHostSend(correlationId, command.content, hostSend);
+    if (inputs.length) {
+      const context = { expectedSessionKey: lifetime.sessionKey, clientMessageId: correlationId, hostSend };
+      if (retry) {
+        const operation = priorSend
+          ? lifetime.runtime.retryAttachmentSend!(correlationId, context)
+          : lifetime.runtime.recoverAttachmentSend!(command.content, inputs, context);
+        void operation.then(() => {
+          if (this.current !== lifetime || attempt.settled || attempt.accepted) return;
+          const send = lifetime.runtime.getSnapshot().sends.find(item => item.clientMessageId === correlationId);
+          if (send?.status === 'failed' || send?.status === 'uncertain' || !send) {
+            this.onSendSignal(lifetime, attempt, { kind: 'uncertain', reason: 'retry-unavailable' });
+          }
+        });
+      } else if (!lifetime.runtime.sendAttachments!(command.content, inputs, context)) {
+        this.onSendSignal(lifetime, attempt, { kind: 'failed', reason: 'refused', detail: 'send-not-started' });
+      }
+    } else if (retry) lifetime.runtime.retryHostSend(correlationId, command.content, hostSend);
     else if (!lifetime.runtime.send(command.content, correlationId, hostSend)) {
       this.settle(lifetime, attempt, { event: 'failed', lifetimeId: lifetime.lifetimeId,
         correlationId, attempt: attempt.number, reason: 'refused', detail: 'send-not-started' });
@@ -393,7 +460,8 @@ export class HostComposerBridge {
         return;
       case 'failed':
         this.settle(lifetime, attempt, { event: 'failed', lifetimeId: lifetime.lifetimeId,
-          correlationId: attempt.correlationId, attempt: attempt.number, reason: signal.reason, detail: signal.detail });
+          correlationId: attempt.correlationId, attempt: attempt.number, reason: signal.reason, detail: signal.detail,
+          ...(signal.attachmentIndex === undefined ? {} : { attachmentIndex: signal.attachmentIndex }) });
         if (signal.reason === 'refused') {
           this.markSendRefused(lifetime, signal.detail);
         }

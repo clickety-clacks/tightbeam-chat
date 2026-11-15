@@ -1050,3 +1050,130 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     expect(events.filter((event) => event.event === 'ready')).toHaveLength(1);
   });
 });
+
+describe('native photo host commands', () => {
+  const photo = { filename: 'photo.png', mimeType: 'image/png', data: 'iVBORw0KGgo=' };
+  class PhotoTransport extends HostComposerTransport {
+    uploads: Blob[] = [];
+    failUpload = false;
+    uploadAttachment: NonNullable<ChatTransport['uploadAttachment']> = async input => {
+      this.uploads.push(input.bytes);
+      if (this.failUpload) throw new Error('Upload interrupted');
+      return { assetId: 'asset-photo', mimeType: input.bytes.type, filename: input.filename, size: input.bytes.size };
+    };
+    readAttachment: NonNullable<ChatTransport['readAttachment']> = async () => this.uploads.at(-1)!;
+    attachmentCapabilities?: ChatTransport['attachmentCapabilities'];
+    override addCanonical(submission: HumanSubmission): CanonicalMessage {
+      const row = super.addCanonical(submission);
+      const withPhotos = { ...row, attachments: submission.attachments };
+      const rows = this.records.get(submission.sessionKey)!;
+      rows[rows.indexOf(row)] = withPhotos;
+      return withPhotos;
+    }
+  }
+  function stubImagePreparation() {
+    vi.stubGlobal('createImageBitmap', vi.fn().mockResolvedValue({ width: 1, height: 1, close: vi.fn() }));
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ drawImage: vi.fn() } as unknown as CanvasRenderingContext2D);
+    vi.spyOn(HTMLCanvasElement.prototype, 'toBlob').mockImplementation((callback, type) =>
+      callback(new Blob([new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])], { type })));
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:fixture-photo');
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+  }
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+
+  it.each(['', 'a caption', '/settings'])('uploads a native photo with content %j and reconciles its real reference', async content => {
+    stubImagePreparation();
+    const transport = new PhotoTransport();
+    transport.nextSend = async submission => {
+      const row = transport.addCanonical(submission);
+      return { outcome: 'accepted', messageId: row.id };
+    };
+    const events: HostComposerEvent[] = [];
+    installDeclaration(events);
+    openChat(transport, 'photo-session');
+    const ready = await waitForReady(events, 'photo-session');
+    expect(ready.capabilities.attachments).toEqual({ mediaTypes: ['image/jpeg', 'image/png'] });
+    act(() => commandEntry()({ type: 'send', ...ready, correlationId: correlation, content, attachments: [photo] }));
+    await waitFor(() => expect(events.some(e => e.event === 'delivered')).toBe(true));
+    expect(transport.uploads).toHaveLength(1);
+    expect(transport.submissions).toHaveLength(1);
+    expect(transport.submissions[0]).toMatchObject({ content, clientMessageId: correlation,
+      attachments: [{ assetId: 'asset-photo', mimeType: 'image/png', filename: 'photo.png', size: 8 }] });
+    expect(events.filter(e => e.event === 'accepted' || e.event === 'delivered').map(e => e.event)).toEqual(['accepted', 'delivered']);
+    await screen.findByRole('button', { name: /Enlarge Image: photo.png/ });
+    expect(events.some(e => e.event === 'rejected')).toBe(false);
+  });
+
+  it('prepares JPEG input through the shared image path and reports decode failures by index', async () => {
+    stubImagePreparation();
+    const transport = new PhotoTransport();
+    const events: HostComposerEvent[] = [];
+    installDeclaration(events); openChat(transport, 'photo-session');
+    const ready = await waitForReady(events, 'photo-session');
+    const jpeg = { filename: 'camera.jpg', mimeType: 'image/jpeg', data: '/9j/4AA=' };
+    act(() => commandEntry()({ type: 'send', ...ready, correlationId: correlation, content: 'camera', attachments: [jpeg] }));
+    await waitFor(() => expect(transport.submissions).toHaveLength(1));
+    expect(transport.submissions[0].attachments?.[0]).toMatchObject({ filename: 'camera.jpg', mimeType: 'image/jpeg' });
+    vi.mocked(createImageBitmap).mockRejectedValue(new Error('decode unavailable'));
+    vi.stubGlobal('Image', class { src = ''; decode = async () => { throw new Error('decode unavailable'); }; });
+    act(() => commandEntry()({ type: 'send', ...ready,
+      correlationId: 'c_223e4567-e89b-42d3-a456-426614174001', content: '', attachments: [jpeg] }));
+    await waitFor(() => expect(events.some(e => e.event === 'failed' && e.reason === 'image-unreadable' && e.attachmentIndex === 0)).toBe(true));
+    expect(transport.submissions).toHaveLength(1);
+  });
+
+  it('narrows supplied upload capabilities to photos and preserves actual limits', async () => {
+    const transport = new PhotoTransport();
+    transport.attachmentCapabilities = () => ({ mediaTypes: ['image/png', 'text/plain'], maxAttachments: 3 });
+    const events: HostComposerEvent[] = [];
+    installDeclaration(events); openChat(transport, 'photo-session');
+    const ready = await waitForReady(events, 'photo-session');
+    expect(ready.capabilities.attachments).toEqual({ mediaTypes: ['image/png'], maxAttachments: 3 });
+  });
+
+  it.each([null, {}, [{ ...photo, filename: '' }], [{ ...photo, data: '' }],
+    [{ ...photo, data: 'data:image/png;base64,iVBORw0KGgo=' }], [{ ...photo, data: '%%%%' }],
+    [{ ...photo, mimeType: 'application/pdf' }]])('rejects invalid attachment manifest %j without upload or post', async attachments => {
+    const transport = new PhotoTransport();
+    const events: HostComposerEvent[] = [];
+    installDeclaration(events); openChat(transport, 'photo-session');
+    const ready = await waitForReady(events, 'photo-session');
+    act(() => commandEntry()({ type: 'send', ...ready, correlationId: correlation, content: '', attachments }));
+    expect(events.at(-1)).toMatchObject({ event: 'rejected', reason: 'invalid-attachments' });
+    expect(transport.uploads).toEqual([]); expect(transport.submissions).toEqual([]);
+  });
+
+  it('keeps a pending photo visible, reports upload failure and retries only the original manifest', async () => {
+    stubImagePreparation();
+    const transport = new PhotoTransport(); transport.failUpload = true;
+    const events: HostComposerEvent[] = [];
+    installDeclaration(events); openChat(transport, 'photo-session');
+    const ready = await waitForReady(events, 'photo-session');
+    const request = { type: 'send' as const, ...ready, correlationId: correlation, content: '', attachments: [photo] };
+    act(() => commandEntry()(request));
+    await waitFor(() => expect(events.some(e => e.event === 'failed')).toBe(true));
+    expect(events.at(-1)).toMatchObject({ event: 'failed', reason: 'upload-failed', attachmentIndex: 0, attempt: 1 });
+    await screen.findByRole('button', { name: /Enlarge Image: photo.png/ });
+    act(() => commandEntry()({ ...request, retry: true, attachments: [{ ...photo, data: 'iVBORw0KGgs=' }] }));
+    expect(events.at(-1)).toMatchObject({ event: 'rejected', reason: 'correlation-conflict' });
+    expect(transport.uploads).toHaveLength(1);
+    transport.failUpload = false;
+    transport.nextSend = async submission => { const row = transport.addCanonical(submission); return { outcome: 'accepted', messageId: row.id }; };
+    act(() => commandEntry()({ ...request, retry: true }));
+    await waitFor(() => expect(events.some(e => e.event === 'delivered' && e.attempt === 2)).toBe(true));
+    expect(transport.uploads).toHaveLength(2);
+    expect(transport.uploads[0]).toBe(transport.uploads[1]);
+    expect(transport.submissions).toHaveLength(1);
+  });
+
+  it('recovers an unknown correlation without uploading or posting fresh references', async () => {
+    stubImagePreparation();
+    const transport = new PhotoTransport();
+    const events: HostComposerEvent[] = [];
+    installDeclaration(events); openChat(transport, 'photo-session');
+    const ready = await waitForReady(events, 'photo-session');
+    act(() => commandEntry()({ type: 'send', ...ready, correlationId: correlation, content: '', attachments: [photo], retry: true }));
+    await waitFor(() => expect(events.some(e => e.event === 'uncertain' && e.reason === 'retry-unavailable')).toBe(true));
+    expect(transport.uploads).toEqual([]); expect(transport.submissions).toEqual([]);
+  });
+});

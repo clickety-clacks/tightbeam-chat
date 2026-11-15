@@ -1,6 +1,6 @@
 # Host-supplied composer protocol
 
-Version 1 lets an embedding host provide the message composer while Chat renders one selected conversation. The API is page-local and text-only. The host owns the draft and all host-side retry decisions; Chat keeps send state in the current page lifetime only.
+Version 1 lets an embedding host provide the message composer while Chat renders one selected conversation. The API is page-local and accepts text plus advertised JPEG/PNG attachments. The host owns the draft and all host-side retry decisions; Chat keeps send state in the current page lifetime only.
 
 The public names are fixed in V1:
 
@@ -135,4 +135,29 @@ The host uses `ready` and `unavailable` for Send readiness, and `connection` for
 
 While opted in, Chat removes the composer and its reserved bottom space only after `ready`, preserves the transcript anchor through host resizing, and shows no status dot, popup, connection-state text, or inline Reconnect control for feed-only errors in the transcript. Feature-specific notices remain. Host-originated local bubbles show `Sending…` while pending and show failed or uncertain delivery without Chat retry or text-restore actions. The host owns the connection dot and its recovery action. Standalone Chat keeps its dot and details action; the dot turns yellow while live updates reconnect and green after recovery.
 
-The runnable browser example is [host-composer.html](../examples/host-composer.html). It demonstrates only the page-local protocol and synthetic fixture profile; it is not a native app or live-service acceptance result.
+The runnable browser example is [host-composer.html](../examples/host-composer.html). Add `?fixture=1` to select its explicit local upload fixture; it is not a native app or live-service acceptance result.
+
+## Native photos
+
+`ready.capabilities.attachments` is present only when this lifetime supports attachment sending and retry. It carries `mediaTypes` (JPEG/PNG only in this version) and any supplied `maxAttachments`, `maxAttachmentBytes`, `maxTotalBytes`, `maxInlineImageBytes` and `maxInlineImageTotalBytes`. No limits are invented. An empty capability object means uploads are available without supplied restrictions; absence means the native host must hide attachment controls.
+
+Add photos to the existing command:
+
+```ts
+window.__TIGHTBEAM_CHAT_COMMAND__({
+  type: 'send', lifetimeId, sessionKey, correlationId, content: '',
+  attachments: [{ filename: 'photo.jpg', mimeType: 'image/jpeg', data: rawBase64 }],
+});
+```
+
+`data` is standard base64 without a data-URL prefix. Each item must decode to nonempty bytes and have a nonblank filename and an advertised MIME type. Malformed or unsupported attachment inputs produce `rejected/invalid-attachments` without uploading or posting. Absent attachments or an empty array is a text-only send. Empty text is accepted with photos. `/settings` with photos is message text; only text-only Settings commands open the local dialog.
+
+Chat derives attachment IDs from the correlation and ordered index, then uses the same image preparation, upload and canonical reference pipeline as web composition. The native host need not downscale before handing over the photo. Local pending photos and canonical photos use the same transcript thumbnail viewer.
+
+A user retry repeats the exact content and ordered filename/MIME/byte manifest with the original correlation and `retry:true`. Changed photos on a retained correlation produce `correlation-conflict`. Chat retries retained prepared bytes and uploaded references. On a new page lifetime, recovery checks canonical history without blindly uploading fresh references; when delivery cannot be established, it may report `uncertain/retry-unavailable`. Keep the native draft and correlation on failed, uncertain or interrupted attempts. Do not automatically retry on readiness.
+
+Photo attempts use the same accepted/delivered/failed/uncertain events as text. Preparation and upload failures add `failed` reasons `image-unreadable` and `upload-failed`, with `detail` and optional zero-based `attachmentIndex`. Accepted means Gateway acknowledgement; delivered means canonical reconciliation, not agent reading.
+
+This version does not implement other file types or native attach-time assessment commands. Without the Gateway assessment verb, photos post normally with no new assessment warning or confirmation.
+
+For local integration testing, run `npm run example` and open `/host-composer.html?fixture=1`. This explicitly selects an in-memory upload-capable transport and `fixture-session`; it is not a live Gateway or evidence that an agent received an image. An injected native declaration is preserved; the page’s demonstration declaration is used only when none exists.

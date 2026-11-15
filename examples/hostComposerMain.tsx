@@ -1,6 +1,8 @@
 import { createRoot } from 'react-dom/client';
 import { HOST_COMMAND_NAME, HOST_DECLARATION_NAME, type HostComposerCommand, type HostComposerEvent } from '../src/hostComposer';
 import type { HostComposerCommandEntry } from '../src/hostComposer';
+import { TightbeamChat, createTightbeamAdapter } from '../src';
+import { LocalFixtureTransport, fixtureTarget } from './mockTransport';
 import { RuntimeEntry } from './RuntimeEntry';
 import './site.css';
 import './hostComposer.css';
@@ -89,7 +91,7 @@ function handleEvent(event: HostComposerEvent): void {
       panel.hidden = false;
       document.body.classList.add('host-composer-active');
       targetLabel.textContent = `${event.agentDisplayName || 'Selected agent'} · ${event.sessionKey}`;
-      status.textContent = `Chat is ready. Text sending is supported; attachments may be supported in a future version.`;
+      status.textContent = event.capabilities.attachments ? 'Chat is ready for text and JPEG/PNG photos.' : 'Chat is ready for text.';
       form.querySelector<HTMLButtonElement>('button[type="submit"]')!.disabled = false;
       updateRetryButton();
       updateReconnectButton();
@@ -159,7 +161,7 @@ function handleEvent(event: HostComposerEvent): void {
 }
 
 const declaration = { versions: [1], onEvent: handleEvent };
-page[HOST_DECLARATION_NAME] = declaration;
+if (!(HOST_DECLARATION_NAME in page)) page[HOST_DECLARATION_NAME] = declaration;
 
 form.addEventListener('submit', (event) => {
   event.preventDefault();
@@ -170,4 +172,10 @@ retryButton.addEventListener('click', () => {
 });
 reconnectButton.addEventListener('click', reconnectLiveUpdates);
 
-createRoot(document.getElementById('root')!).render(<RuntimeEntry />);
+// Explicit local fixture only; the default still uses the configured live target.
+const fixture = new URLSearchParams(window.location.search).get('fixture') === '1';
+const fixtureAdapter = fixture ? createTightbeamAdapter(new LocalFixtureTransport(), {
+  ...fixtureTarget, label: 'TEST FIXTURE — local photo upload',
+}) : undefined;
+createRoot(document.getElementById('root')!).render(fixtureAdapter
+  ? <TightbeamChat sessionKey="fixture-session" adapter={fixtureAdapter} /> : <RuntimeEntry />);

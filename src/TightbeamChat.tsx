@@ -1140,6 +1140,19 @@ type AttachmentSendView = LocalSend & {
   readonly attachmentPhase?: 'preparing' | 'assessing' | 'confirmation' | 'failed' | 'posted';
 };
 
+function PendingSendImages({ items }: {
+  readonly items: readonly PendingSendAttachment[];
+}) {
+  const read = useCallback(async (reference: AttachmentReference) => {
+    const item = items.find(item => item.id === reference.assetId);
+    if (!item) throw new Error('Local photo is no longer available.');
+    return item.bytes;
+  }, [items]);
+  return <MessageAttachments attachments={items.filter(item => item.bytes.type.startsWith('image/')).map(item => ({
+    assetId: item.id, mimeType: item.bytes.type, filename: item.filename, size: item.bytes.size,
+  }))} readAttachment={read} />;
+}
+
 function newAttachmentId(): string {
   return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
     ? crypto.randomUUID()
@@ -3366,6 +3379,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
           aria-label={formatVisibleIds(announcement)}
           data-send-state={send.reconciled ? 'solid' : refused ? 'refused' : uncertain ? 'uncertain' : 'ghosted'}>
           <div className="tb-chat-bubble-body">{markdownBody(stripProvenanceMarkup(send.content))}</div>
+          {attachmentItems.length > 0 && <PendingSendImages items={attachmentItems} />}
           {refusalCopy && <p className="tb-chat-send-refusal" aria-hidden="true">{refusalCopy}</p>}
           {uncertain && <p className="tb-chat-send-uncertainty" aria-hidden="true">{uncertaintyCopy}</p>}
           {!send.reconciled && !awaitingAttachmentDecision && <div className="tb-chat-send-indicator" data-send-status={send.status} aria-hidden="true">

@@ -1925,7 +1925,7 @@ class SessionRuntime implements ChatRuntime {
   getAttachmentCapabilities = () => {
     if (this.disposed || !this.checkIdentity() || this.state.status !== 'ready' ||
         !this.transport.uploadAttachment) return undefined;
-    return this.transport.attachmentCapabilities?.(this.sessionKey);
+    return this.transport.attachmentCapabilities?.(this.sessionKey) ?? Object.freeze({});
   };
 
   sendAttachments = (content: string, inputs: readonly AttachmentInput[],

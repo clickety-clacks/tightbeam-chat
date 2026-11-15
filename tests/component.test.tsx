@@ -3386,7 +3386,7 @@ describe('conversation surface', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
 
     expect(await screen.findByText('Preparing attachments…')).toBeTruthy();
-    expect(screen.getByText('large-photo.png')).toBeTruthy();
+    expect(within(screen.getByRole('region', { name: 'Attachment send status' })).getByText('large-photo.png')).toBeTruthy();
     expect(screen.getByText('Waiting to upload')).toBeTruthy();
     expect(screen.queryByText(/^Sent$/)).toBeNull();
     expect(composer.value).toBe('');
