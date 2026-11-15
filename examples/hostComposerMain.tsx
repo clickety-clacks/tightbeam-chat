@@ -2,7 +2,6 @@ import { createRoot } from 'react-dom/client';
 import { HOST_COMMAND_NAME, HOST_DECLARATION_NAME, type HostComposerCommand, type HostComposerEvent } from '../src/hostComposer';
 import type { HostComposerCommandEntry } from '../src/hostComposer';
 import { TightbeamChat, createTightbeamAdapter } from '../src';
-import { LocalFixtureTransport, fixtureTarget } from './mockTransport';
 import { RuntimeEntry } from './RuntimeEntry';
 import './site.css';
 import './hostComposer.css';
@@ -172,10 +171,15 @@ retryButton.addEventListener('click', () => {
 });
 reconnectButton.addEventListener('click', reconnectLiveUpdates);
 
-// Explicit local fixture only; the default still uses the configured live target.
-const fixture = new URLSearchParams(window.location.search).get('fixture') === '1';
-const fixtureAdapter = fixture ? createTightbeamAdapter(new LocalFixtureTransport(), {
-  ...fixtureTarget, label: 'TEST FIXTURE — local photo upload',
-}) : undefined;
-createRoot(document.getElementById('root')!).render(fixtureAdapter
-  ? <TightbeamChat sessionKey="fixture-session" adapter={fixtureAdapter} /> : <RuntimeEntry />);
+// The upload fixture is a development-only simulator aid, absent from releases.
+async function mountExample() {
+  const root = createRoot(document.getElementById('root')!);
+  if (import.meta.env.DEV && new URLSearchParams(window.location.search).get('fixture') === '1') {
+    const { LocalFixtureTransport, fixtureTarget } = await import('./mockTransport');
+    const adapter = createTightbeamAdapter(new LocalFixtureTransport(), {
+      ...fixtureTarget, label: 'TEST FIXTURE — local photo upload',
+    });
+    root.render(<TightbeamChat sessionKey="fixture-session" adapter={adapter} />);
+  } else root.render(<RuntimeEntry />);
+}
+void mountExample();

@@ -2036,9 +2036,22 @@ class SessionRuntime implements ChatRuntime {
     if (context && (context.expectedSessionKey !== this.sessionKey || context.clientMessageId !== id)) return;
     if (this.disposed || !this.checkIdentity() || this.sendControllers.has(id)) return;
     const prior = this.state.sends.find(send => send.clientMessageId === id);
-    if (!prior?.attachmentItems || prior.reconciled || !['failed', 'uncertain'].includes(prior.status)) return;
+    if (!prior?.attachmentItems) return;
+    const resumedLifetime = context?.hostSend && prior.hostSend &&
+      context.hostSend.lifetimeId !== prior.hostSend.lifetimeId;
+    if (!prior.reconciled && !['failed', 'uncertain'].includes(prior.status) && !resumedLifetime) return;
     // This entry retries retained upload bytes, never caller-replaced text or files.
     if (context?.hostSend) this.updateSend(id, send => ({ ...send, hostSend: Object.freeze({ ...context.hostSend! }) }));
+    if (prior.reconciled) {
+      this.notifyHostSend(id, { kind: 'reconciled' });
+      return;
+    }
+    // Page hiding stops work without declaring an outcome. A user retry in the
+    // restored page resumes that interrupted send: uploads keep their bytes,
+    // and posted sends check canonical history before deduplicated resubmission.
+    if (resumedLifetime && (prior.status === 'pending' || prior.status === 'accepted')) {
+      this.updateSend(id, send => ({ ...send, status: send.postSubmitted ? 'uncertain' : 'failed' }));
+    }
     await this.retrySend(id);
   };
 

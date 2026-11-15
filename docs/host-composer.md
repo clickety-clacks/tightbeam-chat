@@ -160,4 +160,4 @@ Photo attempts use the same accepted/delivered/failed/uncertain events as text. 
 
 This version does not implement other file types or native attach-time assessment commands. Without the Gateway assessment verb, photos post normally with no new assessment warning or confirmation.
 
-For local integration testing, run `npm run example` and open `/host-composer.html?fixture=1`. This explicitly selects an in-memory upload-capable transport and `fixture-session`; it is not a live Gateway or evidence that an agent received an image. An injected native declaration is preserved; the page’s demonstration declaration is used only when none exists.
+For local integration testing, run `npm run example` and open `/host-composer.html?fixture=1`. This development-only mode is excluded from release builds and explicitly selects an in-memory upload-capable transport and `fixture-session`; it is not a live Gateway or evidence that an agent received an image. An injected native declaration is preserved; the page’s demonstration declaration is used only when none exists.

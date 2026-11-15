@@ -86,8 +86,9 @@ class HostComposerTransport implements ChatTransport {
     records: [], oldestCursor: null, hasOlder: false, coverage: _sessionKey,
   });
   proveCoverage = (session: SessionRecord, page: ConversationPage, _buffered: readonly ChangeNotice[]) => page.coverage === session.sessionKey;
-  sendHuman = async (submission: HumanSubmission): Promise<HumanSendResult> => {
+  sendHuman = async (submission: HumanSubmission, _signal?: AbortSignal, onSubmitted?: () => void): Promise<HumanSendResult> => {
     this.submissions.push(submission);
+    onSubmitted?.();
     if (this.authorizationLost) throw new AuthorizationError('Access to this conversation is no longer authorized.');
     return this.nextSend ? this.nextSend(submission) : { outcome: 'accepted' };
   };
@@ -1164,6 +1165,46 @@ describe('native photo host commands', () => {
     expect(transport.uploads).toHaveLength(2);
     expect(transport.uploads[0]).toBe(transport.uploads[1]);
     expect(transport.submissions).toHaveLength(1);
+  });
+
+  it.each(['uploading', 'posted', 'reconciled'] as const)('settles photo retry after cached page hide/show while %s', async phase => {
+    stubImagePreparation();
+    const transport = new PhotoTransport();
+    const uploadGate = deferred<void>();
+    const postGate = deferred<HumanSendResult>();
+    const upload = transport.uploadAttachment;
+    let uploading = false;
+    transport.uploadAttachment = async input => {
+      if (phase === 'uploading' && !uploading) {
+        uploading = true;
+        await uploadGate.promise;
+      }
+      return upload(input, new AbortController().signal);
+    };
+    transport.nextSend = async submission => {
+      if (phase !== 'uploading' && transport.submissions.length === 1) return postGate.promise;
+      const row = transport.addCanonical(submission);
+      return { outcome: 'accepted', messageId: row.id };
+    };
+    const events: HostComposerEvent[] = [];
+    installDeclaration(events); openChat(transport, 'photo-session');
+    const first = await waitForReady(events, 'photo-session');
+    const request = { type: 'send' as const, lifetimeId: first.lifetimeId, sessionKey: first.sessionKey,
+      correlationId: correlation, content: '', attachments: [photo] };
+    act(() => commandEntry()(request));
+    await waitFor(() => expect(phase === 'uploading' ? uploading : transport.submissions.length === 1).toBe(true));
+    act(() => window.dispatchEvent(new Event('pagehide')));
+    expect(events.some(e => ['failed', 'uncertain'].includes(e.event))).toBe(false);
+    if (phase === 'reconciled') transport.addCanonical(transport.submissions[0]);
+    act(() => window.dispatchEvent(new Event('pageshow')));
+    await waitFor(() => expect(events.filter(e => e.event === 'ready')).toHaveLength(2));
+    const next = events.filter((e): e is Extract<HostComposerEvent, { event: 'ready' }> => e.event === 'ready').at(-1)!;
+    act(() => commandEntry()({ ...request, lifetimeId: next.lifetimeId, retry: true }));
+    await waitFor(() => expect(events.some(e => e.event === 'delivered' && e.lifetimeId === next.lifetimeId)).toBe(true));
+    expect(transport.submissions).toHaveLength(phase === 'posted' ? 2 : 1);
+    expect(transport.uploads).toHaveLength(1);
+    expect(events.some(e => e.event === 'rejected' && e.reason === 'attempt-in-flight')).toBe(false);
+    uploadGate.resolve(); postGate.resolve({ outcome: 'accepted' });
   });
 
   it('recovers an unknown correlation without uploading or posting fresh references', async () => {
