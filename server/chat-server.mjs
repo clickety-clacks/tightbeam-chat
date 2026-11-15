@@ -533,7 +533,7 @@ function parseServiceMarkerDispatchTarget(rawUrl, runtime) {
 }
 
 async function serviceMarkerDispatch(request, response, runtime) {
-  if (!runtime.markerDeviceToken || !runtime.operatorPrincipalKey) {
+  if ((!runtime.markerDeviceToken || !runtime.operatorPrincipalKey) && !serviceReady(runtime)) {
     jsonResponse(response, 404, { error: { code: 'not_found' } });
     return;
   }
@@ -566,21 +566,30 @@ async function serviceMarkerDispatch(request, response, runtime) {
     jsonResponse(response, 400, { error: { code: 'invalid_request' } });
     return;
   }
-  if (!value || typeof value !== 'object' || Array.isArray(value) || value.verb !== 'read-marker-set') {
+  if (!value || typeof value !== 'object' || Array.isArray(value) ||
+      !['read-marker-set', 'assess_attachments'].includes(value.verb)) {
     jsonResponse(response, 404, { error: { code: 'not_found' } });
     return;
   }
+
+  const assessment = value.verb === 'assess_attachments';
+  if (!assessment && (!runtime.markerDeviceToken || !runtime.operatorPrincipalKey)) {
+    jsonResponse(response, 404, { error: { code: 'not_found' } });
+    return;
+  }
+  const forwardedBody = assessment
+    ? Buffer.from(JSON.stringify({ ...value, asUser: runtime.principalKey })) : body;
 
   try {
     writeGatewayReply(response, await gatewayRequest(gateway, target.path, {
       method: 'POST',
       headers: {
-        authorization: `Bearer ${runtime.markerDeviceToken}`,
+        ...(!assessment ? { authorization: `Bearer ${runtime.markerDeviceToken}` } : {}),
         'content-type': request.headers['content-type'] ?? 'application/json',
-        'content-length': String(body.length),
+        'content-length': String(forwardedBody.length),
       },
-      body,
-      authorize: false,
+      body: forwardedBody,
+      authorize: assessment,
     }));
   } catch {
     jsonResponse(response, 502, { error: { code: 'gateway_unavailable' } });
