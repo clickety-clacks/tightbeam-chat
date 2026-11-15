@@ -62,20 +62,21 @@ describe('Chat entry selection', () => {
     });
   });
 
-  it('keeps the configured marker route scoped to its Gateway', () => {
-    const withMarkers = { ...configured, principalKey: 'fixture-principal', readMarkerRoute: 'gateway-configured-user' as const };
-    const sameGateway = resolveEntrySelection(
-      `?gateway=${encodeURIComponent(configured.gateway)}&session=${encodeURIComponent('agent:linked/chat')}`,
-      withMarkers,
-    );
-    expect(sameGateway.kind === 'selected' && sameGateway.target.readMarkerRoute).toBe('gateway-configured-user');
+  it.each(['gateway-configured-user', 'gateway-user-device'] as const)(
+    'keeps the %s marker route scoped to its Gateway', readMarkerRoute => {
+      const withMarkers = { ...configured, principalKey: 'fixture-principal', readMarkerRoute };
+      const sameGateway = resolveEntrySelection(
+        `?gateway=${encodeURIComponent(configured.gateway)}&session=${encodeURIComponent('agent:linked/chat')}`,
+        withMarkers,
+      );
+      expect(sameGateway.kind === 'selected' && sameGateway.target.readMarkerRoute).toBe(readMarkerRoute);
 
-    const otherGateway = resolveEntrySelection(
-      `?gateway=${encodeURIComponent('https://other.example')}&session=${encodeURIComponent('agent:other/chat')}`,
-      withMarkers,
-    );
-    expect(otherGateway.kind === 'selected' && otherGateway.target.readMarkerRoute).toBeUndefined();
-  });
+      const otherGateway = resolveEntrySelection(
+        `?gateway=${encodeURIComponent('https://other.example')}&session=${encodeURIComponent('agent:other/chat')}`,
+        withMarkers,
+      );
+      expect(otherGateway.kind === 'selected' && otherGateway.target.readMarkerRoute).toBeUndefined();
+    });
 
   it('rejects malformed, incomplete, duplicate, credential-bearing, and unrecognized query data safely', () => {
     const rejected = [
@@ -112,21 +113,23 @@ describe('Chat entry selection', () => {
 
 describe('private browser entry and same-origin gateway bridge', () => {
   it('exposes the configured marker route without forwarding browser credentials', async () => {
-    const fetchSpy = vi.fn<typeof fetch>().mockResolvedValue(new Response('{}', { status: 200 }));
-    vi.stubGlobal('fetch', fetchSpy);
-    const host = browserHost({ ...configured, principalKey: 'fixture-principal', readMarkerRoute: 'gateway-configured-user' });
+    for (const readMarkerRoute of ['gateway-configured-user', 'gateway-user-device'] as const) {
+      const fetchSpy = vi.fn<typeof fetch>().mockResolvedValue(new Response('{}', { status: 200 }));
+      vi.stubGlobal('fetch', fetchSpy);
+      const host = browserHost({ ...configured, principalKey: 'fixture-principal', readMarkerRoute });
 
-    expect(host.readMarkerRoute).toBe('gateway-configured-user');
-    expect(host.readMarkerOperatorPrincipalKey).toBe('fixture-principal');
-    await host.fetch('/__chat/agent/dispatch', {
-      method: 'POST',
-      headers: { authorization: 'Bearer browser-supplied-value', 'content-type': 'application/json' },
-      body: JSON.stringify({ verb: 'read-marker-set' }),
-    });
+      expect(host.readMarkerRoute).toBe(readMarkerRoute);
+      expect(host.readMarkerOperatorPrincipalKey).toBe('fixture-principal');
+      await host.fetch('/__chat/agent/dispatch', {
+        method: 'POST',
+        headers: { authorization: 'Bearer browser-supplied-value', 'content-type': 'application/json' },
+        body: JSON.stringify({ verb: 'read-marker-set' }),
+      });
 
-    const [, init] = fetchSpy.mock.calls[0]!;
-    expect(new Headers(init?.headers).has('authorization')).toBe(false);
-    expect(init?.credentials).toBe('same-origin');
+      const [, init] = fetchSpy.mock.calls[0]!;
+      expect(new Headers(init?.headers).has('authorization')).toBe(false);
+      expect(init?.credentials).toBe('same-origin');
+    }
   });
 
   it('keeps HTTPS fetch and WebSocket traffic on the selected Chat origin', () => {

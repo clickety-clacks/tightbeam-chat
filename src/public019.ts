@@ -68,8 +68,8 @@ export interface Public019Host {
   /** A host-authorized fetch, including the appropriate bearer header for REST. */
   fetch(input: string, init: RequestInit): Promise<Response>;
   currentIdentity(): HostIdentity;
-  /** Set when marker reads and writes use the configured Chat user. */
-  readonly readMarkerRoute?: 'gateway-configured-user';
+  /** Marker route advertised by the host for its configured Chat Gateway. */
+  readonly readMarkerRoute?: 'gateway-configured-user' | 'gateway-user-device';
   /** The configured Chat user permitted to use the declared marker route. */
   readonly readMarkerOperatorPrincipalKey?: string;
   /** Connect /ws/changes?protocolVersion=2, authenticate, then return a fresh socket. */
@@ -1123,7 +1123,8 @@ export function createPublic019Transport(config: Public019Config): { transport: 
   const markerOperatorPrincipalKey = config.host.readMarkerOperatorPrincipalKey?.trim();
   const markerTransport: Pick<ChatTransport,
     'readMarkerOperatorPrincipalKey' | 'readReadMarker' | 'writeReadMarker'> =
-    config.host.readMarkerRoute === 'gateway-configured-user' && markerOperatorPrincipalKey ? {
+    (config.host.readMarkerRoute === 'gateway-configured-user' ||
+      config.host.readMarkerRoute === 'gateway-user-device') && markerOperatorPrincipalKey ? {
       readMarkerOperatorPrincipalKey: markerOperatorPrincipalKey,
       async readReadMarker(scopeKey, signal): Promise<ReadMarkerReadResult> {
         if (config.host.currentIdentity().principalKey !== markerOperatorPrincipalKey) return { supported: false };
@@ -1170,7 +1171,8 @@ export function createPublic019Transport(config: Public019Config): { transport: 
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
             verb: 'read-marker-set',
-            asUser: markerOperatorPrincipalKey,
+            ...(config.host.readMarkerRoute === 'gateway-configured-user'
+              ? { asUser: markerOperatorPrincipalKey } : {}),
             params: {
               scopeKey: request.scopeKey,
               marker: request.sequence,

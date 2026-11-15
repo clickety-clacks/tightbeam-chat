@@ -27,6 +27,7 @@ describe('direct browser entry', () => {
     ));
 
     expect((await load('gateway-configured-user')).readMarkerRoute).toBe('gateway-configured-user');
+    expect((await load('gateway-user-device')).readMarkerRoute).toBe('gateway-user-device');
     expect((await load('unexpected-route')).readMarkerRoute).toBeUndefined();
     expect((await load(undefined)).readMarkerRoute).toBeUndefined();
   });

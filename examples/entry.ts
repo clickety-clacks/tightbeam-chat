@@ -3,7 +3,7 @@ export interface ChatTarget {
   readonly sessionKey: string;
   readonly principalKey: string;
   readonly deviceId: string;
-  readonly readMarkerRoute?: 'gateway-configured-user';
+  readonly readMarkerRoute?: 'gateway-configured-user' | 'gateway-user-device';
   readonly restHumanSendEnabled?: boolean;
 }
 
@@ -17,7 +17,7 @@ export interface ConfiguredChatTarget {
   readonly sessionKey?: string;
   readonly principalKey?: string;
   readonly deviceId?: string;
-  readonly readMarkerRoute?: 'gateway-configured-user';
+  readonly readMarkerRoute?: 'gateway-configured-user' | 'gateway-user-device';
   readonly restHumanSendEnabled?: boolean;
 }
 
@@ -55,7 +55,8 @@ export async function loadConfiguredChatTarget(
     typeof config.sessionKey === 'string' ? config.sessionKey : undefined,
     typeof config.principalKey === 'string' ? config.principalKey : undefined,
     typeof config.deviceId === 'string' ? config.deviceId : undefined,
-    config.readMarkerRoute === 'gateway-configured-user' ? 'gateway-configured-user' : undefined,
+    config.readMarkerRoute === 'gateway-configured-user' || config.readMarkerRoute === 'gateway-user-device'
+      ? config.readMarkerRoute : undefined,
     config.restHumanSendEnabled === true,
   );
   if (!target) throw new Error('The Chat server returned an invalid default target.');
@@ -91,7 +92,7 @@ function targetFrom(
   sessionKey: string | undefined,
   principalKey: string | undefined,
   deviceId: string | undefined,
-  readMarkerRoute: 'gateway-configured-user' | undefined,
+  readMarkerRoute: 'gateway-configured-user' | 'gateway-user-device' | undefined,
   restHumanSendEnabled: boolean,
 ): ChatTarget | undefined {
   const normalizedGateway = canonicalGateway(gateway);
