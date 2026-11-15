@@ -480,7 +480,7 @@ async function gatewayRequest(
     request.end(body);
   });
 
-  // serviceAgentDispatch validates these requests as post or read-marker-set before forwarding.
+  // serviceAgentDispatch validates these requests as post, read-marker-set or assess_attachments before forwarding.
   if (!retriedAfterVersionRefresh && authorize && path === '/agent/dispatch' &&
       isIncompatibleCliReply(reply)) {
     if (gateway.cliVersion === cliVersion) gateway.cliVersion = undefined;

@@ -182,6 +182,11 @@ describe('private direct-entry Chat service bridge', () => {
     const seen = [];
     let supported = false;
     const gateway = http.createServer(async (request, response) => {
+      if (request.method === 'GET' && request.url === '/version') {
+        response.setHeader('content-type', 'application/json');
+        response.end(JSON.stringify({ version: '0.1.14' }));
+        return;
+      }
       const chunks = [];
       for await (const chunk of request) chunks.push(Buffer.from(chunk));
       const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
