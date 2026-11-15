@@ -1,5 +1,48 @@
 [
   {
+    "version": "v0.1.100",
+    "items": [
+      {
+        "title": "Send photos from the native composer",
+        "description": "A compatible native host can send JPEG and PNG photos with captions or by themselves. Photos use the same preparation, upload and transcript path as the web composer, with retries preserved across page restoration."
+      },
+      {
+        "title": "Steadier pinned prompts",
+        "description": "Pinned prompt handoffs now keep the selected prompt stable as the conversation moves."
+      },
+      {
+        "title": "Attachment delivery reports",
+        "description": "Where the Gateway reports attachment delivery, Chat shows the per-file result. Native sends continue normally when assessment is unavailable or unknown."
+      },
+      {
+        "title": "Existing WebSocket sends preserved",
+        "description": "This candidate retains the v0.1.99 REST-send revert. PR #242 is excluded because its null-turnSeq receipt fix applies only to the reverted REST send decoder; the WebSocket acknowledgement contract is unchanged."
+      }
+    ]
+  },
+  {
+    "version": "v0.1.99",
+    "items": [
+      {
+        "title": "First message clears Tuner’s top toolbar",
+        "description": "At the top of a Tuner conversation, the first message now starts below the floating toolbar."
+      },
+      {
+        "title": "An icon-only scroll control",
+        "description": "The control for moving to the latest message now shows a down arrow without accompanying text."
+      }
+    ]
+  },
+  {
+    "version": "v0.1.98",
+    "items": [
+      {
+        "title": "A refreshed conversation view",
+        "description": "Navigation, messages, Markdown, activity, prompts, the composer, dialogs, image previews, and received attachment details now share the updated visual design."
+      }
+    ]
+  },
+  {
     "version": "v0.1.97",
     "items": [
       {
