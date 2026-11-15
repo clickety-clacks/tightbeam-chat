@@ -1,4 +1,4 @@
-name: Stage Chat release for approval
+name: Build and stage Chat release
 
 on:
   push:
@@ -60,7 +60,7 @@ jobs:
           asset_name="$(jq -er '.asset' "$provenance")"
           asset_sha256="$(jq -er '.sha256' "$provenance")"
           {
-            echo "## Chat release package staged for approval"
+            echo "## Chat release package staged for verification"
             echo
             echo "- Tag: \`$tag\`"
             echo "- Source commit: \`$source_commit\`"
