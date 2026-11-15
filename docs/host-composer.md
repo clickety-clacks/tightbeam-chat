@@ -135,7 +135,7 @@ The host uses `ready` and `unavailable` for Send readiness, and `connection` for
 
 While opted in, Chat removes the composer and its reserved bottom space only after `ready`, preserves the transcript anchor through host resizing, and shows no status dot, popup, connection-state text, or inline Reconnect control for feed-only errors in the transcript. Feature-specific notices remain. Host-originated local bubbles show `Sending…` while pending and show failed or uncertain delivery without Chat retry or text-restore actions. The host owns the connection dot and its recovery action. Standalone Chat keeps its dot and details action; the dot turns yellow while live updates reconnect and green after recovery.
 
-The runnable browser example is [host-composer.html](../examples/host-composer.html). Add `?fixture=1` to select its explicit local upload fixture; it is not a native app or live-service acceptance result.
+The runnable browser example is [host-composer.html](../examples/host-composer.html). It demonstrates the page-local protocol; it is not a native app or live-service acceptance result.
 
 ## Native photos
 
@@ -158,6 +158,4 @@ A user retry repeats the exact content and ordered filename/MIME/byte manifest w
 
 Photo attempts use the same accepted/delivered/failed/uncertain events as text. Preparation and upload failures add `failed` reasons `image-unreadable` and `upload-failed`, with `detail` and optional zero-based `attachmentIndex`. Accepted means Gateway acknowledgement; delivered means canonical reconciliation, not agent reading.
 
-This version does not implement other file types or native attach-time assessment commands. Without the Gateway assessment verb, photos post normally with no new assessment warning or confirmation.
-
-For local integration testing, run `npm run example` and open `/host-composer.html?fixture=1`. This development-only mode is excluded from release builds and explicitly selects an in-memory upload-capable transport and `fixture-session`; it is not a live Gateway or evidence that an agent received an image. An injected native declaration is preserved; the page’s demonstration declaration is used only when none exists.
+This version does not implement other file types or native attach-time assessment commands. Without the Gateway assessment verb, or when a host-send assessment is unknown or fails, photos post normally with no new assessment warning or confirmation. Native sends never enter the hidden web-composer confirmation step.

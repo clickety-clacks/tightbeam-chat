@@ -1,7 +1,6 @@
 import { createRoot } from 'react-dom/client';
 import { HOST_COMMAND_NAME, HOST_DECLARATION_NAME, type HostComposerCommand, type HostComposerEvent } from '../src/hostComposer';
 import type { HostComposerCommandEntry } from '../src/hostComposer';
-import { TightbeamChat, createTightbeamAdapter } from '../src';
 import { RuntimeEntry } from './RuntimeEntry';
 import './site.css';
 import './hostComposer.css';
@@ -90,7 +89,7 @@ function handleEvent(event: HostComposerEvent): void {
       panel.hidden = false;
       document.body.classList.add('host-composer-active');
       targetLabel.textContent = `${event.agentDisplayName || 'Selected agent'} · ${event.sessionKey}`;
-      status.textContent = event.capabilities.attachments ? 'Chat is ready for text and JPEG/PNG photos.' : 'Chat is ready for text.';
+      status.textContent = `Chat is ready. Text sending is supported; attachments may be supported in a future version.`;
       form.querySelector<HTMLButtonElement>('button[type="submit"]')!.disabled = false;
       updateRetryButton();
       updateReconnectButton();
@@ -160,7 +159,7 @@ function handleEvent(event: HostComposerEvent): void {
 }
 
 const declaration = { versions: [1], onEvent: handleEvent };
-if (!(HOST_DECLARATION_NAME in page)) page[HOST_DECLARATION_NAME] = declaration;
+page[HOST_DECLARATION_NAME] = declaration;
 
 form.addEventListener('submit', (event) => {
   event.preventDefault();
@@ -171,15 +170,4 @@ retryButton.addEventListener('click', () => {
 });
 reconnectButton.addEventListener('click', reconnectLiveUpdates);
 
-// The upload fixture is a development-only simulator aid, absent from releases.
-async function mountExample() {
-  const root = createRoot(document.getElementById('root')!);
-  if (import.meta.env.DEV && new URLSearchParams(window.location.search).get('fixture') === '1') {
-    const { LocalFixtureTransport, fixtureTarget } = await import('./mockTransport');
-    const adapter = createTightbeamAdapter(new LocalFixtureTransport(), {
-      ...fixtureTarget, label: 'TEST FIXTURE — local photo upload',
-    });
-    root.render(<TightbeamChat sessionKey="fixture-session" adapter={adapter} />);
-  } else root.render(<RuntimeEntry />);
-}
-void mountExample();
+createRoot(document.getElementById('root')!).render(<RuntimeEntry />);

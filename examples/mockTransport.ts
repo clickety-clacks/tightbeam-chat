@@ -35,18 +35,6 @@ export class LocalFixtureTransport implements ChatTransport {
     message(index + 1, `Fixture message ${index + 1}. Older human history stays available across agent resets.`,
       index % 5 === 0 ? 'user' : 'assistant',
       index === 112 ? { messageType: 'future-kind', attachments: [{ name: 'fixture.txt' }] } : {}));
-  readonly targetGateway = 'https://fixture.example';
-  private readonly assets = new Map<string, Blob>();
-  uploadAttachment: NonNullable<ChatTransport['uploadAttachment']> = async (input) => {
-    const assetId = `fixture-asset-${this.assets.size + 1}`;
-    this.assets.set(assetId, input.bytes);
-    return { assetId, filename: input.filename, mimeType: input.bytes.type, size: input.bytes.size };
-  };
-  readAttachment: NonNullable<ChatTransport['readAttachment']> = async (reference) => {
-    const bytes = this.assets.get(reference.assetId);
-    if (!bytes) throw new Error('Fixture attachment not found.');
-    return bytes;
-  };
   private callbacks = new Set<ChangeCallbacks>();
   private version = 1;
   private nextSeq = 125;
@@ -116,7 +104,6 @@ export class LocalFixtureTransport implements ChatTransport {
     const result: HumanSendResult = { outcome: 'accepted' };
     this.postOutcomes.set(submission.clientMessageId, result);
     const row = message(this.nextSeq++, submission.content, 'user', {
-      attachments: submission.attachments,
       clientMessageId: submission.clientMessageId, deviceId: submission.deviceId, turnSeq: this.nextSeq - 1,
     });
     this.turns.set(row.turnSeq!, { seq: row.turnSeq!, sessionKey, status: 'completed',

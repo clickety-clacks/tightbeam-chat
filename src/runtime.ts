@@ -2171,7 +2171,18 @@ class SessionRuntime implements ChatRuntime {
         this.notifyHostSend(id, { kind: 'failed', reason: 'refused', detail: 'attachment_over_limit' });
         return;
       }
-      if (needsAttachmentConfirmation(assessment)) {
+      // Native composers have no web confirmation controls. An unknown or
+      // failed assessment cannot pause their send; only actual Gateway reports
+      // may describe a delivery outcome.
+      if (ready.hostSend && assessment.attachments.some(item => item.assessment === 'unknown') &&
+          !assessment.attachments.some(item => item.assessment === 'will-not-deliver')) {
+        this.updateSend(id, send => ({ ...send, attachments, attachmentPhase: 'ready',
+          attachmentAssessment: undefined }));
+        this.sendControllers.delete(id);
+        await this.post(submission);
+        return;
+      }
+      if (!ready.hostSend && needsAttachmentConfirmation(assessment)) {
         this.updateSend(id, send => ({ ...send, status: 'pending', reason: undefined,
           attachmentPhase: 'confirmation', attachmentAssessment: assessment }));
         return;

@@ -1064,6 +1064,7 @@ describe('native photo host commands', () => {
     };
     readAttachment: NonNullable<ChatTransport['readAttachment']> = async () => this.uploads.at(-1)!;
     attachmentCapabilities?: ChatTransport['attachmentCapabilities'];
+    assessAttachments?: ChatTransport['assessAttachments'];
     override addCanonical(submission: HumanSubmission): CanonicalMessage {
       const row = super.addCanonical(submission);
       const withPhotos = { ...row, attachments: submission.attachments };
@@ -1165,6 +1166,34 @@ describe('native photo host commands', () => {
     expect(transport.uploads).toHaveLength(2);
     expect(transport.uploads[0]).toBe(transport.uploads[1]);
     expect(transport.submissions).toHaveLength(1);
+  });
+
+  it.each(['unknown', 'failed', 'missing', 'nondelivery'] as const)('posts native photos normally without hidden confirmation when assessment is %s', async mode => {
+    stubImagePreparation();
+    const transport = new PhotoTransport();
+    transport.assessAttachments = async submission => {
+      if (mode === 'missing') return undefined;
+      if (mode === 'failed') throw new Error('Assessment unavailable');
+      return { sessionKey: submission.sessionKey, clientMessageId: submission.clientMessageId,
+        attachments: submission.attachments!.map(item => ({ assetId: item.assetId,
+          assessment: mode === 'nondelivery' ? 'will-not-deliver' : 'unknown',
+          reason: mode === 'nondelivery' ? { code: 'unsupported', message: 'Gateway reports nondelivery' } : null })) };
+    };
+    transport.nextSend = async submission => { const row = transport.addCanonical(submission); return { outcome: 'accepted', messageId: row.id }; };
+    const events: HostComposerEvent[] = [];
+    installDeclaration(events);
+    const { runtimes } = openChat(transport, 'photo-session');
+    const ready = await waitForReady(events, 'photo-session');
+    const phases: (string | undefined)[] = [];
+    const unsubscribe = runtimes[0].subscribe(() => phases.push(runtimes[0].getSnapshot().sends[0]?.attachmentPhase));
+    act(() => commandEntry()({ type: 'send', ...ready, correlationId: correlation, content: 'keep this text', attachments: [photo] }));
+    await waitFor(() => expect(events.some(e => e.event === 'delivered')).toBe(true));
+    unsubscribe();
+    expect(phases).not.toContain('confirmation');
+    expect(transport.submissions).toHaveLength(1);
+    expect(transport.submissions[0].content).toBe('keep this text');
+    if (mode !== 'nondelivery') expect(runtimes[0].getSnapshot().sends[0].attachmentAssessment).toBeUndefined();
+    expect(screen.queryByRole('button', { name: 'Send anyway' })).toBeNull();
   });
 
   it.each(['uploading', 'posted', 'reconciled'] as const)('settles photo retry after cached page hide/show while %s', async phase => {
