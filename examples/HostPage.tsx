@@ -26,6 +26,7 @@ export function HostPage({ defaultTarget, configurationError }: {
       const { transport, profile } = createPublic019Transport({
         baseUrl: `${origin}/__chat`,
         targetGateway: selected.gateway,
+        restHumanSendEnabled: selected.restHumanSendEnabled,
         host,
       });
       setAdapter({ ...createTightbeamAdapter(transport, profile),
@@ -33,7 +34,8 @@ export function HostPage({ defaultTarget, configurationError }: {
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : 'The configured Chat service is unavailable.');
     }
-  }, [selected?.gateway, selected?.sessionKey, selected?.principalKey, selected?.deviceId]);
+  }, [selected?.gateway, selected?.sessionKey, selected?.principalKey, selected?.deviceId,
+    selected?.restHumanSendEnabled]);
 
   if (selected && adapter) return <TightbeamChat sessionKey={selected.sessionKey} adapter={adapter}
     configuredConversationHref={configuredConversationHref} />;

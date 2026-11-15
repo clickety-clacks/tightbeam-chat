@@ -74,6 +74,8 @@ export interface Public019Host {
   readonly readMarkerOperatorPrincipalKey?: string;
   /** Connect /ws/changes?protocolVersion=2, authenticate, then return a fresh socket. */
   openAuthenticatedChanges(signal: AbortSignal): Promise<Public019Channel>;
+  /** Connect /ws, authenticate as the human device, await sync_complete, then return a fresh socket. */
+  openAuthenticatedHuman(signal: AbortSignal): Promise<Public019Channel>;
 }
 
 export interface Public019Config {
@@ -81,6 +83,8 @@ export interface Public019Config {
   baseUrl: string;
   /** Non-secret exact Gateway origin selected by the host for status presentation. */
   targetGateway?: string;
+  /** Uses REST human posting only when explicitly enabled; the legacy socket path is the default. */
+  restHumanSendEnabled?: boolean;
   host: Public019Host;
   /** Timeout for non-send responses such as Firehose subscription readiness. */
   responseTimeoutMs?: number;
@@ -720,6 +724,73 @@ function authorizationFailureCode(value: unknown): boolean {
   if (typeof value !== 'string') return false;
   return ['unauthorized', 'forbidden', 'not_authorized', 'not_authenticated',
     'authentication_failed', 'auth_failed'].includes(value.toLowerCase());
+}
+
+async function sendHumanViaWebSocket(
+  host: Public019Host,
+  submission: HumanSubmission,
+  signal: AbortSignal,
+  onSubmitted?: () => void,
+): Promise<HumanSendResult> {
+  const submittingIdentity = host.currentIdentity();
+  if (!submission.clientMessageId.startsWith('c_')) {
+    return { outcome: 'refused', reason: 'invalid_message_id' };
+  }
+  if (submittingIdentity.deviceId !== submission.deviceId) {
+    return { outcome: 'refused', reason: 'Host device identity changed.' };
+  }
+  let channel: Public019Channel;
+  try { channel = await host.openAuthenticatedHuman(signal); }
+  catch (error) {
+    if (error instanceof AuthorizationError) throw error;
+    if (signal.aborted) return { outcome: 'uncertain', reason: 'Human send was interrupted before connecting.' };
+    return { outcome: 'unreachable', reason: 'Not connected to the server.' };
+  }
+  const connectedIdentity = host.currentIdentity();
+  if (connectedIdentity.deviceId !== submittingIdentity.deviceId ||
+      connectedIdentity.principalKey !== submittingIdentity.principalKey) {
+    channel.close();
+    return { outcome: 'refused', reason: 'Host principal changed before human send.' };
+  }
+  return new Promise<HumanSendResult>((resolve) => {
+    let settled = false;
+    let stopListening = () => {};
+    const finish = (result: HumanSendResult) => {
+      if (settled) return;
+      settled = true;
+      stopListening();
+      signal.removeEventListener('abort', onAbort);
+      channel.close();
+      resolve(result);
+    };
+    const onAbort = () => finish({ outcome: 'uncertain', reason: 'Human send interrupted before acknowledgement.' });
+    signal.addEventListener('abort', onAbort, { once: true });
+    stopListening = channel.listen((raw) => {
+      try {
+        const frame = record(raw);
+        if (frame.type === 'ack' && frame.id === submission.clientMessageId) finish({ outcome: 'accepted' });
+        else if (frame.type === 'error' && frame.messageId === submission.clientMessageId) {
+          if (frame.code !== undefined && typeof frame.code !== 'string') {
+            logGatewayIncompatibility('human send response', 'Used the refusal-code fallback.');
+          }
+          finish({ outcome: 'refused', reason: typeof frame.code === 'string' && frame.code ? frame.code : 'refused' });
+        }
+      } catch (error) {
+        logDecodeFailure('human send response', error);
+      }
+    }, (event) => finish(event?.code === 1009
+      ? { outcome: 'refused', reason: 'payload_too_large' }
+      : { outcome: 'uncertain', reason: 'connection-closed-before-acknowledgement' }));
+    if (signal.aborted) onAbort();
+    else if (!settled) {
+      try {
+        channel.send({ type: 'message', id: submission.clientMessageId,
+          sessionKey: submission.sessionKey, content: submission.content,
+          ...(submission.attachments ? { attachments: submission.attachments } : {}) });
+        onSubmitted?.();
+      } catch { finish({ outcome: 'unreachable', reason: 'Human send connection closed before submission.' }); }
+    }
+  });
 }
 
 /** Gateway REST history, protocol-2 changes, and human sending. */
@@ -1421,6 +1492,9 @@ export function createPublic019Transport(config: Public019Config): { transport: 
       }
     },
     async sendHuman(submission: HumanSubmission, signal: AbortSignal, onSubmitted?: () => void): Promise<HumanSendResult> {
+      if (config.restHumanSendEnabled !== true) {
+        return sendHumanViaWebSocket(config.host, submission, signal, onSubmitted);
+      }
       const submittingIdentity = config.host.currentIdentity();
       if (!submission.clientMessageId.startsWith('c_')) {
         return { outcome: 'refused', reason: 'invalid_message_id' };

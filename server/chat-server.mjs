@@ -150,6 +150,7 @@ function loadRuntimeConfig(environment) {
   const deviceId = gatewayOrigin && principalKey && sessionKey.trim()
     ? `chat_${crypto.createHash('sha256').update(`${gatewayOrigin}\0${principalKey}\0${sessionKey}`).digest('hex').slice(0, 24)}`
     : '';
+  const restHumanSendEnabled = environment.CHAT_REST_HUMAN_SEND === '1';
   const configuredTarget = gatewayOrigin && sessionKey.trim()
     ? {
       gateway: gatewayOrigin,
@@ -158,6 +159,7 @@ function loadRuntimeConfig(environment) {
       ...(operatorPrincipalKey
         ? { readMarkerRoute: 'gateway-configured-user' }
         : {}),
+      ...(restHumanSendEnabled ? { restHumanSendEnabled: true } : {}),
     }
     : {};
 
@@ -168,6 +170,7 @@ function loadRuntimeConfig(environment) {
     gatewayOrigin,
     gatewayMapValid: gatewayMap.valid,
     gateways: gatewayMap.gateways,
+    restHumanSendEnabled,
     sessionKey,
     principalKey,
     deviceId,
@@ -376,7 +379,7 @@ export function parseServiceHttpTarget(rawUrl, runtime) {
   }
 }
 
-function parseServiceWebSocketTarget(rawUrl, runtime) {
+export function parseServiceWebSocketTarget(rawUrl, runtime) {
   try {
     const request = new URL(rawUrl, 'http://chat-service.invalid');
     if (request.origin !== 'http://chat-service.invalid') return undefined;
@@ -394,6 +397,11 @@ function parseServiceWebSocketTarget(rawUrl, runtime) {
         return undefined;
       }
       return { path: '/ws/changes?protocolVersion=2', kind: 'changes', gatewayOrigin, sessionKey: sessionKeys[0] };
+    }
+    if (request.pathname === '/__chat/ws' &&
+        request.searchParams.getAll('protocolVersion').length === 0 &&
+        !(runtime.restHumanSendEnabled && gatewayOrigin === runtime.gatewayOrigin)) {
+      return { path: '/ws', kind: 'human', gatewayOrigin, sessionKey: sessionKeys[0] };
     }
     return undefined;
   } catch {
@@ -704,6 +712,10 @@ function proxyServiceWebSocket(request, socket, head, target, runtime, gateway) 
       asUser: runtime.principalKey,
       sessionKey: target.sessionKey,
     };
+    if (target.kind === 'human') {
+      auth.deviceId = runtime.deviceId;
+      auth.subscriptions = ['chat'];
+    }
     remote.write(websocketClientTextFrame(auth));
     if (head.length) remote.write(head);
     socket.pipe(remote).pipe(socket);
@@ -734,7 +746,7 @@ function parseBridgeTarget(rawUrl) {
     if (forwarded.origin !== gateway || forwarded.username || forwarded.password || forwarded.hash) return undefined;
 
     const pathname = forwarded.pathname;
-    const websocket = pathname === '/ws/changes';
+    const websocket = pathname === '/ws' || pathname === '/ws/changes';
     const rest = pathname === '/version' || pathname === '/api/sessions' ||
       /^\/api\/sessions\/[^/]+(?:\/messages)?$/.test(pathname);
     if (!websocket && !rest) return undefined;
