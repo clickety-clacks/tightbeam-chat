@@ -1916,6 +1916,39 @@ describe('conversation surface', () => {
     expect(composer.value).toBe('keep this draft while the feed reconnects');
   });
 
+  it('shows neutral reconnecting copy for a snapshot outage and keeps the draft through recovery', () => {
+    const runtime = new FakeRuntime('snapshot-outage', {
+      conversationError: 'Tightbeam REST request failed with HTTP 502.',
+      liveError: 'Live updates are paused while conversation data is unavailable.',
+      liveConnectionState: 'disconnected',
+    });
+    render(<TightbeamChat sessionKey="snapshot-outage" adapter={adapterFor(runtime)} />);
+
+    const composer = screen.getByRole('textbox') as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: 'keep my draft during recovery' } });
+
+    const reconnecting = screen.getByRole('status');
+    expect(reconnecting.textContent).toContain('Reconnecting…');
+    expect(reconnecting.classList.contains('tb-chat-caption-neutral')).toBe(true);
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByText(/HTTP 502|Conversation history could not be loaded/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Reconnect' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'Open the configured conversation' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Connection status: Disconnected. Show details' }));
+    const details = screen.getByRole('dialog', { name: 'Connection details' });
+    expect(details.textContent).toContain('Reconnecting…');
+    expect(details.textContent).not.toContain('HTTP 502');
+    expect(within(details).getByRole('button', { name: 'Reconnect' })).toBeTruthy();
+
+    act(() => runtime.update({ conversationError: undefined, liveError: undefined,
+      liveConnectionState: 'connected', records: [row('snapshot-outage', 'after-reconnect', 'Recovered transcript')] }));
+
+    expect(screen.queryByText('Reconnecting…')).toBeNull();
+    expect(screen.getByText('Recovered transcript')).toBeTruthy();
+    expect(composer.value).toBe('keep my draft during recovery');
+  });
+
   it('keeps a message visible and its reading position when its renderer fails', async () => {
     const sessionKey = 'message-render-failure';
     const records = [

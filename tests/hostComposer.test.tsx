@@ -39,6 +39,9 @@ class HostComposerTransport implements ChatTransport {
   readMarkerOperatorPrincipalKey?: string;
   readyGate?: ReturnType<typeof deferred<void>>;
   readGate?: ReturnType<typeof deferred<void>>;
+  tailRecoveryGate?: ReturnType<typeof deferred<void>>;
+  tailReadFailures = 0;
+  tailReadCount = 0;
   changeOpenFailures = 0;
   failReadSessionOnce = false;
   missingSession = false;
@@ -77,6 +80,12 @@ class HostComposerTransport implements ChatTransport {
     return { sessionKey, rowVersion: 1, displayName: `Agent ${sessionKey}`, model: 'Model A', harness: 'Harness A', raw: {} };
   };
   readTail = async (sessionKey: string): Promise<ConversationPage> => {
+    this.tailReadCount++;
+    if (this.tailReadFailures > 0) {
+      this.tailReadFailures--;
+      throw new Error('Tightbeam REST request failed with HTTP 502.');
+    }
+    if (this.tailRecoveryGate && this.records.has(sessionKey)) await this.tailRecoveryGate.promise;
     if (this.readGate) await this.readGate.promise;
     if (this.authorizationLost) throw new AuthorizationError('Access to this conversation is no longer authorized.');
     const rows = this.records.get(sessionKey) ?? [];
@@ -710,6 +719,44 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     expect(second.lifetimeId).not.toBe(first.lifetimeId);
     expect(transport.submissions).toHaveLength(1);
     expect(transport.submissions[0].sessionKey).toBe('session-a');
+  });
+
+  it('recovers a down-at-load snapshot with a neutral notice and one persistent host lifetime', async () => {
+    const events: HostComposerEvent[] = [];
+    const sessionKey = 'gateway-down-at-load';
+    const transport = new HostComposerTransport();
+    transport.records.set(sessionKey, [{ kind: 'message', id: 'recovered-on-start', sessionKey, seq: 1,
+      rowVersion: 1, role: 'assistant', content: 'Transcript loaded after Gateway recovery.', raw: {} }]);
+    transport.tailReadFailures = 1;
+    transport.tailRecoveryGate = deferred<void>();
+    installDeclaration(events);
+    const { runtimes, unmount } = openChat(transport, sessionKey);
+    const runtime = runtimes[0];
+
+    try {
+      const ready = await waitForReady(events, sessionKey);
+      await waitFor(() => expect(runtime.getSnapshot().conversationError).toContain('HTTP 502'));
+      await waitFor(() => expect(transport.tailReadCount).toBe(2));
+      await waitFor(() => expect(connectionEvents(events).some((event) => event.lifetimeId === ready.lifetimeId &&
+        event.state === 'reconnecting')).toBe(true));
+
+      const notice = screen.getByRole('status');
+      expect(notice.textContent).toContain('Reconnecting…');
+      expect(notice.classList.contains('tb-chat-caption-neutral')).toBe(true);
+      expect(screen.queryByRole('alert')).toBeNull();
+      expect(screen.queryByText(/HTTP 502/)).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Reconnect' })).toBeNull();
+
+      transport.tailRecoveryGate.resolve();
+      await waitFor(() => expect(runtime.getSnapshot().conversationError).toBeUndefined());
+      expect(await screen.findByText('Transcript loaded after Gateway recovery.')).toBeTruthy();
+      expect(events.filter((event) => event.event === 'ready' && event.lifetimeId === ready.lifetimeId)).toHaveLength(1);
+      expect(events.some((event) => event.event === 'unavailable' && event.lifetimeId === ready.lifetimeId)).toBe(false);
+      expect(events.some((event) => event.event === 'lifetime-ended' && event.lifetimeId === ready.lifetimeId)).toBe(false);
+    } finally {
+      transport.tailRecoveryGate.resolve();
+      unmount();
+    }
   });
 
   it('keeps the host composer ready through feed debounce, sustained failure, and recovery', async () => {
