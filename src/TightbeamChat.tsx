@@ -923,6 +923,14 @@ function sourceLabel(side: Bubble['side'], agentName: string): string {
   return agentName || 'Assistant';
 }
 
+function isRetryingConversationSnapshot(state: RuntimeState): boolean {
+  const transientGatewayFailure = (detail: string | undefined) => Boolean(detail &&
+    (/Tightbeam REST request failed with HTTP 50[234]\b/i.test(detail) ||
+      /Failed to fetch|NetworkError|network request failed|Load failed|fetch failed|ECONNREFUSED|ECONNRESET|ETIMEDOUT/i.test(detail)));
+  return state.status === 'ready' && !state.sessionNotFound && Boolean(state.liveError) &&
+    (transientGatewayFailure(state.sessionError) || transientGatewayFailure(state.conversationError));
+}
+
 function statusText(state: RuntimeState): string {
   if (state.status === 'error') return 'Disconnected';
   if (state.status === 'loading') return 'Connecting';
@@ -1324,6 +1332,7 @@ const Composer = forwardRef<ComposerHandle, {
   const preparationRevision = useRef(0);
   const titleId = useId();
   const statusName = statusText(state);
+  const retryingConversationSnapshot = isRetryingConversationSnapshot(state);
   const statusId = `${titleId}-status-details`;
   const updateDraft = useCallback((content: string) => {
     recoverySnapshot.draft = content;
@@ -1900,9 +1909,10 @@ const Composer = forwardRef<ComposerHandle, {
         <div className="tb-chat-popup-heading"><StatusIcon state={state} />
           <button type="button" aria-label="Close connection details" onClick={closeStatusPopup}>×</button>
         </div>
-        {state.sessionError && <p>Session details: {formatVisibleIds(state.sessionError)}</p>}
-        {state.sessionNotFound && <p>This conversation no longer exists.</p>}
-        {state.conversationError && <p>Conversation history: {formatVisibleIds(state.conversationError)}</p>}
+        {retryingConversationSnapshot && <p>Reconnecting…</p>}
+        {!retryingConversationSnapshot && state.sessionError && <p>Session details: {formatVisibleIds(state.sessionError)}</p>}
+        {!retryingConversationSnapshot && state.sessionNotFound && <p>This conversation no longer exists.</p>}
+        {!retryingConversationSnapshot && state.conversationError && <p>Conversation history: {formatVisibleIds(state.conversationError)}</p>}
         {state.historyError && <p>Earlier messages: {formatVisibleIds(state.historyError)}</p>}
         <dl>
           <dt>Gateway</dt><dd>{state.targetGateway || 'Unavailable'}</dd>
@@ -3179,17 +3189,22 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     if (state.historyError || current < olderHistoryPrefetchDistance(box)) loadOlder();
   };
 
-  const localNotice = state.sessionNotFound ? 'This conversation no longer exists.'
+  const retryingConversationSnapshot = isRetryingConversationSnapshot(state);
+  const localNotice = retryingConversationSnapshot ? 'Reconnecting…'
+    : state.sessionNotFound ? 'This conversation no longer exists.'
     : state.status === 'unauthorized' ? 'Chat is no longer authorized. The message was not sent.'
       : state.status === 'unsupported' ? 'This conversation is not supported.'
     : state.conversationError ? `Conversation history could not be loaded: ${state.conversationError}`
       : state.sessionError ? `Some conversation details are unavailable: ${state.sessionError}`
         : undefined;
   const showRuntimeNotice = state.loadingOlder || !!state.historyError || !!localNotice;
-  const showConfiguredConversationLink = !!configuredConversationHref &&
+  const showConfiguredConversationLink = !retryingConversationSnapshot && !!configuredConversationHref &&
     (state.sessionNotFound || state.sessionError || state.conversationError ||
       state.status === 'unauthorized' || state.status === 'unsupported');
-  const showReconnect = state.sessionNotFound || state.sessionError || state.conversationError;
+  const showReconnect = !retryingConversationSnapshot &&
+    (state.sessionNotFound || state.sessionError || state.conversationError);
+  const runtimeNoticeIsError = Boolean(state.historyError || state.status === 'unauthorized' || state.status === 'unsupported' ||
+    (!retryingConversationSnapshot && (state.sessionNotFound || state.sessionError || state.conversationError)));
   const hasToolHistoryStatus = state.toolCallsEnabled === true &&
     (state.toolCallsLoading || visibleToolCallsError !== undefined);
   const showToolHistoryStatusInNotice = hasToolHistoryStatus && !state.loadingOlder && !!(state.historyError || localNotice);
@@ -3428,8 +3443,8 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
         }
       }}
       aria-label={`${agentName || 'Conversation'} messages`} aria-live="polite" aria-relevant="additions text">
-      {showRuntimeNotice && <div ref={runtimeNotice} className={`tb-chat-runtime-notice ${showToolHistoryStatusInNotice ? 'tb-chat-runtime-notice-with-tool-history ' : ''}${state.loadingOlder ? 'tb-chat-history-loading ' : ''} tb-chat-caption ${state.historyError || state.sessionNotFound || state.sessionError || state.conversationError || state.status === 'unauthorized' || state.status === 'unsupported'
-        ? 'tb-chat-caption-danger' : 'tb-chat-caption-neutral'}`} role={state.historyError || state.sessionNotFound || state.conversationError || state.sessionError || state.status === 'unauthorized' || state.status === 'unsupported' ? 'alert' : 'status'}>
+      {showRuntimeNotice && <div ref={runtimeNotice} className={`tb-chat-runtime-notice ${showToolHistoryStatusInNotice ? 'tb-chat-runtime-notice-with-tool-history ' : ''}${state.loadingOlder ? 'tb-chat-history-loading ' : ''} tb-chat-caption ${runtimeNoticeIsError
+        ? 'tb-chat-caption-danger' : 'tb-chat-caption-neutral'}`} role={runtimeNoticeIsError ? 'alert' : 'status'}>
         <span className="tb-chat-caption-body">
           {(state.loadingOlder || state.historyError || localNotice) && <span>{state.loadingOlder ? 'Loading earlier messages…'
             : state.historyError ? `Earlier messages could not be loaded: ${formatVisibleIds(state.historyError)}`

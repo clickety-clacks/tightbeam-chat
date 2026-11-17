@@ -73,7 +73,9 @@ describe('direct browser entry', () => {
     render(<HostPage defaultTarget={defaultTarget} />);
 
     expect(await screen.findByRole('textbox', { name: /message to/i })).toBeTruthy();
-    expect(screen.getByText(/Conversation history could not be loaded/)).toBeTruthy();
+    expect(screen.getByText('Reconnecting…')).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByText(/HTTP 503|Conversation history could not be loaded/)).toBeNull();
     expect(screen.queryByText(defaultTarget.gateway)).toBeNull();
     expect(screen.queryByText(defaultTarget.sessionKey)).toBeNull();
     expect(screen.queryByLabelText(/device id|device token/i)).toBeNull();
