@@ -1,10 +1,10 @@
 [
   {
-    "version": "v0.1.102",
+    "version": "v0.1.103",
     "items": [
       {
-        "title": "Recover embedded Chat after connection outages",
-        "description": "In Tuner, Chat restores its host connection and loads the conversation. Temporary history failures retry with capped backoff; permanent history or cursor errors stop retrying. Gateway 0.1.16 remains supported, and human-send REST mode stays off by default."
+        "title": "Chat recovers after Gateway outages",
+        "description": "v0.1.102 was never released; its recovery improvements are included in this update. In Tuner, Chat shows Reconnecting during a Gateway outage and loads the conversation after it returns without a page reload or Save and connect. Temporary history failures retry with capped, jittered backoff; permanent history and cursor errors stop retrying. Gateway 0.1.16 remains supported, and human-send REST mode stays off by default."
       }
     ]
   },
