@@ -1006,6 +1006,10 @@ export function createChatServer({
         product: 'tightbeam-chat',
         tag: manifest.tag,
         sourceCommit: manifest.sourceCommit,
+        gatewayCompatibility: {
+          supportedVersions: manifest.gatewayCompatibility?.supportedVersions ?? [],
+          chatRestHumanSendEnabled: runtime.restHumanSendEnabled,
+        },
       });
       return;
     }

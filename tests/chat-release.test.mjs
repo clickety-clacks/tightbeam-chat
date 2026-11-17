@@ -103,7 +103,11 @@ describe('persistent Chat server', () => {
     const server = createChatServer({
       rootDir,
       publicDir,
-      releaseInfo: { tag: 'v0.1.0', sourceCommit: SOURCE_COMMIT },
+      releaseInfo: {
+        tag: 'v0.1.0',
+        sourceCommit: SOURCE_COMMIT,
+        gatewayCompatibility: { supportedVersions: ['0.1.16'] },
+      },
       environment: {
         CHAT_PUBLIC_ORIGIN: origin,
         CHAT_DEFAULT_GATEWAY_ORIGIN: gatewayOrigin,
@@ -124,7 +128,13 @@ describe('persistent Chat server', () => {
 
     const identity = await fetch(`${origin}/__chat/version`);
     expect(await identity.json()).toEqual({
-      product: 'tightbeam-chat', tag: 'v0.1.0', sourceCommit: SOURCE_COMMIT,
+      product: 'tightbeam-chat',
+      tag: 'v0.1.0',
+      sourceCommit: SOURCE_COMMIT,
+      gatewayCompatibility: {
+        supportedVersions: ['0.1.16'],
+        chatRestHumanSendEnabled: false,
+      },
     });
     expect(await (await fetch(`${origin}/`)).text()).toBe('<main>Chat</main>');
   });
@@ -481,6 +491,8 @@ describe('Chat release packaging and updater', () => {
     expect(releaseNotes).toContain(`SHA-256: ${actualHash}`);
     expect(JSON.parse(await fs.readFile(path.join(outputDir, 'release-provenance.json'), 'utf8')))
       .toMatchObject({ tag: 'v1.2.3', sourceCommit: SOURCE_COMMIT, sha256: actualHash, nodeVersion: 'v24.7.0' });
+    expect(JSON.parse(execFileSync('tar', ['-xOzf', result.assetPath, './release.json'], { encoding: 'utf8' })))
+      .toMatchObject({ gatewayCompatibility: { supportedVersions: ['0.1.16'] } });
     const members = execFileSync('tar', ['-tzf', result.assetPath], { encoding: 'utf8' });
     expect(members).toContain('./public/index.html');
     expect(members).toContain('./server/chat-server.mjs');

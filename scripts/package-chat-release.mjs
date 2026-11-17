@@ -79,6 +79,7 @@ export async function packageChatRelease({
       tag,
       sourceCommit,
       nodeVersion,
+      gatewayCompatibility: { supportedVersions: ['0.1.16'] },
     }, null, 2)}\n`);
 
     const assetName = `tightbeam-chat-${tag}.tar.gz`;

@@ -1,5 +1,18 @@
 [
   {
+    "version": "v0.1.101",
+    "items": [
+      {
+        "title": "Gateway 0.1.16 compatibility",
+        "description": "Chat supports Gateway 0.1.16 with CHAT_REST_HUMAN_SEND off, the default. Human prompts use the authenticated WebSocket path and read-marker writes use device authentication. The version endpoint reports supported Gateway versions and the active REST flag state. No breaking changes."
+      },
+      {
+        "title": "Shared prompt names remain opt-in",
+        "description": "Chat can show distinct human submitter names in shared sessions when a compatible Gateway preserves them. This stays off by default until that Gateway support is available; the existing generic labels and send path remain unchanged."
+      }
+    ]
+  },
+  {
     "version": "v0.1.100",
     "items": [
       {
