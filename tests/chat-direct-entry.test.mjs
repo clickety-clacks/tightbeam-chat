@@ -412,6 +412,7 @@ describe('private direct-entry Chat service bridge', () => {
     const chatReleaseResponse = await fetch(`${chatOrigin}/__chat/version`);
     expect(await chatReleaseResponse.json()).toEqual({
       product: 'tightbeam-chat', tag: 'v0.1.2', sourceCommit: '1234567890abcdef1234567890abcdef12345678',
+      gatewayCompatibility: { supportedVersions: [], chatRestHumanSendEnabled: true },
     });
     const selectedGateway = `?gateway=${encodeURIComponent(gatewayOrigin)}`;
     const versionResponse = await fetch(`${chatOrigin}/__chat/gateway/version`, { headers: { origin: chatOrigin } });
