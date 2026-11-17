@@ -3025,12 +3025,16 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   }, [host.settingsRequestRevision, openSettings]);
 
   useEffect(() => {
+    if (host.optedIn) {
+      if (overlayRef.current?.kind === 'whats-new') setOverlayState(null);
+      return;
+    }
     if (typeof window === 'undefined' || overlayRef.current) return;
     try {
       const entries = unseenReleaseNotes(window.localStorage, CHAT_RELEASE_VERSION, RELEASE_NOTES);
       if (entries?.length) setOverlayState({ kind: 'whats-new', entries });
     } catch { /* Storage may be unavailable. */ }
-  }, [setOverlayState]);
+  }, [host.optedIn, setOverlayState]);
 
   useLayoutEffect(() => {
     const isOpen = overlay !== null;

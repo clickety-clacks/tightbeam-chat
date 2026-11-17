@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { TightbeamChat } from '../src/TightbeamChat';
 import { createTightbeamAdapter } from '../src/runtime';
+import { unseenReleaseNotes } from '../src/releaseNotes';
 import { HOST_COMMAND_NAME, HOST_DECLARATION_NAME, HostComposerBridge, type HostComposerCommandEntry, type HostComposerEvent } from '../src/hostComposer';
 import type {
   CanonicalMessage, CanonicalTurn, ChangeCallbacks, ChangeNotice, ChatRuntime, ChatTransport,
@@ -9,6 +10,11 @@ import type {
   SessionRecord, TargetCapabilities, TargetObservation, TargetProfile, TightbeamAdapter,
 } from '../src/types';
 import { AuthorizationError, SessionNotFoundError } from '../src/types';
+
+vi.mock('../src/releaseNotes', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/releaseNotes')>();
+  return { ...actual, unseenReleaseNotes: vi.fn(actual.unseenReleaseNotes) };
+});
 
 const capabilities: TargetCapabilities = {
   newestTail: true, stableOlderCursor: true, retainedHistoryAcrossResets: true,
@@ -211,6 +217,8 @@ function installSubmitViewportLayout(viewport: HTMLElement) {
 
 afterEach(() => {
   cleanup();
+  window.localStorage.removeItem('tightbeam-chat.release-notes.seen-version');
+  vi.mocked(unseenReleaseNotes).mockClear();
   const page = window as unknown as Record<string, unknown>;
   delete page[HOST_DECLARATION_NAME];
   delete page[HOST_COMMAND_NAME];
@@ -218,6 +226,42 @@ afterEach(() => {
 });
 
 describe('versioned host composer seam on the real adapter and surface', () => {
+  it('suppresses automatic What’s New in hosted mode without delaying ready, connection, or transcript rendering', async () => {
+    vi.mocked(unseenReleaseNotes).mockReturnValueOnce([
+      { version: 'v0.1.103', items: [{ title: 'Recent update', description: 'A recent change.' }] },
+    ]);
+    const sessionKey = 'hosted-whats-new';
+    const events: HostComposerEvent[] = [];
+    const transport = new HostComposerTransport();
+    transport.records.set(sessionKey, [{ kind: 'message', sessionKey, id: 'history-1', seq: 1,
+      rowVersion: 1, role: 'assistant', content: 'Transcript line from history', raw: {} }]);
+    installDeclaration(events);
+
+    openChat(transport, sessionKey);
+
+    const ready = await waitForReady(events, sessionKey);
+    await waitFor(() => expect(connectionEvents(events).some(event =>
+      event.lifetimeId === ready.lifetimeId && event.state === 'connected')).toBe(true), { timeout: 2500 });
+    expect(screen.getByText('Transcript line from history')).toBeTruthy();
+    expect(screen.queryByRole('dialog', { name: "What's new" })).toBeNull();
+    const readyIndex = events.findIndex(event => event.event === 'ready' && event.lifetimeId === ready.lifetimeId);
+    const connectedIndex = events.findIndex(event => event.event === 'connection' &&
+      event.lifetimeId === ready.lifetimeId && event.state === 'connected');
+    expect(connectedIndex).toBeGreaterThan(readyIndex);
+  });
+
+  it('keeps automatic What’s New for the browser surface', async () => {
+    vi.mocked(unseenReleaseNotes).mockReturnValueOnce([
+      { version: 'v0.1.103', items: [{ title: 'Recent update', description: 'A recent change.' }] },
+    ]);
+    const transport = new HostComposerTransport();
+
+    openChat(transport, 'browser-whats-new');
+
+    expect(await screen.findByRole('dialog', { name: "What's new" })).toBeTruthy();
+    expect(screen.getByText('Recent update')).toBeTruthy();
+  });
+
   it('keeps the web composer until the snapshot is ready, without waiting for live updates', async () => {
     const events: HostComposerEvent[] = [];
     const transport = new HostComposerTransport();
