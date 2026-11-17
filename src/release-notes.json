@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.104",
+    "items": [
+      {
+        "title": "What's New stays out of the conversation in Tuner",
+        "description": "Chat skips the automatic What's New dialog when opened inside Tuner. You can still open the release notes from Settings."
+      }
+    ]
+  },
+  {
     "version": "v0.1.103",
     "items": [
       {
