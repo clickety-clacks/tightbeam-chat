@@ -36,10 +36,16 @@ describe('principal-scoped message projection', () => {
 
     expect(projectMessages([own, other, missing], 'person').messages.map(row => row.senderLabel))
       .toEqual(['You', 'User', 'User']);
-    expect(projectMessages([own, other, missing], 'person', 'person', true).messages.map(row => row.senderLabel))
+    const shared = projectMessages([own, other, missing], 'person', 'person', true);
+    expect(shared.multipleSubmitters).toBe(true);
+    expect(shared.messages.map(row => row.senderLabel))
       .toEqual(['Ari', 'Morgan', 'You']);
-    expect(projectMessages([own, other, missing], 'person', 'person', true).messages.map(row => row.ownerScoped))
+    expect(shared.messages.map(row => row.ownerScoped))
       .toEqual([true, false, false]);
+
+    const single = projectMessages([own], 'person', 'person', true);
+    expect(single.multipleSubmitters).toBe(false);
+    expect(single.messages.map(row => row.senderLabel)).toEqual(['You']);
   });
 
   it('preserves canonical batch members without fabricating duplicate rows', () => {

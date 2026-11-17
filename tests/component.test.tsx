@@ -734,10 +734,16 @@ describe('conversation surface', () => {
     const canonical = decodePublic019Message({
       id: 'complete-message', seq: 10, rowVersion: 10, sessionKey, role: 'user', sender: 'user:person',
       messageType: 'chat', content, assignmentId: 'task-123', at: Date.parse('2026-10-30T00:00:00Z'), attachments: [],
+      submitter: { identity: 'first-login', displayName: 'Riley' },
     }, sessionKey);
-    const runtime = new FakeRuntime(sessionKey, { records: [canonical] });
+    const other = decodePublic019Message({
+      id: 'second-message', seq: 11, rowVersion: 11, sessionKey, role: 'user', sender: 'user:other-person',
+      messageType: 'chat', content: 'A second person prompt.', at: Date.parse('2026-10-30T00:01:00Z'), attachments: [],
+      submitter: { identity: 'second-login', displayName: 'Morgan' },
+    }, sessionKey);
+    const runtime = new FakeRuntime(sessionKey, { records: [canonical, other] });
 
-    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} submitterAttributionEnabled />);
 
     const log = screen.getByRole('log');
     const message = within(log).getByText('Review the test results and summarize the failures.')
@@ -747,6 +753,23 @@ describe('conversation surface', () => {
     expect(log.textContent).toContain('[from user:account]');
     expect(log.textContent).toContain('[assignment: task-123]');
     expect(log.textContent).toContain('Review the test results and summarize the failures.');
+    expect(within(log).getByText('A second person prompt.').closest('.tb-chat-bubble')
+      ?.querySelector('.tb-chat-bubble-sender')?.textContent).toBe('Morgan');
+  });
+
+  it('keeps the generic You label when only one submitter appears in a session', () => {
+    const sessionKey = 'single-submitter-label';
+    const canonical = decodePublic019Message({
+      id: 'single-submitter-message', seq: 10, rowVersion: 10, sessionKey, role: 'user', sender: 'user:person',
+      messageType: 'chat', content: 'A personal prompt.', at: Date.parse('2026-10-30T00:00:00Z'), attachments: [],
+      submitter: { identity: 'tailnet-login', displayName: 'Riley' },
+    }, sessionKey);
+    const runtime = new FakeRuntime(sessionKey, { records: [canonical] });
+
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} submitterAttributionEnabled />);
+
+    const prompt = within(screen.getByRole('log')).getByText('A personal prompt.').closest('.tb-chat-bubble');
+    expect(prompt?.querySelector('.tb-chat-bubble-sender')?.textContent).toBe('You');
   });
 
   it('preserves the agent label when an agent reply carries assignment context', () => {

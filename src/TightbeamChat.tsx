@@ -2500,9 +2500,9 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
       key: message.key, record: message.source, side: message.side,
       ownerScoped: message.side === 'agent' || message.ownerScoped,
       sender: message.side === 'human'
-        ? submitterAttributionEnabled === true
+        ? messageSourceLabel(message.source, submitterAttributionEnabled === true && projection.multipleSubmitters
           ? message.senderLabel ?? 'You'
-          : messageSourceLabel(message.source, message.senderLabel ?? sourceLabel(message.side, agentName))
+          : message.senderLabel ?? sourceLabel(message.side, agentName))
         : sourceLabel(message.side, agentName),
       derived: Boolean(message.member),
       displayContent: message.member?.content, member: message.member,
