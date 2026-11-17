@@ -1,5 +1,18 @@
 [
   {
+    "version": "v0.1.102",
+    "items": [
+      {
+        "title": "Recover Tuner-hosted conversations after temporary outages",
+        "description": "A Tuner host-mode issue that could leave the transcript blank is fixed. Chat now retries temporary history failures with capped backoff; permanent cursor and older-history errors stop retrying rather than repeating requests."
+      },
+      {
+        "title": "Gateway 0.1.16 compatibility",
+        "description": "Chat supports Gateway 0.1.16. REST-based human sending remains off by default, so human prompts continue through the authenticated WebSocket path."
+      }
+    ]
+  },
+  {
     "version": "v0.1.101",
     "items": [
       {
