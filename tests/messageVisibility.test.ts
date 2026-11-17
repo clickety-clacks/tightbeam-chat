@@ -28,6 +28,20 @@ describe('principal-scoped message projection', () => {
     expect(forOther.find(row => row.key === 'cli')?.senderLabel).toBe('User');
   });
 
+  it('uses canonical submitter display names only when attribution is enabled and keeps ownership separate', () => {
+    const own = message('own', { raw: { submitter: { identity: 'tailnet-login', displayName: 'Ari' } } });
+    const other = message('other', { sender: 'user:another-person',
+      raw: { submitter: { identity: null, displayName: 'Morgan' } } });
+    const missing = message('missing', { sender: 'user:another-person', raw: {} });
+
+    expect(projectMessages([own, other, missing], 'person').messages.map(row => row.senderLabel))
+      .toEqual(['You', 'User', 'User']);
+    expect(projectMessages([own, other, missing], 'person', 'person', true).messages.map(row => row.senderLabel))
+      .toEqual(['Ari', 'Morgan', 'You']);
+    expect(projectMessages([own, other, missing], 'person', 'person', true).messages.map(row => row.ownerScoped))
+      .toEqual([true, false, false]);
+  });
+
   it('preserves canonical batch members without fabricating duplicate rows', () => {
     const carrier = message('carrier', { sender: 'process:notifications', isBatchCarrier: true, turnSeq: 10,
       content: '[batched notices: 1]\n[1] source=example sender=user:person cause=notice class=fyi\nHidden wrapper' });

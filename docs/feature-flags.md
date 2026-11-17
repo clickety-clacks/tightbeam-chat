@@ -4,4 +4,4 @@ Flags that hide unfinished features on `main`. See the feature-flag rules in [AG
 
 | Flag | Purpose | Owner | Work item | Default | Remove when |
 | --- | --- | --- | --- | --- | --- |
-| `CHAT_REST_HUMAN_SEND` | Use Gateway REST `/agent/dispatch` for human sends and read-marker writes when set to `1`; otherwise retain the authenticated WebSocket send path and device-authenticated marker-write path. | Chat maintainers | WIeb082 (`wi_eb08260c-73f9-45e3-a1ff-eed51a4b0f85`) | `0` (unset; only `1` enables) | Gateway 0.1.16 installed |
+| `CHAT_REST_HUMAN_SEND` | Use Gateway REST `/agent/dispatch` for human sends and read-marker writes, and enable optional prompt submitter attribution, when set to `1`; otherwise retain the authenticated WebSocket send path, device-authenticated marker-write path, and generic human labels. | Chat maintainers | WIeb082 (`wi_eb08260c-73f9-45e3-a1ff-eed51a4b0f85`) | `0` (unset; only `1` enables) | Gateway 0.1.16 installed |

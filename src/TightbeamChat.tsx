@@ -40,6 +40,8 @@ export interface TightbeamChatProps {
   readonly adapter: TightbeamAdapter;
   /** Same-page route to the configured conversation for an unavailable linked target. */
   readonly configuredConversationHref?: string;
+  /** Enables canonical submitter labels once the compatible Gateway contract is available. */
+  readonly submitterAttributionEnabled?: boolean;
   /** Change when the host changes principal or transport lifetime. */
   readonly identityKey?: string;
   readonly renderMessage?: (record: ConversationRecord, context: RenderContext) => ReactNode | undefined;
@@ -2236,6 +2238,7 @@ const ActivityRunRow = memo(function ActivityRunRow({ entry, expanded, toggle, r
 });
 
 function ChatBody({ runtime, renderMessage, className, hostBridge, configuredConversationHref, activitySummaries,
+  submitterAttributionEnabled,
   recoverySnapshot }: {
   activitySummaries?: ActivitySummaryTransport;
   runtime: ChatRuntime;
@@ -2243,6 +2246,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   className?: string;
   hostBridge: HostComposerBridge | null;
   configuredConversationHref?: string;
+  submitterAttributionEnabled?: boolean;
   recoverySnapshot: ChatRecoverySnapshot;
 }) {
   const state = useSyncExternalStore(runtime.subscribe, runtime.getSnapshot, runtime.getSnapshot);
@@ -2487,19 +2491,22 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   const keyboardActions = useRef({ optedIn: host.optedIn, composerHidden: host.composerHidden, scrollBy: reading.scrollBy });
   keyboardActions.current = { optedIn: host.optedIn, composerHidden: host.composerHidden, scrollBy: reading.scrollBy };
   const agentName = state.agentDisplayName ?? '';
-  const projection = useMemo(() => projectMessages(state.records, state.principalKey, state.session?.raw.ownerUserId),
-    [state.records, state.principalKey, state.session?.raw.ownerUserId]);
+  const projection = useMemo(() => projectMessages(state.records, state.principalKey, state.session?.raw.ownerUserId,
+    submitterAttributionEnabled === true),
+    [state.records, state.principalKey, state.session?.raw.ownerUserId, submitterAttributionEnabled]);
   const bubbles: Bubble[] = useMemo(() => projection.messages
     .filter(message => message.member || !message.source.recordEventIds?.length)
     .map((message) => ({
       key: message.key, record: message.source, side: message.side,
-      ownerScoped: message.side === 'agent' || message.senderLabel === 'You',
+      ownerScoped: message.side === 'agent' || message.ownerScoped,
       sender: message.side === 'human'
-        ? messageSourceLabel(message.source, message.senderLabel ?? sourceLabel(message.side, agentName))
+        ? submitterAttributionEnabled === true
+          ? message.senderLabel ?? 'You'
+          : messageSourceLabel(message.source, message.senderLabel ?? sourceLabel(message.side, agentName))
         : sourceLabel(message.side, agentName),
       derived: Boolean(message.member),
       displayContent: message.member?.content, member: message.member,
-    })), [projection, agentName]);
+  })), [projection, agentName, submitterAttributionEnabled]);
   const caption = state.activityTurnStateAvailable === true ? activeCaption(state.activeTurn) : undefined;
   const visibleSendIdentities = useMemo(() => new Set(bubbles.flatMap((bubble) => {
     const identity = bubble.derived ? undefined : canonicalSendIdentity(bubble.record);
@@ -3498,13 +3505,14 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
       recoverySnapshot={recoverySnapshot} agentName={agentName}
       suppressStatus={host.optedIn} onSettings={openSettings} onSubmitted={reading.scrollToLatest} />}
     {overlay && <ReleaseNotesDialog overlay={overlay} entries={bundledNotes} onClose={closeOverlay}
-      onOpenReleaseNotes={openReleaseNotes} onBack={backToSettings} />}
+      onOpenReleaseNotes={openReleaseNotes} onBack={backToSettings}
+      submitterAttributionEnabled={submitterAttributionEnabled === true} />}
   </section></ActivitySummaryProvider>;
 }
 
 /** One host-selected session. Changing selection/identity disposes the old runtime. */
 export function TightbeamChat({ sessionKey, adapter, identityKey, renderMessage, className,
-  configuredConversationHref }: TightbeamChatProps) {
+  configuredConversationHref, submitterAttributionEnabled }: TightbeamChatProps) {
   const key = `${sessionKey}\u0000${identityKey || ''}`;
   const recoverySnapshot = useRef<ChatRecoverySnapshot>({ key, draft: '', editRevision: 0,
     submittedRevisions: new Map(), scrollTop: 0, followLatest: true, hasReadingPosition: false });
@@ -3557,6 +3565,7 @@ export function TightbeamChat({ sessionKey, adapter, identityKey, renderMessage,
   </section>}>
     <ChatBody key={key} runtime={opened.runtime} renderMessage={renderMessage}
       className={className} hostBridge={hostBridge} configuredConversationHref={configuredConversationHref}
+      submitterAttributionEnabled={submitterAttributionEnabled}
       activitySummaries={adapter.activitySummaries} recoverySnapshot={recoverySnapshot.current} />
   </TranscriptRenderBoundary>;
 }

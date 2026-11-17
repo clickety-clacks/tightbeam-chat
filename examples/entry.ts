@@ -1,3 +1,6 @@
+import type { SubmitterAttribution } from '../src/types';
+import { normalizeSubmitterAttribution } from '../src/submitterAttribution';
+
 export interface ChatTarget {
   readonly gateway: string;
   readonly sessionKey: string;
@@ -5,6 +8,7 @@ export interface ChatTarget {
   readonly deviceId: string;
   readonly readMarkerRoute?: 'gateway-configured-user' | 'gateway-user-device';
   readonly restHumanSendEnabled?: boolean;
+  readonly submitter?: SubmitterAttribution;
 }
 
 export interface RequestedChatTarget {
@@ -19,6 +23,7 @@ export interface ConfiguredChatTarget {
   readonly deviceId?: string;
   readonly readMarkerRoute?: 'gateway-configured-user' | 'gateway-user-device';
   readonly restHumanSendEnabled?: boolean;
+  readonly submitter?: SubmitterAttribution;
 }
 
 /** Loads the deployment-owned, nonsecret default from the same origin as the page. */
@@ -58,6 +63,7 @@ export async function loadConfiguredChatTarget(
     config.readMarkerRoute === 'gateway-configured-user' || config.readMarkerRoute === 'gateway-user-device'
       ? config.readMarkerRoute : undefined,
     config.restHumanSendEnabled === true,
+    normalizeSubmitterAttribution(config.submitter),
   );
   if (!target) throw new Error('The Chat server returned an invalid default target.');
   return target;
@@ -94,6 +100,7 @@ function targetFrom(
   deviceId: string | undefined,
   readMarkerRoute: 'gateway-configured-user' | 'gateway-user-device' | undefined,
   restHumanSendEnabled: boolean,
+  submitter?: SubmitterAttribution,
 ): ChatTarget | undefined {
   const normalizedGateway = canonicalGateway(gateway);
   if (!normalizedGateway || !sessionKey?.trim() || !principalKey?.trim() || !deviceId?.trim()) return undefined;
@@ -104,12 +111,14 @@ function targetFrom(
     deviceId,
     ...(readMarkerRoute ? { readMarkerRoute } : {}),
     ...(restHumanSendEnabled ? { restHumanSendEnabled: true } : {}),
+    ...(restHumanSendEnabled && submitter ? { submitter } : {}),
   };
 }
 
 function configuredTarget(value: ConfiguredChatTarget | undefined): ChatTarget | undefined {
   return targetFrom(value?.gateway, value?.sessionKey, value?.principalKey, value?.deviceId,
-    value?.readMarkerRoute, value?.restHumanSendEnabled === true);
+    value?.readMarkerRoute, value?.restHumanSendEnabled === true,
+    normalizeSubmitterAttribution(value?.submitter));
 }
 
 function wellFormedQuery(search: string): boolean {

@@ -112,6 +112,23 @@ describe('Chat entry selection', () => {
 });
 
 describe('private browser entry and same-origin gateway bridge', () => {
+  it('uses a remembered display name only as a fallback and keeps attribution disabled by default', () => {
+    window.localStorage.clear();
+    const disabled = browserHost(configured);
+    expect(disabled.currentIdentity()).toEqual({ principalKey: configured.principalKey, deviceId: configured.deviceId });
+
+    const enabled = browserHost({ ...configured, restHumanSendEnabled: true });
+    expect(enabled.currentIdentity()).toEqual({ principalKey: configured.principalKey, deviceId: configured.deviceId });
+    window.localStorage.setItem('tightbeam-chat.submitter.display-name', 'Saved name');
+    expect(enabled.currentIdentity()).toMatchObject({ submitter: { identity: null, displayName: 'Saved name' } });
+
+    const supplied = browserHost({ ...configured, restHumanSendEnabled: true,
+      submitter: { identity: 'tailnet-login', displayName: 'Request name' } });
+    expect(supplied.currentIdentity()).toMatchObject({
+      submitter: { identity: 'tailnet-login', displayName: 'Request name' },
+    });
+  });
+
   it('exposes the configured marker route without forwarding browser credentials', async () => {
     for (const readMarkerRoute of ['gateway-configured-user', 'gateway-user-device'] as const) {
       const fetchSpy = vi.fn<typeof fetch>().mockResolvedValue(new Response('{}', { status: 200 }));

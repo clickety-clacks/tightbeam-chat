@@ -385,11 +385,29 @@ describe('private direct-entry Chat service bridge', () => {
     const configResponse = await fetch(`${chatOrigin}/chat-config.json`);
     const config = await configResponse.json();
     expect(config).toMatchObject({ gateway: gatewayOrigin, sessionKey: SESSION, principalKey: PRINCIPAL });
+    expect(config.submitter).toBeUndefined();
     const expectedDeviceId = 'chat_' + crypto.createHash('sha256')
       .update(gatewayOrigin + '\0' + PRINCIPAL + '\0' + SESSION).digest('hex').slice(0, 24);
     expect(config.deviceId).toBe(expectedDeviceId);
     expect(config.readMarkerRoute).toBe('gateway-configured-user');
     expect(JSON.stringify(config)).not.toContain(TOKEN);
+
+    const attributedConfig = await fetch(`${chatOrigin}/chat-config.json`, { headers: {
+      'Tailscale-User-Login': 'person@example.test',
+      'Tailscale-User-Name': '=?UTF-8?Q?Ren=C3=A9?=',
+    } });
+    expect((await attributedConfig.json()).submitter).toEqual({
+      identity: 'person@example.test', displayName: 'René',
+    });
+    const loginOnlyConfig = await fetch(`${chatOrigin}/chat-config.json`, { headers: {
+      'Tailscale-User-Login': 'person@example.test',
+    } });
+    expect((await loginOnlyConfig.json()).submitter).toEqual({ identity: 'person@example.test', displayName: null });
+    const nameOnlyConfig = await fetch(`${chatOrigin}/chat-config.json`, { headers: {
+      'Tailscale-User-Name': 'Remembered-name fallback',
+    } });
+    expect((await nameOnlyConfig.json()).submitter).toEqual({ identity: null,
+      displayName: 'Remembered-name fallback' });
 
     const chatReleaseResponse = await fetch(`${chatOrigin}/__chat/version`);
     expect(await chatReleaseResponse.json()).toEqual({
@@ -739,11 +757,14 @@ describe('private direct-entry Chat service bridge', () => {
     });
     await listen(chat, chatPort);
 
-    const configText = await (await fetch(`${chatOrigin}/chat-config.json`)).text();
+    const configText = await (await fetch(`${chatOrigin}/chat-config.json`, { headers: {
+      'Tailscale-User-Login': 'person@example.test', 'Tailscale-User-Name': 'Person',
+    } })).text();
     expect(JSON.parse(configText)).toMatchObject({
       readMarkerRoute: 'gateway-user-device', principalKey: OPERATOR_PRINCIPAL,
     });
     expect(JSON.parse(configText).restHumanSendEnabled).toBeUndefined();
+    expect(JSON.parse(configText).submitter).toBeUndefined();
     expect(configText).not.toContain(markerToken);
 
     const markerRead = await fetch(`${chatOrigin}/__chat/api/read-markers/${encodeURIComponent(scopeKey)}`, {

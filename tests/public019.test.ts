@@ -115,6 +115,13 @@ function setup(heartbeatTimeoutMs?: number, observedVersion = version, historyIt
 }
 
 describe('Gateway wire mapping and behavior checks', () => {
+  it('preserves canonical submitter metadata on decoded human message rows', () => {
+    const submitter = { identity: null, displayName: 'Riley' };
+    const decoded = decodePublic019Message({ ...item, submitter }, sessionKey);
+    expect(decoded.kind).toBe('message');
+    if (decoded.kind === 'message') expect(decoded.raw.submitter).toEqual(submitter);
+  });
+
   it('keeps the authenticated WebSocket human-send path as the default', async () => {
     const candidate = setup();
     const { transport } = createPublic019Transport({ baseUrl: 'https://host.example', host: candidate.host });
@@ -1402,6 +1409,18 @@ describe('Gateway wire mapping and behavior checks', () => {
       .resolves.toEqual({ outcome: 'accepted', messageId: 'message-original' });
     expect(candidate.dispatches).toHaveLength(2);
     expect(candidate.dispatches[1]).toEqual(candidate.dispatches[0]);
+  });
+
+  it('adds optional submitter attribution without changing the target session or deployment principal', async () => {
+    const candidate = setup();
+    const submission = { sessionKey, deviceId: 'device-1', clientMessageId: 'c_submitter', content: 'hello',
+      submitter: { identity: 'person@example.test', displayName: null } };
+
+    await expect(candidate.transport.sendHuman(submission, new AbortController().signal))
+      .resolves.toMatchObject({ outcome: 'accepted' });
+    expect(candidate.dispatches[0]).toEqual({ verb: 'post', asUser: 'person-1', sessionKey,
+      params: { clientMessageId: 'c_submitter', deviceId: 'device-1', content: 'hello', attachments: [],
+        submitter: { identity: 'person@example.test', displayName: null } } });
   });
 
   it.each(['recorded', 'duplicate'] as const)(

@@ -28,6 +28,12 @@ export interface CanonicalMessage {
   readonly raw: Readonly<Record<string, unknown>>;
 }
 
+/** Self-asserted human prompt attribution; it does not authenticate or authorize. */
+export interface SubmitterAttribution {
+  readonly identity: string | null;
+  readonly displayName: string | null;
+}
+
 export interface CanonicalTurn {
   readonly seq: number;
   readonly sessionKey: string;
@@ -184,6 +190,8 @@ export interface HostIdentity {
   readonly principalKey: string;
   /** Device identity participating in human-send deduplication. */
   readonly deviceId: string;
+  /** Optional prompt attribution supplied separately from the deployment identity. */
+  readonly submitter?: SubmitterAttribution;
 }
 
 export interface TargetCapabilities {
@@ -264,6 +272,7 @@ export interface HumanSubmission {
   readonly clientMessageId: string;
   readonly content: string;
   readonly attachments?: readonly AttachmentReference[];
+  readonly submitter?: SubmitterAttribution;
 }
 
 export interface AttachmentDeliveryReason {
