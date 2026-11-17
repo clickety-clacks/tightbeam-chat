@@ -41,6 +41,7 @@ class HostComposerTransport implements ChatTransport {
   readGate?: ReturnType<typeof deferred<void>>;
   tailRecoveryGate?: ReturnType<typeof deferred<void>>;
   tailReadFailures = 0;
+  tailReadFailureStatus = 502;
   tailReadCount = 0;
   changeOpenFailures = 0;
   failReadSessionOnce = false;
@@ -83,7 +84,7 @@ class HostComposerTransport implements ChatTransport {
     this.tailReadCount++;
     if (this.tailReadFailures > 0) {
       this.tailReadFailures--;
-      throw new Error('Tightbeam REST request failed with HTTP 502.');
+      throw new Error(`Tightbeam REST request failed with HTTP ${this.tailReadFailureStatus}.`);
     }
     if (this.tailRecoveryGate && this.records.has(sessionKey)) await this.tailRecoveryGate.promise;
     if (this.readGate) await this.readGate.promise;
@@ -140,9 +141,13 @@ function makeAdapter(transport: HostComposerTransport) {
 }
 
 function installDeclaration(events: HostComposerEvent[], versions: number[] = [1]): void {
-  (window as unknown as Record<string, unknown>)[HOST_DECLARATION_NAME] = {
-    versions, onEvent: (event: HostComposerEvent) => events.push(event),
-  };
+  const page = window as unknown as Record<string, unknown>;
+  const nativeHandler = { postMessage: (value: string) => events.push(JSON.parse(value) as HostComposerEvent) };
+  page.webkit = { messageHandlers: { tunerChatHost: nativeHandler } };
+  page[HOST_DECLARATION_NAME] = Object.freeze({
+    versions: Object.freeze([...versions]),
+    onEvent: (event: HostComposerEvent) => nativeHandler.postMessage(JSON.stringify(event)),
+  });
 }
 
 function commandEntry(): HostComposerCommandEntry {
@@ -209,6 +214,7 @@ afterEach(() => {
   const page = window as unknown as Record<string, unknown>;
   delete page[HOST_DECLARATION_NAME];
   delete page[HOST_COMMAND_NAME];
+  delete page.webkit;
 });
 
 describe('versioned host composer seam on the real adapter and surface', () => {
@@ -721,13 +727,14 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     expect(transport.submissions[0].sessionKey).toBe('session-a');
   });
 
-  it('recovers a down-at-load snapshot with a neutral notice and one persistent host lifetime', async () => {
+  it.each([500, 502])('recovers a down-at-load snapshot after HTTP %i with a neutral notice and one host lifetime', async (status) => {
     const events: HostComposerEvent[] = [];
     const sessionKey = 'gateway-down-at-load';
     const transport = new HostComposerTransport();
     transport.records.set(sessionKey, [{ kind: 'message', id: 'recovered-on-start', sessionKey, seq: 1,
       rowVersion: 1, role: 'assistant', content: 'Transcript loaded after Gateway recovery.', raw: {} }]);
     transport.tailReadFailures = 1;
+    transport.tailReadFailureStatus = status;
     transport.tailRecoveryGate = deferred<void>();
     installDeclaration(events);
     const { runtimes, unmount } = openChat(transport, sessionKey);
@@ -735,8 +742,11 @@ describe('versioned host composer seam on the real adapter and surface', () => {
 
     try {
       const ready = await waitForReady(events, sessionKey);
-      await waitFor(() => expect(runtime.getSnapshot().conversationError).toContain('HTTP 502'));
+      await waitFor(() => expect(runtime.getSnapshot().conversationError).toContain(`HTTP ${status}`));
       await waitFor(() => expect(transport.tailReadCount).toBe(2));
+      // A second route to recovery cannot overlap the scheduled history read.
+      const duplicateRebuild = runtime.rebuild();
+      expect(transport.tailReadCount).toBe(2);
       await waitFor(() => expect(connectionEvents(events).some((event) => event.lifetimeId === ready.lifetimeId &&
         event.state === 'reconnecting')).toBe(true));
 
@@ -744,10 +754,11 @@ describe('versioned host composer seam on the real adapter and surface', () => {
       expect(notice.textContent).toContain('Reconnecting…');
       expect(notice.classList.contains('tb-chat-caption-neutral')).toBe(true);
       expect(screen.queryByRole('alert')).toBeNull();
-      expect(screen.queryByText(/HTTP 502/)).toBeNull();
+      expect(screen.queryByText(/HTTP 5\d\d/)).toBeNull();
       expect(screen.queryByRole('button', { name: 'Reconnect' })).toBeNull();
 
       transport.tailRecoveryGate.resolve();
+      await duplicateRebuild;
       await waitFor(() => expect(runtime.getSnapshot().conversationError).toBeUndefined());
       expect(await screen.findByText('Transcript loaded after Gateway recovery.')).toBeTruthy();
       expect(events.filter((event) => event.event === 'ready' && event.lifetimeId === ready.lifetimeId)).toHaveLength(1);
