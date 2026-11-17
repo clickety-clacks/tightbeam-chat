@@ -8,6 +8,8 @@ A `vMAJOR.MINOR.PATCH` tag runs the Chat checks, builds the browser application 
 - `SHA256SUMS`, which records the bundle checksum; and
 - `release-provenance.json`, which records the tag, exact source commit, asset name, checksum and build tool versions.
 
+The packaged `release.json` records supported Gateway versions. `GET /__chat/version` returns that compatibility list alongside the Chat tag and source commit, plus whether `CHAT_REST_HUMAN_SEND` is enabled in the running service.
+
 The tag workflow creates a draft and uploads the complete asset set, then stops. Its summary and the draft notes show the exact source commit, package name and SHA-256. Check the package against that checksum, then publish the draft. Releases need no human approval; see [AGENTS.md](../AGENTS.md). The updater accepts only published releases, so the draft is retained for review without becoming available for automatic installation. No npm package is published.
 
 ## Server configuration
