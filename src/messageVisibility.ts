@@ -117,11 +117,29 @@ function submitterDisplayName(record: CanonicalMessage): string | undefined {
   return typeof displayName === 'string' && displayName.trim() ? displayName.trim() : undefined;
 }
 
+function submitterKey(record: CanonicalMessage): string | undefined {
+  const submitter = record.raw.submitter;
+  if (!submitter || typeof submitter !== 'object' || Array.isArray(submitter)) return undefined;
+  const attribution = submitter as Record<string, unknown>;
+  const identity = attribution.identity;
+  if (typeof identity === 'string' && identity.trim()) return `identity:${identity.trim()}`;
+  const displayName = attribution.displayName;
+  return typeof displayName === 'string' && displayName.trim() ? `display:${displayName.trim()}` : undefined;
+}
+
 export function projectMessages(records: readonly ConversationRecord[], principalKey?: string, ownerUserId?: unknown,
   submitterAttributionEnabled = false): {
-  messages: VisibleMessage[]; issues: readonly string[];
+  messages: VisibleMessage[]; issues: readonly string[]; multipleSubmitters: boolean;
 } {
   const byId = new Map(records.filter((row): row is CanonicalMessage => row.kind === 'message').map((row) => [row.id, row]));
+  const submitterKeys = new Set<string>();
+  for (const record of byId.values()) {
+    if (!isVisibleHumanRow(record)) continue;
+    const key = submitterKey(record);
+    if (key) submitterKeys.add(key);
+  }
+  const multipleSubmitters = submitterKeys.size > 1;
+  const showSubmitterNames = submitterAttributionEnabled && multipleSubmitters;
   const messages: VisibleMessage[] = [];
   const issues: string[] = [];
   for (const record of byId.values()) {
@@ -143,13 +161,13 @@ export function projectMessages(records: readonly ConversationRecord[], principa
       }
     } else if (classification === 'human') {
       messages.push({ key: record.id, source: record, side: 'human',
-        senderLabel: submitterAttributionEnabled ? submitterDisplayName(record) ?? 'You' : 'You',
+        senderLabel: showSubmitterNames ? submitterDisplayName(record) ?? 'You' : 'You',
         ownerScoped: true, provenancePending: false });
     } else if (isVisibleHumanRow(record)) {
       // A missing or different sender does not prove this row belongs to the viewer,
       // but it also is not a reason to omit the row from the conversation.
       messages.push({ key: record.id, source: record, side: 'human',
-        senderLabel: submitterAttributionEnabled ? submitterDisplayName(record) ?? 'You' : 'User',
+        senderLabel: showSubmitterNames ? submitterDisplayName(record) ?? 'You' : 'User',
         ownerScoped: false, provenancePending: false });
     } else if (classification === 'assistant') {
       const parent = record.replyToMessageId ? byId.get(record.replyToMessageId) : undefined;
@@ -173,5 +191,5 @@ export function projectMessages(records: readonly ConversationRecord[], principa
       });
     }
   }
-  return { messages, issues: Object.freeze([...new Set(issues)]) };
+  return { messages, issues: Object.freeze([...new Set(issues)]), multipleSubmitters };
 }
