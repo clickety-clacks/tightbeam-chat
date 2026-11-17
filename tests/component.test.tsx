@@ -16,6 +16,7 @@ import type {
 
 afterEach(() => {
   cleanup();
+  window.localStorage.removeItem('tightbeam-chat.submitter.display-name');
   document.querySelectorAll('style[data-chat-component-test]').forEach(style => style.remove());
   vi.useRealTimers();
   vi.unstubAllGlobals();
@@ -3824,6 +3825,19 @@ describe('conversation surface', () => {
     fireEvent.keyDown(document, { key: 'Escape' });
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
     expect(document.activeElement).toBe(composer);
+  });
+
+  it('shows and remembers a prompt display name only when submitter attribution is enabled', async () => {
+    const runtime = new FakeRuntime('submitter-settings');
+    render(<TightbeamChat sessionKey="submitter-settings" adapter={adapterFor(runtime)}
+      submitterAttributionEnabled />);
+    const composer = screen.getByRole('textbox', { name: 'Message to Research assistant' });
+    fireEvent.change(composer, { target: { value: '/settings' } });
+    fireEvent.keyDown(composer, { key: 'Enter' });
+
+    const displayName = await screen.findByRole('textbox', { name: 'Name shown on your prompts' });
+    fireEvent.change(displayName, { target: { value: 'Riley' } });
+    expect(window.localStorage.getItem('tightbeam-chat.submitter.display-name')).toBe('Riley');
   });
 
   it('opens Settings from Return without sending a message', async () => {

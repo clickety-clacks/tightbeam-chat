@@ -164,6 +164,27 @@ function turnEvent(id: string, turnEventSeq: number, kind: TurnEventRecord['kind
 async function settle() { await vi.waitFor(() => {}, { timeout: 50 }); }
 
 describe('framework-independent runtime', () => {
+  it('snapshots submitter attribution with a prompt and retains it across a retry', async () => {
+    const transport = new ControlledTransport();
+    const captured = { identity: 'person@example.test', displayName: 'Riley' } as const;
+    transport.identity = { ...transport.identity, submitter: captured };
+    let attempts = 0;
+    transport.nextSend = async () => ++attempts === 1
+      ? { outcome: 'refused', reason: 'temporary refusal' }
+      : { outcome: 'accepted' };
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+
+    const id = runtime.send('Attributed prompt')!;
+    await vi.waitFor(() => expect(runtime.getSnapshot().sends[0]?.status).toBe('failed'));
+    transport.identity = { ...transport.identity, submitter: { identity: 'changed@example.test', displayName: 'Changed' } };
+    await runtime.retrySend(id);
+    await vi.waitFor(() => expect(runtime.getSnapshot().sends[0]?.status).toBe('accepted'));
+
+    expect(transport.submissions.map(submission => submission.submitter)).toEqual([captured, captured]);
+    runtime.dispose();
+  });
+
   it('unions live turn events with the history read and reloads the same ordinal sequence', async () => {
     const transport = new TurnEventTransport();
     const prompt = message(10, { id: 'prompt-7', role: 'user', sender: 'user:person', turnSeq: 7 });
@@ -2131,6 +2152,8 @@ describe('attachment submission recovery', () => {
   }
   it('retains ordered bytes and successful references after a later upload fails; retries only missing preparation', async () => {
     const transport = new AttachmentsTransport(); transport.failItem = 'second';
+    transport.identity = { ...transport.identity,
+      submitter: { identity: 'person@example.test', displayName: 'Riley' } };
     const runtime = await ready(transport);
     const inputs = [input('first'), input('second')];
     const id = runtime.sendAttachments!(' exact text ', inputs)!;
@@ -2148,6 +2171,7 @@ describe('attachment submission recovery', () => {
     expect(transport.uploads).toEqual(['first', 'second', 'second']);
     expect(transport.submissions).toHaveLength(1);
     expect(transport.submissions[0]).toMatchObject({ sessionKey, deviceId: 'device', clientMessageId: id, content: ' exact text ',
+      submitter: { identity: 'person@example.test', displayName: 'Riley' },
       attachments: [{ assetId: 'asset_first', filename: 'first.bin' }, { assetId: 'asset_second', filename: 'second.bin' }] });
     expect(Object.isFrozen(transport.submissions[0].attachments)).toBe(true);
     expect(Object.isFrozen(transport.submissions[0].attachments![0])).toBe(true);

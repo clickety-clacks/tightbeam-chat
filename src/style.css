@@ -1008,6 +1008,24 @@ body {
   text-align: start;
 }
 .tb-chat-settings-back { justify-content: flex-start; width: auto; margin: 0 0 .75rem; }
+.tb-chat-submit-name-setting {
+  display: grid;
+  gap: .45rem;
+  margin-top: 1.25rem;
+}
+.tb-chat-submit-name-setting label { font-size: .875rem; font-weight: 600; }
+.tb-chat-submit-name-setting input {
+  width: 100%;
+  min-height: 2.9rem;
+  padding: .55rem .7rem;
+  border: 1px solid var(--tb-chat-border);
+  border-radius: 12px;
+  color: var(--tb-chat-text);
+  background: var(--tb-chat-background);
+  font: inherit;
+}
+.tb-chat-submit-name-setting input:focus-visible { outline: 2px solid var(--tb-chat-accent); outline-offset: 3px; }
+.tb-chat-submit-name-setting p { margin: 0; color: var(--tb-chat-muted); font-size: .8125rem; line-height: 1.45; }
 .tb-chat-release-entry {
   padding: .75rem;
   border: 1px solid var(--tb-chat-border);
@@ -1421,6 +1439,7 @@ body {
   .tb-chat-latest-user-prompt-jump,
   .tb-chat-settings-item,
   .tb-chat-settings-back,
+  .tb-chat-submit-name-setting input,
   .tb-chat-send-actions button {
     transition: none;
   }

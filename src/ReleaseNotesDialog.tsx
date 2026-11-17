@@ -1,15 +1,20 @@
-import { useEffect, useId, useLayoutEffect, useRef } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import type { ReleaseNotesEntry } from './releaseNotes';
+import { readBrowserRememberedSubmitterDisplayName, writeBrowserRememberedSubmitterDisplayName } from './submitterAttribution';
 
 export type ChatOverlay =
   | { readonly kind: 'whats-new'; readonly entries: readonly ReleaseNotesEntry[] }
   | { readonly kind: 'settings'; readonly page: 'home' | 'release-notes' };
 
-export function ReleaseNotesDialog({ overlay, entries, onClose, onOpenReleaseNotes, onBack }:
+export function ReleaseNotesDialog({ overlay, entries, onClose, onOpenReleaseNotes, onBack, submitterAttributionEnabled }:
   { overlay: ChatOverlay; entries: readonly ReleaseNotesEntry[]; onClose: () => void;
-    onOpenReleaseNotes: () => void; onBack: () => void }) {
+    onOpenReleaseNotes: () => void; onBack: () => void; submitterAttributionEnabled?: boolean }) {
   const closeButton = useRef<HTMLButtonElement>(null);
   const titleId = useId();
+  const displayNameId = useId();
+  const displayNameHelpId = useId();
+  const [rememberedDisplayName, setRememberedDisplayName] = useState(
+    () => submitterAttributionEnabled ? readBrowserRememberedSubmitterDisplayName() ?? '' : '');
   const title = overlay.kind === 'whats-new' ? "What's new"
     : overlay.page === 'home' ? 'Settings' : 'Release notes';
   const shownEntries = overlay.kind === 'whats-new' ? overlay.entries : entries;
@@ -40,6 +45,17 @@ export function ReleaseNotesDialog({ overlay, entries, onClose, onOpenReleaseNot
           <button type="button" className="tb-chat-settings-item" onClick={onOpenReleaseNotes}>
             <span>Release notes</span><span aria-hidden="true">›</span>
           </button>
+          {submitterAttributionEnabled && <div className="tb-chat-submit-name-setting">
+            <label htmlFor={displayNameId}>Name shown on your prompts</label>
+            <input id={displayNameId} type="text" autoComplete="name" value={rememberedDisplayName}
+              aria-describedby={displayNameHelpId}
+              onChange={event => {
+                const value = event.currentTarget.value;
+                setRememberedDisplayName(value);
+                writeBrowserRememberedSubmitterDisplayName(value);
+              }} />
+            <p id={displayNameHelpId}>Saved on this device and used when the service does not provide a display name. It does not affect access.</p>
+          </div>}
         </div>
         : <div className="tb-chat-modal-content">
           {overlay.kind === 'settings' && <button type="button" className="tb-chat-settings-back"

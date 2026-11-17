@@ -33,6 +33,7 @@ import {
 } from './types';
 import { ToolHistoryUnavailableError } from './toolHistory';
 import { TurnEventHistoryUnavailableError } from './turnEvents';
+import { normalizeSubmitterAttribution } from './submitterAttribution';
 
 // Snapshot coverage is the Chat client's subscribe-before-REST overlap, not a
 // Gateway snapshot watermark.
@@ -1513,6 +1514,7 @@ export function createPublic019Transport(config: Public019Config): { transport: 
           currentIdentity.principalKey !== submittingIdentity.principalKey) {
         return { outcome: 'refused', reason: 'Host principal changed before human send.' };
       }
+      const submitter = normalizeSubmitterAttribution(submission.submitter);
       let request: Promise<Response>;
       try {
         request = config.host.fetch(`${baseUrl}/agent/dispatch`, {
@@ -1527,6 +1529,7 @@ export function createPublic019Transport(config: Public019Config): { transport: 
               deviceId: submission.deviceId,
               content: submission.content,
               attachments: submission.attachments ?? [],
+              ...(submitter ? { submitter } : {}),
             },
           }),
         });

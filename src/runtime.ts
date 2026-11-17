@@ -35,12 +35,14 @@ import {
   type LiveRailDenial,
   type RuntimeState,
   type SessionRecord,
+  type SubmitterAttribution,
   type TargetProfile,
   type TightbeamAdapter,
   type TurnProvenance,
   SessionNotFoundError,
 } from './types';
 import { isPreparedAttachmentSelection, prepareAttachmentInputs } from './attachmentPreparation';
+import { normalizeSubmitterAttribution } from './submitterAttribution';
 import { ToolHistoryUnavailableError } from './toolHistory';
 import { TurnEventHistoryUnavailableError } from './turnEvents';
 import { createTurnProvenance } from './provenance';
@@ -1905,14 +1907,20 @@ class SessionRuntime implements ChatRuntime {
     }
   };
 
+  private currentSubmitter(): SubmitterAttribution | undefined {
+    return normalizeSubmitterAttribution(this.transport.currentIdentity().submitter);
+  }
+
   send = (content: string, clientMessageId?: string, hostSend?: HostSendContext): string | null => {
     if (!content.trim() || this.disposed || !this.checkIdentity() || this.state.status === 'unauthorized') return null;
     const id = clientMessageId ?? `c_${crypto.randomUUID()}`;
     if (clientMessageId && !hostCorrelationPattern.test(clientMessageId)) return null;
     if (this.state.sends.some((send) => send.clientMessageId === id)) return null;
+    const submitter = this.currentSubmitter();
     const submission: HumanSubmission = Object.freeze({
       sessionKey: this.sessionKey, deviceId: this.identity.deviceId,
       clientMessageId: id, content,
+      ...(submitter ? { submitter } : {}),
     });
     const send: LocalSend = Object.freeze({ ...submission, submittedAt: new Date().toISOString(),
       status: 'pending', reconciled: false, ...(hostSend ? { hostSend: Object.freeze({ ...hostSend }) } : {}) });
@@ -1938,8 +1946,10 @@ class SessionRuntime implements ChatRuntime {
         this.state.sends.some(send => send.clientMessageId === clientMessageId)) return null;
     const attachmentItems = this.captureAttachments(inputs);
     if (!attachmentItems) return null;
+    const submitter = this.currentSubmitter();
     const send: LocalSend = Object.freeze({ sessionKey: this.sessionKey, deviceId: this.identity.deviceId,
       clientMessageId, content, submittedAt: new Date().toISOString(), status: 'pending', reconciled: false,
+      ...(submitter ? { submitter } : {}),
       attachmentItems, attachmentPhase: 'preparing', postSubmitted: false,
       // A previewed selection is already a frozen submission snapshot. Later
       // targets may refuse its upload, but must never silently replace its bytes.
@@ -1958,7 +1968,8 @@ class SessionRuntime implements ChatRuntime {
         !send.attachments || !send.attachmentAssessment || hasKnownOverLimit(send.attachmentAssessment) ||
         send.attachments.length !== send.attachmentItems.length) return false;
     const submission: HumanSubmission = Object.freeze({ sessionKey: send.sessionKey, deviceId: send.deviceId,
-      clientMessageId: send.clientMessageId, content: send.content, attachments: send.attachments });
+      clientMessageId: send.clientMessageId, content: send.content, attachments: send.attachments,
+      ...(send.submitter ? { submitter: send.submitter } : {}) });
     this.updateSend(clientMessageId, current => ({ ...current, attachmentPhase: 'ready' }));
     void this.post(submission);
     return true;
@@ -2142,7 +2153,8 @@ class SessionRuntime implements ChatRuntime {
       const ready = current()!;
       const attachments = Object.freeze(ready.attachmentItems!.map(item => item.reference!));
       const submission: HumanSubmission = Object.freeze({ sessionKey: ready.sessionKey, deviceId: ready.deviceId,
-        clientMessageId: ready.clientMessageId, content: ready.content, attachments });
+        clientMessageId: ready.clientMessageId, content: ready.content, attachments,
+        ...(ready.submitter ? { submitter: ready.submitter } : {}) });
       this.updateSend(id, send => ({ ...send, attachments, attachmentPhase: 'assessing' }));
       let assessment: AttachmentAssessmentResult | undefined;
       try {
@@ -2376,7 +2388,8 @@ class SessionRuntime implements ChatRuntime {
           return;
         }
         await this.post(Object.freeze({ sessionKey: send.sessionKey, deviceId: send.deviceId,
-          clientMessageId, content: send.content, attachments: send.attachments }));
+          clientMessageId, content: send.content, attachments: send.attachments,
+          ...(send.submitter ? { submitter: send.submitter } : {}) }));
       } finally {
         if (this.sendControllers.get(clientMessageId) === controller) this.sendControllers.delete(clientMessageId);
       }
@@ -2395,6 +2408,7 @@ class SessionRuntime implements ChatRuntime {
       await this.post({
         sessionKey: current.sessionKey, deviceId: current.deviceId,
         clientMessageId: current.clientMessageId, content: current.content,
+        ...(current.submitter ? { submitter: current.submitter } : {}),
       });
     } finally {
       this.retryingSends.delete(clientMessageId);
@@ -2447,8 +2461,10 @@ class SessionRuntime implements ChatRuntime {
     const previous = this.state.sends.find((send) => send.clientMessageId === clientMessageId);
     if (previous && (previous.content !== content || previous.attachmentItems)) return;
     void this.markReadPosition();
+    const submitter = previous ? previous.submitter : this.currentSubmitter();
     const submission: HumanSubmission = Object.freeze({ sessionKey: this.sessionKey,
-      deviceId: this.identity.deviceId, clientMessageId, content });
+      deviceId: this.identity.deviceId, clientMessageId, content,
+      ...(submitter ? { submitter } : {}) });
     const local: LocalSend = Object.freeze({ ...submission,
       submittedAt: previous?.submittedAt ?? new Date().toISOString(), status: 'pending', reconciled: false,
       ...(hostSend ? { hostSend: Object.freeze({ ...hostSend }) } : {}) });

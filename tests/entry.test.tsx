@@ -42,6 +42,17 @@ describe('direct browser entry', () => {
     expect((await load('1')).restHumanSendEnabled).toBeUndefined();
   });
 
+  it('accepts supplied submitter fields only with the enabled REST transport', async () => {
+    const source = { ...defaultTarget, restHumanSendEnabled: true,
+      submitter: { identity: 'person@example.test', displayName: '  Riley  ' } };
+    const enabled = await loadConfiguredChatTarget(async () => new Response(JSON.stringify(source), { status: 200 }));
+    expect(enabled.submitter).toEqual({ identity: 'person@example.test', displayName: 'Riley' });
+
+    const disabled = await loadConfiguredChatTarget(async () => new Response(JSON.stringify({ ...source,
+      restHumanSendEnabled: false }), { status: 200 }));
+    expect(disabled.submitter).toBeUndefined();
+  });
+
   it('keeps Chat and sending available when conversation endpoints are unavailable', async () => {
     const fetchSpy = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify({
       error: { code: 'chat_gateway_unavailable' },

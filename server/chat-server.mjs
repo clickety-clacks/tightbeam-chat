@@ -6,6 +6,7 @@ import https from 'node:https';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { TextDecoder } from 'node:util';
 
 const MIME_TYPES = new Map([
   ['.css', 'text/css; charset=utf-8'],
@@ -34,6 +35,51 @@ function canonicalOrigin(value) {
   } catch {
     return undefined;
   }
+}
+
+function decodeQEncodedWord(payload) {
+  const bytes = [];
+  for (let index = 0; index < payload.length; index++) {
+    const character = payload[index];
+    if (character === '_') {
+      bytes.push(0x20);
+    } else if (character === '=' && /^[0-9a-f]{2}$/i.test(payload.slice(index + 1, index + 3))) {
+      bytes.push(Number.parseInt(payload.slice(index + 1, index + 3), 16));
+      index += 2;
+    } else {
+      const byte = payload.charCodeAt(index);
+      if (byte > 0x7f) throw new Error('Invalid encoded header value.');
+      bytes.push(byte);
+    }
+  }
+  return Uint8Array.from(bytes);
+}
+
+function decodeHeaderEncodedWords(value) {
+  return value.replace(/=\?([^?]+)\?([bq])\?([^?]*)\?=/gi, (encoded, charset, encoding, payload) => {
+    try {
+      const bytes = encoding.toLowerCase() === 'b'
+        ? Buffer.from(payload, 'base64')
+        : decodeQEncodedWord(payload);
+      return new TextDecoder(charset, { fatal: true }).decode(bytes);
+    } catch {
+      return encoded;
+    }
+  });
+}
+
+function suppliedTailnetText(headers, headerName) {
+  const header = headers[headerName];
+  if (typeof header !== 'string') return undefined;
+  const value = decodeHeaderEncodedWords(header).trim();
+  return value || undefined;
+}
+
+function tailnetSubmitter(headers) {
+  const identity = suppliedTailnetText(headers, 'tailscale-user-login');
+  const displayName = suppliedTailnetText(headers, 'tailscale-user-name');
+  if (!identity && !displayName) return undefined;
+  return { identity: identity ?? null, displayName: displayName ?? null };
 }
 
 function isLoopback(hostname) {
@@ -947,7 +993,12 @@ export function createChatServer({
   return http.createServer((request, response) => {
     const parsedRequest = new URL(request.url ?? '/', 'http://chat.invalid');
     if (parsedRequest.pathname === '/chat-config.json') {
-      writeJson(response, 200, runtime.configuredTarget);
+      const submitter = runtime.configuredTarget.restHumanSendEnabled === true
+        ? tailnetSubmitter(request.headers) : undefined;
+      writeJson(response, 200, {
+        ...runtime.configuredTarget,
+        ...(submitter ? { submitter } : {}),
+      });
       return;
     }
     if (parsedRequest.pathname === '/__chat/version') {

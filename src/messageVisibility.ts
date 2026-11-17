@@ -97,7 +97,9 @@ export interface VisibleMessage {
   readonly source: CanonicalMessage;
   readonly side: 'human' | 'agent';
   /** User rows without exact principal proof remain visible without claiming ownership. */
-  readonly senderLabel?: 'You' | 'User';
+  readonly senderLabel?: string;
+  /** Exact configured-principal membership, independent of a display label. */
+  readonly ownerScoped: boolean;
   /** Included by the projection, but awaiting relation/turn evidence before UI rendering. */
   readonly provenancePending: boolean;
   readonly member?: HumanMember;
@@ -108,7 +110,15 @@ function isVisibleHumanRow(record: CanonicalMessage): boolean {
     !nonhumanTypes.has(record.messageType ?? '') && !nonhumanSender.test(record.sender ?? '');
 }
 
-export function projectMessages(records: readonly ConversationRecord[], principalKey?: string, ownerUserId?: unknown): {
+function submitterDisplayName(record: CanonicalMessage): string | undefined {
+  const submitter = record.raw.submitter;
+  if (!submitter || typeof submitter !== 'object' || Array.isArray(submitter)) return undefined;
+  const displayName = (submitter as Record<string, unknown>).displayName;
+  return typeof displayName === 'string' && displayName.trim() ? displayName.trim() : undefined;
+}
+
+export function projectMessages(records: readonly ConversationRecord[], principalKey?: string, ownerUserId?: unknown,
+  submitterAttributionEnabled = false): {
   messages: VisibleMessage[]; issues: readonly string[];
 } {
   const byId = new Map(records.filter((row): row is CanonicalMessage => row.kind === 'message').map((row) => [row.id, row]));
@@ -123,19 +133,24 @@ export function projectMessages(records: readonly ConversationRecord[], principa
       for (const member of members) {
         if (member.sender.startsWith('user:')) {
           if (!preserveNotices) {
+            const ownerScoped = member.sender === `user:${principalKey}`;
             messages.push({ key: `${record.id}:member:${member.index}`, source: record, side: 'human',
-              senderLabel: member.sender === `user:${principalKey}` ? 'You' : 'User',
+              senderLabel: ownerScoped ? 'You' : 'User', ownerScoped,
               provenancePending: false, member: Object.freeze({ index: member.index, sourceId: member.sourceId,
                 sender: member.sender, content: member.content }) });
           }
         }
       }
     } else if (classification === 'human') {
-      messages.push({ key: record.id, source: record, side: 'human', senderLabel: 'You', provenancePending: false });
+      messages.push({ key: record.id, source: record, side: 'human',
+        senderLabel: submitterAttributionEnabled ? submitterDisplayName(record) ?? 'You' : 'You',
+        ownerScoped: true, provenancePending: false });
     } else if (isVisibleHumanRow(record)) {
       // A missing or different sender does not prove this row belongs to the viewer,
       // but it also is not a reason to omit the row from the conversation.
-      messages.push({ key: record.id, source: record, side: 'human', senderLabel: 'User', provenancePending: false });
+      messages.push({ key: record.id, source: record, side: 'human',
+        senderLabel: submitterAttributionEnabled ? submitterDisplayName(record) ?? 'You' : 'User',
+        ownerScoped: false, provenancePending: false });
     } else if (classification === 'assistant') {
       const parent = record.replyToMessageId ? byId.get(record.replyToMessageId) : undefined;
       // Both rows must participate in the same typed generating turn. A loaded
@@ -154,7 +169,7 @@ export function projectMessages(records: readonly ConversationRecord[], principa
       const provenancePending = includesHuman === undefined && !!record.replyToMessageId && !parent;
       // An incomplete relation remains unknown; it is not exclusion evidence.
       if (includesHuman !== false) messages.push({
-        key: record.id, source: record, side: 'agent', provenancePending,
+        key: record.id, source: record, side: 'agent', ownerScoped: true, provenancePending,
       });
     }
   }

@@ -35,10 +35,11 @@ export function HostPage({ defaultTarget, configurationError }: {
       setError(failure instanceof Error ? failure.message : 'The configured Chat service is unavailable.');
     }
   }, [selected?.gateway, selected?.sessionKey, selected?.principalKey, selected?.deviceId,
-    selected?.restHumanSendEnabled]);
+    selected?.restHumanSendEnabled, selected?.submitter?.identity, selected?.submitter?.displayName]);
 
   if (selected && adapter) return <TightbeamChat sessionKey={selected.sessionKey} adapter={adapter}
-    configuredConversationHref={configuredConversationHref} />;
+    configuredConversationHref={configuredConversationHref}
+    submitterAttributionEnabled={selected.restHumanSendEnabled === true} />;
   if (resolution.kind === 'configuration-error') return <main className="chat-entry-state">
     <p className="tb-chat-empty">No conversation is available.</p>
   </main>;

@@ -1,5 +1,6 @@
 import { AuthorizationError, type HostIdentity } from '../src/types';
 import type { Public019Channel, Public019Host } from '../src/public019';
+import { normalizeSubmitterAttribution, readBrowserRememberedSubmitterDisplayName } from '../src/submitterAttribution';
 import type { ChatTarget } from './entry';
 
 function isAuthorizationFailureCode(value: unknown): boolean {
@@ -20,6 +21,11 @@ function chatSocketUrl(path: '/ws' | '/ws/changes', target: ChatTarget): URL {
 /** The Chat service owns its provisioned Gateway credential and auth frames. */
 export function browserHost(target: ChatTarget): Public019Host {
   const identity: HostIdentity = { principalKey: target.principalKey, deviceId: target.deviceId };
+  const currentIdentity = (): HostIdentity => {
+    if (target.restHumanSendEnabled !== true) return identity;
+    const submitter = normalizeSubmitterAttribution(target.submitter, readBrowserRememberedSubmitterDisplayName());
+    return submitter ? Object.freeze({ ...identity, submitter }) : identity;
+  };
 
   function open(path: '/ws' | '/ws/changes', signal: AbortSignal): Promise<Public019Channel> {
     const human = path === '/ws';
@@ -102,7 +108,7 @@ export function browserHost(target: ChatTarget): Public019Host {
   }
 
   return {
-    currentIdentity: () => identity,
+    currentIdentity,
     ...(target.readMarkerRoute ? {
       readMarkerRoute: target.readMarkerRoute,
       readMarkerOperatorPrincipalKey: target.principalKey,
