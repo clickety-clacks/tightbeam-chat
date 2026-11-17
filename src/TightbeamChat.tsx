@@ -925,7 +925,7 @@ function sourceLabel(side: Bubble['side'], agentName: string): string {
 
 function isRetryingConversationSnapshot(state: RuntimeState): boolean {
   const transientGatewayFailure = (detail: string | undefined) => Boolean(detail &&
-    (/Tightbeam REST request failed with HTTP 50[234]\b/i.test(detail) ||
+    (/Tightbeam REST request failed with HTTP 5\d\d\b/i.test(detail) ||
       /Failed to fetch|NetworkError|network request failed|Load failed|fetch failed|ECONNREFUSED|ECONNRESET|ETIMEDOUT/i.test(detail)));
   return state.status === 'ready' && !state.sessionNotFound && Boolean(state.liveError) &&
     (transientGatewayFailure(state.sessionError) || transientGatewayFailure(state.conversationError));

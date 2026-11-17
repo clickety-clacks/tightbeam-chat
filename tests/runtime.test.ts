@@ -40,6 +40,7 @@ class ControlledTransport implements ChatTransport {
   observation: TargetObservation = profile;
   callbacks?: ChangeCallbacks;
   readTailCalls = 0;
+  tailFailures: Error[] = [];
   readOlderCalls = 0;
   readAfterCalls: string[] = [];
   readMessageCalls: string[] = [];
@@ -91,6 +92,8 @@ class ControlledTransport implements ChatTransport {
   }
   readTail = async (): Promise<ConversationPage> => {
     this.readTailCalls++;
+    const failure = this.tailFailures.shift();
+    if (failure) throw failure;
     const page = this.tailPage ?? this.page(this.rows.slice(-3));
     this.tailHook?.();
     return page;
@@ -164,6 +167,34 @@ function turnEvent(id: string, turnEventSeq: number, kind: TurnEventRecord['kind
 async function settle() { await vi.waitFor(() => {}, { timeout: 50 }); }
 
 describe('framework-independent runtime', () => {
+  it('retries transient history failures with jittered exponential backoff capped at thirty seconds', async () => {
+    vi.useFakeTimers();
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0);
+    const transport = new ControlledTransport();
+    transport.tailFailures = Array.from({ length: 10 }, () =>
+      new Error('Tightbeam REST request failed with HTTP 500.'));
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    try {
+      await runtime.rebuild();
+      expect(transport.readTailCalls).toBe(1);
+
+      for (const [index, delay] of [125, 250, 500, 1000, 2000, 4000, 8000, 15000].entries()) {
+        await vi.advanceTimersByTimeAsync(delay);
+        expect(transport.readTailCalls).toBe(index + 2);
+      }
+      expect(transport.readTailCalls).toBe(9);
+      await vi.advanceTimersByTimeAsync(14999);
+      expect(transport.readTailCalls).toBe(9);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(transport.readTailCalls).toBe(10);
+      expect(runtime.getSnapshot().conversationError).toContain('HTTP 500');
+    } finally {
+      runtime.dispose();
+      random.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it('snapshots submitter attribution with a prompt and retains it across a retry', async () => {
     const transport = new ControlledTransport();
     const captured = { identity: 'person@example.test', displayName: 'Riley' } as const;

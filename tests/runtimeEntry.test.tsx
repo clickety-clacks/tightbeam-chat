@@ -42,7 +42,8 @@ describe('runtime-configured browser entry', () => {
     render(<RuntimeEntry />);
 
     expect(await screen.findByRole('textbox', { name: /message to/i })).toBeTruthy();
-    expect((await screen.findByRole('alert')).textContent).toContain('Conversation history could not be loaded: Tightbeam REST request failed with HTTP 500.');
+    expect(await screen.findByText('Reconnecting…')).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
     expect(screen.getByRole('log')).toBeTruthy();
     expect(screen.queryByText(target.gateway)).toBeNull();
     expect(screen.queryByText(target.sessionKey)).toBeNull();
@@ -89,7 +90,8 @@ describe('runtime-configured browser entry', () => {
     render(<RuntimeEntry />);
 
     expect(await screen.findByRole('textbox', { name: /message to/i })).toBeTruthy();
-    expect((await screen.findByRole('alert')).textContent).toContain('Conversation history could not be loaded: Tightbeam REST request failed with HTTP 500.');
+    expect(await screen.findByText('Reconnecting…')).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
     expect(screen.getByRole('log')).toBeTruthy();
     expect(screen.queryByText(linkedSession)).toBeNull();
     expect(screen.queryByText(target.sessionKey)).toBeNull();

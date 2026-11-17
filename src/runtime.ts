@@ -1211,10 +1211,16 @@ class SessionRuntime implements ChatRuntime {
     this.liveOutageStartedAt = undefined;
   }
 
-  private scheduleRebuild(): void {
+  private scheduleRebuild(jitterHistoryRetry = false): void {
     if (this.disposed || this.reconnectTimer) return;
-    const delay = this.retryDelayMs;
-    this.retryDelayMs = Math.min(this.retryDelayMs * 2, 30_000);
+    const backoff = this.retryDelayMs;
+    // History requests from many open conversations can fail together during
+    // an outage. Equal jitter spreads their retries while retaining the same
+    // capped exponential ceiling and predictable feed-reconnect cadence.
+    const delay = jitterHistoryRetry
+      ? Math.floor(backoff / 2 + Math.random() * backoff / 2)
+      : backoff;
+    this.retryDelayMs = Math.min(backoff * 2, 30_000);
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = undefined;
       void this.rebuild();
@@ -1779,8 +1785,8 @@ class SessionRuntime implements ChatRuntime {
       if (!this.pendingFeedCoverage) {
         for (const notice of this.buffered.splice(0)) this.receive(notice, generation);
       }
-      if (((liveError && liveAttemptSettled) || sessionError || conversationError) && !sessionNotFound) {
-        this.scheduleRebuild();
+      if (((liveError && liveAttemptSettled) || sessionError || conversationError || historyError) && !sessionNotFound) {
+        this.scheduleRebuild(Boolean(sessionError || conversationError || historyError));
       }
       // The feed may become ready after the history request started. It cannot
       // replay changes from that interval, so read forward from this snapshot's
@@ -1809,7 +1815,7 @@ class SessionRuntime implements ChatRuntime {
       }
       this.publish({ status: 'ready', statusDetail: undefined,
         conversationError: errorText(error), liveError: liveError ?? this.state.liveError });
-      this.scheduleRebuild();
+      this.scheduleRebuild(true);
     }
   }
 
