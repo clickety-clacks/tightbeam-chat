@@ -42,6 +42,7 @@ class ControlledTransport implements ChatTransport {
   readTailCalls = 0;
   tailFailures: Error[] = [];
   readOlderCalls = 0;
+  olderFailures: Error[] = [];
   readAfterCalls: string[] = [];
   readMessageCalls: string[] = [];
   readSessionCalls = 0;
@@ -108,6 +109,8 @@ class ControlledTransport implements ChatTransport {
   };
   readOlder = async (_key: string, before: string): Promise<ConversationPage> => {
     this.readOlderCalls++;
+    const failure = this.olderFailures.shift();
+    if (failure) throw failure;
     const index = this.rows.findIndex((row) => row.id === before);
     if (index < 0) throw new Error('cursor missing');
     return this.page(this.rows.slice(Math.max(0, index - 3), index));
@@ -194,6 +197,49 @@ describe('framework-independent runtime', () => {
       vi.useRealTimers();
     }
   });
+
+  it.each(['HTTP 400', 'non-advancing cursor'])(
+    'does not poll history again after a permanent older-history error (%s)', async (failure) => {
+      vi.useFakeTimers();
+      const transport = new ControlledTransport();
+      const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+      try {
+        await runtime.rebuild();
+        await runtime.loadOlder();
+        const readTailCalls = transport.readTailCalls;
+        const readOlderCalls = transport.readOlderCalls;
+        const readOlder = transport.readOlder;
+        transport.readAfter = undefined;
+
+        if (failure === 'HTTP 400') {
+          transport.olderFailures.push(new Error('Tightbeam REST request failed with HTTP 400.'));
+        } else {
+          transport.readOlder = async (key, before) => ({
+            ...(await readOlder.call(transport, key, before)),
+            oldestCursor: before,
+            hasOlder: true,
+          });
+        }
+
+        await runtime.rebuild();
+        expect(runtime.getSnapshot().historyError).toContain(
+          failure === 'HTTP 400' ? 'HTTP 400' : 'Older cursor did not advance.',
+        );
+        expect(transport.readOlderCalls).toBe(readOlderCalls + 1);
+        const tailCallsAfterFailure = transport.readTailCalls;
+
+        await vi.advanceTimersByTimeAsync(60_000);
+
+        expect(transport.readTailCalls).toBe(tailCallsAfterFailure);
+        expect(transport.readOlderCalls).toBe(readOlderCalls + 1);
+        expect(transport.readTailCalls).toBe(readTailCalls + 1);
+        expect(tailCallsAfterFailure).toBe(readTailCalls + 1);
+      } finally {
+        runtime.dispose();
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it('snapshots submitter attribution with a prompt and retains it across a retry', async () => {
     const transport = new ControlledTransport();

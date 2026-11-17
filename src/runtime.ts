@@ -69,6 +69,13 @@ function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function isTransientHistoryFailure(detail: string | undefined): boolean {
+  return Boolean(detail && (
+    /Tightbeam REST request failed with HTTP 5\d\d\b/i.test(detail) ||
+    /Failed to fetch|NetworkError|network request failed|Load failed|fetch failed|ECONNREFUSED|ECONNRESET|ETIMEDOUT/i.test(detail)
+  ));
+}
+
 function recordsFrom(map: Map<string, ConversationRecord>): readonly ConversationRecord[] {
   return Object.freeze([...map.values()].sort(compareRecords));
 }
@@ -1785,8 +1792,9 @@ class SessionRuntime implements ChatRuntime {
       if (!this.pendingFeedCoverage) {
         for (const notice of this.buffered.splice(0)) this.receive(notice, generation);
       }
-      if (((liveError && liveAttemptSettled) || sessionError || conversationError || historyError) && !sessionNotFound) {
-        this.scheduleRebuild(Boolean(sessionError || conversationError || historyError));
+      const transientHistoryFailure = isTransientHistoryFailure(historyError);
+      if (((liveError && liveAttemptSettled) || sessionError || conversationError || transientHistoryFailure) && !sessionNotFound) {
+        this.scheduleRebuild(Boolean(sessionError || conversationError || transientHistoryFailure));
       }
       // The feed may become ready after the history request started. It cannot
       // replay changes from that interval, so read forward from this snapshot's
