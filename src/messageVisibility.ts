@@ -102,6 +102,8 @@ export interface VisibleMessage {
   readonly ownerScoped: boolean;
   /** Included by the projection, but awaiting relation/turn evidence before UI rendering. */
   readonly provenancePending: boolean;
+  /** Harness failure carried by a process row that explicitly refers to this prompt. */
+  readonly failureReason?: string;
   readonly member?: HumanMember;
 }
 
@@ -127,6 +129,19 @@ function submitterKey(record: CanonicalMessage): string | undefined {
   return typeof displayName === 'string' && displayName.trim() ? `display:${displayName.trim()}` : undefined;
 }
 
+function turnFailureReason(record: CanonicalMessage): string | undefined {
+  if (record.role !== 'assistant' || record.sender !== 'process:tightbeam' ||
+      record.messageType !== 'substrate' || record.isBatchCarrier === true ||
+      !record.content.startsWith('[turn failed]')) return undefined;
+  const afterMarker = record.content.slice('[turn failed]'.length).replace(/^\r?\n(?:\r?\n)?/, '');
+  const messageAbovePrefix = 'The agent could not answer the message above:';
+  if (afterMarker.startsWith(messageAbovePrefix)) {
+    const reason = afterMarker.slice(messageAbovePrefix.length);
+    return reason.startsWith(' ') ? reason.slice(1) : reason;
+  }
+  return afterMarker || undefined;
+}
+
 export function projectMessages(records: readonly ConversationRecord[], principalKey?: string, ownerUserId?: unknown,
   submitterAttributionEnabled = false): {
   messages: VisibleMessage[]; issues: readonly string[]; multipleSubmitters: boolean;
@@ -140,6 +155,38 @@ export function projectMessages(records: readonly ConversationRecord[], principa
   }
   const multipleSubmitters = submitterKeys.size > 1;
   const showSubmitterNames = submitterAttributionEnabled && multipleSubmitters;
+  // Runtime history and change updates are kept in message sequence order.
+  // Track one prompt per session so failure attribution stays a single pass.
+  const failuresByPrompt = new Map<string, string>();
+  const latestPromptBySession = new Map<string, { prompt?: CanonicalMessage; hasAssistantReply: boolean }>();
+  for (const record of byId.values()) {
+    const reason = turnFailureReason(record);
+    if (reason) {
+      const explicitParent = record.replyToMessageId ? byId.get(record.replyToMessageId) : undefined;
+      let promptId: string | undefined;
+      if (record.replyToMessageId) {
+        if (explicitParent?.sessionKey === record.sessionKey && isHumanMessage(explicitParent, principalKey)) {
+          promptId = explicitParent.id;
+        }
+      } else if (record.content.includes('The agent could not answer the message above:')) {
+        const latest = latestPromptBySession.get(record.sessionKey);
+        if (latest && !latest.hasAssistantReply && latest.prompt && isHumanMessage(latest.prompt, principalKey)) {
+          promptId = latest.prompt.id;
+        }
+      }
+      if (promptId) {
+        // Keep the originating refusal when later rows repeat the failed turn.
+        if (!failuresByPrompt.has(promptId)) failuresByPrompt.set(promptId, reason);
+      }
+    }
+
+    if (record.role === 'user') {
+      latestPromptBySession.set(record.sessionKey, { prompt: record, hasAssistantReply: false });
+    } else if (record.role === 'assistant' && !record.sender?.startsWith('process:')) {
+      const latest = latestPromptBySession.get(record.sessionKey);
+      if (latest) latest.hasAssistantReply = true;
+    }
+  }
   const messages: VisibleMessage[] = [];
   const issues: string[] = [];
   for (const record of byId.values()) {
@@ -162,7 +209,8 @@ export function projectMessages(records: readonly ConversationRecord[], principa
     } else if (classification === 'human') {
       messages.push({ key: record.id, source: record, side: 'human',
         senderLabel: showSubmitterNames ? submitterDisplayName(record) ?? 'You' : 'You',
-        ownerScoped: true, provenancePending: false });
+        ownerScoped: true, provenancePending: false,
+        ...(failuresByPrompt.has(record.id) ? { failureReason: failuresByPrompt.get(record.id) } : {}) });
     } else if (isVisibleHumanRow(record)) {
       // A missing or different sender does not prove this row belongs to the viewer,
       // but it also is not a reason to omit the row from the conversation.

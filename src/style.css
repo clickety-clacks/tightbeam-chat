@@ -283,6 +283,8 @@ body {
 .tb-chat-local { border-color: var(--tb-chat-border); }
 .tb-chat-local[data-send-state="ghosted"] { opacity: .68; }
 .tb-chat-local[data-send-state="uncertain"] { opacity: .88; }
+.tb-chat-local[data-send-state="timed-out"] { border-color: var(--tb-chat-danger); }
+.tb-chat-bubble[data-message-state="failed"] { border-color: var(--tb-chat-danger); }
 .tb-chat-bubble-body { min-width: 0; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
 .tb-chat-markdown { min-width: 0; overflow-wrap: anywhere; }
 .tb-chat-markdown > :first-child { margin-top: 0; }
@@ -346,6 +348,9 @@ body {
 .tb-chat-send-indicator { display: flex; align-items: center; min-height: .9rem; margin: .35rem 0 0; }
 .tb-chat-send-refusal { margin: .35rem 0 0; color: var(--tb-chat-danger); font-size: .82rem; }
 .tb-chat-send-uncertainty { margin: .35rem 0 0; color: var(--tb-chat-muted); font-size: .82rem; }
+.tb-chat-send-timeout { margin: .35rem 0 0; color: var(--tb-chat-danger); font-size: .82rem; }
+.tb-chat-persisted-failure { margin: .5rem 0 0; color: var(--tb-chat-danger); font-size: .82rem; }
+.tb-chat-persisted-failure-reason { margin-top: .2rem; white-space: pre-wrap; overflow-wrap: anywhere; }
 .tb-chat-send-spinner {
   display: inline-block;
   width: .78rem;

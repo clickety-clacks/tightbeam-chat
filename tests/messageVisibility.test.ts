@@ -151,4 +151,20 @@ describe('principal-scoped message projection', () => {
     const quote = message('quote', { content: rows[2].content });
     expect(projectMessages([quote], 'person').messages[0].source).toBe(quote);
   });
+
+  it('keeps the detailed harness reason when a later compact failure refers to the same prompt', () => {
+    const detailedReason = 'Prompt is too long (~12345 tokens, limit 10000)';
+    const prompt = message('prompt', { seq: 1, content: 'A long prompt' });
+    const detailedFailure = message('detailed-failure', { seq: 2, role: 'assistant',
+      sender: 'process:tightbeam', messageType: 'substrate',
+      content: `[turn failed]\n\nThe agent could not answer the message above: ${detailedReason}` });
+    const compaction = message('compaction', { seq: 3, role: 'assistant',
+      sender: 'process:tightbeam', messageType: 'substrate', content: '[context compacted]' });
+    const compactFailure = message('compact-failure', { seq: 4, role: 'assistant',
+      sender: 'process:tightbeam', messageType: 'substrate',
+      content: '[turn failed]\n\nThe agent could not answer the message above: Internal error: prompt too long' });
+
+    const projected = projectMessages([prompt, detailedFailure, compaction, compactFailure], 'person', 'person');
+    expect(projected.messages.find(row => row.key === prompt.id)?.failureReason).toBe(detailedReason);
+  });
 });

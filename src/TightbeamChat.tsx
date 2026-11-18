@@ -55,12 +55,14 @@ interface Bubble {
   readonly ownerScoped: boolean;
   readonly sender: string;
   readonly displayContent?: string;
+  readonly failureReason?: string;
   readonly member?: HumanMember;
   readonly derived: boolean;
 }
 
 const olderHistoryPrefetchDistance = (viewport: HTMLElement) => Math.max(80, viewport.clientHeight * 1.5);
 const toolHistoryErrorGraceMs = 1000;
+const pendingSendTimeoutMs = 2 * 60 * 1000;
 
 type TimelineItem =
   | { readonly kind: 'record-event'; readonly event: SessionRecordEvent }
@@ -1051,7 +1053,7 @@ function StatusIcon({ state }: { state: RuntimeState }) {
 }
 
 const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, registerRow, readAttachment, preservePosition,
-  reconcileLayout, onRetryRender, scrollKey: scrollKeyOverride, promptTargetPrefix }: {
+  reconcileLayout, onRetryRender, onRestoreFailedMessage, canEditResend, scrollKey: scrollKeyOverride, promptTargetPrefix }: {
   bubble: Bubble;
   renderMessage?: TightbeamChatProps['renderMessage'];
   agentName: string;
@@ -1060,6 +1062,8 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, re
   preservePosition: () => void;
   reconcileLayout: () => void;
   onRetryRender: () => void;
+  onRestoreFailedMessage: (bubble: Bubble) => void;
+  canEditResend: boolean;
   scrollKey?: string;
   promptTargetPrefix: string;
 }) {
@@ -1070,6 +1074,7 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, re
   }, [registerRow, scrollKey]);
   const time = localTimestamp(record.createdAt);
   const displayContent = stripProvenanceMarkup(bubble.displayContent ?? record.content);
+  const failureReason = bubble.failureReason;
   const context: RenderContext = {
     sessionKey: record.sessionKey,
     recordKey: bubble.key,
@@ -1092,7 +1097,8 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, re
   }) : record;
   return <article ref={rowRef} id={`${promptTargetPrefix}-${encodeURIComponent(bubble.key)}`}
     className={`tb-chat-bubble tb-chat-bubble-${bubble.side}`} data-record-key={bubble.key} data-scroll-key={scrollKey}
-    aria-label={`Message from ${formatVisibleIds(bubble.sender || sourceLabel(bubble.side, agentName))}`}>
+    data-message-state={failureReason ? 'failed' : undefined}
+    aria-label={`Message from ${formatVisibleIds(bubble.sender || sourceLabel(bubble.side, agentName))}${failureReason ? `. Failed. Reason: ${failureReason}` : ''}`}>
     {bubble.side === 'human' && <span className="tb-chat-bubble-sender" aria-hidden="true">{formatVisibleIds(bubble.sender)}</span>}
     <div className="tb-chat-bubble-body">
       <TranscriptRenderBoundary resetKey={record.rowVersion} onRecovered={reconcileLayout}
@@ -1105,6 +1111,12 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, re
         <RenderedRecordBody record={displayRecord} context={context} renderMessage={renderMessage} />
       </TranscriptRenderBoundary>
     </div>
+    {failureReason && <div className="tb-chat-persisted-failure" role="alert">
+      <strong>Message failed.</strong>
+      <div className="tb-chat-persisted-failure-reason">{failureReason}</div>
+      {bubble.side === 'human' && bubble.ownerScoped && canEditResend && <button type="button" className="tb-chat-send-retry"
+        onClick={() => onRestoreFailedMessage(bubble)}>Edit and resend</button>}
+    </div>}
     <time className="tb-chat-time" dateTime={time.dateTime}>{time.text}</time>
   </article>;
 }, (previous, next) => {
@@ -1117,8 +1129,10 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, re
   // rows memoized so appending to a long transcript doesn't re-render every body.
   return before.key === after.key && before.record === after.record && before.side === after.side &&
     before.sender === after.sender && before.displayContent === after.displayContent &&
+    before.failureReason === after.failureReason && previous.canEditResend === next.canEditResend &&
     before.derived === after.derived && sameMember && previous.renderMessage === next.renderMessage &&
     previous.onRetryRender === next.onRetryRender && previous.readAttachment === next.readAttachment &&
+    previous.onRestoreFailedMessage === next.onRestoreFailedMessage &&
     previous.promptTargetPrefix === next.promptTargetPrefix &&
     previous.agentName === next.agentName && previous.registerRow === next.registerRow &&
     previous.preservePosition === next.preservePosition && previous.reconcileLayout === next.reconcileLayout &&
@@ -2260,6 +2274,22 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   recoverySnapshot: ChatRecoverySnapshot;
 }) {
   const state = useSyncExternalStore(runtime.subscribe, runtime.getSnapshot, runtime.getSnapshot);
+  const [pendingSendClock, setPendingSendClock] = useState(() => Date.now());
+  const nextPendingSendDeadline = useMemo(() => {
+    const deadlines = state.sends.flatMap(send => {
+      if (send.status !== 'pending' || send.postSubmitted !== true) return [];
+      const submittedAt = Date.parse(send.submittedAt);
+      const deadline = submittedAt + pendingSendTimeoutMs;
+      return Number.isFinite(submittedAt) && deadline > pendingSendClock ? [deadline] : [];
+    });
+    return deadlines.length ? Math.min(...deadlines) : undefined;
+  }, [state.sends, pendingSendClock]);
+  useEffect(() => {
+    if (nextPendingSendDeadline === undefined) return;
+    const timer = window.setTimeout(() => setPendingSendClock(Date.now()),
+      Math.max(0, nextPendingSendDeadline - Date.now()) + 1);
+    return () => window.clearTimeout(timer);
+  }, [nextPendingSendDeadline]);
   const promptTargetPrefix = useId();
   const markedOpenRuntime = useRef<ChatRuntime | null>(null);
   const pendingVisibleReturn = useRef(false);
@@ -2501,28 +2531,38 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   const keyboardActions = useRef({ optedIn: host.optedIn, composerHidden: host.composerHidden, scrollBy: reading.scrollBy });
   keyboardActions.current = { optedIn: host.optedIn, composerHidden: host.composerHidden, scrollBy: reading.scrollBy };
   const agentName = state.agentDisplayName ?? '';
+  const sendsByIdentity = useMemo(() => new Map(state.sends.map((send) => [sendIdentity(send), send])), [state.sends]);
+  const sendsByIdentityRef = useRef(sendsByIdentity);
+  sendsByIdentityRef.current = sendsByIdentity;
   const projection = useMemo(() => projectMessages(state.records, state.principalKey, state.session?.raw.ownerUserId,
     submitterAttributionEnabled === true),
     [state.records, state.principalKey, state.session?.raw.ownerUserId, submitterAttributionEnabled]);
   const bubbles: Bubble[] = useMemo(() => projection.messages
     .filter(message => message.member || !message.source.recordEventIds?.length)
-    .map((message) => ({
-      key: message.key, record: message.source, side: message.side,
-      ownerScoped: message.side === 'agent' || message.ownerScoped,
-      sender: message.side === 'human'
-        ? messageSourceLabel(message.source, submitterAttributionEnabled === true && projection.multipleSubmitters
-          ? message.senderLabel ?? 'You'
-          : message.senderLabel ?? sourceLabel(message.side, agentName))
-        : sourceLabel(message.side, agentName),
-      derived: Boolean(message.member),
-      displayContent: message.member?.content, member: message.member,
-  })), [projection, agentName, submitterAttributionEnabled]);
+    .map((message) => {
+      return {
+        key: message.key, record: message.source, side: message.side,
+        ownerScoped: message.side === 'agent' || message.ownerScoped,
+        sender: message.side === 'human'
+          ? messageSourceLabel(message.source, submitterAttributionEnabled === true && projection.multipleSubmitters
+            ? message.senderLabel ?? 'You'
+            : message.senderLabel ?? sourceLabel(message.side, agentName))
+          : sourceLabel(message.side, agentName),
+        derived: Boolean(message.member),
+        displayContent: message.member?.content, member: message.member, failureReason: message.failureReason,
+      };
+    }), [projection, agentName, submitterAttributionEnabled]);
   const caption = state.activityTurnStateAvailable === true ? activeCaption(state.activeTurn) : undefined;
   const visibleSendIdentities = useMemo(() => new Set(bubbles.flatMap((bubble) => {
     const identity = bubble.derived ? undefined : canonicalSendIdentity(bubble.record);
     return identity ? [identity] : [];
   })), [bubbles]);
-  const sendsByIdentity = useMemo(() => new Map(state.sends.map((send) => [sendIdentity(send), send])), [state.sends]);
+  const restoreFailedMessage = useCallback((bubble: Bubble) => {
+    const identity = canonicalSendIdentity(bubble.record);
+    const send = identity ? sendsByIdentityRef.current.get(identity) as AttachmentSendView | undefined : undefined;
+    composer.current?.restore(bubble.record.content, send?.attachmentItems ?? []);
+    composer.current?.focusAtEnd();
+  }, []);
   const canonicalSends = useMemo(() => {
     const records = new Map<string, CanonicalMessage>();
     for (const record of state.records) {
@@ -3354,11 +3394,16 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
         }
         if (item.kind === 'bubble') {
           const { bubble } = item;
+          const identity = canonicalSendIdentity(bubble.record);
+          const send = identity ? sendsByIdentity.get(identity) as AttachmentSendView | undefined : undefined;
+          const canEditResend = Boolean(bubble.failureReason && bubble.side === 'human' && bubble.ownerScoped &&
+            !host.composerHidden && (!bubble.record.attachments?.length || send?.attachmentItems?.length));
           return <RecordRow key={bubble.key} bubble={bubble} scrollKey={item.scrollKey}
             renderMessage={renderMessage} agentName={agentName} registerRow={reading.registerRow}
             readAttachment={runtime.readAttachment}
             preservePosition={preserveReadingPosition} reconcileLayout={reading.reconcileViewportLayout}
-            onRetryRender={retryTranscript} promptTargetPrefix={promptTargetPrefix} />;
+            onRetryRender={retryTranscript} onRestoreFailedMessage={restoreFailedMessage} canEditResend={canEditResend}
+            promptTargetPrefix={promptTargetPrefix} />;
         }
         const { send } = item;
         const time = localTimestamp(send.submittedAt);
@@ -3369,12 +3414,16 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
         const awaitingAttachmentDecision = send.attachmentPhase === 'assessing' || send.attachmentPhase === 'confirmation';
         const refused = send.status === 'failed' && !send.reconciled;
         const uncertain = send.status === 'uncertain' && !send.reconciled;
+        const submittedAt = Date.parse(send.submittedAt);
+        const timedOut = send.status === 'pending' && send.postSubmitted === true &&
+          Number.isFinite(submittedAt) && pendingSendClock >= submittedAt + pendingSendTimeoutMs;
         const retryableUncertainty = uncertain && !retryUnavailable && (attachmentItems.length > 0 ||
           send.reason === 'connection-closed-before-acknowledgement' || send.reason === 'connection-unconfirmed');
         const retryAvailable = !hostManaged && !retryUnavailable && !blockedOverLimit && (refused || retryableUncertainty);
-        const restoreAvailable = !hostManaged && !retryUnavailable && (refused || uncertain);
+        const restoreAvailable = !hostManaged && !retryUnavailable && (refused || uncertain || timedOut);
         const restoreLabel = attachmentItems.length > 0 ? 'Restore draft to the composer' : 'Restore text to the composer';
         const uncertaintyCopy = "We couldn't confirm whether this message was sent. Check the conversation before trying again.";
+        const timeoutCopy = 'This message timed out while waiting for confirmation. Check the conversation before sending it again.';
         const refusalCopy = refused
           ? isKnownAttachmentOverLimit(send)
             ? attachmentLimitRefusalText(send)
@@ -3394,6 +3443,8 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
             ? refusalCopy
               ? `Your message was not sent. ${refusalCopy}`
               : `Your message was not sent. Reason: ${send.reason || 'The message was refused.'}`
+          : timedOut
+            ? timeoutCopy
             : uncertain
               ? uncertaintyCopy
               : 'Your message is sending.';
@@ -3403,16 +3454,17 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
           className="tb-chat-bubble tb-chat-bubble-human tb-chat-local" key={send.clientMessageId}
           data-record-key={targetKey} data-scroll-key={targetKey}
           aria-label={formatVisibleIds(announcement)}
-          data-send-state={send.reconciled ? 'solid' : refused ? 'refused' : uncertain ? 'uncertain' : 'ghosted'}>
+          data-send-state={send.reconciled ? 'solid' : refused ? 'refused' : timedOut ? 'timed-out' : uncertain ? 'uncertain' : 'ghosted'}>
           <div className="tb-chat-bubble-body">{markdownBody(stripProvenanceMarkup(send.content))}</div>
           {attachmentItems.length > 0 && <PendingSendImages items={attachmentItems} />}
           {refusalCopy && <p className="tb-chat-send-refusal" aria-hidden="true">{refusalCopy}</p>}
+          {timedOut && <p className="tb-chat-send-timeout">{timeoutCopy}</p>}
           {uncertain && <p className="tb-chat-send-uncertainty" aria-hidden="true">{uncertaintyCopy}</p>}
           {!send.reconciled && !awaitingAttachmentDecision && <div className="tb-chat-send-indicator" data-send-status={send.status} aria-hidden="true">
-            {refused ? <span className="tb-chat-send-error">!</span> : uncertain
+            {refused || timedOut ? <span className="tb-chat-send-error">!</span> : uncertain
               ? <span className="tb-chat-send-uncertain-mark">?</span> : <span className="tb-chat-send-spinner" />}
           </div>}
-          <span className="tb-chat-sr-only" role={refused ? 'alert' : 'status'} aria-atomic="true">{formatVisibleIds(announcement)}</span>
+          <span className="tb-chat-sr-only" role={refused || timedOut ? 'alert' : 'status'} aria-atomic="true">{formatVisibleIds(announcement)}</span>
           {(retryAvailable || restoreAvailable) && <div className="tb-chat-send-actions">
             {retryAvailable && <button type="button" disabled={state.status === 'unauthorized'}
               onClick={() => void runtime.retrySend(send.clientMessageId)}>
@@ -3426,7 +3478,8 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   }, [activityPlan.toolItems, expandedActivityRuns, expandedToolCalls, toggleActivityRun, setToolCallExpanded,
     revealingActivityItems, finishActivityReveal, reading.registerRow, reading.preserveVisiblePosition,
     reading.reconcileViewportLayout, preserveReadingPosition, expandRun,
-    renderMessage, agentName, state.status, runtime, retryTranscript, promptTargetPrefix]);
+    renderMessage, agentName, state.status, runtime, retryTranscript, restoreFailedMessage,
+    pendingSendClock, promptTargetPrefix, sendsByIdentity, host.composerHidden]);
 
   return <ActivitySummaryProvider transport={activitySummaries}
     connected={state.liveConnectionState ? state.liveConnectionState === 'connected' : state.status === 'ready'}
