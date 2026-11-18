@@ -102,6 +102,8 @@ export interface VisibleMessage {
   readonly ownerScoped: boolean;
   /** Included by the projection, but awaiting relation/turn evidence before UI rendering. */
   readonly provenancePending: boolean;
+  /** Harness failure carried by a process row that explicitly refers to this prompt. */
+  readonly failureReason?: string;
   readonly member?: HumanMember;
 }
 
@@ -127,6 +129,37 @@ function submitterKey(record: CanonicalMessage): string | undefined {
   return typeof displayName === 'string' && displayName.trim() ? `display:${displayName.trim()}` : undefined;
 }
 
+function turnFailureReason(record: CanonicalMessage): string | undefined {
+  if (record.role !== 'assistant' || record.sender !== 'process:tightbeam' ||
+      record.messageType !== 'substrate' || record.isBatchCarrier === true ||
+      !record.content.startsWith('[turn failed]')) return undefined;
+  const afterMarker = record.content.slice('[turn failed]'.length).replace(/^\r?\n(?:\r?\n)?/, '');
+  const messageAbovePrefix = 'The agent could not answer the message above:';
+  if (afterMarker.startsWith(messageAbovePrefix)) {
+    const reason = afterMarker.slice(messageAbovePrefix.length);
+    return reason.startsWith(' ') ? reason.slice(1) : reason;
+  }
+  return afterMarker || undefined;
+}
+
+function failedPromptId(record: CanonicalMessage, messages: readonly CanonicalMessage[],
+  byId: ReadonlyMap<string, CanonicalMessage>, principalKey?: string): string | undefined {
+  const explicitParent = record.replyToMessageId;
+  if (explicitParent) {
+    const parent = byId.get(explicitParent);
+    return parent?.sessionKey === record.sessionKey && isHumanMessage(parent, principalKey)
+      ? parent.id : undefined;
+  }
+  if (!record.content.includes('The agent could not answer the message above:')) return undefined;
+
+  const preceding = messages.filter(message => message.sessionKey === record.sessionKey && message.seq < record.seq);
+  const parent = [...preceding].reverse().find(message => message.role === 'user');
+  if (!parent || !isHumanMessage(parent, principalKey)) return undefined;
+  const hasAssistantReply = preceding.some(message => message.seq > parent.seq && message.role === 'assistant' &&
+    !message.sender?.startsWith('process:'));
+  return hasAssistantReply ? undefined : parent.id;
+}
+
 export function projectMessages(records: readonly ConversationRecord[], principalKey?: string, ownerUserId?: unknown,
   submitterAttributionEnabled = false): {
   messages: VisibleMessage[]; issues: readonly string[]; multipleSubmitters: boolean;
@@ -140,6 +173,14 @@ export function projectMessages(records: readonly ConversationRecord[], principa
   }
   const multipleSubmitters = submitterKeys.size > 1;
   const showSubmitterNames = submitterAttributionEnabled && multipleSubmitters;
+  const orderedMessages = [...byId.values()].sort((left, right) => left.seq - right.seq || left.id.localeCompare(right.id));
+  const failuresByPrompt = new Map<string, string>();
+  for (const record of orderedMessages) {
+    const reason = turnFailureReason(record);
+    if (!reason) continue;
+    const promptId = failedPromptId(record, orderedMessages, byId, principalKey);
+    if (promptId) failuresByPrompt.set(promptId, reason);
+  }
   const messages: VisibleMessage[] = [];
   const issues: string[] = [];
   for (const record of byId.values()) {
@@ -162,7 +203,8 @@ export function projectMessages(records: readonly ConversationRecord[], principa
     } else if (classification === 'human') {
       messages.push({ key: record.id, source: record, side: 'human',
         senderLabel: showSubmitterNames ? submitterDisplayName(record) ?? 'You' : 'You',
-        ownerScoped: true, provenancePending: false });
+        ownerScoped: true, provenancePending: false,
+        ...(failuresByPrompt.has(record.id) ? { failureReason: failuresByPrompt.get(record.id) } : {}) });
     } else if (isVisibleHumanRow(record)) {
       // A missing or different sender does not prove this row belongs to the viewer,
       // but it also is not a reason to omit the row from the conversation.
