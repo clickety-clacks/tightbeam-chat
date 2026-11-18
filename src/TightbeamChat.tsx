@@ -56,7 +56,6 @@ interface Bubble {
   readonly sender: string;
   readonly displayContent?: string;
   readonly failureReason?: string;
-  readonly canEditResend?: boolean;
   readonly member?: HumanMember;
   readonly derived: boolean;
 }
@@ -1054,7 +1053,7 @@ function StatusIcon({ state }: { state: RuntimeState }) {
 }
 
 const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, registerRow, readAttachment, preservePosition,
-  reconcileLayout, onRetryRender, onRestoreFailedMessage, scrollKey: scrollKeyOverride, promptTargetPrefix }: {
+  reconcileLayout, onRetryRender, onRestoreFailedMessage, canEditResend, scrollKey: scrollKeyOverride, promptTargetPrefix }: {
   bubble: Bubble;
   renderMessage?: TightbeamChatProps['renderMessage'];
   agentName: string;
@@ -1064,6 +1063,7 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, re
   reconcileLayout: () => void;
   onRetryRender: () => void;
   onRestoreFailedMessage: (bubble: Bubble) => void;
+  canEditResend: boolean;
   scrollKey?: string;
   promptTargetPrefix: string;
 }) {
@@ -1114,7 +1114,7 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, re
     {failureReason && <div className="tb-chat-persisted-failure" role="alert">
       <strong>Message failed.</strong>
       <div className="tb-chat-persisted-failure-reason">{failureReason}</div>
-      {bubble.side === 'human' && bubble.ownerScoped && bubble.canEditResend && <button type="button" className="tb-chat-send-retry"
+      {bubble.side === 'human' && bubble.ownerScoped && canEditResend && <button type="button" className="tb-chat-send-retry"
         onClick={() => onRestoreFailedMessage(bubble)}>Edit and resend</button>}
     </div>}
     <time className="tb-chat-time" dateTime={time.dateTime}>{time.text}</time>
@@ -1129,7 +1129,7 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, re
   // rows memoized so appending to a long transcript doesn't re-render every body.
   return before.key === after.key && before.record === after.record && before.side === after.side &&
     before.sender === after.sender && before.displayContent === after.displayContent &&
-    before.failureReason === after.failureReason && before.canEditResend === after.canEditResend &&
+    before.failureReason === after.failureReason && previous.canEditResend === next.canEditResend &&
     before.derived === after.derived && sameMember && previous.renderMessage === next.renderMessage &&
     previous.onRetryRender === next.onRetryRender && previous.readAttachment === next.readAttachment &&
     previous.onRestoreFailedMessage === next.onRestoreFailedMessage &&
@@ -2532,14 +2532,14 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   keyboardActions.current = { optedIn: host.optedIn, composerHidden: host.composerHidden, scrollBy: reading.scrollBy };
   const agentName = state.agentDisplayName ?? '';
   const sendsByIdentity = useMemo(() => new Map(state.sends.map((send) => [sendIdentity(send), send])), [state.sends]);
+  const sendsByIdentityRef = useRef(sendsByIdentity);
+  sendsByIdentityRef.current = sendsByIdentity;
   const projection = useMemo(() => projectMessages(state.records, state.principalKey, state.session?.raw.ownerUserId,
     submitterAttributionEnabled === true),
     [state.records, state.principalKey, state.session?.raw.ownerUserId, submitterAttributionEnabled]);
   const bubbles: Bubble[] = useMemo(() => projection.messages
     .filter(message => message.member || !message.source.recordEventIds?.length)
     .map((message) => {
-      const identity = canonicalSendIdentity(message.source);
-      const send = identity ? sendsByIdentity.get(identity) as AttachmentSendView | undefined : undefined;
       return {
         key: message.key, record: message.source, side: message.side,
         ownerScoped: message.side === 'agent' || message.ownerScoped,
@@ -2550,10 +2550,8 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
           : sourceLabel(message.side, agentName),
         derived: Boolean(message.member),
         displayContent: message.member?.content, member: message.member, failureReason: message.failureReason,
-        canEditResend: !host.composerHidden && message.side === 'human' && message.ownerScoped &&
-          (!message.source.attachments?.length || Boolean(send?.attachmentItems?.length)),
       };
-    }), [projection, agentName, host.composerHidden, sendsByIdentity, submitterAttributionEnabled]);
+    }), [projection, agentName, submitterAttributionEnabled]);
   const caption = state.activityTurnStateAvailable === true ? activeCaption(state.activeTurn) : undefined;
   const visibleSendIdentities = useMemo(() => new Set(bubbles.flatMap((bubble) => {
     const identity = bubble.derived ? undefined : canonicalSendIdentity(bubble.record);
@@ -2561,10 +2559,10 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   })), [bubbles]);
   const restoreFailedMessage = useCallback((bubble: Bubble) => {
     const identity = canonicalSendIdentity(bubble.record);
-    const send = identity ? sendsByIdentity.get(identity) as AttachmentSendView | undefined : undefined;
+    const send = identity ? sendsByIdentityRef.current.get(identity) as AttachmentSendView | undefined : undefined;
     composer.current?.restore(bubble.record.content, send?.attachmentItems ?? []);
     composer.current?.focusAtEnd();
-  }, [sendsByIdentity]);
+  }, []);
   const canonicalSends = useMemo(() => {
     const records = new Map<string, CanonicalMessage>();
     for (const record of state.records) {
@@ -3396,11 +3394,15 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
         }
         if (item.kind === 'bubble') {
           const { bubble } = item;
+          const identity = canonicalSendIdentity(bubble.record);
+          const send = identity ? sendsByIdentity.get(identity) as AttachmentSendView | undefined : undefined;
+          const canEditResend = Boolean(bubble.failureReason && bubble.side === 'human' && bubble.ownerScoped &&
+            !host.composerHidden && (!bubble.record.attachments?.length || send?.attachmentItems?.length));
           return <RecordRow key={bubble.key} bubble={bubble} scrollKey={item.scrollKey}
             renderMessage={renderMessage} agentName={agentName} registerRow={reading.registerRow}
             readAttachment={runtime.readAttachment}
             preservePosition={preserveReadingPosition} reconcileLayout={reading.reconcileViewportLayout}
-            onRetryRender={retryTranscript} onRestoreFailedMessage={restoreFailedMessage}
+            onRetryRender={retryTranscript} onRestoreFailedMessage={restoreFailedMessage} canEditResend={canEditResend}
             promptTargetPrefix={promptTargetPrefix} />;
         }
         const { send } = item;
@@ -3477,7 +3479,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     revealingActivityItems, finishActivityReveal, reading.registerRow, reading.preserveVisiblePosition,
     reading.reconcileViewportLayout, preserveReadingPosition, expandRun,
     renderMessage, agentName, state.status, runtime, retryTranscript, restoreFailedMessage,
-    pendingSendClock, promptTargetPrefix]);
+    pendingSendClock, promptTargetPrefix, sendsByIdentity, host.composerHidden]);
 
   return <ActivitySummaryProvider transport={activitySummaries}
     connected={state.liveConnectionState ? state.liveConnectionState === 'connected' : state.status === 'ready'}

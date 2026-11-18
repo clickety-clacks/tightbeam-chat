@@ -142,24 +142,6 @@ function turnFailureReason(record: CanonicalMessage): string | undefined {
   return afterMarker || undefined;
 }
 
-function failedPromptId(record: CanonicalMessage, messages: readonly CanonicalMessage[],
-  byId: ReadonlyMap<string, CanonicalMessage>, principalKey?: string): string | undefined {
-  const explicitParent = record.replyToMessageId;
-  if (explicitParent) {
-    const parent = byId.get(explicitParent);
-    return parent?.sessionKey === record.sessionKey && isHumanMessage(parent, principalKey)
-      ? parent.id : undefined;
-  }
-  if (!record.content.includes('The agent could not answer the message above:')) return undefined;
-
-  const preceding = messages.filter(message => message.sessionKey === record.sessionKey && message.seq < record.seq);
-  const parent = [...preceding].reverse().find(message => message.role === 'user');
-  if (!parent || !isHumanMessage(parent, principalKey)) return undefined;
-  const hasAssistantReply = preceding.some(message => message.seq > parent.seq && message.role === 'assistant' &&
-    !message.sender?.startsWith('process:'));
-  return hasAssistantReply ? undefined : parent.id;
-}
-
 export function projectMessages(records: readonly ConversationRecord[], principalKey?: string, ownerUserId?: unknown,
   submitterAttributionEnabled = false): {
   messages: VisibleMessage[]; issues: readonly string[]; multipleSubmitters: boolean;
@@ -173,13 +155,37 @@ export function projectMessages(records: readonly ConversationRecord[], principa
   }
   const multipleSubmitters = submitterKeys.size > 1;
   const showSubmitterNames = submitterAttributionEnabled && multipleSubmitters;
-  const orderedMessages = [...byId.values()].sort((left, right) => left.seq - right.seq || left.id.localeCompare(right.id));
+  // Runtime history and change updates are kept in message sequence order.
+  // Track one prompt per session so failure attribution stays a single pass.
   const failuresByPrompt = new Map<string, string>();
-  for (const record of orderedMessages) {
+  const latestPromptBySession = new Map<string, { prompt?: CanonicalMessage; hasAssistantReply: boolean }>();
+  for (const record of byId.values()) {
     const reason = turnFailureReason(record);
-    if (!reason) continue;
-    const promptId = failedPromptId(record, orderedMessages, byId, principalKey);
-    if (promptId) failuresByPrompt.set(promptId, reason);
+    if (reason) {
+      const explicitParent = record.replyToMessageId ? byId.get(record.replyToMessageId) : undefined;
+      let promptId: string | undefined;
+      if (record.replyToMessageId) {
+        if (explicitParent?.sessionKey === record.sessionKey && isHumanMessage(explicitParent, principalKey)) {
+          promptId = explicitParent.id;
+        }
+      } else if (record.content.includes('The agent could not answer the message above:')) {
+        const latest = latestPromptBySession.get(record.sessionKey);
+        if (latest && !latest.hasAssistantReply && latest.prompt && isHumanMessage(latest.prompt, principalKey)) {
+          promptId = latest.prompt.id;
+        }
+      }
+      if (promptId) {
+        // Keep the originating refusal when later rows repeat the failed turn.
+        if (!failuresByPrompt.has(promptId)) failuresByPrompt.set(promptId, reason);
+      }
+    }
+
+    if (record.role === 'user') {
+      latestPromptBySession.set(record.sessionKey, { prompt: record, hasAssistantReply: false });
+    } else if (record.role === 'assistant' && !record.sender?.startsWith('process:')) {
+      const latest = latestPromptBySession.get(record.sessionKey);
+      if (latest) latest.hasAssistantReply = true;
+    }
   }
   const messages: VisibleMessage[] = [];
   const issues: string[] = [];
