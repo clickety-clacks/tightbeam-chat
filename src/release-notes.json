@@ -1,5 +1,18 @@
 [
   {
+    "version": "v0.1.105",
+    "items": [
+      {
+        "title": "See why a prompt failed",
+        "description": "When a turn is refused, Chat marks the original prompt as failed and shows the reason from the transcript. Choose Edit and resend to revise the prompt. If a send goes unconfirmed for two minutes, Chat shows a timeout and lets you restore the text to the composer. Resending is up to you."
+      },
+      {
+        "title": "Gateway compatibility",
+        "description": "Chat continues to support Gateway 0.1.16. Human prompts use the authenticated WebSocket connection by default."
+      }
+    ]
+  },
+  {
     "version": "v0.1.104",
     "items": [
       {
