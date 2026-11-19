@@ -2,6 +2,13 @@ import { AuthorizationError, type HostIdentity } from '../src/types';
 import type { Public019Channel, Public019Host } from '../src/public019';
 import { normalizeSubmitterAttribution, readBrowserRememberedSubmitterDisplayName } from '../src/submitterAttribution';
 import type { ChatTarget } from './entry';
+import { sendWithBrowserDevice, type DeviceCredentialLost } from './devicePairing';
+
+/** This browser's own paired Gateway device; its credential stays in the bridge cookie. */
+export interface BrowserDevice {
+  readonly deviceId: string;
+  readonly onCredentialLost?: DeviceCredentialLost;
+}
 
 function isAuthorizationFailureCode(value: unknown): boolean {
   if (typeof value !== 'string') return false;
@@ -18,9 +25,12 @@ function chatSocketUrl(path: '/ws' | '/ws/changes', target: ChatTarget): URL {
   return url;
 }
 
-/** The Chat service owns its provisioned Gateway credential and auth frames. */
-export function browserHost(target: ChatTarget): Public019Host {
-  const identity: HostIdentity = { principalKey: target.principalKey, deviceId: target.deviceId };
+/**
+ * The Chat service owns its provisioned Gateway credential and auth frames. With
+ * a paired browser device, every human send uses that device instead.
+ */
+export function browserHost(target: ChatTarget, device?: BrowserDevice): Public019Host {
+  const identity: HostIdentity = { principalKey: target.principalKey, deviceId: device?.deviceId ?? target.deviceId };
   const currentIdentity = (): HostIdentity => {
     if (target.restHumanSendEnabled !== true) return identity;
     const submitter = normalizeSubmitterAttribution(target.submitter, readBrowserRememberedSubmitterDisplayName());
@@ -107,34 +117,46 @@ export function browserHost(target: ChatTarget): Public019Host {
     });
   }
 
+  const hostFetch = (input: string, init?: RequestInit): Promise<Response> => {
+    let url: URL;
+    try { url = new URL(input, window.location.origin); }
+    catch { return Promise.reject(new Error('Invalid Chat service request.')); }
+    if (url.origin !== window.location.origin || !url.pathname.startsWith('/__chat/')) {
+      return Promise.reject(new Error('Chat requests must remain on the configured service origin.'));
+    }
+    const gateways = url.searchParams.getAll('gateway');
+    if (gateways.length > 1 || (gateways.length === 1 && gateways[0] !== target.gateway)) {
+      return Promise.reject(new Error('Chat requests must use the selected Gateway.'));
+    }
+    url.searchParams.set('gateway', target.gateway);
+    const headers = new Headers(init?.headers);
+    headers.delete('authorization');
+    // A cross-site form cannot set this header, and a cross-origin script needs a refused preflight.
+    const method = (init?.method ?? 'GET').toUpperCase();
+    if (method !== 'GET' && method !== 'HEAD') headers.set('x-tightbeam-chat', '1');
+    return fetch(url, {
+      ...init,
+      headers,
+      credentials: 'same-origin',
+      redirect: 'error',
+    });
+  };
+
   return {
     currentIdentity,
+    ...(device ? {
+      sendHumanAsDevice: (submission, signal, onSubmitted) =>
+        sendWithBrowserDevice(hostFetch, submission, signal, onSubmitted, device.onCredentialLost),
+    } satisfies Pick<Public019Host, 'sendHumanAsDevice'> : {}),
     ...(target.readMarkerRoute ? {
       readMarkerRoute: target.readMarkerRoute,
       readMarkerOperatorPrincipalKey: target.principalKey,
     } : {}),
-    fetch: (input, init) => {
-      let url: URL;
-      try { url = new URL(input, window.location.origin); }
-      catch { return Promise.reject(new Error('Invalid Chat service request.')); }
-      if (url.origin !== window.location.origin || !url.pathname.startsWith('/__chat/')) {
-        return Promise.reject(new Error('Chat requests must remain on the configured service origin.'));
-      }
-      const gateways = url.searchParams.getAll('gateway');
-      if (gateways.length > 1 || (gateways.length === 1 && gateways[0] !== target.gateway)) {
-        return Promise.reject(new Error('Chat requests must use the selected Gateway.'));
-      }
-      url.searchParams.set('gateway', target.gateway);
-      const headers = new Headers(init?.headers);
-      headers.delete('authorization');
-      return fetch(url, {
-        ...init,
-        headers,
-        credentials: 'same-origin',
-        redirect: 'error',
-      });
-    },
+    fetch: hostFetch,
     openAuthenticatedChanges: (signal) => open('/ws/changes', signal),
-    openAuthenticatedHuman: (signal) => open('/ws', signal),
+    // While paired, the organization-credential human socket is never opened.
+    openAuthenticatedHuman: (signal) => device
+      ? Promise.reject(new Error('Human sends use this browser\'s paired device.'))
+      : open('/ws', signal),
   };
 }

@@ -9,6 +9,8 @@ export interface ChatTarget {
   readonly readMarkerRoute?: 'gateway-configured-user' | 'gateway-user-device';
   readonly restHumanSendEnabled?: boolean;
   readonly submitter?: SubmitterAttribution;
+  /** CHAT_DEVICE_PAIRING: this page may pair the browser as its own Gateway device. */
+  readonly devicePairingEnabled?: boolean;
 }
 
 export interface RequestedChatTarget {
@@ -24,6 +26,8 @@ export interface ConfiguredChatTarget {
   readonly readMarkerRoute?: 'gateway-configured-user' | 'gateway-user-device';
   readonly restHumanSendEnabled?: boolean;
   readonly submitter?: SubmitterAttribution;
+  /** CHAT_DEVICE_PAIRING: this page may pair the browser as its own Gateway device. */
+  readonly devicePairingEnabled?: boolean;
 }
 
 /** Loads the deployment-owned, nonsecret default from the same origin as the page. */
@@ -64,6 +68,7 @@ export async function loadConfiguredChatTarget(
       ? config.readMarkerRoute : undefined,
     config.restHumanSendEnabled === true,
     normalizeSubmitterAttribution(config.submitter),
+    config.devicePairingEnabled === true,
   );
   if (!target) throw new Error('The Chat server returned an invalid default target.');
   return target;
@@ -101,6 +106,7 @@ function targetFrom(
   readMarkerRoute: 'gateway-configured-user' | 'gateway-user-device' | undefined,
   restHumanSendEnabled: boolean,
   submitter?: SubmitterAttribution,
+  devicePairingEnabled = false,
 ): ChatTarget | undefined {
   const normalizedGateway = canonicalGateway(gateway);
   if (!normalizedGateway || !sessionKey?.trim() || !principalKey?.trim() || !deviceId?.trim()) return undefined;
@@ -112,13 +118,14 @@ function targetFrom(
     ...(readMarkerRoute ? { readMarkerRoute } : {}),
     ...(restHumanSendEnabled ? { restHumanSendEnabled: true } : {}),
     ...(restHumanSendEnabled && submitter ? { submitter } : {}),
+    ...(devicePairingEnabled ? { devicePairingEnabled: true } : {}),
   };
 }
 
 function configuredTarget(value: ConfiguredChatTarget | undefined): ChatTarget | undefined {
   return targetFrom(value?.gateway, value?.sessionKey, value?.principalKey, value?.deviceId,
     value?.readMarkerRoute, value?.restHumanSendEnabled === true,
-    normalizeSubmitterAttribution(value?.submitter));
+    normalizeSubmitterAttribution(value?.submitter), value?.devicePairingEnabled === true);
 }
 
 function wellFormedQuery(search: string): boolean {

@@ -77,6 +77,11 @@ export interface Public019Host {
   openAuthenticatedChanges(signal: AbortSignal): Promise<Public019Channel>;
   /** Connect /ws, authenticate as the human device, await sync_complete, then return a fresh socket. */
   openAuthenticatedHuman(signal: AbortSignal): Promise<Public019Channel>;
+  /**
+   * When present, every human send (messages and commands) goes through this
+   * host-held device credential and never through the provisioned credential.
+   */
+  sendHumanAsDevice?(submission: HumanSubmission, signal: AbortSignal, onSubmitted?: () => void): Promise<HumanSendResult>;
 }
 
 export interface Public019Config {
@@ -1495,6 +1500,14 @@ export function createPublic019Transport(config: Public019Config): { transport: 
       }
     },
     async sendHuman(submission: HumanSubmission, signal: AbortSignal, onSubmitted?: () => void): Promise<HumanSendResult> {
+      if (config.host.sendHumanAsDevice) {
+        if (!submission.clientMessageId.startsWith('c_')) return { outcome: 'refused', reason: 'invalid_message_id' };
+        if (config.host.currentIdentity().deviceId !== submission.deviceId) {
+          return { outcome: 'refused', reason: 'Host device identity changed.' };
+        }
+        if (signal.aborted) return { outcome: 'unreachable', reason: 'Human send was interrupted before submission.' };
+        return config.host.sendHumanAsDevice(submission, signal, onSubmitted);
+      }
       if (config.restHumanSendEnabled !== true) {
         return sendHumanViaWebSocket(config.host, submission, signal, onSubmitted);
       }
