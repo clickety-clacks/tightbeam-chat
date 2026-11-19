@@ -333,6 +333,7 @@ async function createBundleFixture(tag, sourceCommit, { noticeContent, includeEx
 async function createPackageSourceFixture(rootDir) {
   const files = [
     'bin/activity-summaries.mjs',
+    'bin/chat-device.mjs',
     'scripts/pair-marker-device.mjs',
     'server/chat-server.mjs',
     'scripts/update-chat-release.mjs',
@@ -461,7 +462,7 @@ describe('Chat release packaging and updater', () => {
     expect(noticeText).toContain('React 19.3.0, React DOM 19.3.0, and Scheduler 0.28.0');
     expect(noticeText).toContain('Copyright (c) Meta Platforms, Inc. and affiliates.');
     const files = [
-      'dist/chat-server/public/index.html', 'server/chat-server.mjs', 'bin/activity-summaries.mjs', 'scripts/pair-marker-device.mjs', 'scripts/update-chat-release.mjs',
+      'dist/chat-server/public/index.html', 'server/chat-server.mjs', 'bin/activity-summaries.mjs', 'bin/chat-device.mjs', 'scripts/pair-marker-device.mjs', 'scripts/update-chat-release.mjs',
       'scripts/chat-release-updater.mjs', 'scripts/chat-release-watch.mjs', 'packaging/tightbeam-chat.service',
       'packaging/tightbeam-chat-release-watch.service', 'packaging/tightbeam-chat-release-watch.timer',
       'LICENSE', 'THIRD_PARTY_NOTICES.md',
@@ -497,6 +498,8 @@ describe('Chat release packaging and updater', () => {
     expect(members).toContain('./public/index.html');
     expect(members).toContain('./server/chat-server.mjs');
     expect(members).toContain('./bin/activity-summaries.mjs');
+    expect(members).toContain('./bin/chat-device.mjs');
+    expect(members).not.toContain('./server/chat-device.mjs');
     expect(members).toContain('./bin/pair-marker-device.mjs');
     expect(members).not.toContain('./server/activity-summaries.mjs');
     expect(members).toContain('./bin/chat-release-watch.mjs');
@@ -562,10 +565,13 @@ describe('Chat release packaging and updater', () => {
     expect(installed).toMatchObject({ tag, sourceCommit: SOURCE_COMMIT, staged: true });
     const stagedRelease = path.join(root, 'releases', tag);
     await expect(fs.access(path.join(stagedRelease, 'bin/activity-summaries.mjs'))).resolves.toBeUndefined();
+    await expect(fs.access(path.join(stagedRelease, 'bin/chat-device.mjs'))).resolves.toBeUndefined();
     await expect(fs.access(path.join(stagedRelease, 'server/activity-summaries.mjs')))
       .rejects.toMatchObject({ code: 'ENOENT' });
     expect(await fs.readFile(path.join(stagedRelease, 'server/chat-server.mjs'), 'utf8'))
       .toContain("from '../bin/activity-summaries.mjs'");
+    expect(await fs.readFile(path.join(stagedRelease, 'server/chat-server.mjs'), 'utf8'))
+      .toContain("from '../bin/chat-device.mjs'");
     expect(serviceManager.calls).toContain('restart:tightbeam-chat.service');
   });
 

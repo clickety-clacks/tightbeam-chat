@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { ActivitySummaryStore, summaryConfiguration, serveSummaries } from '../bin/activity-summaries.mjs';
+import { contentSecurityPolicy, createDeviceBridge, isDeviceRoute } from '../bin/chat-device.mjs';
 import fs from 'node:fs';
 import http from 'node:http';
 import https from 'node:https';
@@ -184,6 +185,7 @@ function loadRuntimeConfig(environment) {
   const configuredGateway = canonicalOrigin(environment.CHAT_DEFAULT_GATEWAY_ORIGIN);
   const gatewayMap = loadGatewayMap(environment, configuredGateway);
   const restHumanSendEnabled = environment.CHAT_REST_HUMAN_SEND === '1';
+  const devicePairingEnabled = environment.CHAT_DEVICE_PAIRING === '1';
   let markerDeviceToken = '';
   if (!restHumanSendEnabled && typeof environment.CHAT_READ_MARKER_DEVICE_CREDENTIAL_FILE === 'string' &&
       environment.CHAT_READ_MARKER_DEVICE_CREDENTIAL_FILE) {
@@ -214,6 +216,7 @@ function loadRuntimeConfig(environment) {
       ...(principalKey ? { principalKey, deviceId } : {}),
       ...(readMarkerRoute ? { readMarkerRoute } : {}),
       ...(restHumanSendEnabled ? { restHumanSendEnabled: true } : {}),
+      ...(devicePairingEnabled ? { devicePairingEnabled: true } : {}),
     }
     : {};
 
@@ -225,6 +228,7 @@ function loadRuntimeConfig(environment) {
     gatewayMapValid: gatewayMap.valid,
     gateways: gatewayMap.gateways,
     restHumanSendEnabled,
+    devicePairingEnabled,
     markerDeviceToken,
     sessionKey,
     principalKey,
@@ -848,20 +852,21 @@ function allowedPublicOrigin(runtime, request) {
   return sameBrowserOrigin(origin, runtime.publicOrigin);
 }
 
-function respondText(response, status, text) {
+function respondText(response, status, text, securityHeaders = {}) {
   const body = Buffer.from(text);
   response.writeHead(status, {
     'content-type': 'text/plain; charset=utf-8',
     'cache-control': 'no-store',
     'content-length': body.length,
     'x-content-type-options': 'nosniff',
+    ...securityHeaders,
   });
   response.end(body);
 }
 
-function serveAsset(request, response, publicDir) {
+function serveAsset(request, response, publicDir, securityHeaders = {}) {
   if (request.method !== 'GET' && request.method !== 'HEAD') {
-    response.writeHead(405, { allow: 'GET, HEAD', 'cache-control': 'no-store' }).end();
+    response.writeHead(405, { allow: 'GET, HEAD', 'cache-control': 'no-store', ...securityHeaders }).end();
     return;
   }
 
@@ -869,7 +874,7 @@ function serveAsset(request, response, publicDir) {
   try {
     pathname = decodeURIComponent(new URL(request.url, 'http://chat.invalid').pathname);
   } catch {
-    respondText(response, 400, 'Invalid asset path.');
+    respondText(response, 400, 'Invalid asset path.', securityHeaders);
     return;
   }
 
@@ -877,7 +882,7 @@ function serveAsset(request, response, publicDir) {
   const root = path.resolve(publicDir);
   const filename = path.resolve(root, `.${pathname}`);
   if (filename !== root && !filename.startsWith(`${root}${path.sep}`)) {
-    respondText(response, 404, 'Not found.');
+    respondText(response, 404, 'Not found.', securityHeaders);
     return;
   }
 
@@ -885,11 +890,11 @@ function serveAsset(request, response, publicDir) {
   try {
     stat = fs.statSync(filename);
   } catch {
-    respondText(response, 404, 'Not found.');
+    respondText(response, 404, 'Not found.', securityHeaders);
     return;
   }
   if (!stat.isFile()) {
-    respondText(response, 404, 'Not found.');
+    respondText(response, 404, 'Not found.', securityHeaders);
     return;
   }
 
@@ -901,6 +906,7 @@ function serveAsset(request, response, publicDir) {
     'cache-control': cacheControl,
     'content-length': stat.size,
     'x-content-type-options': 'nosniff',
+    ...securityHeaders,
   });
   if (request.method === 'HEAD') {
     response.end();
@@ -977,14 +983,34 @@ function proxyWebSocket(request, socket, head, target) {
   upstream.end();
 }
 
+/** The device bridge pairs and sends only on the configured Gateway. */
+function deviceGateway(url, runtime) {
+  if (!serviceReady(runtime)) return { status: 503, code: 'chat_service_unconfigured' };
+  const selected = selectedGatewayOrigin(url.searchParams, runtime.gatewayOrigin);
+  const configured = runtime.gateways.get(runtime.gatewayOrigin);
+  if (!selected || runtime.gateways.get(selected) !== configured) {
+    return { status: 409, code: 'device_gateway_mismatch' };
+  }
+  if (!configured?.base) return { status: 503, code: 'chat_gateway_unavailable' };
+  return { base: configured.base };
+}
+
 export function createChatServer({
   rootDir = process.cwd(),
   publicDir = path.resolve(rootDir, 'public'),
   releaseInfo,
   environment = process.env,
+  deviceTimings,
 } = {}) {
   const runtime = loadRuntimeConfig(environment);
   const manifest = releaseInfo ?? JSON.parse(fs.readFileSync(path.resolve(rootDir, 'release.json'), 'utf8'));
+  const deviceBridge = runtime.devicePairingEnabled
+    ? createDeviceBridge({ publicOrigin: runtime.publicOrigin, resolveGateway: (url) => deviceGateway(url, runtime),
+      timings: deviceTimings })
+    : undefined;
+  const assetSecurityHeaders = runtime.devicePairingEnabled
+    ? { 'content-security-policy': contentSecurityPolicy(runtime.publicOrigin) }
+    : {};
 
   let summaries;
   try { summaries = new ActivitySummaryStore(summaryConfiguration(environment)); }
@@ -1011,6 +1037,10 @@ export function createChatServer({
           chatRestHumanSendEnabled: runtime.restHumanSendEnabled,
         },
       });
+      return;
+    }
+    if (deviceBridge && isDeviceRoute(parsedRequest.pathname)) {
+      void deviceBridge(request, response);
       return;
     }
     if (parsedRequest.pathname.startsWith('/__chat/')) {
@@ -1043,9 +1073,14 @@ export function createChatServer({
       proxyHttp(request, response, target);
       return;
     }
-    serveAsset(request, response, publicDir);
+    serveAsset(request, response, publicDir, assetSecurityHeaders);
   }).on('close', () => summaries?.close()).on('upgrade', (request, socket, head) => {
     const parsedRequest = new URL(request.url ?? '/', 'http://chat.invalid');
+    if (deviceBridge && isDeviceRoute(parsedRequest.pathname)) {
+      // The device credential is used only on the bridge's own short sockets.
+      socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+      return;
+    }
     if (parsedRequest.pathname.startsWith('/__chat/')) {
       if (!allowedPublicOrigin(runtime, request) || request.method !== 'GET' ||
           request.headers.upgrade?.toLowerCase() !== 'websocket' ||
