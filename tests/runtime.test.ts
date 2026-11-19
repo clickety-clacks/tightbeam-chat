@@ -664,7 +664,7 @@ describe('framework-independent runtime', () => {
       expect(runtime.send('The conversation remains available while the feed is disconnected.')).toBeTruthy();
       expect(open).toHaveBeenCalledTimes(4);
       await vi.advanceTimersByTimeAsync(8250);
-      expect(runtime.getSnapshot().liveConnectionState).toBe('disconnected');
+      expect(runtime.getSnapshot().liveConnectionState).toBe('reconnecting');
       transport.rows.push(message(9));
       open.mockImplementation((...args) => connect(...args));
       await runtime.rebuild({ restart: true });
@@ -713,7 +713,7 @@ describe('framework-independent runtime', () => {
     } finally { runtime.dispose(); vi.useRealTimers(); }
   });
 
-  it('keeps flapping yellow, shows red after ten seconds, and waits for a stable recovery', async () => {
+  it('keeps flapping yellow, stays yellow through a long outage, and waits for a stable recovery', async () => {
     vi.useFakeTimers();
     const transport = new ControlledTransport();
     const connect = transport.openChanges;
@@ -750,14 +750,17 @@ describe('framework-independent runtime', () => {
       await vi.advanceTimersByTimeAsync(8500);
 
       expect(Date.now() - outageStartedAt).toBe(10_000);
-      expect(runtime.getSnapshot().liveConnectionState).toBe('disconnected');
-      expect(transitions.map(({ state }) => state)).toEqual(['reconnecting', 'disconnected']);
+      expect(runtime.getSnapshot().liveConnectionState).toBe('reconnecting');
+      // Chat is still retrying, so a long outage stays yellow rather than turning red.
+      await vi.advanceTimersByTimeAsync(110_000);
+      expect(runtime.getSnapshot().liveConnectionState).toBe('reconnecting');
+      expect(transitions.map(({ state }) => state)).toEqual(['reconnecting']);
 
       open.mockImplementation((...args) => connect(...args));
       await runtime.rebuild({ restart: true });
-      expect(runtime.getSnapshot().liveConnectionState).toBe('disconnected');
+      expect(runtime.getSnapshot().liveConnectionState).toBe('reconnecting');
       await vi.advanceTimersByTimeAsync(999);
-      expect(runtime.getSnapshot().liveConnectionState).toBe('disconnected');
+      expect(runtime.getSnapshot().liveConnectionState).toBe('reconnecting');
       await vi.advanceTimersByTimeAsync(1);
       expect(runtime.getSnapshot().liveConnectionState).toBe('connected');
       expect(transitions.slice(1).every((change, index) =>
@@ -766,7 +769,7 @@ describe('framework-independent runtime', () => {
     } finally { runtime.dispose(); vi.useRealTimers(); }
   });
 
-  it('settles repeated feed failures as disconnected and catches up immediately when the feed returns', async () => {
+  it('keeps repeated feed failures reconnecting and catches up immediately when the feed returns', async () => {
     vi.useFakeTimers();
     const transport = new ControlledTransport();
     const connect = transport.openChanges;
@@ -782,7 +785,7 @@ describe('framework-independent runtime', () => {
         await vi.advanceTimersByTimeAsync(delay);
       }
       expect(runtime.getSnapshot().status).toBe('ready');
-      expect(runtime.getSnapshot().liveConnectionState).toBe('disconnected');
+      expect(runtime.getSnapshot().liveConnectionState).toBe('reconnecting');
       expect(runtime.getSnapshot().records.some(row => row.id === oldest)).toBe(true);
 
       const ready = deferred<{ close(): void }>();
@@ -825,7 +828,7 @@ describe('framework-independent runtime', () => {
       expect(transport.readAfterCalls.length).toBeGreaterThan(readsBeforeOpen);
       expect(runtime.getSnapshot().records.some(row => row.id === latest.id)).toBe(true);
       expect(runtime.getSnapshot().records.some(row => row.id === oldest)).toBe(true);
-      expect(runtime.getSnapshot().liveConnectionState).toBe('disconnected');
+      expect(runtime.getSnapshot().liveConnectionState).toBe('reconnecting');
       await vi.advanceTimersByTimeAsync(1000);
       expect(runtime.getSnapshot().liveConnectionState).toBe('connected');
       await vi.advanceTimersByTimeAsync(30_000);

@@ -815,7 +815,7 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     }
   });
 
-  it('keeps the host composer ready through feed debounce, sustained failure, and recovery', async () => {
+  it('keeps the host composer ready and reports reconnecting through feed debounce, sustained failure, and recovery', async () => {
     const events: HostComposerEvent[] = [];
     const transport = new HostComposerTransport();
     transport.nextSend = async (submission) => {
@@ -836,9 +836,14 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     await waitFor(() => expect(connectionEvents(events).slice(connectionEventCountBeforeDrop).some((event) =>
       event.state === 'reconnecting' && event.lifetimeId === first.lifetimeId)).toBe(true), { timeout: 2000 });
 
-    await waitFor(() => expect(events.some((event) => event.event === 'connection' && event.state === 'disconnected' &&
-      event.lifetimeId === first.lifetimeId)).toBe(true), { timeout: 12_000 });
-    expect(runtimes[0].getSnapshot().liveConnectionState).toBe('disconnected');
+    // Past the point where an outage used to turn red: Chat is still retrying,
+    // so the host keeps hearing 'reconnecting' and never 'disconnected'.
+    const openedBeforeWait = transport.changeOpenCount;
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 11_000)); });
+    expect(transport.changeOpenCount).toBeGreaterThan(openedBeforeWait);
+    expect(connectionEvents(events).slice(connectionEventCountBeforeDrop).map((event) => event.state))
+      .toEqual(['reconnecting']);
+    expect(runtimes[0].getSnapshot().liveConnectionState).toBe('reconnecting');
     expect(screen.queryByRole('button', { name: 'Reconnect' })).toBeNull();
     expect(events.filter((event) => event.event === 'ready' && event.lifetimeId === first.lifetimeId)).toHaveLength(1);
     expect(events.some((event) => event.event === 'unavailable' && event.lifetimeId === first.lifetimeId)).toBe(false);

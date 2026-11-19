@@ -3517,6 +3517,22 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     connected={state.liveConnectionState ? state.liveConnectionState === 'connected' : state.status === 'ready'}
     reconcile={reading.reconcileViewportLayout}><section ref={root} className={`tb-chat ${host.composerHidden ? 'tb-chat-host-composer-hidden' : ''} ${className || ''}`}
     aria-label={agentName ? `${agentName} conversation` : 'Conversation'}>
+    {/* Outside the scrolling transcript so the notice stays in view wherever the reader is scrolled. */}
+    {showRuntimeNotice && <div ref={runtimeNotice} className={`tb-chat-runtime-notice ${showToolHistoryStatusInNotice ? 'tb-chat-runtime-notice-with-tool-history ' : ''}${state.loadingOlder ? 'tb-chat-history-loading ' : ''} tb-chat-caption ${runtimeNoticeIsError
+      ? 'tb-chat-caption-danger' : 'tb-chat-caption-neutral'}`} role={runtimeNoticeIsError ? 'alert' : 'status'}>
+      <span className="tb-chat-caption-body">
+        {(state.loadingOlder || state.historyError || localNotice) && <span>{state.loadingOlder ? 'Loading earlier messages…'
+          : state.historyError ? `Earlier messages could not be loaded: ${formatVisibleIds(state.historyError)}`
+            : localNotice ? formatVisibleIds(localNotice) : undefined}</span>}
+        {state.historyError && <button type="button" onClick={loadOlder}>Retry loading messages</button>}
+        {showReconnect &&
+          <button type="button" onClick={() => void runtime.rebuild({ restart: true })}>Reconnect</button>}
+        {showConfiguredConversationLink && <a href={configuredConversationHref}>Open the configured conversation</a>}
+      </span>
+      {showToolHistoryStatusInNotice && <div className="tb-chat-runtime-tool-history">
+        {renderToolHistoryStatus()}
+      </div>}
+    </div>}
     <div className="tb-chat-viewport" data-latest-control-visible={reading.showLatest && !reading.hideLatestControl ? 'true' : undefined}
       ref={viewport} onScroll={handleScroll} role="log" tabIndex={-1}
       onWheel={(event) => { reading.interrupt(); if (event.deltaY !== 0) reading.noteUserScroll(); }}
@@ -3532,21 +3548,6 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
         }
       }}
       aria-label={`${agentName || 'Conversation'} messages`} aria-live="polite" aria-relevant="additions text">
-      {showRuntimeNotice && <div ref={runtimeNotice} className={`tb-chat-runtime-notice ${showToolHistoryStatusInNotice ? 'tb-chat-runtime-notice-with-tool-history ' : ''}${state.loadingOlder ? 'tb-chat-history-loading ' : ''} tb-chat-caption ${runtimeNoticeIsError
-        ? 'tb-chat-caption-danger' : 'tb-chat-caption-neutral'}`} role={runtimeNoticeIsError ? 'alert' : 'status'}>
-        <span className="tb-chat-caption-body">
-          {(state.loadingOlder || state.historyError || localNotice) && <span>{state.loadingOlder ? 'Loading earlier messages…'
-            : state.historyError ? `Earlier messages could not be loaded: ${formatVisibleIds(state.historyError)}`
-              : localNotice ? formatVisibleIds(localNotice) : undefined}</span>}
-          {state.historyError && <button type="button" onClick={loadOlder}>Retry loading messages</button>}
-          {showReconnect &&
-            <button type="button" onClick={() => void runtime.rebuild({ restart: true })}>Reconnect</button>}
-          {showConfiguredConversationLink && <a href={configuredConversationHref}>Open the configured conversation</a>}
-        </span>
-        {showToolHistoryStatusInNotice && <div className="tb-chat-runtime-tool-history">
-          {renderToolHistoryStatus()}
-        </div>}
-      </div>}
       <div className={`tb-chat-message-content${reserveRuntimeNotice ? ' tb-chat-runtime-notice-reserved' : ''}`} ref={reading.content}>
       <TranscriptRenderBoundary resetKey={state.generation} onRetry={retryTranscript}
         onRecovered={reading.reconcileViewportLayout} fallback={retry => <div

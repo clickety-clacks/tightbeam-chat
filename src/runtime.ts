@@ -52,7 +52,6 @@ import { advanceReadMarkerForwardOnly } from './readMarker';
 import { parseBatchMembers } from './messageVisibility';
 
 const LIVE_RECONNECTING_AFTER_MS = 1_000;
-const LIVE_DISCONNECTED_AFTER_MS = 10_000;
 const LIVE_STATUS_MIN_INTERVAL_MS = 1_000;
 const LIVE_STABLE_OPEN_MS = 1_000;
 const BROWSER_RECOVERY_DEBOUNCE_MS = 1_000;
@@ -318,7 +317,6 @@ class SessionRuntime implements ChatRuntime {
   private retryDelayMs = 250;
   private liveOutageStartedAt: number | undefined;
   private liveReconnectStatusTimer: ReturnType<typeof setTimeout> | undefined;
-  private liveDisconnectedStatusTimer: ReturnType<typeof setTimeout> | undefined;
   private liveRecoveryStatusTimer: ReturnType<typeof setTimeout> | undefined;
   private liveRecoveryPending = false;
   private liveStatusChangedAt = Date.now();
@@ -1171,18 +1169,9 @@ class SessionRuntime implements ChatRuntime {
       }, Math.max(0, reconnectAt - Date.now()));
     }
 
-    if (this.state.liveConnectionState !== 'disconnected') {
-      if (this.liveDisconnectedStatusTimer) clearTimeout(this.liveDisconnectedStatusTimer);
-      const disconnectedAt = Math.max(outageStartedAt + LIVE_DISCONNECTED_AFTER_MS,
-        this.liveStatusChangedAt + LIVE_STATUS_MIN_INTERVAL_MS);
-      this.liveDisconnectedStatusTimer = setTimeout(() => {
-        this.liveDisconnectedStatusTimer = undefined;
-        if (this.disposed || this.liveOutageStartedAt !== outageStartedAt || this.liveRecoveryPending) return;
-        if (this.state.liveConnectionState !== 'disconnected') {
-          this.publish({ liveConnectionState: 'disconnected' });
-        }
-      }, Math.max(0, disconnectedAt - Date.now()));
-    }
+    // Chat keeps retrying for as long as the outage lasts, so the feed stays
+    // 'reconnecting' however long it takes; 'disconnected' is reserved for
+    // states with no retry, such as lost authorization.
   }
 
   private noteLiveFeedRecovered(): void {
@@ -1200,8 +1189,6 @@ class SessionRuntime implements ChatRuntime {
       this.liveOutageStartedAt = undefined;
       if (this.liveReconnectStatusTimer) clearTimeout(this.liveReconnectStatusTimer);
       this.liveReconnectStatusTimer = undefined;
-      if (this.liveDisconnectedStatusTimer) clearTimeout(this.liveDisconnectedStatusTimer);
-      this.liveDisconnectedStatusTimer = undefined;
       this.retryDelayMs = 250;
       if (this.state.liveConnectionState !== 'connected') this.publish({ liveConnectionState: 'connected' });
     }, Math.max(0, connectedAt - Date.now()));
@@ -1210,8 +1197,6 @@ class SessionRuntime implements ChatRuntime {
   private clearLiveFeedStatusTimers(): void {
     if (this.liveReconnectStatusTimer) clearTimeout(this.liveReconnectStatusTimer);
     this.liveReconnectStatusTimer = undefined;
-    if (this.liveDisconnectedStatusTimer) clearTimeout(this.liveDisconnectedStatusTimer);
-    this.liveDisconnectedStatusTimer = undefined;
     if (this.liveRecoveryStatusTimer) clearTimeout(this.liveRecoveryStatusTimer);
     this.liveRecoveryStatusTimer = undefined;
     this.liveRecoveryPending = false;

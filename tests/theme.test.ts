@@ -431,6 +431,14 @@ describe('Chat theme', () => {
     expect(captionAction).toContain('text-decoration: underline');
     expect(componentCss).not.toContain('.tb-chat-tool-controls');
     expect(rule(componentCss, '.tb-chat-tool-history-status')).toContain('display: flex');
+    // The runtime notice is pinned to the non-scrolling Chat surface, so a
+    // scrolled transcript cannot carry it out of view.
+    const surface = rule(componentCss, '.tb-chat');
+    expect(surface).toContain('position: relative');
+    expect(surface).toContain('overflow: hidden');
+    const runtimeNotice = rule(componentCss, '.tb-chat-runtime-notice');
+    expect(runtimeNotice).toContain('position: absolute');
+    expect(runtimeNotice).toContain('top: .65rem');
     const phoneLayout = componentCss.slice(componentCss.indexOf('@media (max-width: 540px)'));
     const phoneInitialNotice = phoneLayout.match(/\.tb-chat-caption\.tb-chat-runtime-notice:not\(\.tb-chat-runtime-notice-with-tool-history\)\s*\{([^}]*)\}/)?.[1] ?? '';
     expect(phoneInitialNotice).toContain('width: auto');
