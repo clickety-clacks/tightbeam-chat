@@ -466,7 +466,8 @@ export function createDeviceBridge({ publicOrigin, resolveGateway, timings: timi
     }
     const url = new URL(request.url ?? '/', 'http://chat.invalid');
     const route = url.pathname.slice(DEVICE_ROUTE_PREFIX.length);
-    const method = { '/pair': 'POST', '/status': 'GET', '/send': 'POST', '/forget': 'POST' }[route];
+    // Every route is a POST: browsers omit Origin on same-origin GETs, and status signs in with the credential.
+    const method = ['/pair', '/status', '/send', '/forget'].includes(route) ? 'POST' : undefined;
     if (!method) { writeJson(response, 404, { error: { code: 'not_found' } }); return; }
     if (request.method !== method) {
       response.writeHead(405, { allow: method, 'cache-control': 'no-store' }).end();

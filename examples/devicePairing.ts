@@ -46,7 +46,8 @@ async function readJson(response: Response): Promise<Record<string, unknown> | u
 }
 
 export async function fetchDeviceStatus(fetcher: DeviceFetch, signal?: AbortSignal): Promise<DeviceStatus> {
-  const response = await fetcher(`${DEVICE_ROUTE}/status`, { method: 'GET', cache: 'no-store', signal });
+  // A POST, so the browser sends Origin (it omits it on same-origin GETs) and the anti-forgery header.
+  const response = await fetcher(`${DEVICE_ROUTE}/status`, { method: 'POST', cache: 'no-store', signal });
   const body = await readJson(response);
   if (!response.ok || !body) throw new Error("This browser's pairing could not be checked.");
   if (body.paired === true && typeof body.deviceId === 'string' && DEVICE_ID_PATTERN.test(body.deviceId)) {

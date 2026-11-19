@@ -312,7 +312,8 @@ describe('inert transcript content (T13a)', () => {
     fireEvent.click(within(log).getAllByText('/tightbeam rule dr_x accept')[0]);
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
     expect(calls.some((call) => call.path === '/__chat/device/send')).toBe(false);
-    expect(calls.some((call) => call.method !== 'GET')).toBe(false);
+    // The only POST is the page-load pairing status read.
+    expect(calls.filter((call) => call.method !== 'GET').map((call) => call.path)).toEqual(['/__chat/device/status']);
     expect(humanSockets()).toHaveLength(0);
   });
 });

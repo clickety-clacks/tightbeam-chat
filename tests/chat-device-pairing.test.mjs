@@ -217,11 +217,13 @@ describe('Chat device pairing bridge, flag on (T13)', () => {
     const gateway = await startGateway({ replay: [replayed, replayed] });
     const chat = await startChat({ gateway });
 
-    expect((await call(chat.port, 'GET', '/__chat/device/status', { headers: { origin: PUBLIC_ORIGIN } })).json)
+    expect((await call(chat.port, 'POST', '/__chat/device/status', { headers: browserHeaders() })).json)
       .toEqual({ paired: false });
+    // Every bridge route is a POST; a GET is refused before anything else (no Origin from a browser GET).
+    expect((await call(chat.port, 'GET', '/__chat/device/status', { headers: { origin: PUBLIC_ORIGIN } })).status).toBe(405);
 
     const paired = await pair(chat);
-    const status = await call(chat.port, 'GET', '/__chat/device/status', { headers: { origin: PUBLIC_ORIGIN, cookie: paired.cookie } });
+    const status = await call(chat.port, 'POST', '/__chat/device/status', { headers: browserHeaders({ cookie: paired.cookie }) });
     expect(status.json).toEqual({ paired: true, deviceId: paired.deviceId, verified: true, userId: 'george', scope: 'decide' });
 
     const message = await call(chat.port, 'POST', '/__chat/device/send', {
@@ -312,7 +314,7 @@ describe('Chat device pairing bridge, flag on (T13)', () => {
 
     for (const reason of ['auth_failed', 'device_not_approved', 'user_removed']) {
       gateway.kill(paired.deviceId, reason);
-      const status = await call(chat.port, 'GET', '/__chat/device/status', { headers: { origin: PUBLIC_ORIGIN, cookie: paired.cookie } });
+      const status = await call(chat.port, 'POST', '/__chat/device/status', { headers: browserHeaders({ cookie: paired.cookie }) });
       expect(status.json).toEqual({ paired: false, reason });
       expect(cookieFrom(status)).toContain('Max-Age=0');
     }
@@ -323,7 +325,7 @@ describe('Chat device pairing bridge, flag on (T13)', () => {
     const chat = await startChat({ gateway });
     const paired = await pair(chat);
     await gateway.close();
-    const status = await call(chat.port, 'GET', '/__chat/device/status', { headers: { origin: PUBLIC_ORIGIN, cookie: paired.cookie } });
+    const status = await call(chat.port, 'POST', '/__chat/device/status', { headers: browserHeaders({ cookie: paired.cookie }) });
     expect(status.json).toEqual({ paired: true, deviceId: paired.deviceId, verified: false });
     expect(status.headers['set-cookie']).toBeUndefined();
     const send = await call(chat.port, 'POST', '/__chat/device/send', {
@@ -398,8 +400,10 @@ describe('Chat device bridge forgery refusals, flag on (T13a)', () => {
     ['a cross-site fetch-metadata request', 'POST', '/__chat/device/send', { origin: PUBLIC_ORIGIN, 'x-tightbeam-chat': '1', 'sec-fetch-site': 'same-site' }],
     ['a pairing POST without the header', 'POST', '/__chat/device/pair', { origin: PUBLIC_ORIGIN }],
     ['a forget POST without the header', 'POST', '/__chat/device/forget', { origin: PUBLIC_ORIGIN }],
-    ['a cross-site status read', 'GET', '/__chat/device/status', { origin: 'https://evil.example' }],
-    ['a status read with no Origin', 'GET', '/__chat/device/status', {}],
+    ['a cross-site status read', 'POST', '/__chat/device/status', { origin: 'https://evil.example', 'x-tightbeam-chat': '1' }],
+    ['a status read with no Origin', 'POST', '/__chat/device/status', { 'x-tightbeam-chat': '1' }],
+    ['a status read without the header', 'POST', '/__chat/device/status', { origin: PUBLIC_ORIGIN }],
+    ['a same-origin GET without Origin, as browsers send it', 'GET', '/__chat/device/status', {}],
     ['a cross-origin preflight', 'OPTIONS', '/__chat/device/send', { origin: 'https://evil.example',
       'access-control-request-method': 'POST', 'access-control-request-headers': 'x-tightbeam-chat' }],
     ['a same-origin preflight', 'OPTIONS', '/__chat/device/send', { origin: PUBLIC_ORIGIN,
@@ -450,6 +454,7 @@ describe('Chat device bridge, flag off', () => {
     for (const [method, pathname, headers, body] of [
       ['GET', '/__chat/device/status', { origin: PUBLIC_ORIGIN }],
       ['GET', '/__chat/device/status', {}],
+      ['POST', '/__chat/device/status', browserHeaders()],
       ['POST', '/__chat/device/pair', browserHeaders(), pairRequest()],
       ['POST', '/__chat/device/send', browserHeaders(), sendBody('c_off')],
       ['POST', '/__chat/device/forget', browserHeaders()],
