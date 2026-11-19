@@ -1,5 +1,18 @@
 [
   {
+    "version": "v0.1.108",
+    "items": [
+      {
+        "title": "Reconnecting means reconnecting",
+        "description": "While Chat is retrying after a Gateway outage, every connection indicator says Reconnecting, including inside apps that host Chat. Chat shows Disconnected only when it has stopped trying. The Reconnecting notice stays in view while you scroll, and connection details offer Reconnect so you can try right away."
+      },
+      {
+        "title": "Gateway compatibility",
+        "description": "Chat continues to support Gateway 0.1.16. Human prompts use the authenticated WebSocket connection by default."
+      }
+    ]
+  },
+  {
     "version": "v0.1.107",
     "items": [
       {
