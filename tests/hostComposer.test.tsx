@@ -146,11 +146,12 @@ function makeAdapter(transport: HostComposerTransport) {
   return { adapter, runtimes };
 }
 
-function installDeclaration(events: HostComposerEvent[], versions: number[] = [1]): void {
+function installDeclaration(events: HostComposerEvent[], versions: number[] = [1], extra: Record<string, unknown> = {}): void {
   const page = window as unknown as Record<string, unknown>;
   const nativeHandler = { postMessage: (value: string) => events.push(JSON.parse(value) as HostComposerEvent) };
   page.webkit = { messageHandlers: { tunerChatHost: nativeHandler } };
   page[HOST_DECLARATION_NAME] = Object.freeze({
+    ...extra,
     versions: Object.freeze([...versions]),
     onEvent: (event: HostComposerEvent) => nativeHandler.postMessage(JSON.stringify(event)),
   });
@@ -517,7 +518,7 @@ describe('versioned host composer seam on the real adapter and surface', () => {
 
     try {
       const ready = await waitForReady(events, 'conversation-a');
-      const snapshotKeys = ['composerHidden', 'optedIn', 'ready', 'settingsRequestRevision'];
+      const snapshotKeys = ['composerHidden', 'optedIn', 'ready', 'restoreRequested', 'settingsRequestRevision'];
       expect(Object.keys(bridge.getSnapshot()).sort()).toEqual(snapshotKeys);
       const ids: string[] = [];
       for (let index = 0; index < 64; index++) {
@@ -1154,6 +1155,146 @@ describe('versioned host composer seam on the real adapter and surface', () => {
   });
 });
 
+type RestoreRequested = Extract<HostComposerEvent, { event: 'restore-requested' }>;
+const restoreDeclaration = { events: Object.freeze({ 'restore-requested': Object.freeze([1]) }) };
+const failureReason = 'Synthetic failure reason for tests';
+
+function restoreEvents(events: readonly HostComposerEvent[]): RestoreRequested[] {
+  return events.filter((event): event is RestoreRequested => event.event === 'restore-requested');
+}
+
+function humanPrompt(sessionKey: string, id: string, seq: number, content: string,
+  extra: Partial<CanonicalMessage> = {}): CanonicalMessage {
+  return { kind: 'message', id, sessionKey, seq, rowVersion: 1, role: 'user', sender: 'user:person', content, raw: {}, ...extra };
+}
+
+function turnFailure(sessionKey: string, promptId: string, seq: number): CanonicalMessage {
+  return { kind: 'message', id: `failure-${promptId}`, sessionKey, seq, rowVersion: 1, role: 'assistant',
+    sender: 'process:tightbeam', messageType: 'substrate', replyToMessageId: promptId,
+    content: `[turn failed]\n${failureReason}`, raw: {} };
+}
+
+function failedBubble(content: string): HTMLElement {
+  const bubble = screen.getByText(content).closest('article');
+  expect(bubble?.getAttribute('data-message-state')).toBe('failed');
+  return bubble as HTMLElement;
+}
+
+describe('host restore-requested for failed turns', () => {
+  const sessionKey = 'restore-session';
+  const promptCorrelation = 'c_323e4567-e89b-42d3-a456-426614174002';
+
+  function failedHistory(transport: HostComposerTransport) {
+    transport.records.set(sessionKey, [
+      humanPrompt(sessionKey, 'prompt-1', 1, 'Synthetic failed prompt', { clientMessageId: promptCorrelation, deviceId: 'device-2' }),
+      turnFailure(sessionKey, 'prompt-1', 2),
+    ]);
+  }
+
+  it.each([
+    ['no events field', {}],
+    ['an unsupported event version', { events: { 'restore-requested': [2] } }],
+    ['a malformed events field', { events: 'restore-requested' }],
+  ])('keeps today’s host behaviour for a host with %s', async (_label, extra) => {
+    const transport = new HostComposerTransport();
+    failedHistory(transport);
+    const events: HostComposerEvent[] = [];
+    installDeclaration(events, [1], extra);
+    openChat(transport, sessionKey);
+    await waitForReady(events, sessionKey);
+    await waitFor(() => expect(document.querySelector('textarea')).toBeNull());
+
+    const bubble = failedBubble('Synthetic failed prompt');
+    expect(within(bubble).getByText('Message failed.')).toBeTruthy();
+    expect(within(bubble).getByText(failureReason)).toBeTruthy();
+    expect(within(bubble).queryByRole('button', { name: 'Edit and resend' })).toBeNull();
+    expect(events.some(event => event.event === 'declined')).toBe(false);
+    expect(restoreEvents(events)).toEqual([]);
+  });
+
+  it('emits exactly one restore-requested event per tap for a declared host, never automatically', async () => {
+    const transport = new HostComposerTransport();
+    failedHistory(transport);
+    const events: HostComposerEvent[] = [];
+    installDeclaration(events, [1], restoreDeclaration);
+    const { runtimes } = openChat(transport, sessionKey);
+    const ready = await waitForReady(events, sessionKey);
+    const bubble = failedBubble('Synthetic failed prompt');
+    await within(bubble).findByRole('button', { name: 'Edit and resend' });
+    // The failed bubble and its verbatim reason are unchanged by the action.
+    expect(within(bubble).getByText('Message failed.')).toBeTruthy();
+    expect(within(bubble).getByText(failureReason)).toBeTruthy();
+
+    // Readiness, connection updates and history refreshes never emit it.
+    await waitFor(() => expect(connectionEvents(events).length).toBeGreaterThan(0));
+    await act(async () => { await runtimes[0].rebuild({ restart: true }); });
+    await waitFor(() => expect(within(failedBubble('Synthetic failed prompt'))
+      .getByRole('button', { name: 'Edit and resend' })).toBeTruthy());
+    expect(restoreEvents(events)).toEqual([]);
+
+    fireEvent.click(within(failedBubble('Synthetic failed prompt')).getByRole('button', { name: 'Edit and resend' }));
+    expect(restoreEvents(events)).toEqual([{
+      event: 'restore-requested', version: 1, lifetimeId: ready.lifetimeId, sessionKey,
+      messageId: 'prompt-1', correlationId: promptCorrelation, content: 'Synthetic failed prompt',
+    }]);
+    fireEvent.click(within(failedBubble('Synthetic failed prompt')).getByRole('button', { name: 'Edit and resend' }));
+    expect(restoreEvents(events)).toHaveLength(2);
+    expect(restoreEvents(events)[1]).toEqual(restoreEvents(events)[0]);
+
+    // Chat neither sends, retries nor restores into its hidden composer.
+    expect(transport.submissions).toEqual([]);
+    expect(document.querySelector('textarea')).toBeNull();
+    expect(events.some(event => ['accepted', 'delivered', 'failed', 'uncertain', 'rejected'].includes(event.event))).toBe(false);
+    expect(failedBubble('Synthetic failed prompt').querySelector('.tb-chat-persisted-failure-reason')?.textContent).toBe(failureReason);
+  });
+
+  it('offers the action only on failed human prompts owned by the viewer', async () => {
+    const transport = new HostComposerTransport();
+    transport.records.set(sessionKey, [
+      humanPrompt(sessionKey, 'answered', 1, 'Synthetic answered prompt'),
+      { kind: 'message', id: 'answer', sessionKey, seq: 2, rowVersion: 1, role: 'assistant', sender: 'assistant-service',
+        messageType: 'assistant', replyToMessageId: 'answered', content: 'Synthetic answer', raw: {} },
+      humanPrompt(sessionKey, 'other-user', 3, 'Synthetic prompt from someone else', { sender: 'user:someone-else' }),
+      turnFailure(sessionKey, 'other-user', 4),
+      humanPrompt(sessionKey, 'own-failed', 5, 'Synthetic own failed prompt'),
+      turnFailure(sessionKey, 'own-failed', 6),
+    ]);
+    const events: HostComposerEvent[] = [];
+    installDeclaration(events, [1], restoreDeclaration);
+    openChat(transport, sessionKey);
+    await waitForReady(events, sessionKey);
+    await within(failedBubble('Synthetic own failed prompt')).findByRole('button', { name: 'Edit and resend' });
+    expect(screen.getAllByRole('button', { name: 'Edit and resend' })).toHaveLength(1);
+    expect(screen.getByText('Synthetic answered prompt').closest('article')?.querySelector('button')).toBeNull();
+    expect(screen.getByText('Synthetic answer').closest('article')?.querySelector('button')).toBeNull();
+    const other = screen.getByText('Synthetic prompt from someone else').closest('article');
+    expect(other && within(other).queryByRole('button', { name: 'Edit and resend' })).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit and resend' }));
+    const [event] = restoreEvents(events);
+    expect(event).toMatchObject({ messageId: 'own-failed', content: 'Synthetic own failed prompt' });
+    // A row with no client message ID carries no correlation.
+    expect('correlationId' in event).toBe(false);
+    expect(restoreEvents(events)).toHaveLength(1);
+  });
+
+  it('hides the action while the lifetime is not ready and emits nothing for it', async () => {
+    const transport = new HostComposerTransport();
+    failedHistory(transport);
+    const events: HostComposerEvent[] = [];
+    installDeclaration(events, [1], restoreDeclaration);
+    openChat(transport, sessionKey);
+    const ready = await waitForReady(events, sessionKey);
+    await within(failedBubble('Synthetic failed prompt')).findByRole('button', { name: 'Edit and resend' });
+    transport.authorizationLost = true;
+    act(() => commandEntry()({ type: 'send', lifetimeId: ready.lifetimeId, sessionKey,
+      correlationId: correlation, content: 'synthetic send while access expires' }));
+    await waitFor(() => expect(events.some(event => event.event === 'unavailable')).toBe(true));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Edit and resend' })).toBeNull());
+    expect(restoreEvents(events)).toEqual([]);
+  });
+});
+
 describe('native photo host commands', () => {
   const photo = { filename: 'photo.png', mimeType: 'image/png', data: 'iVBORw0KGgo=' };
   class PhotoTransport extends HostComposerTransport {
@@ -1347,5 +1488,56 @@ describe('native photo host commands', () => {
     act(() => commandEntry()({ type: 'send', ...ready, correlationId: correlation, content: '', attachments: [photo], retry: true }));
     await waitFor(() => expect(events.some(e => e.event === 'uncertain' && e.reason === 'retry-unavailable')).toBe(true));
     expect(transport.uploads).toEqual([]); expect(transport.submissions).toEqual([]);
+  });
+
+  it('hands the host the restorable photo manifest Chat holds for a failed turn', async () => {
+    stubImagePreparation();
+    const transport = new PhotoTransport();
+    transport.nextSend = async submission => {
+      const row = transport.addCanonical(submission);
+      return { outcome: 'accepted', messageId: row.id };
+    };
+    const events: HostComposerEvent[] = [];
+    installDeclaration(events, [1], restoreDeclaration);
+    openChat(transport, 'photo-session');
+    const ready = await waitForReady(events, 'photo-session');
+    act(() => commandEntry()({ type: 'send', ...ready, correlationId: correlation, content: 'Synthetic photo prompt', attachments: [photo] }));
+    await waitFor(() => expect(events.some(e => e.event === 'delivered')).toBe(true));
+    const prompt = transport.records.get('photo-session')!.at(-1)!;
+    act(() => transport.emit(turnFailure('photo-session', prompt.id, 100)));
+    const button = await within(await waitFor(() => failedBubble('Synthetic photo prompt')))
+      .findByRole('button', { name: 'Edit and resend' });
+    expect(restoreEvents(events)).toEqual([]);
+
+    fireEvent.click(button);
+    await waitFor(() => expect(restoreEvents(events)).toHaveLength(1));
+    expect(restoreEvents(events)[0]).toEqual({
+      event: 'restore-requested', version: 1, lifetimeId: ready.lifetimeId, sessionKey: 'photo-session',
+      messageId: prompt.id, correlationId: correlation, content: 'Synthetic photo prompt',
+      attachments: [{ filename: 'photo.png', mimeType: 'image/png', data: photo.data }],
+    });
+    expect(transport.submissions).toHaveLength(1);
+    expect(transport.uploads).toHaveLength(1);
+  });
+
+  it('flags photos Chat cannot restore instead of hiding the action', async () => {
+    const transport = new PhotoTransport();
+    transport.records.set('photo-session', [
+      humanPrompt('photo-session', 'photo-prompt', 1, 'Synthetic photo prompt from history', {
+        attachments: [{ assetId: 'asset-history', mimeType: 'image/png', filename: 'history.png', size: 8 }] }),
+      turnFailure('photo-session', 'photo-prompt', 2),
+    ]);
+    const events: HostComposerEvent[] = [];
+    installDeclaration(events, [1], restoreDeclaration);
+    openChat(transport, 'photo-session');
+    const ready = await waitForReady(events, 'photo-session');
+    fireEvent.click(await within(failedBubble('Synthetic photo prompt from history'))
+      .findByRole('button', { name: 'Edit and resend' }));
+    expect(restoreEvents(events)).toEqual([{
+      event: 'restore-requested', version: 1, lifetimeId: ready.lifetimeId, sessionKey: 'photo-session',
+      messageId: 'photo-prompt', content: 'Synthetic photo prompt from history', attachmentsUnavailable: true,
+    }]);
+    expect(transport.uploads).toEqual([]);
+    expect(transport.submissions).toEqual([]);
   });
 });
