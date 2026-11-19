@@ -1920,7 +1920,7 @@ describe('conversation surface', () => {
     const runtime = new FakeRuntime('snapshot-outage', {
       conversationError: 'Tightbeam REST request failed with HTTP 502.',
       liveError: 'Live updates are paused while conversation data is unavailable.',
-      liveConnectionState: 'disconnected',
+      liveConnectionState: 'reconnecting',
     });
     render(<TightbeamChat sessionKey="snapshot-outage" adapter={adapterFor(runtime)} />);
 
@@ -1935,7 +1935,10 @@ describe('conversation surface', () => {
     expect(screen.queryByRole('button', { name: 'Reconnect' })).toBeNull();
     expect(screen.queryByRole('link', { name: 'Open the configured conversation' })).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Connection status: Disconnected. Show details' }));
+    // The status dot says the same thing as the notice while Chat retries.
+    const statusButton = screen.getByRole('button', { name: 'Connection status: Reconnecting. Show details' });
+    expect(statusButton.querySelector('.tb-chat-status-dot')?.classList.contains('tb-chat-status-stale')).toBe(true);
+    fireEvent.click(statusButton);
     const details = screen.getByRole('dialog', { name: 'Connection details' });
     expect(details.textContent).toContain('Reconnecting…');
     expect(details.textContent).not.toContain('HTTP 502');
@@ -3049,8 +3052,9 @@ describe('conversation surface', () => {
         await failure;
       });
       await waitFor(() => expect(runtime.getSnapshot().historyError).toBe('The request failed'));
-      expect(log.querySelector('.tb-chat-history-loading')).toBeNull();
-      expect(within(log).getByRole('alert').textContent).toContain('Earlier messages could not be loaded');
+      const chat = log.closest<HTMLElement>('.tb-chat')!;
+      expect(chat.querySelector('.tb-chat-history-loading')).toBeNull();
+      expect(within(chat).getByRole('alert').textContent).toContain('Earlier messages could not be loaded');
       expect(layout.offset(anchor)).toBe(anchorBeforeFailure);
 
       const afterFailure = layout.scrollTop;
@@ -3073,18 +3077,97 @@ describe('conversation surface', () => {
     }
   });
 
+  it('offers Reconnect in the connection details for as long as the feed is reconnecting', () => {
+    const runtime = new FakeRuntime('sustained-reconnect', {
+      records: [row('sustained-reconnect', 'kept', 'Existing conversation text')],
+      liveError: 'Connection unavailable',
+      liveConnectionState: 'reconnecting',
+    });
+    render(<TightbeamChat sessionKey="sustained-reconnect" adapter={adapterFor(runtime)} />);
+
+    const openDetails = () => {
+      const button = screen.getByRole('button', { name: 'Connection status: Reconnecting. Show details' });
+      if (!screen.queryByRole('dialog', { name: 'Connection details' })) fireEvent.click(button);
+      return screen.getByRole('dialog', { name: 'Connection details' });
+    };
+    expect(within(openDetails()).getByRole('button', { name: 'Reconnect' })).toBeTruthy();
+
+    // A brief reopen during a sustained outage clears liveError while Chat is
+    // still reconnecting; the manual Reconnect stays available and every label
+    // still says Reconnecting.
+    act(() => runtime.update({ liveError: undefined, liveConnectionState: 'reconnecting' }));
+    const details = openDetails();
+    expect(within(details).getByRole('button', { name: 'Reconnect' })).toBeTruthy();
+    expect(screen.queryByText(/Disconnected/)).toBeNull();
+    fireEvent.click(within(details).getByRole('button', { name: 'Reconnect' }));
+    expect(runtime.rebuildOptions.at(-1)).toEqual({ restart: true });
+
+    act(() => runtime.update({ liveConnectionState: 'connected' }));
+    if (!screen.queryByRole('dialog', { name: 'Connection details' })) {
+      fireEvent.click(screen.getByRole('button', { name: 'Connection status: Connected. Show details' }));
+    }
+    expect(within(screen.getByRole('dialog', { name: 'Connection details' }))
+      .queryByRole('button', { name: 'Reconnect' })).toBeNull();
+  });
+
+  it('keeps the reconnecting notice in view and clear of the transcript wherever the reader scrolls', () => {
+    const sessionKey = 'reconnecting-notice-scroll';
+    const records = Array.from({ length: 12 }, (_, index) => row(sessionKey, `message-${index + 1}`,
+      `Outage message ${index + 1}`, { seq: index + 1 }));
+    const runtime = new FakeRuntime(sessionKey, {
+      records,
+      conversationError: 'Tightbeam REST request failed with HTTP 502.',
+      liveError: 'Live updates are paused while conversation data is unavailable.',
+      liveConnectionState: 'reconnecting',
+    });
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+
+    const log = screen.getByRole('log');
+    const chat = log.closest<HTMLElement>('.tb-chat')!;
+    const content = log.querySelector<HTMLElement>('.tb-chat-message-content')!;
+    const layout = installViewportLayout(log);
+    try {
+      const notice = screen.getByRole('status');
+      expect(notice.textContent).toContain('Reconnecting…');
+      // The notice belongs to the non-scrolling Chat surface, not the scrolling
+      // transcript, so scrolling the transcript cannot carry it out of view.
+      expect(notice.parentElement).toBe(chat);
+      expect(log.contains(notice)).toBe(false);
+      expect(chat.querySelector('.tb-chat-composer')?.contains(notice)).toBe(false);
+      // The transcript reserves the notice's height, so the notice does not cover its first rows.
+      expect(content.classList.contains('tb-chat-runtime-notice-reserved')).toBe(true);
+
+      for (const position of [0, 400, 120]) {
+        fireEvent.wheel(log, { deltaY: position ? 1 : -1 });
+        layout.setScrollTop(position);
+        fireEvent.scroll(log);
+        const current = screen.getByRole('status');
+        expect(current).toBe(notice);
+        expect(current.textContent).toContain('Reconnecting…');
+        expect(current.parentElement).toBe(chat);
+      }
+      expect(screen.getByRole('button', { name: 'Connection status: Reconnecting. Show details' })).toBeTruthy();
+
+      act(() => runtime.update({ conversationError: undefined, liveError: undefined, liveConnectionState: 'connected' }));
+      expect(screen.queryByText('Reconnecting…')).toBeNull();
+    } finally {
+      layout.restore();
+    }
+  });
+
   it('keeps the older-page status outside the scrollable message layout', () => {
     const runtime = new FakeRuntime('loading-status', { loadingOlder: true });
     render(<TightbeamChat sessionKey="loading-status" adapter={adapterFor(runtime)} />);
 
     const viewport = screen.getByRole('log');
-    const status = viewport.querySelector<HTMLElement>('.tb-chat-history-loading');
+    const chat = viewport.closest<HTMLElement>('.tb-chat')!;
+    const status = chat.querySelector<HTMLElement>('.tb-chat-history-loading');
     expect(status?.getAttribute('role')).toBe('status');
     expect(status?.classList.contains('tb-chat-caption-neutral')).toBe(true);
     expect(status?.classList.contains('tb-chat-runtime-notice')).toBe(true);
     expect(status?.textContent).toBe('Loading earlier messages…');
-    expect(status?.parentElement).toBe(viewport);
-    expect(viewport.querySelector('.tb-chat-message-content')?.contains(status)).toBe(false);
+    expect(status?.parentElement).toBe(chat);
+    expect(viewport.contains(status)).toBe(false);
   });
 
   it('keeps Retry loading messages on the history error caption', async () => {
@@ -3113,7 +3196,8 @@ describe('conversation surface', () => {
 
     const viewport = screen.getByRole('log');
     act(() => runtime.update({ loadingOlder: true }));
-    expect(viewport.querySelector('.tb-chat-history-loading')?.textContent).toBe('Loading earlier messages…');
+    expect(viewport.closest('.tb-chat')?.querySelector('.tb-chat-history-loading')?.textContent)
+      .toBe('Loading earlier messages…');
     expect(viewport.querySelector('.tb-chat-tool-history-status-placeholder')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Tool calls' })).toBeNull();
     act(() => runtime.update({ loadingOlder: false }));
