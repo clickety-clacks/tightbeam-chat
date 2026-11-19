@@ -42,14 +42,16 @@ export interface DeviceSendCallbacks {
  * persisted outcome, in the same batch. Key on those two fields, not on a missing
  * id or seq. Everything else reaches the page through the normal transcript read.
  */
+// The frame's sessionKey (W7: "the socket's session key") is not compared: the
+// reply-to id already names this send, and a socket's session may differ from the
+// conversation the command was typed in. art_743d47c0 is the final contract.
 export function ephemeralCommandReplies(frames: unknown,
   submission: { readonly sessionKey: string; readonly clientMessageId: string }): EphemeralReply[] {
   if (!Array.isArray(frames)) return [];
   return frames.filter((frame): frame is Record<string, unknown> => plainObject(frame) &&
     frame.type === 'message' && frame.ephemeral === true &&
     frame.replyToClientMessageId === submission.clientMessageId &&
-    typeof frame.content === 'string' && frame.content.length > 0 &&
-    (frame.sessionKey === undefined || frame.sessionKey === submission.sessionKey))
+    typeof frame.content === 'string' && frame.content.length > 0)
     .map((frame) => ({ sessionKey: submission.sessionKey, clientMessageId: submission.clientMessageId,
       content: frame.content as string }));
 }

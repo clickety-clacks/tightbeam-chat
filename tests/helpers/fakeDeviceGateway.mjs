@@ -98,6 +98,7 @@ function changesSocket(request, socket, history) {
  * - messageError(frame): returns an error frame to send instead of an ack
  * - ephemeralDelayMs: delay before the ephemeral reply to recovery-enroll / approve-device
  * - ephemeralBeforeAck: send that ephemeral reply first, before the ack
+ * - ephemeralSessionKey: the session key the ephemeral reply names (W7: the socket's)
  * - history: { sessionKey, userId, messages } serves the read API and /ws/changes the
  *   Chat page loads through its provisioned (organization) credential
  */
@@ -210,7 +211,7 @@ export async function startFakeDeviceGateway(options = {}) {
           : frame.content === '/tightbeam approve-device'
             ? `Pairing code ${FAKE_ISSUED_CODE}, valid 10 minutes.` : undefined;
         const sendEphemeral = () => send({ type: 'message', ephemeral: true, id: `e_${frame.id}`, timestamp: Date.now(),
-          role: 'assistant', sessionKey: frame.sessionKey, replyToClientMessageId: frame.id, content: ephemeral });
+          role: 'assistant', sessionKey: options.ephemeralSessionKey ?? frame.sessionKey, replyToClientMessageId: frame.id, content: ephemeral });
         if (ephemeral && options.ephemeralBeforeAck) sendEphemeral();
         setTimeout(() => {
           if (connection.closed || connection.replaced) return;

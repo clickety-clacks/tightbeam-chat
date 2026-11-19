@@ -313,6 +313,20 @@ describe('Chat device pairing bridge, flag on (T13)', () => {
     for (const line of captured) expect(line).not.toContain(FAKE_RECOVERY_SECRET);
   });
 
+  it('keeps the ephemeral reply to this command even when it names another session (W7: the socket\'s)', async () => {
+    const gateway = await startGateway({ ephemeralSessionKey: 'agent:main:clawline:george:main' });
+    const chat = await startChat({ gateway });
+    const paired = await pair(chat);
+    const response = await call(chat.port, 'POST', '/__chat/device/send', {
+      headers: browserHeaders({ cookie: paired.cookie }), body: sendBody('c_elsewhere', '/tightbeam recovery-enroll') });
+    expect(response.json).toMatchObject({ outcome: 'accepted', ack: { id: 'c_elsewhere' } });
+    const ephemeral = response.json.messages.filter((frame) => frame.ephemeral === true);
+    expect(ephemeral).toHaveLength(1);
+    expect(ephemeral[0]).toMatchObject({ sessionKey: 'agent:main:clawline:george:main', replyToClientMessageId: 'c_elsewhere',
+      content: expect.stringContaining(FAKE_RECOVERY_SECRET) });
+    for (const line of captured) expect(line).not.toContain(FAKE_RECOVERY_SECRET);
+  });
+
   it('reports complete:false with no secret when a takeover lands after the ack and before the ephemeral frame', async () => {
     const gateway = await startGateway({ ephemeralDelayMs: 400 });
     const timings = { ...FAST_TIMINGS, commandQuietMs: 800, commandOutcomeTimeoutMs: 1_500 };

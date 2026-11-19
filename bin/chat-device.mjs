@@ -307,8 +307,11 @@ function sendAttempt(gatewayBase, publicOrigin, credential, message, timings) {
     const command = isCommand(message.content);
     // A command's replies are complete once the socket has been quiet for commandQuietMs.
     const endCommandReplies = () => finish({ kind: 'accepted', ack, messages, complete: true });
+    // A reply to this command (W7: ephemeral:true, replyToClientMessageId = our id) is
+    // kept whatever session key it names; other frames only for this conversation.
     const isSessionMessage = (frame) => frame.type === 'message' &&
-      (frame.sessionKey === undefined || frame.sessionKey === message.sessionKey);
+      (frame.replyToClientMessageId === message.id ||
+        frame.sessionKey === undefined || frame.sessionKey === message.sessionKey);
     const socket = openGatewaySocket(gatewayBase, publicOrigin, {
       onOpen: () => socket.send(authFrame(credential.deviceId, credential.token)),
       onFrame: (frame) => {
