@@ -20,11 +20,13 @@ const SEND_BODY_LIMIT_BYTES = 4 * 1024 * 1024;
 const OPERATION_TIMEOUT_MS = 15_000;
 const SYNC_GRACE_MS = 3_000;
 const COMMAND_OUTCOME_TIMEOUT_MS = 10_000;
+const COMMAND_QUIET_MS = 1_000;
 
 const defaultTimings = Object.freeze({
   operationTimeoutMs: OPERATION_TIMEOUT_MS,
   syncGraceMs: SYNC_GRACE_MS,
   commandOutcomeTimeoutMs: COMMAND_OUTCOME_TIMEOUT_MS,
+  commandQuietMs: COMMAND_QUIET_MS,
   retryDelayMs: () => 50 + Math.floor(Math.random() * 100),
 });
 
@@ -268,7 +270,8 @@ function isCommand(content) {
 /**
  * One per-send attempt (W5): auth, wait out replay, send the message frame with
  * the browser's id, wait for its ack or error, and for a /tightbeam command
- * collect the echo and outcome message frames.
+ * collect every following message frame for the session (echo, outcome, and any
+ * ephemeral secret or code) until the socket is quiet.
  */
 function sendAttempt(gatewayBase, publicOrigin, credential, message, timings) {
   return new Promise((resolve) => {
@@ -278,12 +281,14 @@ function sendAttempt(gatewayBase, publicOrigin, credential, message, timings) {
     const messages = [];
     let graceTimer;
     let outcomeTimer;
+    let quietTimer;
     const finish = (result) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       clearTimeout(graceTimer);
       clearTimeout(outcomeTimer);
+      clearTimeout(quietTimer);
       socket.close();
       resolve(result);
     };
@@ -299,6 +304,8 @@ function sendAttempt(gatewayBase, publicOrigin, credential, message, timings) {
       }));
     };
     const command = isCommand(message.content);
+    // A command's replies are complete once the socket has been quiet for commandQuietMs.
+    const endCommandReplies = () => finish({ kind: 'accepted', ack, messages, complete: true });
     const socket = openGatewaySocket(gatewayBase, publicOrigin, {
       onOpen: () => socket.send(authFrame(credential.deviceId, credential.token)),
       onFrame: (frame) => {
@@ -322,6 +329,7 @@ function sendAttempt(gatewayBase, publicOrigin, credential, message, timings) {
             if (!command) { finish({ kind: 'accepted', ack, messages, complete: true }); return; }
             outcomeTimer = setTimeout(() => finish({ kind: 'accepted', ack, messages, complete: false }),
               timings.commandOutcomeTimeoutMs);
+            quietTimer = setTimeout(endCommandReplies, timings.commandQuietMs);
           } else if (frame.type === 'error' && (frame.messageId === message.id || frame.id === message.id)) {
             finish({ kind: 'refused', error: { code: typeof frame.code === 'string' && frame.code ? frame.code : 'refused',
               ...(typeof frame.message === 'string' ? { message: frame.message } : {}) } });
@@ -329,8 +337,11 @@ function sendAttempt(gatewayBase, publicOrigin, credential, message, timings) {
           return;
         }
         if (frame.type === 'message' && (frame.sessionKey === undefined || frame.sessionKey === message.sessionKey)) {
+          // Echo, outcome, and any ephemeral reply (a recovery secret or pairing code) for
+          // this device only. They pass through to this response and are never recorded.
           messages.push(frame);
-          if (messages.length >= 2) finish({ kind: 'accepted', ack, messages, complete: true });
+          clearTimeout(quietTimer);
+          quietTimer = setTimeout(endCommandReplies, timings.commandQuietMs);
         }
       },
       onEnd: (reason) => {
@@ -474,7 +485,7 @@ export function createDeviceBridge({ publicOrigin, resolveGateway, timings: timi
       return;
     }
     if (route === '/forget') {
-      // Forgetting clears this browser's cookie only; revocation stays a Clawline act.
+      // Forgetting clears this browser's cookie only; revoking the device is a separate act.
       writeJson(response, 200, { paired: false }, clearDeviceCookie());
       return;
     }

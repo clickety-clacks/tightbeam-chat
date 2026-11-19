@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createChatServer } from '../server/chat-server.mjs';
-import { startFakeDeviceGateway } from './helpers/fakeDeviceGateway.mjs';
+import { FAKE_ISSUED_CODE, FAKE_RECOVERY_SECRET, startFakeDeviceGateway } from './helpers/fakeDeviceGateway.mjs';
 
 const PUBLIC_ORIGIN = 'https://chat.tailnet.example';
 const SESSION = 'agent:main:george';
@@ -15,7 +15,8 @@ const PRINCIPAL = 'george';
 const ORG_TOKEN = 'fixture-organization-credential';
 const COOKIE_NAME = '__Secure-tb-chat-device';
 const RELEASE = { tag: 'v0.1.2', sourceCommit: '1234567890abcdef1234567890abcdef12345678' };
-const FAST_TIMINGS = { operationTimeoutMs: 2_000, syncGraceMs: 200, commandOutcomeTimeoutMs: 500, retryDelayMs: () => 100 };
+const FAST_TIMINGS = { operationTimeoutMs: 2_000, syncGraceMs: 200, commandOutcomeTimeoutMs: 1_000, commandQuietMs: 150,
+  retryDelayMs: () => 100 };
 
 const cleanups = [];
 const temporaryRoots = [];
@@ -148,7 +149,8 @@ describe('Chat device pairing bridge, flag on (T13)', () => {
     const response = await call(chat.port, 'POST', '/__chat/device/pair', { headers: browserHeaders(), body: rawBody });
 
     expect(response.status).toBe(200);
-    expect(response.json).toEqual({ success: true, userId: 'george', deviceId: request.deviceId, scope: 'decide', signedIn: true });
+    // Stage 1 has no scopes; Chat neither requires nor assumes one.
+    expect(response.json).toEqual({ success: true, userId: 'george', deviceId: request.deviceId, signedIn: true });
     expect(gateway.state.rawPairTexts).toEqual([rawBody]);
     // First sign-in happened at once (W2) with the new device credential.
     const auth = gateway.state.clientFrames.filter((frame) => frame.type === 'auth');
@@ -187,7 +189,7 @@ describe('Chat device pairing bridge, flag on (T13)', () => {
   it('refuses a paired credential that fails first sign-in as dead, without a cookie', async () => {
     const gateway = await startGateway({ pairReply: (frame, state) => {
       const token = 'tbt_dead';
-      state.devices.set(token, { deviceId: frame.deviceId, userId: 'george', scope: 'decide', dead: 'device_not_approved' });
+      state.devices.set(token, { deviceId: frame.deviceId, userId: 'george', dead: 'device_not_approved' });
       return { type: 'pair_result', success: true, token, userId: 'george' };
     } });
     const chat = await startChat({ gateway });
@@ -224,7 +226,7 @@ describe('Chat device pairing bridge, flag on (T13)', () => {
 
     const paired = await pair(chat);
     const status = await call(chat.port, 'POST', '/__chat/device/status', { headers: browserHeaders({ cookie: paired.cookie }) });
-    expect(status.json).toEqual({ paired: true, deviceId: paired.deviceId, verified: true, userId: 'george', scope: 'decide' });
+    expect(status.json).toEqual({ paired: true, deviceId: paired.deviceId, verified: true, userId: 'george' });
 
     const message = await call(chat.port, 'POST', '/__chat/device/send', {
       headers: browserHeaders({ cookie: paired.cookie }), body: sendBody('c_message_1') });
@@ -257,6 +259,44 @@ describe('Chat device pairing bridge, flag on (T13)', () => {
       ]);
     expect(gateway.state.httpRequests).toEqual([]);
     expectNoTokenAnywhere(gateway, status.text, message.text, command.text);
+  });
+
+  it('passes a scope through for display only when the Gateway reports one', async () => {
+    const gateway = await startGateway({ pairReply: (frame, state) => {
+      state.devices.set('tbt_full', { deviceId: frame.deviceId, userId: 'george', scope: 'full' });
+      return { type: 'pair_result', success: true, token: 'tbt_full', userId: 'george', scope: 'full' };
+    } });
+    const chat = await startChat({ gateway });
+    const paired = await pair(chat);
+    expect(paired.response.json).toMatchObject({ success: true, scope: 'full', signedIn: true });
+    const status = await call(chat.port, 'POST', '/__chat/device/status', { headers: browserHeaders({ cookie: paired.cookie }) });
+    expect(status.json).toMatchObject({ paired: true, scope: 'full' });
+  });
+
+  it.each([
+    ['/tightbeam recovery-enroll', FAKE_RECOVERY_SECRET],
+    ['/tightbeam approve-device', FAKE_ISSUED_CODE],
+  ])('returns every reply to %s, including the ephemeral one, and never records it', async (content, secret) => {
+    // The ephemeral frame arrives after the echo and outcome; the quiet window still catches it.
+    const gateway = await startGateway({ ephemeralDelayMs: 100 });
+    const chat = await startChat({ gateway });
+    const paired = await pair(chat);
+    const response = await call(chat.port, 'POST', '/__chat/device/send', {
+      headers: browserHeaders({ cookie: paired.cookie }), body: sendBody('c_enroll', content) });
+    expect(response.status).toBe(200);
+    expect(response.json).toMatchObject({ outcome: 'accepted', complete: true, ack: { id: 'c_enroll' } });
+    expect(response.json.messages).toHaveLength(3);
+    expect(response.json.messages.slice(0, 2).map((frame) => frame.ephemeral)).toEqual([undefined, undefined]);
+    expect(response.json.messages[2]).toEqual({ type: 'message', ephemeral: true, role: 'assistant', sessionKey: SESSION,
+      replyToClientMessageId: 'c_enroll', content: expect.stringContaining(secret) });
+    expect(response.headers['set-cookie']).toBeUndefined();
+    for (const line of captured) expect(line).not.toContain(secret);
+    const files = await fs.readdir(chat.root, { recursive: true });
+    for (const file of files) {
+      const filename = path.join(chat.root, file);
+      if ((await fs.stat(filename)).isFile()) expect(await fs.readFile(filename, 'utf8')).not.toContain(secret);
+    }
+    expectNoTokenAnywhere(gateway, response.text);
   });
 
   it('relays a Gateway refusal for the message id', async () => {

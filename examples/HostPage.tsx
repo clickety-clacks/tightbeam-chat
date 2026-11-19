@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { TightbeamChat, createPublic019Transport, createTightbeamAdapter, type TightbeamAdapter } from '../src';
 import { createActivitySummaryTransport } from '../src/activitySummaries';
 import { browserHost, type BrowserDevice } from './browserHost';
 import { DevicePairingBar, type BrowserDeviceState } from './DevicePairingBar';
-import { fetchDeviceStatus, forgetBrowserDevice, pairBrowser, type PairOutcome } from './devicePairing';
+import { fetchDeviceStatus, forgetBrowserDevice, pairBrowser, type EphemeralReply, type PairOutcome } from './devicePairing';
+import { EphemeralRepliesPanel, type ShownEphemeralReply } from './EphemeralRepliesPanel';
 import { resolveEntrySelection, type ChatTarget, type ConfiguredChatTarget } from './entry';
 
 export function HostPage({ defaultTarget, configurationError }: {
@@ -25,6 +26,8 @@ export function HostPage({ defaultTarget, configurationError }: {
     : device.state.kind === 'paired' || device.state.kind === 'revoked' ? `device:${device.state.deviceId}`
       : device.state.kind === 'unpaired' ? 'service' : undefined;
   const onCredentialLost = device.onCredentialLost;
+  const ephemeral = useEphemeralReplies();
+  const onEphemeral = ephemeral.add;
 
   useEffect(() => {
     if (!selected || !sendMode) {
@@ -35,7 +38,7 @@ export function HostPage({ defaultTarget, configurationError }: {
     setError('');
     try {
       const paired: BrowserDevice | undefined = sendMode.startsWith('device:')
-        ? { deviceId: sendMode.slice('device:'.length), onCredentialLost }
+        ? { deviceId: sendMode.slice('device:'.length), onCredentialLost, onEphemeral }
         : undefined;
       const host = browserHost(selected, paired);
       const origin = window.location.origin;
@@ -52,7 +55,7 @@ export function HostPage({ defaultTarget, configurationError }: {
     }
   }, [selected?.gateway, selected?.sessionKey, selected?.principalKey, selected?.deviceId,
     selected?.restHumanSendEnabled, selected?.submitter?.identity, selected?.submitter?.displayName,
-    sendMode, onCredentialLost]);
+    sendMode, onCredentialLost, onEphemeral]);
 
   const bar = pairingEnabled && <DevicePairingBar state={device.state} onPair={device.pair}
     onForget={device.forget} onRetry={device.check} onUseService={device.useService} />;
@@ -60,7 +63,10 @@ export function HostPage({ defaultTarget, configurationError }: {
     const chat = <TightbeamChat sessionKey={selected.sessionKey} adapter={adapter}
       configuredConversationHref={configuredConversationHref}
       submitterAttributionEnabled={selected.restHumanSendEnabled === true} />;
-    return bar ? <div className="chat-device-layout">{bar}{chat}</div> : chat;
+    return bar ? <div className="chat-device-layout">{bar}
+      <EphemeralRepliesPanel replies={ephemeral.replies.filter((reply) => reply.sessionKey === selected.sessionKey)}
+        onDismiss={ephemeral.dismiss} />
+      {chat}</div> : chat;
   }
   if (resolution.kind === 'configuration-error') return <main className="chat-entry-state">
     <p className="tb-chat-empty">No conversation is available.</p>
@@ -145,4 +151,16 @@ function useBrowserDevice(target: ChatTarget | undefined) {
 
   const check = useCallback(() => setRevision((value) => value + 1), []);
   return { state, pair, forget, onCredentialLost, useService, check };
+}
+
+/** Page-memory only: secrets and codes shown here are never stored anywhere and vanish on reload. */
+function useEphemeralReplies() {
+  const [replies, setReplies] = useState<readonly ShownEphemeralReply[]>([]);
+  const nextKey = useRef(0);
+  const add = useCallback((incoming: readonly EphemeralReply[]) => {
+    const shown = incoming.map((reply) => ({ ...reply, key: nextKey.current++ }));
+    setReplies((current) => [...current, ...shown]);
+  }, []);
+  const dismiss = useCallback((key: number) => setReplies((current) => current.filter((reply) => reply.key !== key)), []);
+  return { replies, add, dismiss };
 }

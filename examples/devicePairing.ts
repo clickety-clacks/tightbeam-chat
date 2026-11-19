@@ -18,6 +18,38 @@ export type PairOutcome =
 /** Called when the bridge reports this browser's device credential is gone (cookie cleared). */
 export type DeviceCredentialLost = (reason: string) => void;
 
+/** A reply meant only for the requesting page: a recovery secret or a pairing code. */
+export interface EphemeralReply {
+  readonly sessionKey: string;
+  readonly clientMessageId: string;
+  readonly content: string;
+}
+
+export interface DeviceSendCallbacks {
+  readonly onCredentialLost?: DeviceCredentialLost;
+  /** Receives ephemeral replies; they live only in page memory and are never persisted. */
+  readonly onEphemeral?: (replies: readonly EphemeralReply[]) => void;
+}
+
+/**
+ * The single place that decides which command reply frames are ephemeral. Proposed
+ * contract W7 (not yet confirmed by the Gateway): `{type:'message', ephemeral:true,
+ * role:'assistant', sessionKey, replyToClientMessageId, content}` with no `seq`,
+ * after the ack, echo and persisted outcome. Everything else reaches the page
+ * through the normal transcript read and is ignored here.
+ */
+export function ephemeralCommandReplies(frames: unknown,
+  submission: { readonly sessionKey: string; readonly clientMessageId: string }): EphemeralReply[] {
+  if (!Array.isArray(frames)) return [];
+  return frames.filter((frame): frame is Record<string, unknown> => plainObject(frame) &&
+    frame.type === 'message' && frame.ephemeral === true && frame.seq === undefined &&
+    typeof frame.content === 'string' && frame.content.length > 0 &&
+    (frame.sessionKey === undefined || frame.sessionKey === submission.sessionKey) &&
+    (frame.replyToClientMessageId === undefined || frame.replyToClientMessageId === submission.clientMessageId))
+    .map((frame) => ({ sessionKey: submission.sessionKey, clientMessageId: submission.clientMessageId,
+      content: frame.content as string }));
+}
+
 const DEVICE_ID_PATTERN = /^chat-web-[0-9a-f]{32}$/;
 
 /** A fresh `chat-web-<32 hex>` device id for one pairing attempt. */
@@ -27,7 +59,7 @@ export function newBrowserDeviceId(randomValues: (bytes: Uint8Array) => Uint8Arr
   return `chat-web-${Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')}`;
 }
 
-/** The Gateway's claimed name: the human's label followed by the Clawline code. */
+/** The Gateway's claimed name: the human's label followed by the pairing code. */
 export function pairingClaimedName(name: string, code: string): string {
   return `${name.trim()} ${code.trim()}`;
 }
@@ -112,7 +144,7 @@ export async function sendWithBrowserDevice(
   submission: HumanSubmission,
   signal: AbortSignal,
   onSubmitted?: () => void,
-  onCredentialLost?: DeviceCredentialLost,
+  callbacks: DeviceSendCallbacks = {},
 ): Promise<HumanSendResult> {
   let request: Promise<Response>;
   try {
@@ -141,10 +173,12 @@ export async function sendWithBrowserDevice(
   const code = typeof error?.code === 'string' && error.code ? error.code : undefined;
   if (response.status === 401) {
     const reason = code === 'token_revoked' || code === 'not_paired' ? code : 'token_revoked';
-    onCredentialLost?.(reason);
+    callbacks.onCredentialLost?.(reason);
     return { outcome: 'refused', reason };
   }
   if (response.ok && body?.outcome === 'accepted' && plainObject(body.ack) && body.ack.id === submission.clientMessageId) {
+    const ephemeral = ephemeralCommandReplies(body.messages, submission);
+    if (ephemeral.length) callbacks.onEphemeral?.(ephemeral);
     return { outcome: 'accepted',
       ...(typeof body.ack.messageId === 'string' && body.ack.messageId ? { messageId: body.ack.messageId } : {}) };
   }

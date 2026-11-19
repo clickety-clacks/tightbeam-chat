@@ -45,3 +45,27 @@ body { background: var(--tb-chat-background); color: var(--tb-chat-text); }
   font: inherit;
 }
 .chat-device-bar-form button { justify-self: start; }
+.chat-ephemeral-panel { flex: none; padding: .5rem .75rem; border-bottom: 1px solid var(--tb-chat-border); }
+.chat-ephemeral-reply { display: grid; gap: .35rem; }
+.chat-ephemeral-reply + .chat-ephemeral-reply { margin-top: .6rem; }
+.chat-ephemeral-warning { margin: 0; color: var(--tb-chat-danger); font-weight: 600; font-size: .8125rem; }
+.chat-ephemeral-content {
+  margin: 0;
+  padding: .5rem .6rem;
+  border: 1px solid var(--tb-chat-border);
+  border-radius: 10px;
+  background: var(--tb-chat-agent-surface);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.chat-ephemeral-reply button {
+  justify-self: start;
+  min-height: 2rem;
+  padding: .25rem .7rem;
+  border: 1px solid var(--tb-chat-border);
+  border-radius: 999px;
+  color: var(--tb-chat-text);
+  background: var(--tb-chat-agent-surface);
+  font: inherit;
+}

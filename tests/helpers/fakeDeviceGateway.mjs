@@ -4,6 +4,10 @@
 import crypto from 'node:crypto';
 import http from 'node:http';
 
+/** The ephemeral replies (proposed W7) for /tightbeam recovery-enroll and approve-device. */
+export const FAKE_RECOVERY_SECRET = 'TBR-7K3MQ-9ZD2W-H8XAP-4RN6T';
+export const FAKE_ISSUED_CODE = 'TB-9QXR-T4MB-K2WD';
+
 function serverFrame(opcode, payload) {
   let header;
   if (payload.length < 126) header = Buffer.from([0x80 | opcode, payload.length]);
@@ -92,6 +96,7 @@ function changesSocket(request, socket, history) {
  * - ackDelayMs: delay before a message ack
  * - replay: frames pushed between auth_result and sync_complete
  * - messageError(frame): returns an error frame to send instead of an ack
+ * - ephemeralDelayMs: delay before the ephemeral reply to recovery-enroll / approve-device
  * - history: { sessionKey, userId, messages } serves the read API and /ws/changes the
  *   Chat page loads through its provisioned (organization) credential
  */
@@ -123,8 +128,9 @@ export async function startFakeDeviceGateway(options = {}) {
 
   const defaultPairReply = (frame) => {
     const token = `tbt_${crypto.randomBytes(24).toString('hex')}`;
-    state.devices.set(token, { deviceId: frame.deviceId, userId: 'george', scope: 'decide' });
-    return { type: 'pair_result', success: true, token, userId: 'george', scope: 'decide' };
+    // Stage 1 has no device scopes: no scope field.
+    state.devices.set(token, { deviceId: frame.deviceId, userId: 'george' });
+    return { type: 'pair_result', success: true, token, userId: 'george' };
   };
 
   server.on('upgrade', (request, socket) => {
@@ -186,7 +192,7 @@ export async function startFakeDeviceGateway(options = {}) {
         connection.deviceId = device.deviceId;
         state.live.set(device.deviceId, connection);
         send({ type: 'auth_result', success: true, userId: device.userId, deviceId: device.deviceId,
-          scope: device.scope, sessionId: `conn_${device.deviceId}` });
+          ...(device.scope ? { scope: device.scope } : {}), sessionId: `conn_${device.deviceId}` });
         for (const replayed of options.replay ?? []) send(replayed);
         send({ type: 'sync_complete' });
         return;
@@ -204,6 +210,14 @@ export async function startFakeDeviceGateway(options = {}) {
           if (frame.content.startsWith('/tightbeam')) {
             send({ type: 'message', sessionKey: frame.sessionKey, role: 'user', content: frame.content });
             send({ type: 'message', sessionKey: frame.sessionKey, role: 'system', content: `outcome for ${frame.content}` });
+            const ephemeral = frame.content === '/tightbeam recovery-enroll'
+              ? `Recovery secret ${FAKE_RECOVERY_SECRET}. It is shown only this once.`
+              : frame.content === '/tightbeam approve-device'
+                ? `Pairing code ${FAKE_ISSUED_CODE}, valid 10 minutes.` : undefined;
+            if (ephemeral) {
+              setTimeout(() => send({ type: 'message', ephemeral: true, role: 'assistant', sessionKey: frame.sessionKey,
+                replyToClientMessageId: frame.id, content: ephemeral }), options.ephemeralDelayMs ?? 0);
+            }
           }
         }, options.ackDelayMs ?? 0);
       }

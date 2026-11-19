@@ -2,12 +2,11 @@ import { AuthorizationError, type HostIdentity } from '../src/types';
 import type { Public019Channel, Public019Host } from '../src/public019';
 import { normalizeSubmitterAttribution, readBrowserRememberedSubmitterDisplayName } from '../src/submitterAttribution';
 import type { ChatTarget } from './entry';
-import { sendWithBrowserDevice, type DeviceCredentialLost } from './devicePairing';
+import { sendWithBrowserDevice, type DeviceSendCallbacks } from './devicePairing';
 
 /** This browser's own paired Gateway device; its credential stays in the bridge cookie. */
-export interface BrowserDevice {
+export interface BrowserDevice extends DeviceSendCallbacks {
   readonly deviceId: string;
-  readonly onCredentialLost?: DeviceCredentialLost;
 }
 
 function isAuthorizationFailureCode(value: unknown): boolean {
@@ -146,7 +145,7 @@ export function browserHost(target: ChatTarget, device?: BrowserDevice): Public0
     currentIdentity,
     ...(device ? {
       sendHumanAsDevice: (submission, signal, onSubmitted) =>
-        sendWithBrowserDevice(hostFetch, submission, signal, onSubmitted, device.onCredentialLost),
+        sendWithBrowserDevice(hostFetch, submission, signal, onSubmitted, device),
     } satisfies Pick<Public019Host, 'sendHumanAsDevice'> : {}),
     ...(target.readMarkerRoute ? {
       readMarkerRoute: target.readMarkerRoute,
