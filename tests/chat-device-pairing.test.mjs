@@ -43,7 +43,7 @@ afterEach(async () => {
   for (const root of temporaryRoots.splice(0)) await fs.rm(root, { recursive: true, force: true });
 });
 
-async function startChat({ gateway, flag = true, extraEnvironment = {}, root: existingRoot } = {}) {
+async function startChat({ gateway, flag = true, extraEnvironment = {}, root: existingRoot, timings = FAST_TIMINGS } = {}) {
   let root = existingRoot;
   if (!root) {
     root = await fs.mkdtemp(path.join(os.tmpdir(), 'chat-device-pairing-'));
@@ -65,7 +65,7 @@ async function startChat({ gateway, flag = true, extraEnvironment = {}, root: ex
     ...extraEnvironment,
   };
   const server = createChatServer({ rootDir: root, publicDir: path.join(root, 'public'), releaseInfo: RELEASE,
-    environment, deviceTimings: FAST_TIMINGS });
+    environment, deviceTimings: timings });
   const sockets = new Set();
   server.on('connection', (socket) => { sockets.add(socket); socket.on('close', () => sockets.delete(socket)); });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -297,6 +297,43 @@ describe('Chat device pairing bridge, flag on (T13)', () => {
       if ((await fs.stat(filename)).isFile()) expect(await fs.readFile(filename, 'utf8')).not.toContain(secret);
     }
     expectNoTokenAnywhere(gateway, response.text);
+  });
+
+  it('keeps an ephemeral frame that arrives before the ack, in arrival order', async () => {
+    const gateway = await startGateway({ ephemeralBeforeAck: true, ackDelayMs: 50 });
+    const chat = await startChat({ gateway });
+    const paired = await pair(chat);
+    const response = await call(chat.port, 'POST', '/__chat/device/send', {
+      headers: browserHeaders({ cookie: paired.cookie }), body: sendBody('c_first', '/tightbeam recovery-enroll') });
+    expect(response.json).toMatchObject({ outcome: 'accepted', complete: true, ack: { id: 'c_first' } });
+    expect(response.json.messages.map((frame) => frame.ephemeral === true ? 'ephemeral' : frame.role))
+      .toEqual(['ephemeral', 'user', 'system']);
+    expect(response.json.messages[0]).toMatchObject({ replyToClientMessageId: 'c_first',
+      content: expect.stringContaining(FAKE_RECOVERY_SECRET) });
+    for (const line of captured) expect(line).not.toContain(FAKE_RECOVERY_SECRET);
+  });
+
+  it('reports complete:false with no secret when a takeover lands after the ack and before the ephemeral frame', async () => {
+    const gateway = await startGateway({ ephemeralDelayMs: 400 });
+    const timings = { ...FAST_TIMINGS, commandQuietMs: 800, commandOutcomeTimeoutMs: 1_500 };
+    const chat = await startChat({ gateway, timings });
+    const paired = await pair(chat);
+    const sending = call(chat.port, 'POST', '/__chat/device/send', {
+      headers: browserHeaders({ cookie: paired.cookie }), body: sendBody('c_cut', '/tightbeam recovery-enroll') });
+    // Once the command is recorded (and acked), another tab's status read takes over the device socket.
+    for (let tries = 0; !gateway.state.recorded.has('c_cut'); tries += 1) {
+      expect(tries).toBeLessThan(200);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const takeovers = gateway.state.takeovers;
+    await call(chat.port, 'POST', '/__chat/device/status', { headers: browserHeaders({ cookie: paired.cookie }) });
+    const response = await sending;
+    expect(gateway.state.takeovers).toBe(takeovers + 1);
+    expect(response.json).toMatchObject({ outcome: 'accepted', complete: false, ack: { id: 'c_cut' } });
+    expect(response.json.messages.some((frame) => frame.ephemeral)).toBe(false);
+    expect(response.text).not.toContain(FAKE_RECOVERY_SECRET);
+    expect(gateway.state.recorded.size).toBe(1);
   });
 
   it('relays a Gateway refusal for the message id', async () => {

@@ -97,6 +97,7 @@ function changesSocket(request, socket, history) {
  * - replay: frames pushed between auth_result and sync_complete
  * - messageError(frame): returns an error frame to send instead of an ack
  * - ephemeralDelayMs: delay before the ephemeral reply to recovery-enroll / approve-device
+ * - ephemeralBeforeAck: send that ephemeral reply first, before the ack
  * - history: { sessionKey, userId, messages } serves the read API and /ws/changes the
  *   Chat page loads through its provisioned (organization) credential
  */
@@ -204,20 +205,20 @@ export async function startFakeDeviceGateway(options = {}) {
         const duplicate = state.recorded.has(frame.id);
         if (!duplicate) state.recorded.set(frame.id, { ...frame, deviceId: connection.deviceId });
         const messageId = `m_${[...state.recorded.keys()].indexOf(frame.id) + 1}`;
+        const ephemeral = frame.content === '/tightbeam recovery-enroll'
+          ? `Recovery secret ${FAKE_RECOVERY_SECRET}. It is shown only this once.`
+          : frame.content === '/tightbeam approve-device'
+            ? `Pairing code ${FAKE_ISSUED_CODE}, valid 10 minutes.` : undefined;
+        const sendEphemeral = () => send({ type: 'message', ephemeral: true, role: 'assistant',
+          sessionKey: frame.sessionKey, replyToClientMessageId: frame.id, content: ephemeral });
+        if (ephemeral && options.ephemeralBeforeAck) sendEphemeral();
         setTimeout(() => {
           if (connection.closed || connection.replaced) return;
           send({ type: 'ack', id: frame.id, messageId, ...(duplicate ? { duplicate: true } : {}) });
           if (frame.content.startsWith('/tightbeam')) {
             send({ type: 'message', sessionKey: frame.sessionKey, role: 'user', content: frame.content });
             send({ type: 'message', sessionKey: frame.sessionKey, role: 'system', content: `outcome for ${frame.content}` });
-            const ephemeral = frame.content === '/tightbeam recovery-enroll'
-              ? `Recovery secret ${FAKE_RECOVERY_SECRET}. It is shown only this once.`
-              : frame.content === '/tightbeam approve-device'
-                ? `Pairing code ${FAKE_ISSUED_CODE}, valid 10 minutes.` : undefined;
-            if (ephemeral) {
-              setTimeout(() => send({ type: 'message', ephemeral: true, role: 'assistant', sessionKey: frame.sessionKey,
-                replyToClientMessageId: frame.id, content: ephemeral }), options.ephemeralDelayMs ?? 0);
-            }
+            if (ephemeral && !options.ephemeralBeforeAck) setTimeout(sendEphemeral, options.ephemeralDelayMs ?? 0);
           }
         }, options.ackDelayMs ?? 0);
       }

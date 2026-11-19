@@ -270,8 +270,9 @@ function isCommand(content) {
 /**
  * One per-send attempt (W5): auth, wait out replay, send the message frame with
  * the browser's id, wait for its ack or error, and for a /tightbeam command
- * collect every following message frame for the session (echo, outcome, and any
- * ephemeral secret or code) until the socket is quiet.
+ * collect every message frame for the session after the send, before or after
+ * the ack (echo, outcome, and any ephemeral secret or code), until the socket is
+ * quiet after the ack.
  */
 function sendAttempt(gatewayBase, publicOrigin, credential, message, timings) {
   return new Promise((resolve) => {
@@ -306,6 +307,8 @@ function sendAttempt(gatewayBase, publicOrigin, credential, message, timings) {
     const command = isCommand(message.content);
     // A command's replies are complete once the socket has been quiet for commandQuietMs.
     const endCommandReplies = () => finish({ kind: 'accepted', ack, messages, complete: true });
+    const isSessionMessage = (frame) => frame.type === 'message' &&
+      (frame.sessionKey === undefined || frame.sessionKey === message.sessionKey);
     const socket = openGatewaySocket(gatewayBase, publicOrigin, {
       onOpen: () => socket.send(authFrame(credential.deviceId, credential.token)),
       onFrame: (frame) => {
@@ -333,10 +336,13 @@ function sendAttempt(gatewayBase, publicOrigin, credential, message, timings) {
           } else if (frame.type === 'error' && (frame.messageId === message.id || frame.id === message.id)) {
             finish({ kind: 'refused', error: { code: typeof frame.code === 'string' && frame.code ? frame.code : 'refused',
               ...(typeof frame.message === 'string' ? { message: frame.message } : {}) } });
+          } else if (command && isSessionMessage(frame)) {
+            // An ephemeral reply may arrive before the ack; keep arrival order.
+            messages.push(frame);
           }
           return;
         }
-        if (frame.type === 'message' && (frame.sessionKey === undefined || frame.sessionKey === message.sessionKey)) {
+        if (isSessionMessage(frame)) {
           // Echo, outcome, and any ephemeral reply (a recovery secret or pairing code) for
           // this device only. They pass through to this response and are never recorded.
           messages.push(frame);
