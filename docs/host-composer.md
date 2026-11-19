@@ -149,7 +149,7 @@ While opted in, Chat removes the composer and its reserved bottom space only aft
 
 ## Failed-turn restore
 
-A failed turn is a person's prompt that the Gateway accepted and Chat reported `delivered`, after which the agent's turn failed. Chat shows it as the prompt bubble followed by `Message failed.` and the verbatim failure reason. This is separate from a refused send, which the host learns from `failed` and whose draft it already holds. No other host event reports a failed turn.
+A failed turn is a person's prompt that the Gateway accepted and Chat reported `delivered`, after which the agent's turn failed. Chat shows it as the prompt bubble followed by `Message failed.` and the verbatim failure reason. This is separate from a refused send, which the host learns from `failed` and whose draft it already holds. `restore-requested` is in addition to the attempt events, not a replacement: a declared host still receives `accepted`, `delivered`, `failed` and `uncertain` exactly as above, and a refused send is still reported only by `failed`. No other host event reports a failed turn.
 
 **Declaration.** The host opts in with `events: { 'restore-requested': [1] }` on its declaration. Without it, host mode is unchanged: the failed bubble and reason show with no action.
 
@@ -183,7 +183,7 @@ Unlike standalone Chat, host mode also shows the action when the prompt had phot
 - `content` may be empty for a photo-only prompt. It is the row's text unchanged, without trimming.
 - A text-only prompt carries neither photo field. A prompt with photos carries exactly one of them. `attachments` lists the photos in row order in the same shape as the `send` command's `attachments`: `data` is standard base64 without a data-URL prefix, of the bytes Chat retained for that send (after image preparation), with that item's MIME type. Chat holds them only for a prompt sent from this page while the runtime is open. Otherwise, or when a byte read fails, `attachmentsUnavailable: true` says the photos cannot be restored.
 
-**Host behavior.** Apply the event only when `lifetimeId` and `sessionKey` match the latest `ready`. Put `content`, and any `attachments`, into the host composer as a draft for the person to edit, and keep any text the person had already typed. Send it only on a later user action, as a new message with a new `c_` UUIDv4 correlation and no `retry` flag. Tell the person when `attachmentsUnavailable` is set. The failed row stays in the transcript; the resend is a new row.
+**Host behavior.** Apply the event only when `lifetimeId` and `sessionKey` match the latest `ready`. Put `content`, and any `attachments`, into the host composer as a draft for the person to edit, and keep any text the person had already typed. The host must send it only on a later user action, as a new message with a new `c_` UUIDv4 correlation and no `retry` flag, never reusing `correlationId` or retrying the failed prompt. Tell the person when `attachmentsUnavailable` is set. The failed row stays in the transcript; the resend is a new row.
 
 The runnable browser example is [host-composer.html](../examples/host-composer.html). It demonstrates the page-local protocol; it is not a native app or live-service acceptance result.
 
