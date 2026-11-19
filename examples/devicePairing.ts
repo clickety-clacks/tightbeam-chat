@@ -34,20 +34,22 @@ export interface DeviceSendCallbacks {
 }
 
 /**
- * The single place that decides which command reply frames are ephemeral. Proposed
- * contract W7 (not yet confirmed by the Gateway): `{type:'message', ephemeral:true,
- * role:'assistant', sessionKey, replyToClientMessageId, content}` with no `seq`,
- * after the ack, echo and persisted outcome. Everything else reaches the page
- * through the normal transcript read and is ignored here.
+ * The single place that decides which command reply frames are ephemeral. Contract
+ * W7, as stated by the Gateway coder (provisional until stage 1 records the exact
+ * bytes): an ordinary server `message` frame (role assistant, an `e_` id that is not
+ * a transcript id, timestamp) marked `ephemeral: true` and carrying
+ * `replyToClientMessageId` = the command's `c_` id, after the ack, echo and
+ * persisted outcome, in the same batch. Key on those two fields, not on a missing
+ * id or seq. Everything else reaches the page through the normal transcript read.
  */
 export function ephemeralCommandReplies(frames: unknown,
   submission: { readonly sessionKey: string; readonly clientMessageId: string }): EphemeralReply[] {
   if (!Array.isArray(frames)) return [];
   return frames.filter((frame): frame is Record<string, unknown> => plainObject(frame) &&
-    frame.type === 'message' && frame.ephemeral === true && frame.seq === undefined &&
+    frame.type === 'message' && frame.ephemeral === true &&
+    frame.replyToClientMessageId === submission.clientMessageId &&
     typeof frame.content === 'string' && frame.content.length > 0 &&
-    (frame.sessionKey === undefined || frame.sessionKey === submission.sessionKey) &&
-    (frame.replyToClientMessageId === undefined || frame.replyToClientMessageId === submission.clientMessageId))
+    (frame.sessionKey === undefined || frame.sessionKey === submission.sessionKey))
     .map((frame) => ({ sessionKey: submission.sessionKey, clientMessageId: submission.clientMessageId,
       content: frame.content as string }));
 }

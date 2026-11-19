@@ -326,10 +326,10 @@ describe('ephemeral recovery secret and pairing code (S6.4, P13)', () => {
   it('matches only W7 ephemeral frames for the sending command, in one function', () => {
     const submission = { sessionKey: 's', clientMessageId: 'c_1' };
     expect(ephemeralCommandReplies([
-      { type: 'message', ephemeral: true, sessionKey: 's', replyToClientMessageId: 'c_1', content: 'yes' },
+      { type: 'message', ephemeral: true, id: 'e_1', timestamp: 1, role: 'assistant', sessionKey: 's', replyToClientMessageId: 'c_1', content: 'yes' },
       { type: 'message', ephemeral: true, sessionKey: 's', replyToClientMessageId: 'c_2', content: 'other send' },
       { type: 'message', ephemeral: true, sessionKey: 'other', replyToClientMessageId: 'c_1', content: 'other session' },
-      { type: 'message', ephemeral: true, seq: 3, sessionKey: 's', content: 'persisted' },
+      { type: 'message', ephemeral: true, sessionKey: 's', content: 'no reply-to' },
       { type: 'message', ephemeral: 'true', sessionKey: 's', content: 'not boolean' },
       { type: 'message', sessionKey: 's', content: 'ordinary' },
       'garbage',

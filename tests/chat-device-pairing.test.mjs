@@ -287,8 +287,8 @@ describe('Chat device pairing bridge, flag on (T13)', () => {
     expect(response.json).toMatchObject({ outcome: 'accepted', complete: true, ack: { id: 'c_enroll' } });
     expect(response.json.messages).toHaveLength(3);
     expect(response.json.messages.slice(0, 2).map((frame) => frame.ephemeral)).toEqual([undefined, undefined]);
-    expect(response.json.messages[2]).toEqual({ type: 'message', ephemeral: true, role: 'assistant', sessionKey: SESSION,
-      replyToClientMessageId: 'c_enroll', content: expect.stringContaining(secret) });
+    expect(response.json.messages[2]).toEqual({ type: 'message', ephemeral: true, id: 'e_c_enroll', timestamp: expect.any(Number),
+      role: 'assistant', sessionKey: SESSION, replyToClientMessageId: 'c_enroll', content: expect.stringContaining(secret) });
     expect(response.headers['set-cookie']).toBeUndefined();
     for (const line of captured) expect(line).not.toContain(secret);
     const files = await fs.readdir(chat.root, { recursive: true });

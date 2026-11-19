@@ -209,8 +209,8 @@ export async function startFakeDeviceGateway(options = {}) {
           ? `Recovery secret ${FAKE_RECOVERY_SECRET}. It is shown only this once.`
           : frame.content === '/tightbeam approve-device'
             ? `Pairing code ${FAKE_ISSUED_CODE}, valid 10 minutes.` : undefined;
-        const sendEphemeral = () => send({ type: 'message', ephemeral: true, role: 'assistant',
-          sessionKey: frame.sessionKey, replyToClientMessageId: frame.id, content: ephemeral });
+        const sendEphemeral = () => send({ type: 'message', ephemeral: true, id: `e_${frame.id}`, timestamp: Date.now(),
+          role: 'assistant', sessionKey: frame.sessionKey, replyToClientMessageId: frame.id, content: ephemeral });
         if (ephemeral && options.ephemeralBeforeAck) sendEphemeral();
         setTimeout(() => {
           if (connection.closed || connection.replaced) return;
