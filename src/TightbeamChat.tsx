@@ -1295,11 +1295,18 @@ interface ComposerHandle {
   closeStatusPopup(): void;
 }
 
+interface SubmittedDraft {
+  readonly revision: number;
+  // Set once the send's delivery became uncertain or failed. From then on only
+  // its reconciled canonical row confirms delivery, not a later acceptance.
+  awaitingCanonical: boolean;
+}
+
 interface ChatRecoverySnapshot {
   key: string;
   draft: string;
   editRevision: number;
-  submittedRevisions: Map<string, number>;
+  submittedRevisions: Map<string, SubmittedDraft>;
   scrollTop: number;
   followLatest: boolean;
   hasReadingPosition: boolean;
@@ -1683,11 +1690,18 @@ const Composer = forwardRef<ComposerHandle, {
   }, [draft]);
 
   useEffect(() => {
+    // The composer keeps a sent message's text until that message is confirmed
+    // delivered. An uncertain or failed send stays tracked, so a later Check and
+    // retry that reconciles its row clears the text and a second Send cannot
+    // post it again. Any edit since the send leaves the draft alone.
     for (const send of state.sends) {
-      const submittedRevision = recoverySnapshot.submittedRevisions.get(send.clientMessageId);
-      if (submittedRevision === undefined || send.status === 'pending') continue;
+      const submitted = recoverySnapshot.submittedRevisions.get(send.clientMessageId);
+      if (!submitted) continue;
+      if (send.status === 'uncertain' || send.status === 'failed') submitted.awaitingCanonical = true;
+      const confirmed = send.reconciled || (send.status === 'accepted' && !submitted.awaitingCanonical);
+      if (!confirmed) continue;
       recoverySnapshot.submittedRevisions.delete(send.clientMessageId);
-      if (send.status === 'accepted' && recoverySnapshot.editRevision === submittedRevision) {
+      if (recoverySnapshot.editRevision === submitted.revision) {
         recoverySnapshot.editRevision++;
         updateDraft('');
       }
@@ -1732,12 +1746,12 @@ const Composer = forwardRef<ComposerHandle, {
       preparationController.current?.abort();
       preparationController.current = null;
       publishAttachments([]);
-      recoverySnapshot.submittedRevisions.set(sendId, recoverySnapshot.editRevision);
+      recoverySnapshot.submittedRevisions.set(sendId, { revision: recoverySnapshot.editRevision, awaitingCanonical: false });
       recoverySnapshot.editRevision++;
       updateDraft('');
     } else {
       sendId = runtime.send(draft);
-      if (sendId) recoverySnapshot.submittedRevisions.set(sendId, recoverySnapshot.editRevision);
+      if (sendId) recoverySnapshot.submittedRevisions.set(sendId, { revision: recoverySnapshot.editRevision, awaitingCanonical: false });
     }
     if (sendId) {
       setAcquisitionError(null);
