@@ -374,6 +374,46 @@ describe('ephemeral recovery secret and pairing code (S6.4, P13)', () => {
     expect(document.body.textContent).not.toContain(SECRET);
   });
 
+  it.each([
+    ['a cut-short command with no ephemeral reply', '/tightbeam recovery-enroll', false, false, true],
+    ['a cut-short command whose secret did arrive', '/tightbeam recovery-enroll', false, true, false],
+    ['a complete command with no ephemeral reply', '/tightbeam status', true, false, false],
+    ['a cut-short ordinary message', 'hello', false, false, false],
+  ])('cut-short notice for %s', async (_name, content, complete, withSecret, expectNotice) => {
+    const notice = "This command's reply may have been cut short. If you expected a code or secret and none is shown, run the command again.";
+    chatService({ status: { paired: true, deviceId: PAIRED_DEVICE, verified: true },
+      send: (body) => json({ outcome: 'accepted', complete, ack: { type: 'ack', id: body.id },
+        messages: [
+          { type: 'message', seq: 7, sessionKey: baseTarget.sessionKey, role: 'user', content: body.content },
+          ...(withSecret ? [{ type: 'message', ephemeral: true, role: 'assistant', sessionKey: baseTarget.sessionKey,
+            replyToClientMessageId: body.id, content: `Recovery secret ${SECRET}.` }] : []),
+        ] }) });
+    window.localStorage.clear();
+    window.sessionStorage.clear();
+    const first = render(<HostPage defaultTarget={pairedTarget} />);
+    await within(deviceBar()).findByText(/^Paired\./);
+    await sendFromComposer(content);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+    const panel = screen.queryByRole('region', { name: 'Shown only here' });
+    if (!expectNotice) {
+      expect(panel?.textContent ?? '').not.toContain('cut short');
+      return;
+    }
+    expect(panel).not.toBeNull();
+    expect(within(panel!).getByRole('status').textContent).toBe(notice);
+    expect(window.localStorage.length + window.sessionStorage.length).toBe(0);
+    fireEvent.click(within(panel!).getByRole('button', { name: 'Dismiss' }));
+    expect(screen.queryByRole('region', { name: 'Shown only here' })).toBeNull();
+    // Memory only: a reload (here into another conversation) has no notice.
+    await sendFromComposer(content);
+    await screen.findByRole('region', { name: 'Shown only here' });
+    first.unmount();
+    window.history.replaceState({}, '', `/?${new URLSearchParams({ gateway: baseTarget.gateway, session: 'agent:main:other' })}`);
+    render(<HostPage defaultTarget={pairedTarget} />);
+    await within(deviceBar()).findByText(/^Paired\./);
+    expect(screen.queryByRole('region', { name: 'Shown only here' })).toBeNull();
+  });
+
   it('shows nothing when an accepted send has no ephemeral reply', async () => {
     chatService({ status: { paired: true, deviceId: PAIRED_DEVICE, verified: true },
       send: (body) => json({ outcome: 'accepted', ack: { type: 'ack', id: body.id } }) });

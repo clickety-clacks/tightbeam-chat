@@ -28,6 +28,7 @@ export function HostPage({ defaultTarget, configurationError }: {
   const onCredentialLost = device.onCredentialLost;
   const ephemeral = useEphemeralReplies();
   const onEphemeral = ephemeral.add;
+  const onReplyCutShort = ephemeral.cutShort;
 
   useEffect(() => {
     if (!selected || !sendMode) {
@@ -38,7 +39,7 @@ export function HostPage({ defaultTarget, configurationError }: {
     setError('');
     try {
       const paired: BrowserDevice | undefined = sendMode.startsWith('device:')
-        ? { deviceId: sendMode.slice('device:'.length), onCredentialLost, onEphemeral }
+        ? { deviceId: sendMode.slice('device:'.length), onCredentialLost, onEphemeral, onReplyCutShort }
         : undefined;
       const host = browserHost(selected, paired);
       const origin = window.location.origin;
@@ -55,7 +56,7 @@ export function HostPage({ defaultTarget, configurationError }: {
     }
   }, [selected?.gateway, selected?.sessionKey, selected?.principalKey, selected?.deviceId,
     selected?.restHumanSendEnabled, selected?.submitter?.identity, selected?.submitter?.displayName,
-    sendMode, onCredentialLost, onEphemeral]);
+    sendMode, onCredentialLost, onEphemeral, onReplyCutShort]);
 
   const bar = pairingEnabled && <DevicePairingBar state={device.state} onPair={device.pair}
     onForget={device.forget} onRetry={device.check} onUseService={device.useService} />;
@@ -158,9 +159,13 @@ function useEphemeralReplies() {
   const [replies, setReplies] = useState<readonly ShownEphemeralReply[]>([]);
   const nextKey = useRef(0);
   const add = useCallback((incoming: readonly EphemeralReply[]) => {
-    const shown = incoming.map((reply) => ({ ...reply, key: nextKey.current++ }));
+    const shown = incoming.map((reply): ShownEphemeralReply => ({ ...reply, kind: 'reply', key: nextKey.current++ }));
     setReplies((current) => [...current, ...shown]);
   }, []);
+  const cutShort = useCallback((send: { readonly sessionKey: string; readonly clientMessageId: string }) => {
+    const notice: ShownEphemeralReply = { ...send, kind: 'cut-short', key: nextKey.current++ };
+    setReplies((current) => [...current, notice]);
+  }, []);
   const dismiss = useCallback((key: number) => setReplies((current) => current.filter((reply) => reply.key !== key)), []);
-  return { replies, add, dismiss };
+  return { replies, add, cutShort, dismiss };
 }

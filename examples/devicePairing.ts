@@ -29,6 +29,8 @@ export interface DeviceSendCallbacks {
   readonly onCredentialLost?: DeviceCredentialLost;
   /** Receives ephemeral replies; they live only in page memory and are never persisted. */
   readonly onEphemeral?: (replies: readonly EphemeralReply[]) => void;
+  /** An accepted command whose replies were cut short (complete:false) with no ephemeral reply. */
+  readonly onReplyCutShort?: (send: { readonly sessionKey: string; readonly clientMessageId: string }) => void;
 }
 
 /**
@@ -179,6 +181,10 @@ export async function sendWithBrowserDevice(
   if (response.ok && body?.outcome === 'accepted' && plainObject(body.ack) && body.ack.id === submission.clientMessageId) {
     const ephemeral = ephemeralCommandReplies(body.messages, submission);
     if (ephemeral.length) callbacks.onEphemeral?.(ephemeral);
+    else if (body.complete === false && /^\/tightbeam(?:\s|$)/.test(submission.content)) {
+      // Another tab's socket may have taken over before a secret or code arrived.
+      callbacks.onReplyCutShort?.({ sessionKey: submission.sessionKey, clientMessageId: submission.clientMessageId });
+    }
     return { outcome: 'accepted',
       ...(typeof body.ack.messageId === 'string' && body.ack.messageId ? { messageId: body.ack.messageId } : {}) };
   }
