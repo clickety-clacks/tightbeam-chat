@@ -1952,8 +1952,9 @@ const Composer = forwardRef<ComposerHandle, {
           <dt>Model</dt><dd>{state.session?.model || 'Unavailable'}</dd>
           <dt>Harness</dt><dd>{state.session?.harness || 'Unavailable'}</dd>
         </dl>
+        {/* Offered for the whole time Chat is reconnecting, including between brief reopens that clear liveError. */}
         {(state.status === 'error' || state.sessionError || state.sessionNotFound || state.conversationError || state.liveError ||
-          state.liveConnectionState === 'disconnected') &&
+          state.liveConnectionState === 'reconnecting' || state.liveConnectionState === 'disconnected') &&
           <button type="button" onClick={() => void runtime.rebuild({ restart: true })}>Reconnect</button>}
       </div>}
       <button ref={sendControl} type="submit" className="tb-chat-send-button" aria-label="Send message"

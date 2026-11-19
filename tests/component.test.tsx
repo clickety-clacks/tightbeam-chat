@@ -3077,6 +3077,39 @@ describe('conversation surface', () => {
     }
   });
 
+  it('offers Reconnect in the connection details for as long as the feed is reconnecting', () => {
+    const runtime = new FakeRuntime('sustained-reconnect', {
+      records: [row('sustained-reconnect', 'kept', 'Existing conversation text')],
+      liveError: 'Connection unavailable',
+      liveConnectionState: 'reconnecting',
+    });
+    render(<TightbeamChat sessionKey="sustained-reconnect" adapter={adapterFor(runtime)} />);
+
+    const openDetails = () => {
+      const button = screen.getByRole('button', { name: 'Connection status: Reconnecting. Show details' });
+      if (!screen.queryByRole('dialog', { name: 'Connection details' })) fireEvent.click(button);
+      return screen.getByRole('dialog', { name: 'Connection details' });
+    };
+    expect(within(openDetails()).getByRole('button', { name: 'Reconnect' })).toBeTruthy();
+
+    // A brief reopen during a sustained outage clears liveError while Chat is
+    // still reconnecting; the manual Reconnect stays available and every label
+    // still says Reconnecting.
+    act(() => runtime.update({ liveError: undefined, liveConnectionState: 'reconnecting' }));
+    const details = openDetails();
+    expect(within(details).getByRole('button', { name: 'Reconnect' })).toBeTruthy();
+    expect(screen.queryByText(/Disconnected/)).toBeNull();
+    fireEvent.click(within(details).getByRole('button', { name: 'Reconnect' }));
+    expect(runtime.rebuildOptions.at(-1)).toEqual({ restart: true });
+
+    act(() => runtime.update({ liveConnectionState: 'connected' }));
+    if (!screen.queryByRole('dialog', { name: 'Connection details' })) {
+      fireEvent.click(screen.getByRole('button', { name: 'Connection status: Connected. Show details' }));
+    }
+    expect(within(screen.getByRole('dialog', { name: 'Connection details' }))
+      .queryByRole('button', { name: 'Reconnect' })).toBeNull();
+  });
+
   it('keeps the reconnecting notice in view and clear of the transcript wherever the reader scrolls', () => {
     const sessionKey = 'reconnecting-notice-scroll';
     const records = Array.from({ length: 12 }, (_, index) => row(sessionKey, `message-${index + 1}`,
