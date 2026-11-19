@@ -1,5 +1,22 @@
 [
   {
+    "version": "v0.1.106",
+    "items": [
+      {
+        "title": "An honest divider after a failed prompt",
+        "description": "Chat shows the Context compacted divider only when the conversation actually recorded a compaction. If a compaction follows a prompt that failed and was not answered, the divider says so: Context compacted · the failed message above was not answered."
+      },
+      {
+        "title": "No duplicate after Check and retry",
+        "description": "If Chat couldn't confirm a message during a connection problem, the composer keeps its text until that message is confirmed delivered, then clears it. Pressing Send again after a successful Check and retry no longer posts a duplicate."
+      },
+      {
+        "title": "Gateway compatibility",
+        "description": "Chat continues to support Gateway 0.1.16. Human prompts use the authenticated WebSocket connection by default."
+      }
+    ]
+  },
+  {
     "version": "v0.1.105",
     "items": [
       {
