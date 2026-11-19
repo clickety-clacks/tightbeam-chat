@@ -3,7 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { HostPage } from '../examples/HostPage';
 import { browserHost } from '../examples/browserHost';
-import { newBrowserDeviceId, pairingClaimedName } from '../examples/devicePairing';
+import { ephemeralCommandReplies, newBrowserDeviceId, pairingClaimedName } from '../examples/devicePairing';
+import { splitNameAndCode } from '../examples/DevicePairingBar';
 
 const baseTarget = {
   gateway: 'https://gateway.example:8443',
@@ -51,7 +52,7 @@ function json(value: unknown, status = 200): Response {
 
 /** A same-origin Chat service fake: history reads, device bridge routes, and every call recorded. */
 function chatService({ status = { paired: false } as Record<string, unknown>, transcript = [] as unknown[],
-  pair = (_body: unknown) => json({ success: true, userId: 'george', deviceId: PAIRED_DEVICE, scope: 'decide', signedIn: true }),
+  pair = (_body: unknown) => json({ success: true, userId: 'george', deviceId: PAIRED_DEVICE, signedIn: true }),
   send = (body: Record<string, unknown>) => json({ outcome: 'accepted', ack: { type: 'ack', id: body.id, messageId: 'm_sent' } }),
 } = {}) {
   const calls: Call[] = [];
@@ -101,6 +102,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
   window.history.replaceState({}, '', '/');
 });
@@ -133,11 +135,12 @@ describe('Pair this browser (flag on)', () => {
     expect(await within(deviceBar()).findByText(/This browser is not paired/)).toBeTruthy();
     fireEvent.click(within(deviceBar()).getByRole('button', { name: 'Pair this browser' }));
     fireEvent.change(screen.getByLabelText('Name for this browser'), { target: { value: 'Desk Chrome' } });
-    fireEvent.change(screen.getByLabelText('Pairing code from Clawline'), { target: { value: 'TB-ABCD-EFGH-JKLM' } });
+    fireEvent.change(screen.getByLabelText('Pairing code'), { target: { value: 'TB-ABCD-EFGH-JKLM' } });
     fireEvent.click(within(deviceBar()).getByRole('button', { name: 'Pair' }));
 
-    expect(await within(deviceBar()).findByText(/This browser is paired as its own device/)).toBeTruthy();
-    expect(within(deviceBar()).getByText(/\(decide\)/)).toBeTruthy();
+    const status = await within(deviceBar()).findByText(/^Paired\. This browser is its own device/);
+    // Stage 1 has no scopes: nothing about a scope is assumed or shown.
+    expect(status.textContent).not.toMatch(/\(|decide|full/);
     const pairCalls = calls.filter((call) => call.path === '/__chat/device/pair');
     expect(pairCalls).toHaveLength(1);
     expect(pairCalls[0].method).toBe('POST');
@@ -160,7 +163,8 @@ describe('Pair this browser (flag on)', () => {
     const { calls } = chatService({ pair: () => json(reply) });
     render(<HostPage defaultTarget={pairedTarget} />);
     fireEvent.click(await within(deviceBar()).findByRole('button', { name: 'Pair this browser' }));
-    fireEvent.change(screen.getByLabelText('Pairing code from Clawline'), { target: { value: 'TB-ABCD-EFGH-JKLM' } });
+    fireEvent.change(screen.getByLabelText('Name for this browser'), { target: { value: 'Duo' } });
+    fireEvent.change(screen.getByLabelText('Pairing code'), { target: { value: 'TB-ABCD-EFGH-JKLM' } });
     fireEvent.click(within(deviceBar()).getByRole('button', { name: 'Pair' }));
 
     const alert = await within(deviceBar()).findByRole('alert');
@@ -170,10 +174,43 @@ describe('Pair this browser (flag on)', () => {
     expect(within(deviceBar()).getByText(/This browser is not paired/)).toBeTruthy();
   });
 
+  it('accepts "<name> <code>" typed in the name box, as the install note says', async () => {
+    const { calls } = chatService();
+    render(<HostPage defaultTarget={pairedTarget} />);
+    fireEvent.click(await within(deviceBar()).findByRole('button', { name: 'Pair this browser' }));
+    fireEvent.change(screen.getByLabelText('Name for this browser'), { target: { value: 'Duo TB-4KQ7-H2WX-9DNM ' } });
+    fireEvent.click(within(deviceBar()).getByRole('button', { name: 'Pair' }));
+    expect(await within(deviceBar()).findByText(/^Paired\./)).toBeTruthy();
+    const pairCall = calls.find((call) => call.path === '/__chat/device/pair');
+    expect((pairCall?.body as { claimedName: string }).claimedName).toBe('Duo TB-4KQ7-H2WX-9DNM');
+  });
+
+  it('splits a trailing code from the name only when the code box is empty', () => {
+    expect(splitNameAndCode('Duo TB-4KQ7-H2WX-9DNM', '')).toEqual({ name: 'Duo', code: 'TB-4KQ7-H2WX-9DNM' });
+    expect(splitNameAndCode(' My iPhone  tb-4kq7-h2wx-9dnm ', '')).toEqual({ name: 'My iPhone', code: 'tb-4kq7-h2wx-9dnm' });
+    expect(splitNameAndCode('Duo', ' TB-AAAA-BBBB-CCCC ')).toEqual({ name: 'Duo', code: 'TB-AAAA-BBBB-CCCC' });
+    expect(splitNameAndCode('TB-4KQ7-H2WX-9DNM', '')).toEqual({ name: 'TB-4KQ7-H2WX-9DNM', code: '' });
+    expect(splitNameAndCode('Duo TB-4KQ7-H2WX', '')).toEqual({ name: 'Duo TB-4KQ7-H2WX', code: '' });
+  });
+
+  it('shows no product name in its pairing guidance', async () => {
+    chatService({ status: { paired: false, reason: 'token_revoked' } });
+    render(<HostPage defaultTarget={pairedTarget} />);
+    fireEvent.click(await within(deviceBar()).findByRole('button', { name: 'Pair this browser' }));
+    fireEvent.change(screen.getByLabelText('Name for this browser'), { target: { value: 'Duo' } });
+    fireEvent.click(within(deviceBar()).getByRole('button', { name: 'Pair' }));
+    await within(deviceBar()).findByText(/Enter the pairing code/);
+    expect(deviceBar().textContent).toContain('/tightbeam approve-device from a paired device, or the root pairing code on Sirius');
+    expect(deviceBar().textContent).not.toMatch(/Clawline/);
+  });
+
   it('checks the form before anything is sent', async () => {
     const { calls } = chatService();
     render(<HostPage defaultTarget={pairedTarget} />);
     fireEvent.click(await within(deviceBar()).findByRole('button', { name: 'Pair this browser' }));
+    fireEvent.click(within(deviceBar()).getByRole('button', { name: 'Pair' }));
+    expect((await within(deviceBar()).findByRole('alert')).textContent).toContain('Enter a name');
+    fireEvent.change(screen.getByLabelText('Name for this browser'), { target: { value: 'Duo' } });
     fireEvent.click(within(deviceBar()).getByRole('button', { name: 'Pair' }));
     expect((await within(deviceBar()).findByRole('alert')).textContent).toContain('Enter the pairing code');
     expect(calls.some((call) => call.path === '/__chat/device/pair')).toBe(false);
@@ -202,9 +239,9 @@ describe('Pair this browser (flag on)', () => {
 
 describe('sending while paired (flag on)', () => {
   it.each([false, true])('sends messages and /tightbeam commands only through /__chat/device/send (REST flag %s)', async (rest) => {
-    const { calls } = chatService({ status: { paired: true, deviceId: PAIRED_DEVICE, verified: true, scope: 'decide' } });
+    const { calls } = chatService({ status: { paired: true, deviceId: PAIRED_DEVICE, verified: true } });
     render(<HostPage defaultTarget={{ ...pairedTarget, ...(rest ? { restHumanSendEnabled: true } : {}) }} />);
-    expect(await within(deviceBar()).findByText(/This browser is paired as its own device/)).toBeTruthy();
+    expect(await within(deviceBar()).findByText(/^Paired\./)).toBeTruthy();
 
     await sendFromComposer('hello from this browser');
     await waitFor(() => expect(calls.filter((call) => call.path === '/__chat/device/send')).toHaveLength(1));
@@ -233,7 +270,7 @@ describe('sending while paired (flag on)', () => {
         : json({ outcome: 'accepted', ack: { type: 'ack', id: body.id, messageId: 'm_retry' } })),
     });
     render(<HostPage defaultTarget={pairedTarget} />);
-    await within(deviceBar()).findByText(/This browser is paired/);
+    await within(deviceBar()).findByText(/^Paired\./);
     await sendFromComposer('retry me');
     await waitFor(() => expect(calls.filter((call) => call.path === '/__chat/device/send')).toHaveLength(2), { timeout: 5000 });
     const ids = calls.filter((call) => call.path === '/__chat/device/send').map((call) => (call.body as { id: string }).id);
@@ -246,7 +283,7 @@ describe('sending while paired (flag on)', () => {
       send: () => json({ error: { code: 'token_revoked', reason: 'token_revoked' } }, 401),
     });
     render(<HostPage defaultTarget={pairedTarget} />);
-    await within(deviceBar()).findByText(/This browser is paired/);
+    await within(deviceBar()).findByText(/^Paired\./);
     await sendFromComposer('after revocation');
     const alert = await within(deviceBar()).findByRole('alert');
     expect(alert.textContent).toContain('token_revoked');
@@ -268,6 +305,83 @@ describe('sending while paired (flag on)', () => {
     const forget = calls.find((call) => call.path === '/__chat/device/forget');
     expect(forget?.method).toBe('POST');
     expect(forget?.headers.get('x-tightbeam-chat')).toBe('1');
+  });
+});
+
+describe('ephemeral recovery secret and pairing code (S6.4, P13)', () => {
+  const SECRET = 'TBR-7K3MQ-9ZD2W-H8XAP-4RN6T';
+  const commandReply = (body: Record<string, unknown>) => json({
+    outcome: 'accepted', complete: true, ack: { type: 'ack', id: body.id, messageId: 'm_enroll' },
+    messages: [
+      { type: 'message', seq: 41, sessionKey: baseTarget.sessionKey, role: 'user', content: body.content },
+      { type: 'message', seq: 42, sessionKey: baseTarget.sessionKey, role: 'system', content: 'Recovery secret issued.' },
+      { type: 'message', sessionKey: baseTarget.sessionKey, role: 'assistant', content: 'not ephemeral, transcript only' },
+      { type: 'message', ephemeral: true, role: 'assistant', sessionKey: baseTarget.sessionKey,
+        replyToClientMessageId: 'c_some_other_send', content: 'belongs to another send' },
+      { type: 'message', ephemeral: true, role: 'assistant', sessionKey: baseTarget.sessionKey,
+        replyToClientMessageId: body.id, content: `Recovery secret ${SECRET}. It is shown only this once.` },
+    ],
+  });
+
+  it('matches only W7 ephemeral frames for the sending command, in one function', () => {
+    const submission = { sessionKey: 's', clientMessageId: 'c_1' };
+    expect(ephemeralCommandReplies([
+      { type: 'message', ephemeral: true, sessionKey: 's', replyToClientMessageId: 'c_1', content: 'yes' },
+      { type: 'message', ephemeral: true, sessionKey: 's', replyToClientMessageId: 'c_2', content: 'other send' },
+      { type: 'message', ephemeral: true, sessionKey: 'other', replyToClientMessageId: 'c_1', content: 'other session' },
+      { type: 'message', ephemeral: true, seq: 3, sessionKey: 's', content: 'persisted' },
+      { type: 'message', ephemeral: 'true', sessionKey: 's', content: 'not boolean' },
+      { type: 'message', sessionKey: 's', content: 'ordinary' },
+      'garbage',
+    ], submission)).toEqual([{ sessionKey: 's', clientMessageId: 'c_1', content: 'yes' }]);
+    expect(ephemeralCommandReplies(undefined, submission)).toEqual([]);
+  });
+
+  it('shows the secret only in this page, as inert text, never stored, gone on reload', async () => {
+    const logged: string[] = [];
+    for (const method of ['log', 'info', 'warn', 'error', 'debug'] as const) {
+      vi.spyOn(console, method).mockImplementation((...args: unknown[]) => { logged.push(args.map(String).join(' ')); });
+    }
+    window.localStorage.clear();
+    window.sessionStorage.clear();
+    chatService({ status: { paired: true, deviceId: PAIRED_DEVICE, verified: true }, send: commandReply });
+    const first = render(<HostPage defaultTarget={pairedTarget} />);
+    await within(deviceBar()).findByText(/^Paired\./);
+    await sendFromComposer('/tightbeam recovery-enroll');
+
+    const panel = await screen.findByRole('region', { name: 'Shown only here' });
+    expect(panel.textContent).toContain('Shown only here, only now — write it down');
+    expect(panel.querySelector('pre')?.textContent).toBe(`Recovery secret ${SECRET}. It is shown only this once.`);
+    expect(panel.textContent).not.toContain('belongs to another send');
+    expect(panel.textContent).not.toContain('not ephemeral');
+    // Not in the conversation transcript, storage, or logs.
+    expect(screen.getByRole('log').textContent).not.toContain(SECRET);
+    const stored = [window.localStorage, window.sessionStorage].flatMap((storage) =>
+      Array.from({ length: storage.length }, (_, index) => `${storage.key(index)}=${storage.getItem(storage.key(index)!)}`));
+    expect(stored.join('\n')).not.toContain(SECRET);
+    expect(logged.join('\n')).not.toContain(SECRET);
+
+    fireEvent.click(within(panel).getByRole('button', { name: 'Dismiss' }));
+    expect(screen.queryByRole('region', { name: 'Shown only here' })).toBeNull();
+
+    await sendFromComposer('/tightbeam approve-device');
+    await screen.findByRole('region', { name: 'Shown only here' });
+    first.unmount();
+    // A reload, or another tab, has no copy.
+    render(<HostPage defaultTarget={pairedTarget} />);
+    await within(deviceBar()).findByText(/^Paired\./);
+    expect(screen.queryByRole('region', { name: 'Shown only here' })).toBeNull();
+    expect(document.body.textContent).not.toContain(SECRET);
+  });
+
+  it('shows nothing when an accepted send has no ephemeral reply', async () => {
+    chatService({ status: { paired: true, deviceId: PAIRED_DEVICE, verified: true },
+      send: (body) => json({ outcome: 'accepted', ack: { type: 'ack', id: body.id } }) });
+    render(<HostPage defaultTarget={pairedTarget} />);
+    await within(deviceBar()).findByText(/^Paired\./);
+    await sendFromComposer('hello');
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+    expect(screen.queryByRole('region', { name: 'Shown only here' })).toBeNull();
   });
 });
 

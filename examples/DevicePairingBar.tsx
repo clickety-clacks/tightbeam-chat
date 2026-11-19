@@ -21,6 +21,20 @@ interface FormProblem extends DeviceNotice {
 }
 
 const CLAIMED_NAME_LIMIT = 64;
+const GET_A_CODE = 'Get a code with /tightbeam approve-device from a paired device, or the root pairing code on Sirius.';
+const PAIRING_CODE_AT_END = /^(.*\S)\s+(TB-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4})$/i;
+
+/**
+ * The name box may hold "<name> <code>" (for example "Duo TB-4KQ7-H2WX-9DNM") when
+ * the code box is empty. The claimed name sent is "<name> <code>" either way.
+ */
+export function splitNameAndCode(name: string, code: string): { readonly name: string; readonly code: string } {
+  const trimmedName = name.trim();
+  const trimmedCode = code.trim();
+  if (trimmedCode) return { name: trimmedName, code: trimmedCode };
+  const match = PAIRING_CODE_AT_END.exec(trimmedName);
+  return match ? { name: match[1].trim(), code: match[2] } : { name: trimmedName, code: '' };
+}
 const DEAD_CREDENTIAL_REASONS = new Set(['token_revoked', 'auth_failed', 'device_not_approved', 'user_removed', 'not_paired']);
 
 /** Human text for each pairing and credential outcome; unknown reasons are shown verbatim. */
@@ -30,7 +44,7 @@ export function deviceNoticeText(notice: DeviceNotice): string {
     case 'pairing_code_invalid':
       return `Code not accepted (pairing_code_invalid).${detail}`;
     case 'pairing_code_required':
-      return `Pairing needs a one-time code (pairing_code_required). Issue a code in Clawline and enter it here.${detail}`;
+      return `Pairing needs a one-time code (pairing_code_required). ${GET_A_CODE}${detail}`;
     case 'already_paired':
       return `This device is already paired (already_paired). Chat does not pair again automatically.${detail}`;
     case 'rate_limited':
@@ -38,12 +52,12 @@ export function deviceNoticeText(notice: DeviceNotice): string {
     case 'paired':
       return 'This browser is now paired.';
     case 'forgotten':
-      return 'This browser forgot its device. Revoke the device in Clawline if you no longer trust it.';
+      return 'This browser forgot its device. The device stays approved until it is revoked.';
     default:
       if (DEAD_CREDENTIAL_REASONS.has(notice.reason)) {
         const cause = notice.reason === 'token_revoked' ? '' : ` (${notice.reason})`;
         return `This browser's device credential is no longer accepted (token_revoked)${cause}. ` +
-          'Messages are not sent with it. Pair this browser again with a new code from Clawline.';
+          `Messages are not sent with it. Pair this browser again with a new code. ${GET_A_CODE}`;
       }
       return `Pairing did not complete (${notice.reason}).${detail}`;
   }
@@ -62,7 +76,7 @@ export function DevicePairingBar({ state, onPair, onForget, onRetry, onUseServic
   readonly onUseService: () => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [name, setName] = useState('Chat in this browser');
+  const [name, setName] = useState('');
   const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState<FormProblem>();
@@ -72,14 +86,14 @@ export function DevicePairingBar({ state, onPair, onForget, onRetry, onUseServic
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (busy) return;
-    const trimmedName = name.trim();
-    const trimmedCode = code.trim();
+    const { name: trimmedName, code: trimmedCode } = splitNameAndCode(name, code);
     if (!trimmedName) {
       setFormError({ reason: 'name_required', message: 'Enter a name for this browser.', local: true });
       return;
     }
     if (!trimmedCode) {
-      setFormError({ reason: 'code_required', message: 'Enter the pairing code issued in Clawline.', local: true });
+      setFormError({ reason: 'code_required', local: true,
+        message: `Enter the pairing code, in its own box or after the name (for example "Duo TB-4KQ7-H2WX-9DNM"). ${GET_A_CODE}` });
       return;
     }
     if (trimmedName.length + 1 + trimmedCode.length > CLAIMED_NAME_LIMIT) {
@@ -129,7 +143,7 @@ export function DevicePairingBar({ state, onPair, onForget, onRetry, onUseServic
       {state.kind === 'revoked' && <button type="button" onClick={onUseService}>Send with Chat's service connection</button>}
       {state.kind === 'paired' && <>
         <p role="status">
-          This browser is paired as its own device <span title={state.deviceId}>{shortDeviceId(state.deviceId)}</span>
+          Paired. This browser is its own device <span title={state.deviceId}>{shortDeviceId(state.deviceId)}</span>
           {state.scope ? ` (${state.scope})` : ''}{state.verified ? '' : ', not verified because the Gateway did not answer'}.
           {' '}Your messages and /tightbeam commands are sent with it.
         </p>
@@ -141,9 +155,10 @@ export function DevicePairingBar({ state, onPair, onForget, onRetry, onUseServic
     {canPair && open && <form className="chat-device-bar-form" onSubmit={(event) => void submit(event)}>
       <label htmlFor={nameId}>Name for this browser</label>
       <input id={nameId} type="text" autoComplete="off" value={name} maxLength={CLAIMED_NAME_LIMIT}
-        onChange={(event) => setName(event.currentTarget.value)} />
-      <label htmlFor={codeId}>Pairing code from Clawline</label>
-      <input id={codeId} type="text" autoComplete="one-time-code" spellCheck={false} placeholder="TB-XXXX-XXXX-XXXX"
+        placeholder="Duo, or Duo TB-XXXX-XXXX-XXXX" onChange={(event) => setName(event.currentTarget.value)} />
+      <label htmlFor={codeId}>Pairing code</label>
+      <input id={codeId} type="text" autoComplete="one-time-code" autoCapitalize="characters" spellCheck={false}
+        placeholder="TB-XXXX-XXXX-XXXX"
         value={code} onChange={(event) => setCode(event.currentTarget.value)} />
       <button type="submit" disabled={busy}>{busy ? 'Pairing…' : 'Pair'}</button>
     </form>}

@@ -11,7 +11,7 @@ import path from 'node:path';
 import { after, before, test } from 'node:test';
 import { chromium } from 'playwright-core';
 import { createChatServer } from '../../server/chat-server.mjs';
-import { startFakeDeviceGateway } from '../helpers/fakeDeviceGateway.mjs';
+import { FAKE_ISSUED_CODE, FAKE_RECOVERY_SECRET, startFakeDeviceGateway } from '../helpers/fakeDeviceGateway.mjs';
 
 const SESSION = 'agent:main:george';
 const COOKIE_NAME = '__Secure-tb-chat-device';
@@ -86,6 +86,7 @@ before(async () => {
   captureServerOutput();
   gateway = await startFakeDeviceGateway({
     ackDelayMs: 20,
+    ephemeralDelayMs: 200,
     history: { sessionKey: SESSION, userId: 'george', messages: [{
       id: 'm_hostile', seq: 1, sessionKey: SESSION, role: 'assistant', messageType: 'chat', content: hostile,
       at: Date.parse('2026-11-19T00:00:00Z'), rowVersion: 1, attachments: [],
@@ -137,14 +138,14 @@ test('T13: pairs by code, keeps the cookie from page script, and sends with the 
   assert.doesNotMatch(policy, /unsafe-inline|unsafe-eval/);
 
   await page.getByRole('button', { name: 'Pair this browser' }).click();
-  await page.getByLabel('Name for this browser').fill('Playwright Chromium');
-  await page.getByLabel('Pairing code from Clawline').fill('TB-ABCD-EFGH-JKLM');
+  // As the install note says: "<name> <code>" in the name box, code box left empty.
+  await page.getByLabel('Name for this browser').fill('Duo TB-4KQ7-H2WX-9DNM');
   await page.getByRole('button', { name: 'Pair', exact: true }).click();
-  await page.getByText('This browser is paired as its own device').waitFor();
+  await page.getByText(/^Paired\. This browser is its own device/).waitFor();
 
   const pairFrame = gateway.state.clientFrames.find((frame) => frame.type === 'pair_request');
   assert.match(pairFrame.deviceId, /^chat-web-[0-9a-f]{32}$/);
-  assert.equal(pairFrame.claimedName, 'Playwright Chromium TB-ABCD-EFGH-JKLM');
+  assert.equal(pairFrame.claimedName, 'Duo TB-4KQ7-H2WX-9DNM');
 
   assert.equal(await page.evaluate(() => document.cookie), '');
   const cookies = await context.cookies();
@@ -170,9 +171,9 @@ test('T13: pairs by code, keeps the cookie from page script, and sends with the 
 
 test('T13a: a fresh page load (reload) and two concurrent tabs send commands with no re-pairing', async () => {
   const first = (await openChat()).page;
-  await first.getByText('This browser is paired as its own device').waitFor();
+  await first.getByText(/^Paired\./).waitFor();
   const second = (await openChat()).page;
-  await second.getByText('This browser is paired as its own device').waitFor();
+  await second.getByText(/^Paired\./).waitFor();
   await Promise.all([
     sendFromComposer(first, '/tightbeam rule dr_tab_a accept'),
     sendFromComposer(second, '/tightbeam rule dr_tab_b accept'),
@@ -186,7 +187,7 @@ test('T13a: a fresh page load (reload) and two concurrent tabs send commands wit
 
 test('T13a: hostile transcript stays inert, injected script is blocked by CSP and sends nothing', async () => {
   const { page } = await openChat();
-  await page.getByText('This browser is paired as its own device').waitFor();
+  await page.getByText(/^Paired\./).waitFor();
   await page.getByText('Hostile transcript:').waitFor();
   await page.getByText('click me').click().catch(() => {});
   await page.waitForTimeout(300);
@@ -220,8 +221,43 @@ test('T13a: hostile transcript stays inert, injected script is blocked by CSP an
   await page.close();
 });
 
-test('T13: no device token on the server disk, logs or environment after use', async () => {
-  const tokens = [...gateway.state.devices.keys()];
+test('P13: a recovery secret and an issued code show only in the requesting tab, unstored', async () => {
+  const sender = (await openChat()).page;
+  await sender.getByText(/^Paired\./).waitFor();
+  const other = (await openChat()).page;
+  await other.getByText(/^Paired\./).waitFor();
+
+  await sendFromComposer(sender, '/tightbeam recovery-enroll');
+  const panel = sender.getByRole('region', { name: 'Shown only here' });
+  await panel.getByText(FAKE_RECOVERY_SECRET, { exact: false }).waitFor();
+  assert.match(await panel.textContent(), /Shown only here, only now — write it down/);
+  await sendFromComposer(sender, '/tightbeam approve-device');
+  await panel.getByText(FAKE_ISSUED_CODE, { exact: false }).waitFor();
+
+  await other.waitForTimeout(300);
+  assert.equal(await other.getByRole('region', { name: 'Shown only here' }).count(), 0);
+  for (const page of [sender, other]) {
+    const stored = await page.evaluate(async () => JSON.stringify({
+      local: Object.entries(localStorage), session: Object.entries(sessionStorage),
+      databases: await indexedDB.databases(), cookie: document.cookie,
+    }));
+    for (const secret of [FAKE_RECOVERY_SECRET, FAKE_ISSUED_CODE]) assert.equal(stored.includes(secret), false, 'stored');
+  }
+  assert.equal((await other.textContent('body')).includes(FAKE_RECOVERY_SECRET), false);
+  // The conversation itself never shows it: it is not in the transcript.
+  assert.equal((await sender.getByRole('log').textContent()).includes(FAKE_RECOVERY_SECRET), false);
+
+  await panel.getByRole('button', { name: 'Dismiss' }).first().click();
+  await sender.reload();
+  await sender.getByText(/^Paired\./).waitFor();
+  assert.equal(await sender.getByRole('region', { name: 'Shown only here' }).count(), 0);
+  assert.equal((await sender.textContent('body')).includes(FAKE_ISSUED_CODE), false);
+  await sender.close();
+  await other.close();
+});
+
+test('T13/P13: no device token, secret or code on the server disk, logs or environment after use', async () => {
+  const tokens = [...gateway.state.devices.keys(), FAKE_RECOVERY_SECRET, FAKE_ISSUED_CODE];
   assert.ok(tokens.length > 0);
   const files = await fs.readdir(root, { recursive: true });
   for (const file of files) {
