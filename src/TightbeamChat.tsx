@@ -2577,9 +2577,19 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   const restoreFailedMessage = useCallback((bubble: Bubble) => {
     const identity = canonicalSendIdentity(bubble.record);
     const send = identity ? sendsByIdentityRef.current.get(identity) as AttachmentSendView | undefined : undefined;
+    if (getHostComposerSnapshot(hostBridge).composerHidden) {
+      // Host mode never restores into Chat's hidden composer; the host owns the draft.
+      hostBridge?.requestRestore({
+        sessionKey: bubble.record.sessionKey, messageId: bubble.record.id,
+        ...(bubble.record.clientMessageId ? { correlationId: bubble.record.clientMessageId } : {}),
+        content: bubble.record.content, attachmentCount: bubble.record.attachments?.length ?? 0,
+        ...(send?.attachmentItems?.length ? { attachments: send.attachmentItems } : {}),
+      });
+      return;
+    }
     composer.current?.restore(bubble.record.content, send?.attachmentItems ?? []);
     composer.current?.focusAtEnd();
-  }, []);
+  }, [hostBridge]);
   const canonicalSends = useMemo(() => {
     const records = new Map<string, CanonicalMessage>();
     for (const record of state.records) {
@@ -3413,8 +3423,12 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
           const { bubble } = item;
           const identity = canonicalSendIdentity(bubble.record);
           const send = identity ? sendsByIdentity.get(identity) as AttachmentSendView | undefined : undefined;
-          const canEditResend = Boolean(bubble.failureReason && bubble.side === 'human' && bubble.ownerScoped &&
-            !host.composerHidden && (!bubble.record.attachments?.length || send?.attachmentItems?.length));
+          const failedOwnPrompt = Boolean(bubble.failureReason && bubble.side === 'human' && bubble.ownerScoped);
+          // Host mode offers the action only to a host that declared restore-requested; the host
+          // receives a cannot-restore flag for photos Chat does not hold, so they don't hide it.
+          const canEditResend = failedOwnPrompt && (host.composerHidden
+            ? host.restoreRequested && host.ready && bubble.record.sessionKey === state.sessionKey
+            : Boolean(!bubble.record.attachments?.length || send?.attachmentItems?.length));
           return <RecordRow key={bubble.key} bubble={bubble} scrollKey={item.scrollKey}
             renderMessage={renderMessage} agentName={agentName} registerRow={reading.registerRow}
             readAttachment={runtime.readAttachment}
@@ -3496,8 +3510,8 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     revealingActivityItems, finishActivityReveal, reading.registerRow, reading.preserveVisiblePosition,
     reading.reconcileViewportLayout, preserveReadingPosition, expandRun,
     renderMessage, agentName, state.status, runtime, retryTranscript, restoreFailedMessage,
-    pendingSendClock, promptTargetPrefix, sendsByIdentity, host.composerHidden,
-    projection.compactionsDuringFailedTurn]);
+    pendingSendClock, promptTargetPrefix, sendsByIdentity, host.composerHidden, host.restoreRequested, host.ready,
+    state.sessionKey, projection.compactionsDuringFailedTurn]);
 
   return <ActivitySummaryProvider transport={activitySummaries}
     connected={state.liveConnectionState ? state.liveConnectionState === 'connected' : state.status === 'ready'}

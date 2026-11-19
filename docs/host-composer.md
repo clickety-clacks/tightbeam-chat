@@ -18,6 +18,18 @@ window.__TIGHTBEAM_CHAT_HOST__ = {
 };
 ```
 
+A declaration may also list optional events the host handles in `events`, keyed by event name, each with the event versions it accepts. The only optional event is `restore-requested` (see [Failed-turn restore](#failed-turn-restore)):
+
+```ts
+window.__TIGHTBEAM_CHAT_HOST__ = {
+  versions: [1],
+  events: { 'restore-requested': [1] },
+  onEvent(event) { /* ... */ },
+};
+```
+
+An absent, non-object or unrecognized `events` field, or a list without version 1, declares no optional events. It never makes the declaration malformed and never causes `declined`; Chat then behaves exactly as it does for a host without the field.
+
 If versions do not overlap or the declaration is malformed, Chat calls `onEvent` once with `declined` when a callable handler was supplied, then behaves as standalone Chat. With no declaration, Chat does not install a command entry. An older Chat release that does not know the declaration leaves its HTML composer in place; a host must keep its own composer hidden unless it receives `ready`.
 
 ## Ready and lifetime messages
@@ -122,7 +134,7 @@ The host follows these rules:
 
 1. Send only with the `lifetimeId` and `sessionKey` from the latest `ready`. After `lifetime-ended`, send nothing until another `ready`.
 2. Keep the host composer hidden until `ready`. A page replacement, load failure, or web-process termination alone is not evidence that a message failed or was not delivered; do not show a delivery warning solely for missing terminal events.
-3. Offer retry only after a user action and use the same correlation and content with `retry: true`. Edited text gets a new correlation.
+3. Offer retry only after a user action and use the same correlation and content with `retry: true`. Edited text gets a new correlation. Text received in `restore-requested` is always a new message: a new correlation and no `retry` flag.
 4. After app restart, a restored draft without its original correlation is a new user-initiated send with a new correlation and no retry flag; it may duplicate an earlier canonical message.
 5. After `declined`, no response, or an older Chat version, let Chat's HTML composer serve.
 6. Never automatically submit a new host attempt. Chat may internally re-ask the identical submission after an ambiguous REST result when Gateway deduplication is supported.
@@ -133,7 +145,45 @@ The host injects the declaration only into the main frame of the configured priv
 
 The host uses `ready` and `unavailable` for Send readiness, and `connection` for its connection indicator. It may send `reconnect` from that indicator while disconnected or reconnecting. While opted in, Chat shows no live-feed Reconnect action in the transcript; feature-specific recovery notices retain their own recovery actions.
 
-While opted in, Chat removes the composer and its reserved bottom space only after `ready`, preserves the transcript anchor through host resizing, and shows no status dot, popup, connection-state text, or inline Reconnect control for feed-only errors in the transcript. Feature-specific notices remain. Host-originated local bubbles show `Sending…` while pending and show failed or uncertain delivery without Chat retry or text-restore actions. The host owns the connection dot and its recovery action. Standalone Chat keeps its dot and details action; the dot turns yellow while live updates reconnect and green after recovery.
+While opted in, Chat removes the composer and its reserved bottom space only after `ready`, preserves the transcript anchor through host resizing, and shows no status dot, popup, connection-state text, or inline Reconnect control for feed-only errors in the transcript. Feature-specific notices remain. Host-originated local bubbles show `Sending…` while pending and show failed or uncertain delivery without Chat retry or text-restore actions. Host mode offers no Chat retry and never restores text into Chat's hidden composer. The one exception is a failed turn: for a host that declares `restore-requested`, Chat may hand the failed prompt's text to the host when the person taps Edit and resend (below). The host owns the connection dot and its recovery action. Standalone Chat keeps its dot and details action; the dot turns yellow while live updates reconnect and green after recovery.
+
+## Failed-turn restore
+
+A failed turn is a person's prompt that the Gateway accepted and Chat reported `delivered`, after which the agent's turn failed. Chat shows it as the prompt bubble followed by `Message failed.` and the verbatim failure reason. This is separate from a refused send, which the host learns from `failed` and whose draft it already holds. No other host event reports a failed turn.
+
+**Declaration.** The host opts in with `events: { 'restore-requested': [1] }` on its declaration. Without it, host mode is unchanged: the failed bubble and reason show with no action.
+
+**When the action shows.** While Chat's composer is hidden (after the first `ready`) and the current lifetime is ready, Chat shows `Edit and resend` on a failed turn when all of these hold:
+
+- the host declared `restore-requested` version 1;
+- the prompt is a human prompt from the signed-in person (the owner-scoped rows standalone Chat's Edit and resend covers; prompts from other people and batch members are excluded);
+- the prompt is in the selected session of the current lifetime.
+
+Unlike standalone Chat, host mode also shows the action when the prompt had photos Chat no longer holds; the event then says the photos cannot be restored. While the lifetime is unavailable or ended, the action is hidden. The failed bubble, `Message failed.` and the reason are the same with or without the action.
+
+**When the event fires.** Each tap on that action emits exactly one event, and nothing else emits it: not readiness, history loading, a reconnect, a new lifetime or a repeated failure row. Two taps emit two identical events; the host may ignore a repeat by `messageId`. Chat does not send, retry, upload or change any send state, and does not write into its own composer. The event goes only to the lifetime that was ready at the tap. If that lifetime ends while Chat reads the photo bytes, nothing is emitted and the person taps again after the next `ready`.
+
+**Event, version 1:**
+
+```ts
+{
+  event: 'restore-requested',
+  version: 1,
+  lifetimeId,            // current ready lifetime
+  sessionKey,            // its selected session
+  messageId,             // canonical row ID of the failed prompt
+  correlationId?,        // the row's client message ID, present only when the row has one
+  content,               // the row's content, exactly what standalone Edit and resend restores
+  attachments?,          // [{ filename, mimeType, data }] when the row had photos Chat holds
+  attachmentsUnavailable?: true, // when the row had photos Chat cannot restore
+}
+```
+
+- `correlationId` is the client message ID recorded on the row. It may belong to another device or to standalone Chat, so it need not be a `c_` UUIDv4 or one of the host's own correlations. It identifies the failed prompt; it is never reused for the resend.
+- `content` may be empty for a photo-only prompt. It is the row's text unchanged, without trimming.
+- A text-only prompt carries neither photo field. A prompt with photos carries exactly one of them. `attachments` lists the photos in row order in the same shape as the `send` command's `attachments`: `data` is standard base64 without a data-URL prefix, of the bytes Chat retained for that send (after image preparation), with that item's MIME type. Chat holds them only for a prompt sent from this page while the runtime is open. Otherwise, or when a byte read fails, `attachmentsUnavailable: true` says the photos cannot be restored.
+
+**Host behavior.** Apply the event only when `lifetimeId` and `sessionKey` match the latest `ready`. Put `content`, and any `attachments`, into the host composer as a draft for the person to edit, and keep any text the person had already typed. Send it only on a later user action, as a new message with a new `c_` UUIDv4 correlation and no `retry` flag. Tell the person when `attachmentsUnavailable` is set. The failed row stays in the transcript; the resend is a new row.
 
 The runnable browser example is [host-composer.html](../examples/host-composer.html). It demonstrates the page-local protocol; it is not a native app or live-service acceptance result.
 

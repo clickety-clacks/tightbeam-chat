@@ -25,11 +25,50 @@ export type HostComposerEvent =
   | { readonly event: 'failed'; readonly lifetimeId: string; readonly correlationId: string; readonly attempt: number;
       readonly reason: 'refused' | 'retry-unavailable' | 'upload-failed' | 'image-unreadable'; readonly detail?: string; readonly attachmentIndex?: number }
   | { readonly event: 'uncertain'; readonly lifetimeId: string; readonly correlationId: string; readonly attempt: number;
-      readonly reason: 'ack-lost' | 'accepted-unreconciled' | 'lifetime-ended' | 'retry-unavailable' };
+      readonly reason: 'ack-lost' | 'accepted-unreconciled' | 'lifetime-ended' | 'retry-unavailable' }
+  | HostRestoreRequestedEvent;
+
+/** Optional host events a declaration can opt into; each lists the event versions the host handles. */
+export const HOST_RESTORE_REQUESTED_EVENT = 'restore-requested';
+
+/**
+ * Emitted once per user activation of host-mode "Edit and resend" on a failed turn.
+ * The host restores the text into its own composer; Chat never sends or retries it.
+ */
+export interface HostRestoreRequestedEvent {
+  readonly event: 'restore-requested';
+  readonly version: 1;
+  readonly lifetimeId: string;
+  readonly sessionKey: string;
+  /** Canonical row ID of the failed prompt. */
+  readonly messageId: string;
+  /** The row's client message ID, present only when the row has one. */
+  readonly correlationId?: string;
+  /** Exactly the row content Chat's own Edit and resend restores. */
+  readonly content: string;
+  /** Present when the row had photos and Chat holds their bytes: the ordered restorable manifest. */
+  readonly attachments?: readonly HostComposerAttachment[];
+  /** Present when the row had photos that Chat cannot restore; `attachments` is then absent. */
+  readonly attachmentsUnavailable?: true;
+}
+
+/** One eligible failed prompt, read by the surface at the moment of the user's tap. */
+export interface HostRestoreRequest {
+  readonly sessionKey: string;
+  readonly messageId: string;
+  readonly correlationId?: string;
+  readonly content: string;
+  /** Number of photos on the canonical row; zero for a text-only prompt. */
+  readonly attachmentCount: number;
+  /** Retained photo inputs in row order, when Chat still holds them. */
+  readonly attachments?: readonly AttachmentInput[];
+}
 
 export interface HostComposerDeclaration {
   readonly versions: readonly number[];
   readonly onEvent: (event: HostComposerEvent) => void;
+  /** Optional events the host handles, by name, each with the event versions it accepts. */
+  readonly events?: { readonly 'restore-requested'?: readonly number[] };
 }
 
 /** JSON-safe native photo input; bytes follow the web attachment preparation path. */
@@ -63,6 +102,8 @@ export interface HostComposerSnapshot {
   readonly composerHidden: boolean;
   readonly ready: boolean;
   readonly settingsRequestRevision: number;
+  /** The declaration lists restore-requested version 1. */
+  readonly restoreRequested: boolean;
 }
 
 interface Attempt {
@@ -87,7 +128,7 @@ interface Lifetime {
 }
 
 const emptySnapshot: HostComposerSnapshot = Object.freeze({
-  optedIn: false, composerHidden: false, ready: false, settingsRequestRevision: 0,
+  optedIn: false, composerHidden: false, ready: false, settingsRequestRevision: 0, restoreRequested: false,
 });
 const correlationPattern = /^c_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const declinedDeclarations = new WeakSet<object>();
@@ -111,6 +152,27 @@ function liveFeedState(state: RuntimeState): HostConnectionState {
   }
   if (state.status === 'loading' || state.status === 'stale') return 'reconnecting';
   return 'disconnected';
+}
+
+/** An absent or malformed `events` field declares no optional events; it never declines the seam. */
+function declaresRestoreRequested(raw: Record<string, unknown>): boolean {
+  const events = raw.events;
+  if (!isObject(events)) return false;
+  const versions = events[HOST_RESTORE_REQUESTED_EVENT];
+  return Array.isArray(versions) && versions.includes(1);
+}
+
+async function blobBase64(blob: Blob): Promise<string> {
+  const bytes = new Uint8Array(blob.arrayBuffer ? await blob.arrayBuffer() : await new Promise<ArrayBuffer>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => reader.error ? reject(reader.error) : resolve(reader.result as ArrayBuffer);
+    reader.readAsArrayBuffer(blob);
+  }));
+  let binary = '';
+  for (let index = 0; index < bytes.length; index += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000));
+  }
+  return btoa(binary);
 }
 
 function errorSafeEmit(handler: (event: HostComposerEvent) => void, event: HostComposerEvent): void {
@@ -140,13 +202,13 @@ export class HostComposerBridge {
       }
       return null;
     }
-    return new HostComposerBridge(target, handler);
+    return new HostComposerBridge(target, handler, declaresRestoreRequested(raw));
   }
 
   private readonly listeners = new Set<() => void>();
   private readonly priorCommand: PropertyDescriptor | undefined;
   private readonly command: HostComposerCommandEntry;
-  private snapshot: HostComposerSnapshot = Object.freeze({ ...emptySnapshot, optedIn: true });
+  private snapshot: HostComposerSnapshot;
   private current: Lifetime | undefined;
   // Preserve original wire identity even when image preparation replaces upload bytes.
   private readonly manifests = new WeakMap<ChatRuntime, Map<string, string>>();
@@ -156,7 +218,9 @@ export class HostComposerBridge {
   private overlayOpen = false;
   private reportedOverlayOpen = false;
 
-  private constructor(private readonly target: Window, private readonly onEvent: (event: HostComposerEvent) => void) {
+  private constructor(private readonly target: Window, private readonly onEvent: (event: HostComposerEvent) => void,
+    private readonly restoreRequested: boolean) {
+    this.snapshot = Object.freeze({ ...emptySnapshot, optedIn: true, restoreRequested });
     this.priorCommand = Object.getOwnPropertyDescriptor(target, HOST_COMMAND_NAME);
     this.command = (command) => this.receive(command);
     Object.defineProperty(target, HOST_COMMAND_NAME, { configurable: true, writable: true, value: this.command });
@@ -178,6 +242,7 @@ export class HostComposerBridge {
       composerHidden: this.snapshot.composerHidden,
       ready: Boolean(this.current?.ready),
       settingsRequestRevision: this.settingsRequestRevision,
+      restoreRequested: this.restoreRequested,
     });
     for (const listener of this.listeners) listener();
   }
@@ -503,6 +568,44 @@ export class HostComposerBridge {
     if (lifetime.attempts.get(attempt.correlationId) === attempt) lifetime.attempts.delete(attempt.correlationId);
     this.emit(event);
     this.publish();
+  }
+
+  /**
+   * Hands one failed prompt to the host after a user tap. Emits at most one
+   * `restore-requested` event per call, only for the current ready lifetime
+   * and its selected session, and only when the host declared the event.
+   */
+  requestRestore(request: HostRestoreRequest): boolean {
+    const lifetime = this.current;
+    if (this.disposed || !this.restoreRequested || !this.snapshot.composerHidden || !lifetime?.ready ||
+        request.sessionKey !== lifetime.sessionKey) return false;
+    const base = {
+      event: 'restore-requested', version: 1, lifetimeId: lifetime.lifetimeId, sessionKey: lifetime.sessionKey,
+      messageId: request.messageId, ...(request.correlationId ? { correlationId: request.correlationId } : {}),
+      content: request.content,
+    } as const;
+    const items = request.attachments ?? [];
+    if (request.attachmentCount === 0) {
+      this.emit(base);
+      return true;
+    }
+    if (!items.length) {
+      this.emit({ ...base, attachmentsUnavailable: true });
+      return true;
+    }
+    void Promise.all(items.map(async item => Object.freeze({
+      filename: item.filename, mimeType: item.bytes.type, data: await blobBase64(item.bytes),
+    }))).then(
+      attachments => attachments,
+      () => undefined,
+    ).then(attachments => {
+      // The event names the lifetime current at the tap. If it ended while the
+      // photos were read, the host could not apply it, so nothing is emitted.
+      if (this.disposed || this.current !== lifetime) return;
+      this.emit(attachments?.length ? { ...base, attachments: Object.freeze(attachments) }
+        : { ...base, attachmentsUnavailable: true });
+    });
+    return true;
   }
 
   private onPageHide = (): void => {
