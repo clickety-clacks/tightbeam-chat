@@ -145,6 +145,8 @@ function turnFailureReason(record: CanonicalMessage): string | undefined {
 export function projectMessages(records: readonly ConversationRecord[], principalKey?: string, ownerUserId?: unknown,
   submitterAttributionEnabled = false): {
   messages: VisibleMessage[]; issues: readonly string[]; multipleSubmitters: boolean;
+  /** Compaction markers recorded while the latest prompt was failing and never answered. */
+  compactionsDuringFailedTurn: ReadonlySet<string>;
 } {
   const byId = new Map(records.filter((row): row is CanonicalMessage => row.kind === 'message').map((row) => [row.id, row]));
   const submitterKeys = new Set<string>();
@@ -159,7 +161,21 @@ export function projectMessages(records: readonly ConversationRecord[], principa
   // Track one prompt per session so failure attribution stays a single pass.
   const failuresByPrompt = new Map<string, string>();
   const latestPromptBySession = new Map<string, { prompt?: CanonicalMessage; hasAssistantReply: boolean }>();
-  for (const record of byId.values()) {
+  // A compaction marker belongs to the prompt in effect when it was recorded.
+  const compactionPrompts = new Map<string, string>();
+  const answeredPrompts = new Set<string>();
+  const attributed = new Set<string>();
+  for (const row of records) {
+    if (row.kind === 'transition') {
+      const latest = latestPromptBySession.get(row.sessionKey);
+      if (row.transition === 'compaction' && latest?.prompt && !latest.hasAssistantReply) {
+        compactionPrompts.set(row.id, latest.prompt.id);
+      }
+      continue;
+    }
+    if (attributed.has(row.id)) continue;
+    attributed.add(row.id);
+    const record = byId.get(row.id)!;
     const reason = turnFailureReason(record);
     if (reason) {
       const explicitParent = record.replyToMessageId ? byId.get(record.replyToMessageId) : undefined;
@@ -185,8 +201,13 @@ export function projectMessages(records: readonly ConversationRecord[], principa
     } else if (record.role === 'assistant' && !record.sender?.startsWith('process:')) {
       const latest = latestPromptBySession.get(record.sessionKey);
       if (latest) latest.hasAssistantReply = true;
+      if (latest?.prompt) answeredPrompts.add(latest.prompt.id);
     }
   }
+  // Only the records decide: the prompt has a recorded failure and no reply.
+  const compactionsDuringFailedTurn = new Set([...compactionPrompts]
+    .filter(([, promptId]) => failuresByPrompt.has(promptId) && !answeredPrompts.has(promptId))
+    .map(([transitionId]) => transitionId));
   const messages: VisibleMessage[] = [];
   const issues: string[] = [];
   for (const record of byId.values()) {
@@ -239,5 +260,5 @@ export function projectMessages(records: readonly ConversationRecord[], principa
       });
     }
   }
-  return { messages, issues: Object.freeze([...new Set(issues)]), multipleSubmitters };
+  return { messages, issues: Object.freeze([...new Set(issues)]), multipleSubmitters, compactionsDuringFailedTurn };
 }

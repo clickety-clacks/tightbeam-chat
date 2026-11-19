@@ -1035,9 +1035,12 @@ function WorkingStateCaption({ caption, turnSeq }: {
   </div>;
 }
 
-function transitionGist(record: CanonicalTransition): string {
+function transitionGist(record: CanonicalTransition, duringFailedTurn = false): string {
   if (record.transition === 'restart') return 'Context reset';
-  if (record.transition === 'compaction') return 'Context compacted';
+  // Compaction did not rescue a prompt whose failure is recorded and never answered.
+  if (record.transition === 'compaction') {
+    return duringFailedTurn ? 'Context compacted · the failed message above was not answered' : 'Context compacted';
+  }
   if (record.transition === 'model' && record.from && record.to) {
     return `Model settings changed: ${record.from} → ${record.to}`;
   }
@@ -3385,7 +3388,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
           registerRow={reading.registerRow} expand={expandRun} />;
         if (item.kind === 'transition') {
           const record = item.record;
-          const gist = formatVisibleIds(transitionGist(record));
+          const gist = formatVisibleIds(transitionGist(record, projection.compactionsDuringFailedTurn.has(record.id)));
           return <div role="separator" aria-orientation="horizontal" key={record.id} ref={element => reading.registerRow(record.id, element)}
             data-record-key={record.id} data-scroll-key={record.id}
             className="tb-chat-transition tb-chat-transition-marker" aria-label={`Transition: ${gist}`}>
@@ -3479,7 +3482,8 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     revealingActivityItems, finishActivityReveal, reading.registerRow, reading.preserveVisiblePosition,
     reading.reconcileViewportLayout, preserveReadingPosition, expandRun,
     renderMessage, agentName, state.status, runtime, retryTranscript, restoreFailedMessage,
-    pendingSendClock, promptTargetPrefix, sendsByIdentity, host.composerHidden]);
+    pendingSendClock, promptTargetPrefix, sendsByIdentity, host.composerHidden,
+    projection.compactionsDuringFailedTurn]);
 
   return <ActivitySummaryProvider transport={activitySummaries}
     connected={state.liveConnectionState ? state.liveConnectionState === 'connected' : state.status === 'ready'}

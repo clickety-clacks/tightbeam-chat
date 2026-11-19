@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { projectMessages } from '../src/messageVisibility';
-import type { CanonicalMessage } from '../src/types';
+import { decodePublic019Message } from '../src/public019';
+import type { CanonicalMessage, CanonicalTransition, ConversationRecord } from '../src/types';
 
 const message = (id: string, extra: Partial<CanonicalMessage> = {}): CanonicalMessage => Object.freeze({
   kind: 'message', id, sessionKey: 'conversation', seq: 1, rowVersion: 1,
@@ -166,5 +167,68 @@ describe('principal-scoped message projection', () => {
 
     const projected = projectMessages([prompt, detailedFailure, compaction, compactFailure], 'person', 'person');
     expect(projected.messages.find(row => row.key === prompt.id)?.failureReason).toBe(detailedReason);
+  });
+});
+
+describe('compaction markers next to a failed prompt', () => {
+  const compaction = (id: string, seq: number): CanonicalTransition => Object.freeze({
+    kind: 'transition', id, sessionKey: 'conversation', seq, rowVersion: 1, transition: 'compaction',
+    content: '[context compacted]', raw: Object.freeze({ id }) });
+  const failure = (id: string, seq: number, reason: string) => message(id, { seq, role: 'assistant',
+    sender: 'process:tightbeam', messageType: 'substrate',
+    content: `[turn failed]\n\nThe agent could not answer the message above: ${reason}` });
+  const refusal = 'Prompt is too long. A single-exchange conversation cannot be compacted.';
+  const during = (rows: ConversationRecord[]) => [...projectMessages(rows, 'person', 'person').compactionsDuringFailedTurn];
+
+  it('finds nothing to mark when the records hold no compaction, whatever the refusal says', () => {
+    const rows = [message('prompt', { seq: 1 }), failure('refused', 2, refusal)];
+    const projected = projectMessages(rows, 'person', 'person');
+    expect([...projected.compactionsDuringFailedTurn]).toEqual([]);
+    expect(projected.messages.find(row => row.key === 'prompt')?.failureReason).toBe(refusal);
+  });
+
+  it('marks a recorded compaction that sits between failures of the same unanswered prompt', () => {
+    expect(during([message('prompt', { seq: 1 }), failure('refused', 2, refusal), compaction('compacted', 3),
+      failure('retry-refused', 4, 'Internal error: Prompt is too long')])).toEqual(['compacted']);
+  });
+
+  it('marks it from the records alone, not from the refusal wording', () => {
+    expect(during([message('prompt', { seq: 1 }), compaction('compacted', 2),
+      failure('refused', 3, 'Something else went wrong')])).toEqual(['compacted']);
+  });
+
+  it('leaves compaction plain when the prompt was answered or the failure belongs to an earlier prompt', () => {
+    expect(during([message('prompt', { seq: 1 }), compaction('compacted', 2),
+      reply('answer', 'prompt', { seq: 3 })])).toEqual([]);
+    expect(during([message('old', { seq: 1 }), failure('refused', 2, refusal),
+      message('next', { seq: 3 }), compaction('compacted', 4), reply('answer', 'next', { seq: 5 })])).toEqual([]);
+    expect(during([message('prompt', { seq: 1 }), reply('answer', 'prompt', { seq: 2 }), compaction('compacted', 3)]))
+      .toEqual([]);
+  });
+
+  it('reads the Gateway history shape of a refused prompt followed by a compaction marker', () => {
+    const sessionKey = 'agent:main:fixture s_example';
+    const item = (id: string, seq: number, extra: Record<string, unknown>) => ({ id, seq, rowVersion: seq,
+      at: 1_795_013_400_000 + seq, sessionKey, attachments: [], recordEventIds: [], replyToMessageId: null,
+      turnSeq: null, context: null, ...extra });
+    const reason = 'Internal error: Prompt is too long · the request is ~377761 tokens (limit 200000) and this '
+      + 'conversation\'s own content is most of it. A single-exchange conversation cannot be compacted; start with '
+      + 'less content (smaller files or pasted text).';
+    const history = [
+      item('s_prompt', 10, { role: 'user', sender: 'user:person', content: 'A very long prompt', turnSeq: 41 }),
+      item('s_prompt', 10, { role: 'user', sender: 'user:person', content: 'A very long prompt', turnSeq: 42 }),
+      item('s_refused', 11, { role: 'assistant', sender: 'process:tightbeam', messageType: 'substrate',
+        content: `[turn failed]\n\nThe agent could not answer the message above: ${reason}` }),
+      item('s_compacted', 12, { role: 'assistant', sender: 'process:tightbeam', messageType: 'marker',
+        content: "[context compacted]\n\nThe session's working context was summarized after unknown.",
+        marker: { kind: 'context-compacted', from: 'unknown', to: 'compacted' } }),
+      item('s_retry_refused', 13, { role: 'assistant', sender: 'process:tightbeam', messageType: 'substrate',
+        content: '[turn failed]\n\nThe agent could not answer the message above: Internal error: Prompt is too long' }),
+    ].map(row => decodePublic019Message(row, sessionKey));
+    const projected = projectMessages(history, 'person', 'person');
+    expect([...projected.compactionsDuringFailedTurn]).toEqual(['s_compacted']);
+    expect(projected.messages.find(row => row.key === 's_prompt')?.failureReason).toBe(reason);
+    expect([...projectMessages(history.filter(row => row.kind !== 'transition'), 'person', 'person')
+      .compactionsDuringFailedTurn]).toEqual([]);
   });
 });

@@ -2745,6 +2745,47 @@ describe('conversation surface', () => {
     expect(screen.queryByRole('article', { name: /transition/i })).toBeNull();
   });
 
+  it('shows no compaction divider after a refused prompt unless the records hold a compaction marker', () => {
+    const sessionKey = 'refused-without-compaction';
+    const reason = 'Prompt is too long. A single-exchange conversation cannot be compacted.';
+    const prompt = row(sessionKey, 'prompt', 'A long prompt', { role: 'user', sender: 'user:person', seq: 1 });
+    const refused = row(sessionKey, 'refused', `[turn failed]\n\nThe agent could not answer the message above: ${reason}`,
+      { role: 'assistant', sender: 'process:tightbeam', messageType: 'substrate', seq: 2 });
+    const runtime = new FakeRuntime(sessionKey, { records: [prompt, refused] });
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+
+    expect(screen.queryAllByRole('separator')).toEqual([]);
+    expect(screen.queryByText(/Context compacted/)).toBeNull();
+    expect(screen.getByRole('alert').textContent).toContain(reason);
+  });
+
+  it('keeps a recorded compaction divider but says it did not answer the failed prompt', () => {
+    const sessionKey = 'refused-with-compaction';
+    const reason = 'Prompt is too long. A single-exchange conversation cannot be compacted.';
+    const prompt = row(sessionKey, 'prompt', 'A long prompt', { role: 'user', sender: 'user:person', seq: 1 });
+    const refused = row(sessionKey, 'refused', `[turn failed]\n\nThe agent could not answer the message above: ${reason}`,
+      { role: 'assistant', sender: 'process:tightbeam', messageType: 'substrate', seq: 2 });
+    const compacted: ConversationRecord = { kind: 'transition', id: 'compacted', sessionKey, seq: 3, rowVersion: 1,
+      transition: 'compaction', from: 'unknown', to: 'compacted', content: '[context compacted]', raw: {} };
+    const retry = row(sessionKey, 'retry', '[turn failed]\n\nThe agent could not answer the message above: Prompt is too long',
+      { role: 'assistant', sender: 'process:tightbeam', messageType: 'substrate', seq: 4 });
+    const runtime = new FakeRuntime(sessionKey, { records: [prompt, refused, compacted, retry] });
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+
+    expect(screen.getAllByRole('separator').map(element => element.getAttribute('aria-label'))).toEqual([
+      'Transition: Context compacted · the failed message above was not answered']);
+    expect(screen.getByRole('alert').textContent).toContain(reason);
+    expect(document.querySelector('[data-message-state="failed"]')).toBeTruthy();
+
+    const reply = row(sessionKey, 'reply', 'Answer', { role: 'assistant', sender: 'assistant-service',
+      replyToMessageId: 'later', turnSeq: 2, seq: 6 });
+    const later = row(sessionKey, 'later', 'A shorter prompt', { role: 'user', sender: 'user:person', seq: 5, turnSeq: 2 });
+    const laterCompaction: ConversationRecord = { ...compacted, id: 'later-compaction', seq: 7 };
+    act(() => runtime.update({ records: [prompt, refused, compacted, retry, later, reply, laterCompaction] }));
+    expect(screen.getAllByRole('separator').map(element => element.getAttribute('aria-label'))).toEqual([
+      'Transition: Context compacted · the failed message above was not answered', 'Transition: Context compacted']);
+  });
+
   it('automatically follows hidden-only older pages until a displayable human message arrives', async () => {
     const sessionKey = 'paged-session';
     const hiddenTrigger = row(sessionKey, 'other-trigger', 'Another agent activity', { role: 'user', sender: 'agent:other', messageType: 'agent', turnSeq: 7 });
