@@ -25,3 +25,5 @@ jobs:
       - run: npm run test:release-watch
       - run: npm run build
       - run: npm run build:chat-server
+      - run: npx playwright-core install --with-deps chromium
+      - run: node --test "tests/browser/*.browser.mjs"

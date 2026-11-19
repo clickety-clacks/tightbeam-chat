@@ -47,12 +47,53 @@ function takeClientFrame(buffer) {
   return { opcode, payload, rest: buffer.subarray(offset + length) };
 }
 
+function historyReply(url, history) {
+  const path = url.pathname;
+  const session = `/api/sessions/${encodeURIComponent(history.sessionKey)}`;
+  if (path === '/version') return { version: '0.1.16' };
+  if (path === session) {
+    return { schemaVersion: 1, resource: 'sessions', item: { sessionKey: history.sessionKey, rowVersion: 1,
+      displayName: 'Main', ownerUserId: history.userId } };
+  }
+  if (path === `${session}/messages`) {
+    return { schemaVersion: 1, resource: 'transcript messages', items: url.searchParams.has('after') ? [] : history.messages ?? [],
+      page: { oldestCursor: null, newestCursor: null, hasMoreBefore: false, hasMoreAfter: false } };
+  }
+  if (path === `${session}/tool-calls`) return { schemaVersion: 1, resource: 'tool calls', items: [], page: { hasMoreBefore: false } };
+  return undefined;
+}
+
+/** The protocol-2 change feed: provisioned auth, then subscription_ready for every subscribe. */
+function changesSocket(request, socket, history) {
+  const accept = crypto.createHash('sha1')
+    .update(`${request.headers['sec-websocket-key']}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest('base64');
+  socket.write(`HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
+  const send = (value) => socket.write(serverFrame(1, Buffer.from(JSON.stringify(value))));
+  socket.on('error', () => {});
+  let bytes = Buffer.alloc(0);
+  socket.on('data', (chunk) => {
+    bytes = Buffer.concat([bytes, chunk]);
+    for (let frame = takeClientFrame(bytes); frame; frame = takeClientFrame(bytes)) {
+      bytes = frame.rest;
+      if (frame.opcode === 8) { socket.end(serverFrame(8, Buffer.from([0x03, 0xe8]))); return; }
+      if (frame.opcode === 9) { socket.write(serverFrame(10, frame.payload)); continue; }
+      if (frame.opcode !== 1) continue;
+      let value;
+      try { value = JSON.parse(frame.payload.toString('utf8')); } catch { continue; }
+      if (value.type === 'auth') send({ type: 'auth_result', success: true, userId: history.userId, sessionKey: value.sessionKey });
+      else if (value.type === 'subscribe') send({ type: 'subscription_ready', subscriptionId: value.subscriptionId });
+    }
+  });
+}
+
 /**
  * Starts the fake Gateway. Options:
  * - pairReply(frame, state): returns the reply frame for a pair_request (default: success)
  * - ackDelayMs: delay before a message ack
  * - replay: frames pushed between auth_result and sync_complete
  * - messageError(frame): returns an error frame to send instead of an ack
+ * - history: { sessionKey, userId, messages } serves the read API and /ws/changes the
+ *   Chat page loads through its provisioned (organization) credential
  */
 export async function startFakeDeviceGateway(options = {}) {
   const state = {
@@ -68,6 +109,11 @@ export async function startFakeDeviceGateway(options = {}) {
   const sockets = new Set();
   const server = http.createServer((request, response) => {
     state.httpRequests.push({ method: request.method, url: request.url });
+    const reply = options.history && historyReply(new URL(request.url, 'http://gateway.invalid'), options.history);
+    if (reply) {
+      response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(reply));
+      return;
+    }
     response.writeHead(404, { 'content-type': 'application/json' }).end('{"error":{"code":"not_found"}}');
   });
   server.on('connection', (socket) => {
@@ -83,6 +129,10 @@ export async function startFakeDeviceGateway(options = {}) {
 
   server.on('upgrade', (request, socket) => {
     state.upgrades.push({ path: request.url, origin: request.headers.origin });
+    if (options.history && request.url.startsWith('/ws/changes')) {
+      changesSocket(request, socket, options.history);
+      return;
+    }
     if (request.url !== '/ws') {
       socket.end('HTTP/1.1 404 Not Found\r\n\r\n');
       return;
