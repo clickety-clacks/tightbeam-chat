@@ -518,7 +518,7 @@ describe('versioned host composer seam on the real adapter and surface', () => {
 
     try {
       const ready = await waitForReady(events, 'conversation-a');
-      const snapshotKeys = ['composerHidden', 'optedIn', 'ready', 'settingsRequestRevision'];
+      const snapshotKeys = ['composerHidden', 'optedIn', 'ready', 'restoreRequested', 'settingsRequestRevision'];
       expect(Object.keys(bridge.getSnapshot()).sort()).toEqual(snapshotKeys);
       const ids: string[] = [];
       for (let index = 0; index < 64; index++) {
