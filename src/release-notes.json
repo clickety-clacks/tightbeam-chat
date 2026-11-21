@@ -1,5 +1,30 @@
 [
   {
+    "version": "v0.1.109",
+    "items": [
+      {
+        "title": "Timestamps for new messages",
+        "description": "Chat shows the Gateway timestamp as a reply arrives. If the Gateway sends no usable time, Chat shows when this device first received the message and replaces that time when the Gateway supplies one."
+      },
+      {
+        "title": "Event pills",
+        "description": "Event pills are available from 2026-11-16 22:19 UTC; earlier events are not backfilled."
+      },
+      {
+        "title": "Reconnecting in Tuner",
+        "description": "Reconnecting state is supported in Tuner Build 79 and later."
+      },
+      {
+        "title": "Gateway compatibility",
+        "description": "Chat supports Gateway 0.1.16. Human prompts use the authenticated WebSocket connection by default."
+      },
+      {
+        "title": "Attachment delivery on supporting Gateways",
+        "description": "On Gateways with original-file delivery, JPEG and PNG arrive inline. Other attachments arrive as original files in the session workspace, with their paths in the same turn. Chat may convert images to JPEG or PNG before uploading them."
+      }
+    ]
+  },
+  {
     "version": "v0.1.108",
     "items": [
       {
