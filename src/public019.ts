@@ -181,13 +181,12 @@ function decodeHistoryRailDenial(value: unknown, sessionKey: string): HistoryRai
   }
 }
 
-function messageTime(row: Record<string, unknown>, site: string): string | undefined {
-  const at = row.at;
-  if (!Number.isSafeInteger(at) || (at as number) < 0) {
-    logGatewayIncompatibility(site, 'Ignored invalid millisecond at timestamp.');
+function wireTimestamp(value: unknown, site: string, field: 'at' | 'occurredAt'): string | undefined {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    logGatewayIncompatibility(site, `Ignored invalid millisecond ${field} timestamp.`);
     return undefined;
   }
-  const date = new Date(at as number);
+  const date = new Date(value);
   if (!Number.isFinite(date.getTime())) {
     logGatewayIncompatibility(site, 'Ignored timestamp outside the supported date range.');
     return undefined;
@@ -222,7 +221,7 @@ export function decodePublic019Message(value: unknown, sessionKey: string): Conv
       transition: kind === 'harness-switch' ? 'harness' : kind === 'model-retune' ? 'model'
         : kind === 'session-restart' ? 'restart' : kind === 'context-compacted' ? 'compaction' : 'unknown',
       content, from, to, recordEventIds,
-      createdAt: messageTime(row, 'transition marker'), raw: Object.freeze({ ...row }),
+      createdAt: wireTimestamp(row.at, 'transition marker', 'at'), raw: Object.freeze({ ...row }),
     });
   }
   const attachments = row.attachments;
@@ -261,7 +260,7 @@ export function decodePublic019Message(value: unknown, sessionKey: string): Conv
     turnIncludesHuman,
     isBatchCarrier,
     messageType: readableOptionalString(row, 'messageType', 'message'),
-    createdAt: messageTime(row, 'message'),
+    createdAt: wireTimestamp(row.at, 'message', 'at'),
     recordEventIds,
     attachments: Object.freeze(Array.isArray(attachments) ? [...attachments] : []),
     clientMessageId: readableOptionalString(row, 'clientMessageId', 'message'),
@@ -566,7 +565,11 @@ export function decodePublic019Notice(value: unknown, sessionKey: string): Chang
     if (record(frame.refs).turnEventId !== event.id) {
       throw new UnsupportedTargetError('Turn-event notice reference does not match its payload.');
     }
-    return { operation: 'turn-event', event };
+    const liveCreatedAt = event.kind === 'assistant.segment'
+      ? wireTimestamp(frame.occurredAt, 'assistant segment notice', 'occurredAt')
+      : undefined;
+    return { operation: 'turn-event', event: liveCreatedAt === undefined
+      ? event : Object.freeze({ ...event, liveCreatedAt }) };
   }
   if (frame.class.startsWith('session.')) {
     if (frame.resource !== 'sessions' || frame.op !== 'upsert') {

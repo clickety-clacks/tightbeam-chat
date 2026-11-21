@@ -7,7 +7,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { TightbeamChat, workingStateOpacity } from '../src/TightbeamChat';
 import type { RenderContext } from '../src/TightbeamChat';
 import { createTurnProvenance } from '../src/provenance';
-import { decodePublic019Message } from '../src/public019';
+import { decodePublic019Message, decodePublic019Notice } from '../src/public019';
 import { AttachmentPreparationError } from '../src/types';
 import type {
   AttachmentInput, AttachmentReference, ToolCallIndex, ToolCallRecord, CanonicalMessage, CanonicalTurn, ChatRuntime, ConversationRecord, LocalSend, RuntimeState,
@@ -4764,6 +4764,38 @@ describe('tool-call and transition display', () => {
     expect(keys.indexOf('record-event:' + event.eventId)).toBeLessThan(keys.indexOf('tool-after-event'));
     expect(view.container.querySelectorAll('.tb-chat-activity-tool-run-toggle')).toHaveLength(0);
     expect(view.container.querySelectorAll('details.tb-chat-activity-line.tb-chat-activity-tool')).toHaveLength(2);
+  });
+
+  it('shows the Gateway time on a live assistant segment before the transcript row arrives', () => {
+    const sessionKey = 'live-segment-time';
+    const prompt = row(sessionKey, 'prompt', 'Question', {
+      seq: 1, role: 'user', sender: 'user:person', turnSeq: 7, createdAt: new Date(1_000).toISOString(),
+    });
+    const activeTurn = createTurnProvenance({
+      ...turn(7, sessionKey, prompt.id, 'user:person', 'running'), triggerSource: 'human',
+    }, [prompt], 'person', 'person');
+    const segment = decodePublic019Notice({
+      type: 'change', schemaVersion: 2, class: 'message.segment_recorded', resource: 'turn events', op: 'upsert',
+      refs: { sessionKey, turnEventId: 'segment' }, occurredAt: 2_000,
+      payload: { id: 'segment', sessionKey, turnSeq: 7, turnEventSeq: 1, kind: 'assistant.segment',
+        messageId: 'reply', toolCallId: null, content: { type: 'text', text: 'Answer' }, toolCall: null, rowVersion: 1 },
+    }, sessionKey);
+    if (segment.operation !== 'turn-event') throw new Error('Expected a turn event');
+    const runtime = new FakeRuntime(sessionKey, {
+      records: [prompt], activeTurn, activityTurnStateAvailable: true, turnEventsEnabled: true,
+      turnEvents: [segment.event],
+    });
+    const view = render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+    const timestamp = () => view.container.querySelector('[data-record-key="turn-message:7:reply:1"] time');
+
+    expect(timestamp()?.getAttribute('datetime')).toBe(new Date(2_000).toISOString());
+    expect(timestamp()?.textContent).not.toBe('Time unavailable');
+
+    const reply = row(sessionKey, 'reply', 'Answer', {
+      seq: 2, turnSeq: 7, replyToMessageId: prompt.id, createdAt: new Date(2_010).toISOString(),
+    });
+    act(() => runtime.update({ records: [prompt, reply], activeTurn: undefined }));
+    expect(timestamp()?.getAttribute('datetime')).toBe(reply.createdAt);
   });
 
   it('renders reply chunks and adjacent tool calls in turn-event order without folding across a reply', () => {

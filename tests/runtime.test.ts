@@ -285,6 +285,8 @@ describe('framework-independent runtime', () => {
     const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
     await vi.waitFor(() => expect(transport.turnEventCallbacks).toBeDefined());
+    const liveCreatedAt = new Date(2_000).toISOString();
+    transport.emitTurnEvent({ ...events[0], liveCreatedAt });
     transport.emitTurnEvent(events[3]);
     snapshot.resolve(events.slice(0, 3));
     await vi.waitFor(() => expect(runtime.getSnapshot().turnEvents).toHaveLength(4));
@@ -292,6 +294,7 @@ describe('framework-independent runtime', () => {
     const liveEntries = projectTurnEvents(runtime.getSnapshot().turnEvents!);
     expect(runtime.getSnapshot().turnEvents!.map(event => event.turnEventSeq)).toEqual([1, 2, 3, 4]);
     expect(liveEntries.map(entry => entry.kind)).toEqual(['assistant', 'tools', 'assistant']);
+    expect(liveEntries[0]).toMatchObject({ liveCreatedAt });
     expect(liveEntries[1]).toMatchObject({ calls: [{ call: completed }] });
 
     await runtime.rebuild({ restart: true });

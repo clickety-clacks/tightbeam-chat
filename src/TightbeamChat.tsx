@@ -325,7 +325,7 @@ function projectTurnTimeline(events: RuntimeState['turnEvents'], records: readon
         const syntheticRecord: CanonicalMessage | undefined = !source && runningOwnerTurn
           ? Object.freeze({ kind: 'message', id: entry.messageId, sessionKey: activeTurn!.turn.sessionKey,
             seq: anchorSeq, rowVersion: 1, role: 'assistant', replyToMessageId: activeTurn!.trigger!.id,
-            turnSeq, content: entry.text, raw: Object.freeze({ turnSeq, messageId: entry.messageId,
+            turnSeq, content: entry.text, createdAt: entry.liveCreatedAt, raw: Object.freeze({ turnSeq, messageId: entry.messageId,
               turnEventIds: entry.eventIds }) })
           : undefined;
         const record = baseRecord

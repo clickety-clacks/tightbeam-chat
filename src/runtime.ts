@@ -123,6 +123,17 @@ function mergeRecord(previous: ConversationRecord | undefined, incoming: Convers
   return previous;
 }
 
+function mergeTurnEvent(previous: TurnEventRecord | undefined, incoming: TurnEventRecord): TurnEventRecord {
+  if (!previous || previous === incoming) return incoming;
+  const { liveCreatedAt: previousTime, ...previousEvent } = previous;
+  const { liveCreatedAt: incomingTime, ...incomingEvent } = incoming;
+  if (JSON.stringify(previousEvent) !== JSON.stringify(incomingEvent)) {
+    throw new UnsupportedTargetError('An immutable turn event changed between history and live delivery.');
+  }
+  // The change envelope can supply a time that is absent from the REST row.
+  return previousTime === undefined && incomingTime !== undefined ? incoming : previous;
+}
+
 function matchingAttachments(send: LocalSend, row: CanonicalMessage): boolean {
   if (!send.attachmentItems) return true;
   if (!send.attachmentsPrepared) return false;
@@ -589,14 +600,10 @@ class SessionRuntime implements ChatRuntime {
       throw new UnsupportedTargetError('Turn-event history contains a duplicate ordinal.');
     }
     const previous = this.turnEvents.get(event.id);
-    if (previous) {
-      if (JSON.stringify(previous) !== JSON.stringify(event)) {
-        throw new UnsupportedTargetError('An immutable turn event changed between history and live delivery.');
-      }
-      return false;
-    }
+    const merged = mergeTurnEvent(previous, event);
+    if (previous === merged) return false;
     this.turnEventOrdinals.set(ordinalKey, event.id);
-    this.turnEvents.set(event.id, event);
+    this.turnEvents.set(event.id, merged);
     if (event.toolCall) this.putTool(event.toolCall);
     return true;
   }
@@ -663,11 +670,11 @@ class SessionRuntime implements ChatRuntime {
             return;
           }
           if (readingSnapshot) {
-            const previous = liveDuringRead.get(notice.event.id);
-            if (!previous) liveDuringRead.set(notice.event.id, notice.event);
-            else if (JSON.stringify(previous) !== JSON.stringify(notice.event)) {
-              this.failTurnEvents(new UnsupportedTargetError('An immutable turn event changed during its history read.'),
-                liveDuringRead.values(), false);
+            try {
+              const previous = liveDuringRead.get(notice.event.id);
+              liveDuringRead.set(notice.event.id, mergeTurnEvent(previous, notice.event));
+            } catch (error) {
+              this.failTurnEvents(error, liveDuringRead.values(), false);
             }
             return;
           }
@@ -691,11 +698,8 @@ class SessionRuntime implements ChatRuntime {
       if (!current()) return;
       const combined = new Map<string, TurnEventRecord>();
       for (const event of [...snapshot, ...liveDuringRead.values()]) {
-        const previous = combined.get(event.id);
-        if (!previous) combined.set(event.id, event);
-        else if (JSON.stringify(previous) !== JSON.stringify(event)) {
-          throw new UnsupportedTargetError('An immutable turn event changed between history and live delivery.');
-        }
+        const previous = combined.get(event.id) ?? this.turnEvents.get(event.id);
+        combined.set(event.id, mergeTurnEvent(previous, event));
       }
       this.replaceTurnEventTurns(requestedTurns, [...combined.values()]);
       for (const turnSeq of turnSeqs) this.turnEventLoadedTurns.add(turnSeq);

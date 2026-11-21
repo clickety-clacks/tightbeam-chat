@@ -114,6 +114,8 @@ export interface TurnEventRecord {
   readonly content: Readonly<Record<string, unknown>> | null;
   readonly toolCall: ToolCallRecord | null;
   readonly rowVersion: number;
+  /** Gateway occurrence time from a live assistant-segment envelope. */
+  readonly liveCreatedAt?: string;
 }
 
 /** A durable occurrence from the selected session's record-event feed. */
