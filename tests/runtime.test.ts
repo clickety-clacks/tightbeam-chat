@@ -566,6 +566,7 @@ describe('framework-independent runtime', () => {
       const transport = new ControlledTransport();
       const index = arrival === 'older-page race' ? 4 : 7;
       const original = message(index + 1, { role: 'user', sender: 'user:person', content: 'Original human words',
+        createdAt: new Date(1_000).toISOString(),
         attachments: [{ name: 'original.txt' }], raw: { turnSeq: null, preserved: 'metadata' } });
       transport.rows[index] = original;
       const enriched = { ...original, turnSeq: 90, content: 'Do not replace the stored words', sender: 'user:another',

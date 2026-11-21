@@ -101,7 +101,13 @@ function senderLookupTarget(sender: string): { readonly sessionKey: string; read
 
 /** Message publication can acquire its turn link without changing rowVersion. */
 function mergeRecord(previous: ConversationRecord | undefined, incoming: ConversationRecord): ConversationRecord {
-  if (!previous || incoming.rowVersion > previous.rowVersion) return incoming;
+  if (!previous) return incoming;
+  if (incoming.rowVersion > previous.rowVersion) {
+    return previous.kind === 'message' && incoming.kind === 'message' &&
+        previous.createdAt !== undefined && incoming.createdAt === undefined
+      ? Object.freeze({ ...incoming, createdAt: previous.createdAt })
+      : incoming;
+  }
   if (incoming.rowVersion === previous.rowVersion && canReviseWithoutSequenceChange(previous) &&
       canReviseWithoutSequenceChange(incoming) && previous.id === incoming.id && previous.seq === incoming.seq &&
       (incoming.createdAt ?? '') >= (previous.createdAt ?? '')) {
@@ -112,26 +118,34 @@ function mergeRecord(previous: ConversationRecord | undefined, incoming: Convers
         raw: Object.freeze({ ...incoming.raw, turnSeq: previous.turnSeq }) })
       : incoming;
   }
-  if (incoming.rowVersion === previous.rowVersion && previous.kind === 'message' && incoming.kind === 'message' &&
-      previous.id === incoming.id && previous.sessionKey === incoming.sessionKey &&
-      previous.turnSeq === undefined && incoming.turnSeq !== undefined) {
-    // Only the newly delivered link is authoritative at the same version. Keep
-    // the stored body, attribution, correlation and all other metadata intact.
-    return Object.freeze({ ...previous, turnSeq: incoming.turnSeq,
-      raw: Object.freeze({ ...previous.raw, turnSeq: incoming.turnSeq }) });
+  if (previous.kind === 'message' && incoming.kind === 'message' &&
+      previous.id === incoming.id && previous.sessionKey === incoming.sessionKey && previous.seq === incoming.seq) {
+    const turnSeq = previous.turnSeq ?? (incoming.rowVersion === previous.rowVersion ? incoming.turnSeq : undefined);
+    const createdAt = previous.createdAt ?? incoming.createdAt;
+    if (turnSeq !== previous.turnSeq || createdAt !== previous.createdAt) {
+      // A matching row can fill in a missing link or time without replacing the stored body.
+      return Object.freeze({ ...previous,
+        ...(createdAt !== previous.createdAt ? { createdAt } : {}),
+        ...(turnSeq !== previous.turnSeq ? { turnSeq, raw: Object.freeze({ ...previous.raw, turnSeq }) } : {}) });
+    }
   }
   return previous;
 }
 
 function mergeTurnEvent(previous: TurnEventRecord | undefined, incoming: TurnEventRecord): TurnEventRecord {
   if (!previous || previous === incoming) return incoming;
-  const { liveCreatedAt: previousTime, ...previousEvent } = previous;
-  const { liveCreatedAt: incomingTime, ...incomingEvent } = incoming;
+  const { liveCreatedAt, receivedAt, ...previousEvent } = previous;
+  const { liveCreatedAt: incomingTime, receivedAt: incomingReceipt, ...incomingEvent } = incoming;
   if (JSON.stringify(previousEvent) !== JSON.stringify(incomingEvent)) {
     throw new UnsupportedTargetError('An immutable turn event changed between history and live delivery.');
   }
   // The change envelope can supply a time that is absent from the REST row.
-  return previousTime === undefined && incomingTime !== undefined ? incoming : previous;
+  if ((liveCreatedAt === undefined && incomingTime !== undefined) ||
+      (receivedAt === undefined && incomingReceipt !== undefined)) {
+    return Object.freeze({ ...previous, liveCreatedAt: liveCreatedAt ?? incomingTime,
+      receivedAt: receivedAt ?? incomingReceipt });
+  }
+  return previous;
 }
 
 function matchingAttachments(send: LocalSend, row: CanonicalMessage): boolean {
@@ -295,6 +309,7 @@ class SessionRuntime implements ChatRuntime {
   private turnEventController: AbortController | undefined;
   private turnEventEpoch = 0;
   private readonly turnEvents = new Map<string, TurnEventRecord>();
+  private readonly messageReceiptTimes = new Map<string, string>();
   private readonly turnEventOrdinals = new Map<string, string>();
   private readonly turnEventLoadedTurns = new Set<number>();
   private turnEventHistoryUnavailable = false;
@@ -592,6 +607,21 @@ class SessionRuntime implements ChatRuntime {
       left.turnEventSeq - right.turnEventSeq || left.id.localeCompare(right.id)));
   }
 
+  private firstMessageReceipt(id: string): string {
+    const previous = this.messageReceiptTimes.get(id);
+    if (previous !== undefined) return previous;
+    const receivedAt = new Date(Date.now()).toISOString();
+    this.messageReceiptTimes.set(id, receivedAt);
+    return receivedAt;
+  }
+
+  private withSegmentReceipt(event: TurnEventRecord): TurnEventRecord {
+    if (event.sessionKey !== this.sessionKey || event.kind !== 'assistant.segment' || !event.messageId ||
+        event.liveCreatedAt !== undefined || event.receivedAt !== undefined ||
+        this.rows.get(event.messageId)?.createdAt !== undefined) return event;
+    return Object.freeze({ ...event, receivedAt: this.firstMessageReceipt(event.messageId) });
+  }
+
   private putTurnEvent(event: TurnEventRecord): boolean {
     if (event.sessionKey !== this.sessionKey) return false;
     const ordinalKey = `${event.turnSeq}:${event.turnEventSeq}`;
@@ -669,17 +699,18 @@ class SessionRuntime implements ChatRuntime {
               liveDuringRead.values(), false);
             return;
           }
+          const event = this.withSegmentReceipt(notice.event);
           if (readingSnapshot) {
             try {
-              const previous = liveDuringRead.get(notice.event.id);
-              liveDuringRead.set(notice.event.id, mergeTurnEvent(previous, notice.event));
+              const previous = liveDuringRead.get(event.id);
+              liveDuringRead.set(event.id, mergeTurnEvent(previous, event));
             } catch (error) {
               this.failTurnEvents(error, liveDuringRead.values(), false);
             }
             return;
           }
           try {
-            if (this.putTurnEvent(notice.event)) {
+            if (this.putTurnEvent(event)) {
               this.publish({ turnEvents: this.orderedTurnEvents(),
                 toolCallIndex: trimIndexBelow(this.toolIndex, this.state.hasOlder ? this.state.records[0]?.seq ?? 0 : 0) });
             }
@@ -697,7 +728,7 @@ class SessionRuntime implements ChatRuntime {
       const snapshot = await this.transport.readTurnEvents(this.sessionKey, turnSeqs, controller.signal);
       if (!current()) return;
       const combined = new Map<string, TurnEventRecord>();
-      for (const event of [...snapshot, ...liveDuringRead.values()]) {
+      for (const event of [...snapshot.map(event => this.withSegmentReceipt(event)), ...liveDuringRead.values()]) {
         const previous = combined.get(event.id) ?? this.turnEvents.get(event.id);
         combined.set(event.id, mergeTurnEvent(previous, event));
       }
@@ -733,7 +764,7 @@ class SessionRuntime implements ChatRuntime {
       if (epoch !== this.turnEventEpoch || this.disposed) return;
       const events = await this.transport.readTurnEvents(this.sessionKey, turnSeqs, controller.signal);
       if (epoch !== this.turnEventEpoch || this.disposed) return;
-      for (const event of events) this.putTurnEvent(event);
+      for (const event of events) this.putTurnEvent(this.withSegmentReceipt(event));
       for (const turnSeq of turnSeqs) this.turnEventLoadedTurns.add(turnSeq);
       this.publish({ turnEvents: this.orderedTurnEvents(), toolCalls: Object.freeze([...this.tools.values()]),
         toolCallIndex: trimIndexBelow(this.toolIndex, this.state.hasOlder ? this.state.records[0]?.seq ?? 0 : 0) });
@@ -940,6 +971,7 @@ class SessionRuntime implements ChatRuntime {
     for (const controller of this.sendControllers.values()) controller.abort();
     this.sendControllers.clear();
     this.rows.clear();
+    this.messageReceiptTimes.clear();
     this.activitySenderDisplayNames.clear();
     this.activitySenderNameLookupGeneration.clear();
     this.messageSeqIndex = undefined;
@@ -990,7 +1022,10 @@ class SessionRuntime implements ChatRuntime {
     if (pageRecord.sessionKey !== this.sessionKey) return;
     if ((this.tombstones.get(pageRecord.id) ?? -1) >= pageRecord.rowVersion) return;
     const previous = this.rows.get(pageRecord.id);
-    const record = mergeRecord(previous, pageRecord);
+    const merged = mergeRecord(previous, pageRecord);
+    const record = merged.kind === 'message' && merged.createdAt === undefined && merged.receivedAt === undefined
+      ? Object.freeze({ ...merged, receivedAt: this.firstMessageReceipt(merged.id) })
+      : merged;
     this.updateMessageSeqIndex(previous, record);
     this.rows.set(record.id, record);
     if (record.kind === 'message' && record.clientMessageId && record.deviceId === this.identity.deviceId) {
@@ -1101,6 +1136,10 @@ class SessionRuntime implements ChatRuntime {
 
   private receive(notice: ChangeNotice, generation: number): void {
     if (!this.isCurrent(generation) || !this.checkIdentity()) return;
+    if (notice.operation === 'upsert' && notice.record.kind === 'message' &&
+        notice.record.sessionKey === this.sessionKey && notice.record.createdAt === undefined) {
+      this.firstMessageReceipt(notice.record.id);
+    }
     if (this.initializing) {
       this.buffered.push(notice);
       return;
@@ -1392,6 +1431,7 @@ class SessionRuntime implements ChatRuntime {
     for (const controller of this.sendControllers.values()) controller.abort();
     this.sendControllers.clear();
     this.rows.clear();
+    this.messageReceiptTimes.clear();
     this.messageSeqIndex = undefined;
     this.tombstones.clear();
     this.liveRailDenials.clear();
@@ -1590,6 +1630,7 @@ class SessionRuntime implements ChatRuntime {
         historyRailDenials = tail.railDenials ?? [];
         const candidate = new Map<string, ConversationRecord>();
         for (const record of tail.records) {
+          if (record.kind === 'message' && record.createdAt === undefined) this.firstMessageReceipt(record.id);
           const previous = candidate.get(record.id);
           candidate.set(record.id, mergeRecord(previous, record));
         }
@@ -1612,6 +1653,7 @@ class SessionRuntime implements ChatRuntime {
             }
             historyRailDenials = page.railDenials ?? [];
             for (const record of page.records) {
+              if (record.kind === 'message' && record.createdAt === undefined) this.firstMessageReceipt(record.id);
               const previous = candidate.get(record.id);
               candidate.set(record.id, mergeRecord(previous, record));
             }

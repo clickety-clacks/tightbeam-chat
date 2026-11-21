@@ -4777,17 +4777,22 @@ describe('tool-call and transition display', () => {
     const segment = decodePublic019Notice({
       type: 'change', schemaVersion: 2, class: 'message.segment_recorded', resource: 'turn events', op: 'upsert',
       refs: { sessionKey, turnEventId: 'segment' }, occurredAt: 2_000,
-      payload: { id: 'segment', sessionKey, turnSeq: 7, turnEventSeq: 1, kind: 'assistant.segment',
+      payload: { id: 'segment', sessionKey, turnSeq: 7, turnEventSeq: 2, kind: 'assistant.segment',
         messageId: 'reply', toolCallId: null, content: { type: 'text', text: 'Answer' }, toolCall: null, rowVersion: 1 },
     }, sessionKey);
     if (segment.operation !== 'turn-event') throw new Error('Expected a turn event');
+    const receivedAt = new Date(3_000).toISOString();
+    const initialSegment = { ...segment.event, id: 'initial', turnEventSeq: 1, liveCreatedAt: undefined,
+      content: { type: 'text', text: 'Live ' }, receivedAt };
     const runtime = new FakeRuntime(sessionKey, {
       records: [prompt], activeTurn, activityTurnStateAvailable: true, turnEventsEnabled: true,
-      turnEvents: [segment.event],
+      turnEvents: [initialSegment],
     });
     const view = render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
     const timestamp = () => view.container.querySelector('[data-record-key="turn-message:7:reply:1"] time');
 
+    expect(timestamp()?.getAttribute('datetime')).toBe(receivedAt);
+    act(() => runtime.update({ turnEvents: [initialSegment, segment.event] }));
     expect(timestamp()?.getAttribute('datetime')).toBe(new Date(2_000).toISOString());
     expect(timestamp()?.textContent).not.toBe('Time unavailable');
 

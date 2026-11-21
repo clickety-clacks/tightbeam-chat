@@ -227,6 +227,47 @@ afterEach(() => {
 });
 
 describe('versioned host composer seam on the real adapter and surface', () => {
+  it.each([false, true])('keeps first-received time and transcript order until Gateway time arrives (hosted: %s)', async hosted => {
+    const sessionKey = 'receipt-time';
+    const transport = new HostComposerTransport();
+    const events: HostComposerEvent[] = [];
+    const earlier: CanonicalMessage = { kind: 'message', sessionKey, id: 'earlier', seq: 1,
+      rowVersion: 1, role: 'assistant', content: 'Earlier reply', raw: {}, createdAt: new Date(5_000).toISOString() };
+    const missing: CanonicalMessage = { ...earlier, id: 'missing', seq: 2, content: 'Live reply', createdAt: undefined };
+    transport.records.set(sessionKey, [earlier]);
+    if (hosted) installDeclaration(events);
+    openChat(transport, sessionKey);
+    await screen.findByText('Earlier reply');
+    if (hosted) {
+      await waitForReady(events, sessionKey);
+      expect(screen.queryByRole('textbox')).toBeNull();
+    }
+    const epoch = Date.now();
+    const time = vi.spyOn(Date, 'now').mockReturnValue(epoch);
+    try {
+      act(() => transport.emit(missing));
+      const bubble = () => screen.getByText('Live reply').closest('article')!;
+      const order = () => [...screen.getByRole('log').querySelectorAll('article')].map(row => row.getAttribute('data-record-key'));
+      const timestamp = () => bubble().querySelector('time')?.getAttribute('datetime');
+      expect(timestamp()).toBe(new Date(epoch).toISOString());
+      expect(order()).toEqual(['earlier', 'missing']);
+
+      time.mockReturnValue(epoch + 60_000);
+      act(() => transport.emit({ ...missing }));
+      expect(timestamp()).toBe(new Date(epoch).toISOString());
+
+      const realTime = new Date(4_000).toISOString();
+      act(() => transport.emit({ ...missing, createdAt: realTime }));
+      expect(timestamp()).toBe(realTime);
+      expect(order()).toEqual(['earlier', 'missing']);
+
+      act(() => transport.emit({ ...missing, rowVersion: 2 }));
+      expect(timestamp()).toBe(realTime);
+    } finally {
+      time.mockRestore();
+    }
+  });
+
   it('suppresses automatic What’s New in hosted mode without delaying ready, connection, or transcript rendering', async () => {
     vi.mocked(unseenReleaseNotes).mockReturnValueOnce([
       { version: 'v0.1.103', items: [{ title: 'Recent update', description: 'A recent change.' }] },

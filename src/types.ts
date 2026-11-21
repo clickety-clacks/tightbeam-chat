@@ -19,6 +19,8 @@ export interface CanonicalMessage {
   readonly content: string;
   readonly messageType?: string;
   readonly createdAt?: string;
+  /** Local first receipt for display only. Never used to place a message. */
+  readonly receivedAt?: string;
   readonly attachments?: readonly unknown[];
   readonly clientMessageId?: string;
   readonly deviceId?: string;
@@ -116,6 +118,7 @@ export interface TurnEventRecord {
   readonly rowVersion: number;
   /** Gateway occurrence time from a live assistant-segment envelope. */
   readonly liveCreatedAt?: string;
+  readonly receivedAt?: string;
 }
 
 /** A durable occurrence from the selected session's record-event feed. */
