@@ -1338,7 +1338,7 @@ class SessionRuntime implements ChatRuntime {
 
     try {
       const controllerSignal = signal ?? new AbortController().signal;
-      const page = await this.readAfterPages(after, controllerSignal);
+      const page = await this.readAfterPages(after, controllerSignal, generation);
       if (!this.isCurrent(generation) || controllerSignal.aborted || this.connection !== connection) return;
 
       for (const record of page.records) this.put(record);
@@ -1600,7 +1600,7 @@ class SessionRuntime implements ChatRuntime {
         !!this.transport.readAfter;
       const [tailResult] = await Promise.allSettled([
         catchingUp
-          ? this.readAfterPages(priorNewestCursor!, controller.signal)
+          ? this.readAfterPages(priorNewestCursor!, controller.signal, generation)
           : this.transport.readTail(this.sessionKey, controller.signal),
       ] as const);
       if (!this.isCurrent(generation) || !this.checkIdentity()) return;
@@ -1858,7 +1858,7 @@ class SessionRuntime implements ChatRuntime {
     }
   }
 
-  private async readAfterPages(after: string, signal: AbortSignal): Promise<ConversationPage> {
+  private async readAfterPages(after: string, signal: AbortSignal, generation: number): Promise<ConversationPage> {
     const readAfter = this.transport.readAfter;
     if (!readAfter) throw new UnsupportedTargetError('Newer history cursor is unavailable.');
     const records: ConversationRecord[] = [];
@@ -1867,6 +1867,9 @@ class SessionRuntime implements ChatRuntime {
     let page: ConversationPage | undefined;
     while (true) {
       page = await readAfter.call(this.transport, this.sessionKey, cursor, signal);
+      if (signal.aborted || !this.isCurrent(generation) || !this.checkIdentity()) {
+        throw new DOMException('History read superseded.', 'AbortError');
+      }
       this.validatePage({ ...page, hasOlder: false });
       if (typeof page.hasNewer !== 'boolean' || (page.hasNewer && !page.newestCursor) ||
           (page.records.length > 0 && !page.newestCursor)) {
@@ -1877,6 +1880,10 @@ class SessionRuntime implements ChatRuntime {
       }
       if (page.hasNewer && page.records.length === 0) {
         throw new UnsupportedTargetError('Newer history page did not advance.');
+      }
+      // A later page can take longer to arrive, or overlap a live copy of this row.
+      for (const record of page.records) {
+        if (record.kind === 'message' && record.createdAt === undefined) this.firstMessageReceipt(record.id);
       }
       records.push(...page.records);
       if (page.newestCursor) newestCursor = page.newestCursor;

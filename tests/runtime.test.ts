@@ -1131,6 +1131,49 @@ describe('framework-independent runtime', () => {
     runtime.dispose();
   });
 
+  it('keeps the first receipt from each catch-up page while a later page is pending', async () => {
+    const transport = new ControlledTransport();
+    const firstPage = deferred<ConversationPage>();
+    const secondPage = deferred<ConversationPage>();
+    const secondRequested = deferred<void>();
+    transport.afterHook = (cursor) => {
+      if (cursor === 'after:8') return firstPage.promise;
+      expect(cursor).toBe('after:9');
+      secondRequested.resolve();
+      return secondPage.promise;
+    };
+    transport.readyGate = deferred<void>();
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    const firstReceipt = Date.now();
+    const secondReceipt = firstReceipt + 60_000;
+    const clock = vi.spyOn(Date, 'now');
+    try {
+      await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+      const earlier = message(9);
+      const later = message(10);
+      const receipts = () => runtime.getSnapshot().records
+        .filter((row): row is CanonicalMessage => row.kind === 'message' && row.seq >= 9)
+        .map(row => row.receivedAt);
+      clock.mockReturnValue(firstReceipt);
+      firstPage.resolve({ records: [earlier], oldestCursor: earlier.id, newestCursor: 'after:9',
+        hasOlder: false, hasNewer: true, coverage: 'controlled-fixture' });
+      transport.readyGate.resolve();
+      await secondRequested.promise;
+
+      clock.mockReturnValue(secondReceipt);
+      transport.emit({ ...earlier });
+      secondPage.resolve({ records: [later], oldestCursor: later.id, newestCursor: 'after:10',
+        hasOlder: false, hasNewer: false, coverage: 'controlled-fixture' });
+      await vi.waitFor(() => expect(receipts()).toHaveLength(2));
+      expect(receipts()).toEqual([
+        new Date(firstReceipt).toISOString(), new Date(secondReceipt).toISOString(),
+      ]);
+    } finally {
+      clock.mockRestore();
+      runtime.dispose();
+    }
+  });
+
   it('publishes a committed startup-overlap row exactly once with the initial tail', async () => {
     const transport = new ControlledTransport();
     const appended = message(9, { content: 'assistant startup response' });
