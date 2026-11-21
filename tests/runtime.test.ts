@@ -285,6 +285,8 @@ describe('framework-independent runtime', () => {
     const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
     await vi.waitFor(() => expect(transport.turnEventCallbacks).toBeDefined());
+    const liveCreatedAt = new Date(2_000).toISOString();
+    transport.emitTurnEvent({ ...events[0], liveCreatedAt });
     transport.emitTurnEvent(events[3]);
     snapshot.resolve(events.slice(0, 3));
     await vi.waitFor(() => expect(runtime.getSnapshot().turnEvents).toHaveLength(4));
@@ -292,6 +294,7 @@ describe('framework-independent runtime', () => {
     const liveEntries = projectTurnEvents(runtime.getSnapshot().turnEvents!);
     expect(runtime.getSnapshot().turnEvents!.map(event => event.turnEventSeq)).toEqual([1, 2, 3, 4]);
     expect(liveEntries.map(entry => entry.kind)).toEqual(['assistant', 'tools', 'assistant']);
+    expect(liveEntries[0]).toMatchObject({ liveCreatedAt });
     expect(liveEntries[1]).toMatchObject({ calls: [{ call: completed }] });
 
     await runtime.rebuild({ restart: true });
@@ -563,6 +566,7 @@ describe('framework-independent runtime', () => {
       const transport = new ControlledTransport();
       const index = arrival === 'older-page race' ? 4 : 7;
       const original = message(index + 1, { role: 'user', sender: 'user:person', content: 'Original human words',
+        createdAt: new Date(1_000).toISOString(),
         attachments: [{ name: 'original.txt' }], raw: { turnSeq: null, preserved: 'metadata' } });
       transport.rows[index] = original;
       const enriched = { ...original, turnSeq: 90, content: 'Do not replace the stored words', sender: 'user:another',
@@ -1125,6 +1129,49 @@ describe('framework-independent runtime', () => {
       ['m1', 'm2', 't3', 'm4', 'm5', 't6', 'm7', 'm8', 'm9']);
     expect(transport.readOlderCalls).toBe(2);
     runtime.dispose();
+  });
+
+  it('keeps the first receipt from each catch-up page while a later page is pending', async () => {
+    const transport = new ControlledTransport();
+    const firstPage = deferred<ConversationPage>();
+    const secondPage = deferred<ConversationPage>();
+    const secondRequested = deferred<void>();
+    transport.afterHook = (cursor) => {
+      if (cursor === 'after:8') return firstPage.promise;
+      expect(cursor).toBe('after:9');
+      secondRequested.resolve();
+      return secondPage.promise;
+    };
+    transport.readyGate = deferred<void>();
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    const firstReceipt = Date.now();
+    const secondReceipt = firstReceipt + 60_000;
+    const clock = vi.spyOn(Date, 'now');
+    try {
+      await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+      const earlier = message(9);
+      const later = message(10);
+      const receipts = () => runtime.getSnapshot().records
+        .filter((row): row is CanonicalMessage => row.kind === 'message' && row.seq >= 9)
+        .map(row => row.receivedAt);
+      clock.mockReturnValue(firstReceipt);
+      firstPage.resolve({ records: [earlier], oldestCursor: earlier.id, newestCursor: 'after:9',
+        hasOlder: false, hasNewer: true, coverage: 'controlled-fixture' });
+      transport.readyGate.resolve();
+      await secondRequested.promise;
+
+      clock.mockReturnValue(secondReceipt);
+      transport.emit({ ...earlier });
+      secondPage.resolve({ records: [later], oldestCursor: later.id, newestCursor: 'after:10',
+        hasOlder: false, hasNewer: false, coverage: 'controlled-fixture' });
+      await vi.waitFor(() => expect(receipts()).toHaveLength(2));
+      expect(receipts()).toEqual([
+        new Date(firstReceipt).toISOString(), new Date(secondReceipt).toISOString(),
+      ]);
+    } finally {
+      clock.mockRestore();
+      runtime.dispose();
+    }
   });
 
   it('publishes a committed startup-overlap row exactly once with the initial tail', async () => {

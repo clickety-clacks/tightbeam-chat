@@ -55,6 +55,7 @@ interface Bubble {
   readonly ownerScoped: boolean;
   readonly sender: string;
   readonly displayContent?: string;
+  readonly segmentTime?: string;
   readonly failureReason?: string;
   readonly member?: HumanMember;
   readonly derived: boolean;
@@ -325,7 +326,8 @@ function projectTurnTimeline(events: RuntimeState['turnEvents'], records: readon
         const syntheticRecord: CanonicalMessage | undefined = !source && runningOwnerTurn
           ? Object.freeze({ kind: 'message', id: entry.messageId, sessionKey: activeTurn!.turn.sessionKey,
             seq: anchorSeq, rowVersion: 1, role: 'assistant', replyToMessageId: activeTurn!.trigger!.id,
-            turnSeq, content: entry.text, raw: Object.freeze({ turnSeq, messageId: entry.messageId,
+            turnSeq, content: entry.text, createdAt: entry.liveCreatedAt, receivedAt: entry.receivedAt,
+            raw: Object.freeze({ turnSeq, messageId: entry.messageId,
               turnEventIds: entry.eventIds }) })
           : undefined;
         const record = baseRecord
@@ -334,7 +336,8 @@ function projectTurnTimeline(events: RuntimeState['turnEvents'], records: readon
           : syntheticRecord;
         if (!record) continue;
         const bubble: Bubble = { key: entry.id, record, side: 'agent', ownerScoped: true,
-          sender: source?.sender ?? sourceLabel('agent', agentName), displayContent: entry.text, derived: false };
+          sender: source?.sender ?? sourceLabel('agent', agentName), displayContent: entry.text,
+          segmentTime: entry.liveCreatedAt, derived: false };
         rows.push({ kind: 'bubble', bubble, anchorSeq, turnEventSeq: entry.turnEventSeq });
         if (source) replacedMessageIds.add(source.record.id);
         continue;
@@ -1075,7 +1078,7 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, re
   const rowRef = useCallback((element: HTMLElement | null) => {
     registerRow(scrollKey, element);
   }, [registerRow, scrollKey]);
-  const time = localTimestamp(record.createdAt);
+  const time = localTimestamp(record.createdAt ?? bubble.segmentTime ?? record.receivedAt);
   const displayContent = stripProvenanceMarkup(bubble.displayContent ?? record.content);
   const failureReason = bubble.failureReason;
   const context: RenderContext = {

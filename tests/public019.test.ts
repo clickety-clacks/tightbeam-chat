@@ -1802,9 +1802,22 @@ describe('tool-call contract and transition category', () => {
       kind: 'tool.ended', messageId: null, toolCallId: call.id, content: null, toolCall: completed, rowVersion: 1 };
     expect(decodeTurnEvent(segment1, sessionKey)).toMatchObject({ id: 'event-1', turnEventSeq: 1,
       kind: 'assistant.segment', messageId: 'message-7', content: { text: 'Before' } });
-    expect(decodePublic019Notice({ type: 'change', schemaVersion: 2, class: 'message.segment_recorded',
-      resource: 'turn events', op: 'upsert', refs: { sessionKey, turnEventId: 'event-1' }, payload: segment1 }, sessionKey))
-      .toMatchObject({ operation: 'turn-event', event: { id: 'event-1', turnEventSeq: 1 } });
+    const segmentNotice = { type: 'change', schemaVersion: 2, class: 'message.segment_recorded',
+      resource: 'turn events', op: 'upsert', refs: { sessionKey, turnEventId: 'event-1' }, payload: segment1 };
+    expect(decodePublic019Notice({ ...segmentNotice, occurredAt: 1_500 }, sessionKey))
+      .toMatchObject({ operation: 'turn-event', event: {
+        id: 'event-1', turnEventSeq: 1, liveCreatedAt: new Date(1_500).toISOString(),
+      } });
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      expect(decodePublic019Notice({ ...segmentNotice, occurredAt: '1500' }, sessionKey))
+        .toEqual({ operation: 'turn-event', event: decodeTurnEvent(segment1, sessionKey) });
+      expect(log).toHaveBeenCalledWith('[Chat] Gateway data incompatibility', {
+        site: 'assistant segment notice', reason: 'Ignored invalid millisecond occurredAt timestamp.',
+      });
+    } finally {
+      log.mockRestore();
+    }
 
     const channels: Channel[] = [];
     const paths: URL[] = [];
@@ -1830,7 +1843,7 @@ describe('tool-call contract and transition category', () => {
       classes: ['message.segment_recorded', 'tool_call.event_recorded'] });
     channels[0].emit({ type: 'change', schemaVersion: 2, subscriptionId: `turn-events:${sessionKey}`, seq: 1,
       class: 'message.segment_recorded', resource: 'turn events', op: 'upsert',
-      refs: { sessionKey, turnEventId: segment1.id }, payload: segment1 });
+      refs: { sessionKey, turnEventId: segment1.id }, payload: segment1, occurredAt: 1_500 });
     expect(callbacks.onNotice).toHaveBeenCalledWith(expect.objectContaining({ operation: 'turn-event',
       event: expect.objectContaining({ id: 'event-1', turnEventSeq: 1 }) }));
 

@@ -11,6 +11,8 @@ export interface AssistantSegmentGroup {
   readonly messageId: string;
   readonly text: string;
   readonly eventIds: readonly string[];
+  readonly liveCreatedAt?: string;
+  readonly receivedAt?: string;
 }
 
 export interface TurnToolCall {
@@ -32,7 +34,7 @@ export type TurnEventEntry = AssistantSegmentGroup | TurnToolRun;
 
 type RawEntry =
   | { kind: 'assistant'; turnSeq: number; turnEventSeq: number; lastTurnEventSeq: number;
-      messageId: string; text: string; eventIds: string[] }
+      messageId: string; text: string; eventIds: string[]; liveCreatedAt?: string; receivedAt?: string }
   | { kind: 'tool'; turnSeq: number; turnEventSeq: number; call: ToolCallRecord; eventIds: string[] };
 
 function eventText(event: TurnEventRecord): string {
@@ -58,10 +60,12 @@ export function projectTurnEvents(events: readonly TurnEventRecord[]): readonly 
         previous.text += text;
         previous.lastTurnEventSeq = event.turnEventSeq;
         previous.eventIds.push(event.id);
+        previous.liveCreatedAt ??= event.liveCreatedAt;
+        previous.receivedAt ??= event.receivedAt;
       } else {
         rows.push({ kind: 'assistant', turnSeq: event.turnSeq, turnEventSeq: event.turnEventSeq,
           lastTurnEventSeq: event.turnEventSeq, messageId: event.messageId!, text,
-          eventIds: [event.id] });
+          eventIds: [event.id], liveCreatedAt: event.liveCreatedAt, receivedAt: event.receivedAt });
       }
       continue;
     }
@@ -87,7 +91,9 @@ export function projectTurnEvents(events: readonly TurnEventRecord[]): readonly 
     if (row.kind === 'assistant') {
       entries.push(Object.freeze({ kind: 'assistant', id: `turn-message:${row.turnSeq}:${row.messageId}:${row.turnEventSeq}`,
         turnSeq: row.turnSeq, turnEventSeq: row.turnEventSeq, lastTurnEventSeq: row.lastTurnEventSeq,
-        messageId: row.messageId, text: row.text, eventIds: Object.freeze([...row.eventIds]) }));
+        messageId: row.messageId, text: row.text, eventIds: Object.freeze([...row.eventIds]),
+        ...(row.liveCreatedAt === undefined ? {} : { liveCreatedAt: row.liveCreatedAt }),
+        ...(row.receivedAt === undefined ? {} : { receivedAt: row.receivedAt }) }));
       index++;
       continue;
     }
