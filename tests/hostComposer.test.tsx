@@ -227,6 +227,31 @@ afterEach(() => {
 });
 
 describe('versioned host composer seam on the real adapter and surface', () => {
+  it('shows a background assistant reply delivered to the hosted transcript', async () => {
+    const sessionKey = 'hosted-background-reply';
+    const transport = new HostComposerTransport();
+    const events: HostComposerEvent[] = [];
+    transport.readSession = async () => ({
+      sessionKey, rowVersion: 1, displayName: 'Agent', raw: { ownerUserId: 'person' },
+    });
+    installDeclaration(events);
+    openChat(transport, sessionKey);
+    await waitForReady(events, sessionKey);
+    expect(screen.queryByRole('textbox')).toBeNull();
+    const reply: CanonicalMessage = {
+      kind: 'message', sessionKey, id: 'reply', seq: 2, rowVersion: 2, role: 'assistant',
+      sender: 'tightbeam', messageType: 'assistant', turnSeq: 1, turnIncludesHuman: false,
+      content: 'A reply from a background turn', raw: {},
+    };
+    act(() => {
+      transport.emit(reply);
+      transport.emit(reply);
+    });
+    const text = await screen.findByText(reply.content);
+    expect(text.closest('article')?.getAttribute('data-record-key')).toBe(reply.id);
+    expect(screen.getAllByText(reply.content)).toHaveLength(1);
+  });
+
   it.each([false, true])('keeps first-received time and transcript order until Gateway time arrives (hosted: %s)', async hosted => {
     const sessionKey = 'receipt-time';
     const transport = new HostComposerTransport();

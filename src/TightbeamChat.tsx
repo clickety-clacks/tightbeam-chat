@@ -52,6 +52,7 @@ interface Bubble {
   readonly key: string;
   readonly record: CanonicalMessage;
   readonly side: 'human' | 'agent';
+  readonly backgroundReply?: boolean;
   readonly ownerScoped: boolean;
   readonly sender: string;
   readonly displayContent?: string;
@@ -305,6 +306,9 @@ function projectTurnTimeline(events: RuntimeState['turnEvents'], records: readon
       ? [event.messageId] : []));
     const turnBubbles = bubbles.filter(bubble => bubble.side === 'agent' &&
       (bubble.record.turnSeq === turnSeq || messageIds.has(bubble.record.id)));
+    // A background reply stays at its own sequence, even when its hidden
+    // trigger precedes other visible messages.
+    if (turnBubbles.some(bubble => bubble.backgroundReply)) continue;
     const runningOwnerTurn = activeTurn?.turn.seq === turnSeq && activeTurn.sourceKind === 'human' && activeTurn.trigger
       ? activeTurn : undefined;
     if (!turnBubbles.length && !runningOwnerTurn) continue;
@@ -2559,10 +2563,10 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     submitterAttributionEnabled === true),
     [state.records, state.principalKey, state.session?.raw.ownerUserId, submitterAttributionEnabled]);
   const bubbles: Bubble[] = useMemo(() => projection.messages
-    .filter(message => message.member || !message.source.recordEventIds?.length)
+    .filter(message => message.side === 'agent' || message.member || !message.source.recordEventIds?.length)
     .map((message) => {
       return {
-        key: message.key, record: message.source, side: message.side,
+        key: message.key, record: message.source, side: message.side, backgroundReply: message.backgroundReply,
         ownerScoped: message.side === 'agent' || message.ownerScoped,
         sender: message.side === 'human'
           ? messageSourceLabel(message.source, submitterAttributionEnabled === true && projection.multipleSubmitters

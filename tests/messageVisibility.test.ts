@@ -58,11 +58,12 @@ describe('principal-scoped message projection', () => {
       reply('nonhuman-answer', 'unloaded', { turnSeq: 11, turnIncludesHuman: false }),
       reply('incomplete-batch', carrier.id, { turnSeq: 10 })];
     const saved = JSON.stringify(rows);
-    expect(project(rows)).toEqual(['member-one', 'member-two', 'mixed-answer', 'incomplete-batch']);
+    expect(project(rows)).toEqual(['member-one', 'member-two', 'mixed-answer', 'nonhuman-answer', 'incomplete-batch']);
     expect(JSON.stringify(rows)).toBe(saved);
     expect(projectMessages(rows, 'person', 'person').messages.slice(0, 2).map((row) => row.side)).toEqual(['human', 'human']);
-    // A session-owner flag cannot classify a different authenticated principal.
     expect(project(rows, 'visitor')).toEqual(['member-one', 'member-two', 'mixed-answer', 'nonhuman-answer', 'incomplete-batch']);
+    expect(projectMessages(rows, 'person', 'person').messages.find(row => row.key === 'nonhuman-answer')?.backgroundReply).toBe(true);
+    expect(projectMessages(rows, 'visitor', 'person').messages.find(row => row.key === 'nonhuman-answer')?.backgroundReply).toBe(false);
   });
 
   it('extracts known human rows from an unmarked process batch without trusting its wrapper', () => {
@@ -83,7 +84,7 @@ describe('principal-scoped message projection', () => {
     expect(forPerson[0].member).not.toHaveProperty('source');
 
     const forVisitor = projectMessages([batch, answer], 'visitor', 'person').messages;
-    expect(forVisitor.map(row => row.key)).toEqual(['process-batch:member:1']);
+    expect(forVisitor.map(row => row.key)).toEqual(['process-batch:member:1', 'answer-to-batch']);
     expect(forVisitor[0].senderLabel).toBe('User');
     expect(forPerson[0].member?.content).toBe('Question one');
   });
@@ -132,7 +133,7 @@ describe('principal-scoped message projection', () => {
       reply('other-reply', other.id, { turnSeq: 3 }), reply('missing-turn', agent.id),
       reply('different-turn', agent.id, { turnSeq: 4 }), reply('missing-parent')];
     expect(project(answers)).toHaveLength(6);
-    expect(project([human, agent, other, ...answers])).toEqual(['human', 'other', 'human-reply', 'missing-turn', 'different-turn', 'missing-parent']);
+    expect(project([human, agent, other, ...answers])).toEqual(['human', 'other', ...answers.map(row => row.id)]);
     const conflict = projectMessages([human, reply('answer', human.id, { turnSeq: 1, turnIncludesHuman: false })], 'person', 'person');
     expect(conflict.messages.map((row) => row.key)).toEqual(['human', 'answer']);
     expect(conflict.issues).toHaveLength(1);
