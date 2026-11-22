@@ -420,13 +420,13 @@ function visibilityMix(sessionKey: string, prefix: string): readonly CanonicalMe
   const agentWake = row(sessionKey, `${prefix}-agent-wake`, `Hidden agent wake ${prefix}`, {
     role: 'user', sender: 'agent:external', messageType: 'agent', turnSeq: 3,
   });
-  const agentReply = row(sessionKey, `${prefix}-agent-reply`, `Hidden reply to agent wake ${prefix}`, {
+  const agentReply = row(sessionKey, `${prefix}-agent-reply`, `Reply to agent wake ${prefix}`, {
     sender: 'assistant-service', messageType: 'assistant', replyToMessageId: agentWake.id, turnSeq: 3,
   });
   const processNotice = row(sessionKey, `${prefix}-process`, `Hidden process notice ${prefix}`, {
     role: 'user', sender: 'process:notifications', messageType: 'chat', turnSeq: 4,
   });
-  const processReply = row(sessionKey, `${prefix}-process-reply`, `Hidden reply to process notice ${prefix}`, {
+  const processReply = row(sessionKey, `${prefix}-process-reply`, `Reply to process notice ${prefix}`, {
     sender: 'assistant-service', messageType: 'assistant', replyToMessageId: processNotice.id, turnSeq: 4,
   });
   const member = row(sessionKey, `${prefix}-member`, `Extracted question ${prefix}`, { role: 'user', sender: 'user:person', turnSeq: 2 });
@@ -455,8 +455,8 @@ function expectVisibilityMix(log: HTMLElement, prefix: string): void {
   expect(agentRow?.closest('.tb-chat-bubble')).toBeNull();
   expect(agentRow?.textContent).toContain(`Hidden agent wake ${prefix}`);
   for (const label of [
-    `Hidden reply to agent wake ${prefix}`, `Hidden reply to process notice ${prefix}`,
-  ]) expect(within(log).queryByText(label)).toBeNull();
+    `Reply to agent wake ${prefix}`, `Reply to process notice ${prefix}`,
+  ]) expect(within(log).getByText(label).closest('article')).toBeTruthy();
 }
 
 function expectActivityText(log: HTMLElement, label: string): void {
@@ -624,20 +624,71 @@ describe('conversation surface', () => {
 
   it('shows the plain empty state after loading when all loaded messages are hidden and older history remains', () => {
     const sessionKey = 'hidden-loaded-history';
-    const hiddenReply = row(sessionKey, 'hidden-reply', 'A reply excluded by the loaded visibility evidence', {
-      seq: 1, sender: 'assistant-service', messageType: 'assistant', turnSeq: 1, turnIncludesHuman: false,
+    const notice = row(sessionKey, 'notice', 'An internal process notice', {
+      seq: 1, role: 'user', sender: 'process:tightbeam', messageType: 'substrate', isBatchCarrier: true,
     });
-    const runtime = new FakeRuntime(sessionKey, { status: 'loading', records: [hiddenReply], hasOlder: true });
+    const runtime = new FakeRuntime(sessionKey, { status: 'loading', records: [notice], hasOlder: true });
     render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
 
     const log = screen.getByRole('log');
     expect(within(log).queryByText('No messages yet.')).toBeNull();
-    expect(within(log).queryByText('A reply excluded by the loaded visibility evidence')).toBeNull();
+    expect(within(log).queryByText('An internal process notice')).toBeNull();
 
     act(() => runtime.update({ status: 'ready' }));
 
     expect(within(log).getByText('No messages yet.')).toBeTruthy();
-    expect(within(log).queryByText('A reply excluded by the loaded visibility evidence')).toBeNull();
+    expect(within(log).queryByText('An internal process notice')).toBeNull();
+  });
+
+  it.each([
+    { viewer: 'person', owner: 'person' },
+    { viewer: 'visitor', owner: 'person' },
+    { viewer: 'person', owner: undefined },
+  ])('shows notice-triggered assistant replies once at their transcript positions (viewer $viewer, owner $owner)', ({ viewer, owner }) => {
+    const sessionKey = 'notice-triggered-conversation';
+    // The reported transcript contained process batch carriers with one agent member
+    // and same-turn assistant replies from sender "tightbeam". Only this shape is retained.
+    const carrier = decodePublic019Message({
+      id: 'carrier', seq: 1, rowVersion: 1, at: 1_000, sessionKey, role: 'user',
+      sender: 'process:tightbeam', messageType: 'substrate', isBatchCarrier: true, turnSeq: 10, turnIncludesHuman: false,
+      content: [
+        '[from process:tightbeam]', '', '[batched notices: 1]', 'batchId=fixture',
+        '[1] source=fixture sender=agent:assistant-session cause=notice class=fyi',
+        'An internal notice', '', 'coalesced by notice-batching',
+      ].join('\n'),
+    }, sessionKey);
+    const between = row(sessionKey, 'intervening', 'Intervening user message', {
+      seq: 2, role: 'user', sender: 'user:person',
+    });
+    const reply = decodePublic019Message({
+      id: 'notice-reply', seq: 3, rowVersion: 3, at: 3_000, sessionKey, role: 'assistant',
+      sender: 'tightbeam', messageType: 'assistant', turnSeq: 10, turnIncludesHuman: false,
+      replyToMessageId: 'carrier', content: 'The notice-triggered answer',
+    }, sessionKey);
+    const wakeReply = decodePublic019Message({
+      id: 'wake-reply', seq: 4, rowVersion: 4, at: 4_000, sessionKey, role: 'assistant',
+      sender: 'tightbeam', messageType: 'assistant', turnSeq: 11, turnIncludesHuman: false,
+      replyToMessageId: null, content: 'The fact-wake answer', recordEventIds: ['work_item.filed:example'],
+    }, sessionKey);
+    const turnEvents: TurnEventRecord[] = [{
+      id: 'segment', sessionKey, kind: 'assistant.segment', turnSeq: 10, turnEventSeq: 1,
+      messageId: 'notice-reply', toolCallId: null, toolCall: null, rowVersion: 1,
+      content: { type: 'text', text: 'The notice-triggered answer' },
+    }];
+    const runtime = new FakeRuntime(sessionKey, {
+      records: [carrier, between], turnEventsEnabled: true, turnEvents, principalKey: viewer,
+      session: { sessionKey, rowVersion: 1, displayName: 'Research assistant', raw: { ownerUserId: owner } },
+    });
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+    const log = screen.getByRole('log');
+    const visibleTranscript = () => [...log.querySelectorAll('article[data-record-key]')]
+      .map(bubble => bubble.getAttribute('data-record-key'));
+    act(() => runtime.update({ records: [carrier, between, reply, wakeReply] }));
+    expect(visibleTranscript()).toEqual(['intervening', 'notice-reply', 'wake-reply']);
+    expect(within(log).getAllByText('The notice-triggered answer')).toHaveLength(1);
+    expect(within(log).getAllByText('The fact-wake answer')).toHaveLength(1);
+    expect(log.querySelector('article[data-record-key="carrier"]')).toBeNull();
+    expect(log.querySelector('[data-record-key="message:wake-reply"]')).toBeNull();
   });
 
   it('renders late canonical rows in sequence order without dropping a human message', () => {
@@ -878,7 +929,7 @@ describe('conversation surface', () => {
     const otherTrigger = row(sessionKey, 'other-trigger', 'An agent sent a wake', {
       seq: 5, role: 'user', sender: 'agent:external', messageType: 'agent', turnSeq: 2,
     });
-    const otherAnswer = row(sessionKey, 'other-answer', 'Must remain hidden', { seq: 6,
+    const otherAnswer = row(sessionKey, 'other-answer', 'Reply to another agent', { seq: 6,
       turnSeq: 2, messageType: 'assistant', replyToMessageId: otherTrigger.id,
     });
     const substrateMarker = row(sessionKey, 'substrate-marker', 'A system event marker', {
@@ -957,7 +1008,7 @@ describe('conversation surface', () => {
     expect(agentRow?.classList.contains('tb-chat-activity-agent')).toBe(true);
     expect(agentRow?.closest('.tb-chat-bubble')).toBeNull();
     expectActivityText(log, 'A process notice in the batch');
-    expect(within(log).queryByText('Must remain hidden')).toBeNull();
+    expect(within(log).getByText('Reply to another agent').closest('article')).toBeTruthy();
     const unmarkedBubble = within(log).getByText('A user row with no sender stays visible').closest('article');
     expect(unmarkedBubble?.getAttribute('aria-label')).toBe('Message from User');
     const mismatchedBubble = within(log).getByText('A differently marked user row stays visible').closest('article');
@@ -1577,7 +1628,7 @@ describe('conversation surface', () => {
     expect(runtime.loadOlderCalls).toBe(1);
     const agentRow = log.querySelector<HTMLElement>('[data-record-key="message:older-agent-trigger"]');
     expect(agentRow?.classList.contains('tb-chat-activity-agent')).toBe(true);
-    expect(within(log).queryByText('A reply whose parent is not loaded')).toBeNull();
+    expect(within(log).getAllByText('A reply whose parent is not loaded')).toHaveLength(1);
     expect(within(log).getByText('A human message with a null sender')).toBeTruthy();
     expect(within(log).getByText('An absent sender stays visible without identity proof')).toBeTruthy();
     expect(within(log).getByText('A reply without a parent link')).toBeTruthy();
@@ -1585,14 +1636,14 @@ describe('conversation surface', () => {
   });
 
   it.each([
-    { scenario: 'the anchored reply survives its human parent loading', excluded: false, visibleOlder: false },
-    { scenario: 'an agent reply is classified after its parent loads alongside visible history', excluded: true, visibleOlder: true },
-    { scenario: 'an agent reply is classified after its parent loads on a hidden-only page', excluded: true, visibleOlder: false },
-  ])('preserves the reading viewport when $scenario', async ({ excluded, visibleOlder }) => {
+    { scenario: 'a human parent loads', agentParent: false, visibleOlder: false },
+    { scenario: 'an agent parent loads alongside visible history', agentParent: true, visibleOlder: true },
+    { scenario: 'an agent parent loads on a hidden-only page', agentParent: true, visibleOlder: false },
+  ])('preserves the reading viewport when $scenario', async ({ agentParent, visibleOlder }) => {
     const sessionKey = 'reading-anchor';
     const parent = row(sessionKey, 'parent', 'The previously unloaded trigger', {
-      seq: 40, turnSeq: 40, role: 'user', sender: excluded ? 'agent:external' : 'user:person',
-      messageType: excluded ? 'agent' : 'chat',
+      seq: 40, turnSeq: 40, role: 'user', sender: agentParent ? 'agent:external' : 'user:person',
+      messageType: agentParent ? 'agent' : 'chat',
     });
     const reply = row(sessionKey, 'anchored-reply', 'The first visible reply', {
       seq: 50, turnSeq: 40, sender: 'assistant-service', messageType: 'assistant', replyToMessageId: parent.id,
@@ -1648,16 +1699,13 @@ describe('conversation surface', () => {
         expect(runtime.getSnapshot().records).toContain(parent);
         expect(runtime.getSnapshot().loadingOlder).toBe(false);
       });
-      if (!excluded) expect(within(log).getByText('The first visible reply')).toBeTruthy();
-      else expect(within(log).queryByText('The first visible reply')).toBeNull();
+      expect(within(log).getAllByText('The first visible reply')).toHaveLength(1);
       expect(viewportOffset(reading)).toBe(readingBefore);
       expect(viewportOffset(following)).toBe(followingBefore);
       expect(log.scrollTop).toBeGreaterThanOrEqual(0);
       expect(runtime.getSnapshot().records).toContain(reply);
 
-      if (excluded && !visibleOlder) {
-        // The direct agent row replaces the provisional reply, so the row count
-        // stays level and does not need compensating space.
+      if (agentParent && !visibleOlder) {
         expect(log.querySelector('[data-record-key="message:parent"]')).toBeTruthy();
         expect(topSpace()).toBe(0);
         // A later visible page can be read without reclassifying shown content.
@@ -1727,12 +1775,8 @@ describe('conversation surface', () => {
       });
       await waitFor(() => expect(runtime.getSnapshot().loadingOlder).toBe(false));
 
-      expect(within(log).queryByText('Provisional reply 1')).toBeNull();
+      expect(within(log).getAllByText('Provisional reply 1')).toHaveLength(1);
       expect(layout.offset(newest)).toBe(newestBefore);
-      expect(layout.scrollTop).toBe(0);
-      // Removing the provisional rows above the reader needs compensation when
-      // the browser cannot use a negative scrollTop.
-      expect(layout.anchorSpace).toBeGreaterThan(0);
       expect(runtime.getSnapshot().records).toContain(replies[0]);
       expect(runtime.getSnapshot().hasOlder).toBe(false);
     } finally {
@@ -2792,7 +2836,9 @@ describe('conversation surface', () => {
   it('automatically follows hidden-only older pages until a displayable human message arrives', async () => {
     const sessionKey = 'paged-session';
     const hiddenTrigger = row(sessionKey, 'other-trigger', 'Another agent activity', { role: 'user', sender: 'agent:other', messageType: 'agent', turnSeq: 7 });
-    const hiddenReply = row(sessionKey, 'hidden-reply', 'Not a human conversation', { turnSeq: 7, replyToMessageId: hiddenTrigger.id });
+    const carrier = row(sessionKey, 'carrier', 'An internal batch carrier', {
+      role: 'user', sender: 'process:notifications', isBatchCarrier: true, turnSeq: 7,
+    });
     const hiddenTurn = provenance(7, sessionKey, hiddenTrigger.id, 'agent:other', hiddenTrigger, 'Other agent');
     const olderHuman = row(sessionKey, 'older-human', 'Older human message', {
       role: 'user', sender: 'user:person', turnSeq: 8,
@@ -2800,13 +2846,13 @@ describe('conversation surface', () => {
     const olderTurn = provenance(8, sessionKey, olderHuman.id, 'user:person', olderHuman);
     const runtime = new FakeRuntime(sessionKey, { hasOlder: true });
     runtime.olderPages = [
-      { records: [hiddenTrigger, hiddenReply], provenance: [hiddenTurn], hasOlder: true },
+      { records: [hiddenTrigger, carrier], provenance: [hiddenTurn], hasOlder: true },
       { records: [olderHuman], provenance: [olderTurn], hasOlder: false },
     ];
     render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
     expect(await within(screen.getByRole('log')).findByText('Older human message')).toBeTruthy();
     await waitFor(() => expect(runtime.loadOlderCalls).toBe(2));
-    expect(screen.queryByText('Not a human conversation')).toBeNull();
+    expect(screen.queryByText('An internal batch carrier')).toBeNull();
     expect(screen.queryByRole('button', { name: /load earlier/i })).toBeNull();
   });
 
@@ -2815,7 +2861,7 @@ describe('conversation surface', () => {
     const hiddenFirst = row(sessionKey, 'hidden-first', 'Earlier activity', {
       role: 'user', sender: 'agent:other', messageType: 'agent', turnSeq: 1,
     });
-    const hiddenSecond = row(sessionKey, 'hidden-second', 'Earlier reply', {
+    const reply = row(sessionKey, 'earlier-reply', 'Earlier reply', {
       sender: 'assistant-service', messageType: 'assistant', turnSeq: 1, replyToMessageId: hiddenFirst.id,
     });
     const older = row(sessionKey, 'older-activity', 'Oldest activity', {
@@ -2823,7 +2869,7 @@ describe('conversation surface', () => {
     });
     const runtime = new FakeRuntime(sessionKey, { hasOlder: true });
     runtime.olderPages = [
-      { records: [hiddenFirst, hiddenSecond], provenance: [], hasOlder: true },
+      { records: [hiddenFirst, reply], provenance: [], hasOlder: true },
       { records: [older], provenance: [], hasOlder: false },
     ];
 
@@ -2831,7 +2877,7 @@ describe('conversation surface', () => {
     await waitFor(() => expect(runtime.loadOlderCalls).toBe(1));
     expect(runtime.getSnapshot().hasOlder).toBe(true);
     expect(screen.getByRole('log').querySelector('[data-record-key="message:hidden-first"]')).toBeTruthy();
-    expect(screen.queryByText('Earlier reply')).toBeNull();
+    expect(screen.getByText('Earlier reply').closest('article')).toBeTruthy();
     expect(runtime.getSnapshot().records.some(record => record.id === 'older-activity')).toBe(false);
   });
 
