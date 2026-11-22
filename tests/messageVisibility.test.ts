@@ -63,7 +63,8 @@ describe('principal-scoped message projection', () => {
     expect(projectMessages(rows, 'person', 'person').messages.slice(0, 2).map((row) => row.side)).toEqual(['human', 'human']);
     expect(project(rows, 'visitor')).toEqual(['member-one', 'member-two', 'mixed-answer', 'nonhuman-answer', 'incomplete-batch']);
     expect(projectMessages(rows, 'person', 'person').messages.find(row => row.key === 'nonhuman-answer')?.backgroundReply).toBe(true);
-    expect(projectMessages(rows, 'visitor', 'person').messages.find(row => row.key === 'nonhuman-answer')?.backgroundReply).toBe(false);
+    expect(projectMessages(rows, 'visitor', 'person').messages.find(row => row.key === 'nonhuman-answer'))
+      .toMatchObject({ backgroundReply: true, provenancePending: true });
   });
 
   it('extracts known human rows from an unmarked process batch without trusting its wrapper', () => {

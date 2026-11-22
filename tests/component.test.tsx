@@ -640,7 +640,11 @@ describe('conversation surface', () => {
     expect(within(log).queryByText('An internal process notice')).toBeNull();
   });
 
-  it('shows notice-triggered assistant replies once at their transcript positions', () => {
+  it.each([
+    { viewer: 'person', owner: 'person' },
+    { viewer: 'visitor', owner: 'person' },
+    { viewer: 'person', owner: undefined },
+  ])('shows notice-triggered assistant replies once at their transcript positions (viewer $viewer, owner $owner)', ({ viewer, owner }) => {
     const sessionKey = 'notice-triggered-conversation';
     // The reported transcript contained process batch carriers with one agent member
     // and same-turn assistant replies from sender "tightbeam". Only this shape is retained.
@@ -671,7 +675,10 @@ describe('conversation surface', () => {
       messageId: 'notice-reply', toolCallId: null, toolCall: null, rowVersion: 1,
       content: { type: 'text', text: 'The notice-triggered answer' },
     }];
-    const runtime = new FakeRuntime(sessionKey, { records: [carrier, between], turnEventsEnabled: true, turnEvents });
+    const runtime = new FakeRuntime(sessionKey, {
+      records: [carrier, between], turnEventsEnabled: true, turnEvents, principalKey: viewer,
+      session: { sessionKey, rowVersion: 1, displayName: 'Research assistant', raw: { ownerUserId: owner } },
+    });
     render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
     const log = screen.getByRole('log');
     const visibleTranscript = () => [...log.querySelectorAll('article[data-record-key]')]

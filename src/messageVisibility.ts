@@ -102,7 +102,7 @@ export interface VisibleMessage {
   readonly ownerScoped: boolean;
   /** Relation or turn evidence is still missing. */
   readonly provenancePending: boolean;
-  /** The reply's turn had no prompt from the viewing principal. */
+  /** The reply stays at its canonical position rather than its trigger's position. */
   readonly backgroundReply?: boolean;
   /** Harness failure carried by a process row that explicitly refers to this prompt. */
   readonly failureReason?: string;
@@ -256,9 +256,12 @@ export function projectMessages(records: readonly ConversationRecord[], principa
       if (direct === true && flag === false) issues.push('Reply classification conflicts with its human parent');
       const includesHuman = direct === true ? true : flag ?? direct;
       const provenancePending = includesHuman === undefined && !!record.replyToMessageId && !parent;
+      // The owner-scoped flag must not prove a visitor's authorship. Its false
+      // value can still keep a reply at its own sequence instead of the carrier's.
+      const noOwnerPrompt = record.turnSeq !== undefined && record.turnIncludesHuman === false;
       messages.push({
         key: record.id, source: record, side: 'agent', ownerScoped: true, provenancePending,
-        backgroundReply: includesHuman === false,
+        backgroundReply: includesHuman === false || (includesHuman === undefined && noOwnerPrompt),
       });
     }
   }
