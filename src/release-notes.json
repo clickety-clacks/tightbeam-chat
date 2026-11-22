@@ -4,7 +4,7 @@
     "items": [
       {
         "title": "Replies from notices and wakes",
-        "description": "Chat shows assistant replies to notices and automatic wakes in the conversation. Each reply appears once, in the order it was recorded."
+        "description": "Chat shows assistant replies to notices and automatic wakes in the conversation. Each reply appears once, in the order it was recorded. Chat keeps the batch wrapper hidden."
       },
       {
         "title": "Gateway compatibility",
