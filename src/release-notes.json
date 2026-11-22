@@ -1,5 +1,18 @@
 [
   {
+    "version": "v0.1.110",
+    "items": [
+      {
+        "title": "Replies from notices and wakes",
+        "description": "Chat shows assistant replies to notices and automatic wakes in the conversation. Each reply appears once, in the order it was recorded."
+      },
+      {
+        "title": "Gateway compatibility",
+        "description": "Chat supports Gateway 0.1.16. Human prompts use the authenticated WebSocket connection by default."
+      }
+    ]
+  },
+  {
     "version": "v0.1.109",
     "items": [
       {
