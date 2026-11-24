@@ -1,3 +1,4 @@
+import { runningModelText } from './runningModel';
 import { uncoveredRecordEvents, recordEventPresentation } from './sessionRecordEvents';
 import type { SessionRecordEvent } from './types';
 import { Component, forwardRef, memo, useCallback, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore,
@@ -1363,6 +1364,9 @@ const Composer = forwardRef<ComposerHandle, {
   const preparationRevision = useRef(0);
   const titleId = useId();
   const statusName = statusText(state);
+  // Only a live, current-session reading counts; never fall back to a selection.
+  const modelText = state.status === 'ready' && state.liveConnectionState === 'connected'
+    ? runningModelText(state.session, state.sessionKey) : '';
   const retryingConversationSnapshot = isRetryingConversationSnapshot(state);
   const statusId = `${titleId}-status-details`;
   const updateDraft = useCallback((content: string) => {
@@ -1928,9 +1932,12 @@ const Composer = forwardRef<ComposerHandle, {
           sendControl.current?.click();
         }}
         rows={1}
-        aria-label={`Message to ${agentName || 'the selected agent'}`} placeholder={agentName}
+        aria-label={`Message to ${agentName || 'the selected agent'}`} placeholder={modelText ? `${agentName} • ${modelText}` : agentName}
         autoComplete="off" spellCheck />
-      <span className="tb-chat-empty-title" aria-hidden="true"><span>{agentName}</span></span>
+      <span className="tb-chat-empty-title" aria-hidden="true">
+        <span className="tb-chat-empty-name">{agentName}</span>
+        {modelText && <span className="tb-chat-empty-model">{'\u00a0•\u00a0'}{modelText}</span>}
+      </span>
       {!suppressStatus && <button ref={statusControl} type="button" className="tb-chat-status-control" aria-label={`Connection status: ${statusName}. Show details`}
         aria-expanded={statusOpen} aria-controls={statusId} onClick={() => setStatusOpen((open) => !open)}>
         <StatusIcon state={state} />

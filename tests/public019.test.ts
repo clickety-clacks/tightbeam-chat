@@ -1069,6 +1069,17 @@ describe('Gateway wire mapping and behavior checks', () => {
       .rejects.toThrow('Transcript page contains no usable messages.');
   });
 
+  it('decodes runningModel and treats absent or malformed values as unknown', () => {
+    const base = { sessionKey, rowVersion: 1, displayName: 'A', harness: 'h' };
+    expect(decodePublic019Session({ ...base, runningModel: { id: 'm', label: 'Claude Opus 5.5', harness: 'h' } }, sessionKey).runningModel)
+      .toEqual({ id: 'm', label: 'Claude Opus 5.5', harness: 'h' });
+    expect(decodePublic019Session({ ...base, runningModel: { id: 'm', label: 4, harness: 'h' } }, sessionKey).runningModel)
+      .toEqual({ id: 'm', label: null, harness: 'h' });
+    for (const bad of [undefined, null, 'm', 3, [], {}, { id: 'm' }, { id: 1, harness: 'h' }]) {
+      expect(decodePublic019Session({ ...base, runningModel: bad }, sessionKey).runningModel).toBeNull();
+    }
+  });
+
   it('uses readable session and turn fallbacks for malformed optional Gateway fields', () => {
     const log = vi.spyOn(console, 'error').mockImplementation(() => {});
     expect(decodePublic019Session({ sessionKey, rowVersion: 1, displayName: null,

@@ -653,12 +653,14 @@ body {
 .tb-chat-input-shell-empty .tb-chat-empty-title { display: flex; }
 .tb-chat-empty-title > span {
   display: block;
-  width: 100%;
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
+.tb-chat-empty-name { flex: 0 100 auto; /* the name gives way first */ }
+.tb-chat-empty-model { flex: 0 1 auto; }
+.tb-chat-empty-name:only-child { flex: 1 1 auto; }
 .tb-chat-input-shell-no-status .tb-chat-empty-title { padding-left: 3rem; }
 .tb-chat-input-shell-no-status textarea { padding-left: 3rem; }
 .tb-chat-input-shell textarea:focus-visible { outline: 2px solid var(--tb-chat-accent); outline-offset: 3px; }

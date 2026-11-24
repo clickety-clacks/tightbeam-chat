@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { TightbeamChat, workingStateOpacity } from '../src/TightbeamChat';
 import type { RenderContext } from '../src/TightbeamChat';
+import { decodeRunningModel } from '../src/runningModel';
 import { createTurnProvenance } from '../src/provenance';
 import { decodePublic019Message, decodePublic019Notice } from '../src/public019';
 import { AttachmentPreparationError } from '../src/types';
@@ -5254,4 +5255,89 @@ it('keeps a covering notice visible without a human span, including notice-first
   act(() => runtime.update({ recordEvents: events }));
   expect(view.container.querySelectorAll('[data-record-key^="record-event:"]')).toHaveLength(0);
   expect(view.container.querySelectorAll('[data-record-key="message:notice-first-row"]')).toHaveLength(1);
+});
+
+describe('composer running model', () => {
+  const key = 'running-model';
+  const running = (extra: Record<string, unknown> = {}) => ({ id: 'model-x', label: 'Claude Opus 5.5', harness: 'Harness A', ...extra });
+  const sessionWith = (sessionKey: string, runningModel: unknown, extra: Record<string, unknown> = {}) => ({
+    sessionKey, rowVersion: 1, displayName: 'Research assistant', model: 'Selected model', harness: 'Harness A',
+    runningModel: decodeRunningModel(runningModel), raw: {}, ...extra }) as RuntimeState['session'];
+  const live = { liveConnectionState: 'connected' as const };
+  const title = (container: HTMLElement) => container.querySelector('.tb-chat-empty-title')?.textContent?.replace(/ /g, ' ');
+
+  it('shows the trimmed running model after the name, never the selected model', () => {
+    const runtime = new FakeRuntime(key, { ...live, session: sessionWith(key, running()) });
+    const view = render(<TightbeamChat sessionKey={key} adapter={adapterFor(runtime)} />);
+    expect(title(view.container)).toBe('Research assistant • Opus 5.5');
+    expect(screen.getByRole('textbox', { name: 'Message to Research assistant' }).getAttribute('placeholder'))
+      .toBe('Research assistant • Opus 5.5');
+    expect(title(view.container)).not.toContain('Selected model');
+  });
+
+  it('uses the id when there is no label, and trims only a leading vendor word', () => {
+    const runtime = new FakeRuntime(key, { ...live, session: sessionWith(key, running({ label: null })) });
+    const view = render(<TightbeamChat sessionKey={key} adapter={adapterFor(runtime)} />);
+    expect(title(view.container)).toBe('Research assistant • model-x');
+    act(() => runtime.update({ session: sessionWith(key, running({ label: 'GPT-6.2 Sol' }), { rowVersion: 2 }) }));
+    expect(title(view.container)).toBe('Research assistant • 6.2 Sol');
+    act(() => runtime.update({ session: sessionWith(key, running({ label: 'Claude' }), { rowVersion: 3 }) }));
+    expect(title(view.container)).toBe('Research assistant • Claude');
+    act(() => runtime.update({ session: sessionWith(key, running({ label: 'GPT-5' }), { rowVersion: 4 }) }));
+    expect(title(view.container)).toBe('Research assistant • GPT-5');
+  });
+
+  it('shows the name alone when the model is unknown or malformed', () => {
+    for (const value of [undefined, null, 'x', 7, [], {}, { id: 3, harness: 'Harness A' }, { id: 'a' }]) {
+      const runtime = new FakeRuntime(key, { ...live, session: sessionWith(key, value) });
+      const view = render(<TightbeamChat sessionKey={key} adapter={adapterFor(runtime)} />);
+      expect(title(view.container)).toBe('Research assistant');
+      view.unmount();
+    }
+  });
+
+  it('follows live session updates and drops the model when it becomes unknown', () => {
+    const runtime = new FakeRuntime(key, { ...live, session: sessionWith(key, running()) });
+    const view = render(<TightbeamChat sessionKey={key} adapter={adapterFor(runtime)} />);
+    act(() => runtime.update({ session: sessionWith(key, running({ label: 'Claude Sonnet 5.5' }), { rowVersion: 2 }) }));
+    expect(title(view.container)).toBe('Research assistant • Sonnet 5.5');
+    act(() => runtime.update({ session: sessionWith(key, null, { rowVersion: 3 }) }));
+    expect(title(view.container)).toBe('Research assistant');
+  });
+
+  it('treats a reading from another harness as unknown', () => {
+    const runtime = new FakeRuntime(key, { ...live, session: sessionWith(key, running({ harness: 'Harness B' })) });
+    const view = render(<TightbeamChat sessionKey={key} adapter={adapterFor(runtime)} />);
+    expect(title(view.container)).toBe('Research assistant');
+    act(() => runtime.update({ session: sessionWith(key, running({ harness: 'Harness B' }), { rowVersion: 2, harness: 'Harness B' }) }));
+    expect(title(view.container)).toBe('Research assistant • Opus 5.5');
+    act(() => runtime.update({ session: sessionWith(key, running({ harness: 'Harness B' }), { rowVersion: 3, harness: 'Harness C' }) }));
+    expect(title(view.container)).toBe('Research assistant');
+  });
+
+  it('hides the model while disconnected and shows the fresh record after reconnect', () => {
+    const runtime = new FakeRuntime(key, { ...live, session: sessionWith(key, running()) });
+    const view = render(<TightbeamChat sessionKey={key} adapter={adapterFor(runtime)} />);
+    act(() => runtime.update({ liveConnectionState: 'reconnecting' }));
+    expect(title(view.container)).toBe('Research assistant');
+    act(() => runtime.update({ liveConnectionState: 'disconnected' }));
+    expect(title(view.container)).toBe('Research assistant');
+    act(() => runtime.update({ liveConnectionState: 'connected',
+      session: sessionWith(key, running({ label: 'Claude Haiku 5.5' }), { rowVersion: 5 }) }));
+    expect(title(view.container)).toBe('Research assistant • Haiku 5.5');
+  });
+
+  it('never shows another conversation\'s model after a switch', () => {
+    const first = new FakeRuntime('first', { ...live, session: sessionWith('first', running()) });
+    const second = new FakeRuntime('second', { ...live, session: sessionWith('second', null) });
+    const adapter: TightbeamAdapter = { open: (k: string) => (k === 'first' ? first : second) } as TightbeamAdapter;
+    const view = render(<TightbeamChat sessionKey="first" adapter={adapter} />);
+    expect(title(view.container)).toBe('Research assistant • Opus 5.5');
+    view.rerender(<TightbeamChat sessionKey="second" adapter={adapter} />);
+    expect(title(view.container)).toBe('Research assistant');
+    // A record that belongs to a different session is never trusted.
+    const stale = new FakeRuntime('third', { ...live, session: sessionWith('first', running()) });
+    const other = render(<TightbeamChat sessionKey="third" adapter={adapterFor(stale)} />);
+    expect(title(other.container)).toBe('Research assistant');
+  });
 });

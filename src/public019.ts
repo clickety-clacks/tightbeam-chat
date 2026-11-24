@@ -301,6 +301,8 @@ function decodeTriggerSource(value: unknown, origin: string): CanonicalTurn['tri
   return 'human';
 }
 
+import { decodeRunningModel } from './runningModel';
+
 export function decodePublic019Session(value: unknown, sessionKey: string): SessionRecord {
   const row = record(value);
   if (requiredString(row, 'sessionKey') !== sessionKey) {
@@ -324,6 +326,7 @@ export function decodePublic019Session(value: unknown, sessionKey: string): Sess
     displayName,
     model,
     harness,
+    runningModel: decodeRunningModel(row.runningModel),
     activity: mechanicalStatus ?? state,
     raw: Object.freeze({ ...row }),
   });
