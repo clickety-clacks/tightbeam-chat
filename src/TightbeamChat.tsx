@@ -1,3 +1,4 @@
+import { newUuid } from './uuid';
 import { composerModelText } from './runningModel';
 import { uncoveredRecordEvents, recordEventPresentation } from './sessionRecordEvents';
 import type { SessionRecordEvent } from './types';
@@ -1095,7 +1096,9 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, re
     }), member: Object.freeze({ ...bubble.member }) } : {}),
     defaultRender: () => bubble.derived ? markdownBody(displayContent)
       : defaultBody(record, readAttachment, preservePosition, reconcileLayout, displayContent),
-    copyText: () => navigator.clipboard.writeText(bubble.displayContent ?? record.content),
+    copyText: () => typeof navigator !== 'undefined' && navigator.clipboard
+      ? navigator.clipboard.writeText(bubble.displayContent ?? record.content)
+      : Promise.reject(new Error('Copying is unavailable here.')),
   };
   // Existing renderers consume record.content. Give them only the member view;
   // source context identifies the carrier without exposing hidden siblings.
@@ -1189,9 +1192,7 @@ function PendingSendImages({ items }: {
 }
 
 function newAttachmentId(): string {
-  return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
-    ? crypto.randomUUID()
-    : `attachment-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return newUuid();
 }
 
 function isImageAttachment(input: ComposerAttachmentInput): boolean {
@@ -1763,7 +1764,12 @@ const Composer = forwardRef<ComposerHandle, {
       recoverySnapshot.editRevision++;
       updateDraft('');
     } else {
-      sendId = runtime.send(draft);
+      try {
+        sendId = runtime.send(draft);
+      } catch (error) {
+        setAcquisitionError(`The message was not submitted: ${errorReason(error)}. Your draft is still here.`);
+        return;
+      }
       if (sendId) recoverySnapshot.submittedRevisions.set(sendId, { revision: recoverySnapshot.editRevision, awaitingCanonical: false });
     }
     if (sendId) {

@@ -1,5 +1,18 @@
 [
   {
+    "version": "v0.1.112",
+    "items": [
+      {
+        "title": "Prompts send inside embedded frames",
+        "description": "Prompts now send when Chat is shown inside an embedded frame, such as a Surf Ace pane. If a send ever fails, Chat shows the error and keeps your draft."
+      },
+      {
+        "title": "Gateway compatibility",
+        "description": "Chat supports Gateway 0.1.16. Human prompts use the authenticated WebSocket connection by default."
+      }
+    ]
+  },
+  {
     "version": "v0.1.111",
     "items": [
       {

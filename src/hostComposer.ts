@@ -1,5 +1,6 @@
 import type { AttachmentCapabilities, AttachmentInput, ChatRuntime, HostSendSignal, RuntimeState } from './types';
 import { isSettingsCommand } from './settingsCommand';
+import { newUuid } from './uuid';
 import { composerModelText } from './runningModel';
 
 /** Public, fixed in-page names for host-composer protocol version 1. */
@@ -307,7 +308,7 @@ export class HostComposerBridge {
     this.reportedOverlayOpen = false;
     const lifetime: Lifetime = {
       runtime,
-      lifetimeId: `l_${crypto.randomUUID()}`,
+      lifetimeId: `l_${newUuid()}`,
       sessionKey: runtime.getSnapshot().sessionKey,
       attempts: new Map(),
       ready: false,

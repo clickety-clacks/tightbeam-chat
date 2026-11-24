@@ -1,3 +1,4 @@
+import { newUuid } from './uuid';
 import { SessionRecordEvents } from './sessionRecordEvents';
 import {
   AuthorizationError,
@@ -1965,7 +1966,7 @@ class SessionRuntime implements ChatRuntime {
 
   send = (content: string, clientMessageId?: string, hostSend?: HostSendContext): string | null => {
     if (!content.trim() || this.disposed || !this.checkIdentity() || this.state.status === 'unauthorized') return null;
-    const id = clientMessageId ?? `c_${crypto.randomUUID()}`;
+    const id = clientMessageId ?? `c_${newUuid()}`;
     if (clientMessageId && !hostCorrelationPattern.test(clientMessageId)) return null;
     if (this.state.sends.some((send) => send.clientMessageId === id)) return null;
     const submitter = this.currentSubmitter();
@@ -1993,7 +1994,7 @@ class SessionRuntime implements ChatRuntime {
     if (context && context.expectedSessionKey !== this.sessionKey) return null;
     if (!inputs.length) return this.send(content, context?.clientMessageId, context?.hostSend);
     if (this.disposed || !this.checkIdentity() || this.state.status !== 'ready') return null;
-    const clientMessageId = context?.clientMessageId ?? `c_${crypto.randomUUID()}`;
+    const clientMessageId = context?.clientMessageId ?? `c_${newUuid()}`;
     if (!hostCorrelationPattern.test(clientMessageId) ||
         this.state.sends.some(send => send.clientMessageId === clientMessageId)) return null;
     const attachmentItems = this.captureAttachments(inputs);
