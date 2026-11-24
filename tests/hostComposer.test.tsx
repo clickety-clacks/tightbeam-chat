@@ -1691,13 +1691,14 @@ describe('host agent-model event', () => {
     const ready = await waitForReady(events, 'model-session');
     await settled(events, 'Opus 5.5');
     const before = modelEvents(events).length;
+    transport.changeOpenFailures = 3;
     act(() => transport.callbacks.get('model-session')?.onDoubt('connection closed'));
-    await settled(events, null);
+    await waitFor(() => expect(models(events).at(-1)).toBeNull(), { timeout: 6000 });
     expect(modelEvents(events)).toHaveLength(before + 1);
     expect(events.filter((event) => event.event === 'ready' && event.lifetimeId === ready.lifetimeId)).toHaveLength(1);
-    await settled(events, 'Opus 5.5');
+    await waitFor(() => expect(models(events).at(-1)).toBe('Opus 5.5'), { timeout: 12_000 });
     expect(modelEvents(events)).toHaveLength(before + 2);
-  }, 20_000);
+  }, 30_000);
 
   it('sends null when the model is unknown', async () => {
     const transport = new HostComposerTransport();
