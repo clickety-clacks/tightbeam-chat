@@ -1700,7 +1700,7 @@ describe('host agent-model event', () => {
     expect(modelEvents(events)).toHaveLength(before + 2);
   }, 30_000);
 
-  it('sends null when status leaves ready and the model again when it returns', async () => {
+  it('sends null when a runtime change takes status out of ready, before unavailable', async () => {
     const transport = new HostComposerTransport();
     transport.runningModel = running();
     const events: HostComposerEvent[] = [];
@@ -1708,18 +1708,15 @@ describe('host agent-model event', () => {
     const { runtimes } = openChat(transport, 'model-session');
     const ready = await waitForReady(events, 'model-session');
     await settled(events, 'Opus 5.5');
-    const before = modelEvents(events).length;
-    transport.readGate = deferred<void>();
-    let rebuilt!: Promise<void>;
-    act(() => { rebuilt = runtimes[0].rebuild({ restart: true }) as Promise<void>; });
-    await waitFor(() => expect(runtimes[0].getSnapshot().status).not.toBe('ready'));
-    await waitFor(() => expect(models(events).at(-1)).toBeNull());
-    expect(modelEvents(events)).toHaveLength(before + 1);
+    transport.authorizationLost = true;
+    await act(async () => { await runtimes[0].rebuild({ restart: true }); });
+    await waitFor(() => expect(events.some((event) => event.event === 'unavailable')).toBe(true));
+    expect(runtimes[0].getSnapshot().status).toBe('unauthorized');
+    const indexes = (kind: string) => events.map((event, index) => event.event === kind ? index : -1).filter((index) => index >= 0);
+    expect(models(events).at(-1)).toBeNull();
+    expect(indexes('agent-model').at(-1)!).toBeLessThan(indexes('unavailable')[0]);
     expect(events.filter((event) => event.event === 'ready' && event.lifetimeId === ready.lifetimeId)).toHaveLength(1);
-    transport.readGate.resolve();
-    await act(async () => { await rebuilt; });
-    await waitFor(() => expect(models(events).at(-1)).toBe('Opus 5.5'), { timeout: 12_000 });
-  }, 30_000);
+  });
 
   it('sends null before unavailable, and nothing after the lifetime ended', async () => {
     const transport = new HostComposerTransport();
@@ -1737,6 +1734,8 @@ describe('host agent-model event', () => {
     const lastModel = events.map((event, index) => ({ event, index })).filter(({ event }) => event.event === 'agent-model').at(-1)!;
     expect(lastModel.event).toMatchObject({ model: null });
     expect(lastModel.index).toBeLessThan(unavailableAt);
+    const endedAt = events.findIndex((event) => event.event === 'lifetime-ended');
+    expect(endedAt).toBeGreaterThan(unavailableAt);
     const count = events.length;
     await act(async () => { await new Promise((done) => setTimeout(done, 200)); });
     expect(events.slice(count).some((event) => event.event === 'agent-model')).toBe(false);

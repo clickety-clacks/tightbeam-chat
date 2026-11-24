@@ -265,9 +265,9 @@ export class HostComposerBridge {
     for (const listener of this.listeners) listener();
   }
 
-  private emitModel(lifetime: Lifetime, state: RuntimeState, force: boolean): void {
+  private emitModel(lifetime: Lifetime, state: RuntimeState | null, force: boolean): void {
     if (!this.agentModel) return;
-    const model = composerModelText(state);
+    const model = state ? composerModelText(state) : null;
     if (!force && lifetime.lastModel === model) return;
     lifetime.lastModel = model;
     this.emit({ event: 'agent-model', version: 1, lifetimeId: lifetime.lifetimeId, sessionKey: lifetime.sessionKey, model });
@@ -280,6 +280,7 @@ export class HostComposerBridge {
   private markUnavailable(lifetime: Lifetime, reason: string): void {
     if (this.current !== lifetime || this.disposed) return;
     if (!lifetime.ready && lifetime.unavailableReason === reason) return;
+    if (lifetime.hasBeenReady) this.emitModel(lifetime, null, false);
     lifetime.ready = false;
     lifetime.unavailableReason = reason;
     this.publish();
