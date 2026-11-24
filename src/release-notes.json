@@ -1,5 +1,22 @@
 [
   {
+    "version": "v0.1.111",
+    "items": [
+      {
+        "title": "Running model in the message box",
+        "description": "When the Gateway reports which model an agent is running, the empty message box shows it after the agent's name, for example Name \u2022 Opus 5.5. Without a report, it shows the name alone. A later Gateway release supplies the model."
+      },
+      {
+        "title": "Model text for Tuner",
+        "description": "Tuner can ask Chat for the same model text with the agent-model event. Tuner needs its own update to use it."
+      },
+      {
+        "title": "Gateway compatibility",
+        "description": "Chat supports Gateway 0.1.16. Human prompts use the authenticated WebSocket connection by default."
+      }
+    ]
+  },
+  {
     "version": "v0.1.110",
     "items": [
       {
