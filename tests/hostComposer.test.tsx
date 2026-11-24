@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { TightbeamChat } from '../src/TightbeamChat';
 import { createTightbeamAdapter } from '../src/runtime';
+import { decodeRunningModel } from '../src/runningModel';
 import { unseenReleaseNotes } from '../src/releaseNotes';
 import { HOST_COMMAND_NAME, HOST_DECLARATION_NAME, HostComposerBridge, type HostComposerCommandEntry, type HostComposerEvent } from '../src/hostComposer';
 import type {
@@ -52,6 +53,8 @@ class HostComposerTransport implements ChatTransport {
   changeOpenFailures = 0;
   failReadSessionOnce = false;
   missingSession = false;
+  runningModel: unknown = undefined;
+  private sessionVersion = 1;
   authorizationLost = false;
   nextSend?: (submission: HumanSubmission) => Promise<HumanSendResult>;
   private seq = 0;
@@ -84,7 +87,8 @@ class HostComposerTransport implements ChatTransport {
       this.failReadSessionOnce = false;
       throw new Error('Temporary history read failure.');
     }
-    return { sessionKey, rowVersion: 1, displayName: `Agent ${sessionKey}`, model: 'Model A', harness: 'Harness A', raw: {} };
+    return { sessionKey, rowVersion: this.sessionVersion, displayName: `Agent ${sessionKey}`, model: 'Model A', harness: 'Harness A',
+      runningModel: decodeRunningModel(this.runningModel), raw: {} };
   };
   readTail = async (sessionKey: string): Promise<ConversationPage> => {
     this.tailReadCount++;
@@ -119,6 +123,14 @@ class HostComposerTransport implements ChatTransport {
     rows.push(record);
     this.records.set(submission.sessionKey, rows);
     return record;
+  }
+
+  setRunningModel(sessionKey: string, runningModel: unknown): void {
+    this.runningModel = runningModel;
+    this.sessionVersion++;
+    this.callbacks.get(sessionKey)?.onNotice({ operation: 'session', session: {
+      sessionKey, rowVersion: this.sessionVersion, displayName: `Agent ${sessionKey}`, model: 'Model A', harness: 'Harness A',
+      runningModel: decodeRunningModel(runningModel), raw: {} } });
   }
 
   emit(record: ConversationRecord): void {
@@ -1610,5 +1622,95 @@ describe('native photo host commands', () => {
     }]);
     expect(transport.uploads).toEqual([]);
     expect(transport.submissions).toEqual([]);
+  });
+});
+
+describe('host agent-model event', () => {
+  const modelDeclaration = { events: Object.freeze({ 'agent-model': Object.freeze([1]) }) };
+  const running = (label: string | null = 'Claude Opus 5.5') => ({ id: 'model-x', label, harness: 'Harness A' });
+  const modelEvents = (events: readonly HostComposerEvent[]) =>
+    events.filter((event): event is Extract<HostComposerEvent, { event: 'agent-model' }> => event.event === 'agent-model');
+
+  it.each([
+    ['no events field', {}],
+    ['an unsupported version', { events: { 'agent-model': [2] } }],
+    ['a malformed events field', { events: 'agent-model' }],
+  ])('sends nothing for a host with %s and leaves ready unchanged', async (_label, extra) => {
+    const transport = new HostComposerTransport();
+    transport.runningModel = running();
+    const events: HostComposerEvent[] = [];
+    installDeclaration(events, [1], extra);
+    openChat(transport, 'model-session');
+    const ready = await waitForReady(events, 'model-session');
+    await waitFor(() => expect(connectionEvents(events).length).toBeGreaterThan(0));
+    expect(modelEvents(events)).toEqual([]);
+    expect(Object.keys(ready).sort()).toEqual(
+      ['agentDisplayName', 'capabilities', 'event', 'gatewayOrigin', 'lifetimeId', 'sessionKey', 'version']);
+    expect(JSON.stringify(ready)).not.toContain('Opus');
+  });
+
+  it('sends the display text right after ready, then only on change, including to null', async () => {
+    const transport = new HostComposerTransport();
+    transport.runningModel = running();
+    const events: HostComposerEvent[] = [];
+    installDeclaration(events, [1], modelDeclaration);
+    openChat(transport, 'model-session');
+    const ready = await waitForReady(events, 'model-session');
+    await waitFor(() => expect(modelEvents(events)).toHaveLength(1));
+    expect(events.indexOf(modelEvents(events)[0])).toBe(events.indexOf(ready) + 1);
+    expect(modelEvents(events)[0]).toEqual({ event: 'agent-model', version: 1, lifetimeId: ready.lifetimeId,
+      sessionKey: 'model-session', model: 'Opus 5.5' });
+    await waitFor(() => expect(transport.callbacks.has('model-session')).toBe(true));
+
+    act(() => transport.setRunningModel('model-session', running()));
+    act(() => transport.setRunningModel('model-session', running('Claude Sonnet 5.5')));
+    await waitFor(() => expect(modelEvents(events)).toHaveLength(2));
+    expect(modelEvents(events)[1].model).toBe('Sonnet 5.5');
+    act(() => transport.setRunningModel('model-session', null));
+    await waitFor(() => expect(modelEvents(events)).toHaveLength(3));
+    expect(modelEvents(events)[2].model).toBeNull();
+    act(() => transport.setRunningModel('model-session', 'malformed'));
+    await act(async () => { await Promise.resolve(); });
+    expect(modelEvents(events)).toHaveLength(3);
+  });
+
+  it('sends null when the model is unknown', async () => {
+    const transport = new HostComposerTransport();
+    const events: HostComposerEvent[] = [];
+    installDeclaration(events, [1], modelDeclaration);
+    openChat(transport, 'model-session');
+    await waitForReady(events, 'model-session');
+    await waitFor(() => expect(modelEvents(events)).toHaveLength(1));
+    expect(modelEvents(events)[0].model).toBeNull();
+  });
+
+  it('works alongside restore-requested when both are declared', async () => {
+    const transport = new HostComposerTransport();
+    transport.runningModel = running();
+    const events: HostComposerEvent[] = [];
+    installDeclaration(events, [1], { events: Object.freeze({
+      'restore-requested': Object.freeze([1]), 'agent-model': Object.freeze([1]) }) });
+    openChat(transport, 'model-session');
+    await waitForReady(events, 'model-session');
+    await waitFor(() => expect(modelEvents(events)).toHaveLength(1));
+    expect(modelEvents(events)[0].model).toBe('Opus 5.5');
+    expect(restoreEvents(events)).toEqual([]);
+  });
+
+  it('sends again for a new lifetime and never for an ended one', async () => {
+    const transport = new HostComposerTransport();
+    transport.runningModel = running();
+    const events: HostComposerEvent[] = [];
+    installDeclaration(events, [1], modelDeclaration);
+    const { rerender, adapter } = openChat(transport, 'session-a');
+    const first = await waitForReady(events, 'session-a');
+    await waitFor(() => expect(modelEvents(events)).toHaveLength(1));
+    rerender(<TightbeamChat sessionKey="session-b" adapter={adapter} />);
+    const second = await waitForReady(events, 'session-b');
+    await waitFor(() => expect(modelEvents(events)).toHaveLength(2));
+    expect(modelEvents(events)[1]).toMatchObject({ lifetimeId: second.lifetimeId, sessionKey: 'session-b', model: 'Opus 5.5' });
+    const endedAt = events.findIndex((event) => event.event === 'lifetime-ended' && event.lifetimeId === first.lifetimeId);
+    expect(endedAt).toBeGreaterThan(-1);
+    expect(modelEvents(events.slice(endedAt)).every((event) => event.lifetimeId !== first.lifetimeId)).toBe(true);
   });
 });

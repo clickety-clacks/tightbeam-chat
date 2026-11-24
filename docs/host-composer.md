@@ -18,12 +18,12 @@ window.__TIGHTBEAM_CHAT_HOST__ = {
 };
 ```
 
-A declaration may also list optional events the host handles in `events`, keyed by event name, each with the event versions it accepts. The only optional event is `restore-requested` (see [Failed-turn restore](#failed-turn-restore)):
+A declaration may also list optional events the host handles in `events`, keyed by event name, each with the event versions it accepts. The optional events are `restore-requested` (see [Failed-turn restore](#failed-turn-restore)) and `agent-model` (see [Agent model](#agent-model)):
 
 ```ts
 window.__TIGHTBEAM_CHAT_HOST__ = {
   versions: [1],
-  events: { 'restore-requested': [1] },
+  events: { 'restore-requested': [1], 'agent-model': [1] },
   onEvent(event) { /* ... */ },
 };
 ```
@@ -48,7 +48,7 @@ After the selected-session subscription is established and canonical history has
 }
 ```
 
-Those are the six ready fields: `version`, `lifetimeId`, `sessionKey`, `gatewayOrigin`, `agentDisplayName`, and `capabilities`. The event also has its `event` discriminator. No attachment capability is present in V1. No credential, token or device secret is included; model and harness details are omitted while opted in.
+Those are the six ready fields: `version`, `lifetimeId`, `sessionKey`, `gatewayOrigin`, `agentDisplayName`, and `capabilities`. The event also has its `event` discriminator. No attachment capability is present in V1. No credential, token or device secret is included; model and harness details are omitted from `ready`; a host that wants the model opts into `agent-model`.
 
 Chat sends these lifetime events:
 
@@ -209,3 +209,15 @@ A user retry repeats the exact content and ordered filename/MIME/byte manifest w
 Photo attempts use the same accepted/delivered/failed/uncertain events as text. Preparation and upload failures add `failed` reasons `image-unreadable` and `upload-failed`, with `detail` and optional zero-based `attachmentIndex`. Accepted means Gateway acknowledgement; delivered means canonical reconciliation, not agent reading.
 
 This version does not implement other file types or native attach-time assessment commands. Without the Gateway assessment verb, or when a host-send assessment is unknown or fails, photos post normally with no new assessment warning or confirmation. Native sends never enter the hidden web-composer confirmation step.
+
+## Agent model
+
+Chat's own composer shows `Name • model` when the Gateway reports the model the agent is running now. A host that replaces the composer can ask for the same text by declaring `events: { 'agent-model': [1] }`. Without the declaration nothing changes, and `ready` keeps its six fields. An absent, malformed or unsupported `events` field declares nothing and never declines the seam.
+
+```js
+{ event: 'agent-model', version: 1, lifetimeId, sessionKey, model: 'Opus 5.5' /* or null */ }
+```
+
+- `model` is exactly the text Chat's composer would show after the agent name, or `null` when unknown: the Gateway does not report it, the report is malformed or from a different harness, or the live connection is down.
+- Chat sends it right after each `ready`, and again only when the value changes, including to `null`. It never sends it for a lifetime that has ended.
+- Hosts that also declare `restore-requested` receive both events independently.

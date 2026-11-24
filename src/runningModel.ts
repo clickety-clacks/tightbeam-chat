@@ -1,4 +1,4 @@
-import type { RunningModel, SessionRecord } from './types';
+import type { RunningModel, RuntimeState, SessionRecord } from './types';
 
 const VENDOR_PREFIX = /^(?:claude|gpt|gemini)[\s-]+/i;
 
@@ -29,4 +29,10 @@ export function runningModelText(session: SessionRecord | undefined, sessionKey:
   // A reading from a different harness than the record's is not trustworthy.
   if (session.harness !== undefined && running.harness !== session.harness) return '';
   return running.label ? trimVendor(running.label) : running.id;
+}
+
+/** The text the composer shows after the name: null while unknown, stale or not live. */
+export function composerModelText(state: RuntimeState): string | null {
+  if (state.status !== 'ready' || state.liveConnectionState !== 'connected') return null;
+  return runningModelText(state.session, state.sessionKey) || null;
 }

@@ -1,4 +1,4 @@
-import { runningModelText } from './runningModel';
+import { composerModelText } from './runningModel';
 import { uncoveredRecordEvents, recordEventPresentation } from './sessionRecordEvents';
 import type { SessionRecordEvent } from './types';
 import { Component, forwardRef, memo, useCallback, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore,
@@ -1365,8 +1365,7 @@ const Composer = forwardRef<ComposerHandle, {
   const titleId = useId();
   const statusName = statusText(state);
   // Only a live, current-session reading counts; never fall back to a selection.
-  const modelText = state.status === 'ready' && state.liveConnectionState === 'connected'
-    ? runningModelText(state.session, state.sessionKey) : '';
+  const modelText = composerModelText(state) ?? '';
   const retryingConversationSnapshot = isRetryingConversationSnapshot(state);
   const statusId = `${titleId}-status-details`;
   const updateDraft = useCallback((content: string) => {

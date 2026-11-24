@@ -1,5 +1,6 @@
 import type { AttachmentCapabilities, AttachmentInput, ChatRuntime, HostSendSignal, RuntimeState } from './types';
 import { isSettingsCommand } from './settingsCommand';
+import { composerModelText } from './runningModel';
 
 /** Public, fixed in-page names for host-composer protocol version 1. */
 export const HOST_DECLARATION_NAME = '__TIGHTBEAM_CHAT_HOST__';
@@ -26,10 +27,24 @@ export type HostComposerEvent =
       readonly reason: 'refused' | 'retry-unavailable' | 'upload-failed' | 'image-unreadable'; readonly detail?: string; readonly attachmentIndex?: number }
   | { readonly event: 'uncertain'; readonly lifetimeId: string; readonly correlationId: string; readonly attempt: number;
       readonly reason: 'ack-lost' | 'accepted-unreconciled' | 'lifetime-ended' | 'retry-unavailable' }
-  | HostRestoreRequestedEvent;
+  | HostRestoreRequestedEvent
+  | HostAgentModelEvent;
 
 /** Optional host events a declaration can opt into; each lists the event versions the host handles. */
 export const HOST_RESTORE_REQUESTED_EVENT = 'restore-requested';
+export const HOST_AGENT_MODEL_EVENT = 'agent-model';
+
+/**
+ * The model text Chat's own composer would show after the agent name, or null when
+ * unknown. Sent right after each `ready` and again only when the value changes.
+ */
+export interface HostAgentModelEvent {
+  readonly event: 'agent-model';
+  readonly version: 1;
+  readonly lifetimeId: string;
+  readonly sessionKey: string;
+  readonly model: string | null;
+}
 
 /**
  * Emitted once per user activation of host-mode "Edit and resend" on a failed turn.
@@ -68,7 +83,7 @@ export interface HostComposerDeclaration {
   readonly versions: readonly number[];
   readonly onEvent: (event: HostComposerEvent) => void;
   /** Optional events the host handles, by name, each with the event versions it accepts. */
-  readonly events?: { readonly 'restore-requested'?: readonly number[] };
+  readonly events?: { readonly 'restore-requested'?: readonly number[]; readonly 'agent-model'?: readonly number[] };
 }
 
 /** JSON-safe native photo input; bytes follow the web attachment preparation path. */
@@ -122,6 +137,8 @@ interface Lifetime {
   readonly attempts: Map<string, Attempt>;
   ready: boolean;
   hasBeenReady: boolean;
+  /** Last agent-model value sent; undefined until the first send for this lifetime. */
+  lastModel?: string | null;
   connectionState?: HostConnectionState;
   unavailableReason?: string;
   unsubscribe: () => void;
@@ -155,10 +172,10 @@ function liveFeedState(state: RuntimeState): HostConnectionState {
 }
 
 /** An absent or malformed `events` field declares no optional events; it never declines the seam. */
-function declaresRestoreRequested(raw: Record<string, unknown>): boolean {
+function declaresEvent(raw: Record<string, unknown>, name: string): boolean {
   const events = raw.events;
   if (!isObject(events)) return false;
-  const versions = events[HOST_RESTORE_REQUESTED_EVENT];
+  const versions = events[name];
   return Array.isArray(versions) && versions.includes(1);
 }
 
@@ -202,7 +219,8 @@ export class HostComposerBridge {
       }
       return null;
     }
-    return new HostComposerBridge(target, handler, declaresRestoreRequested(raw));
+    return new HostComposerBridge(target, handler, declaresEvent(raw, HOST_RESTORE_REQUESTED_EVENT),
+      declaresEvent(raw, HOST_AGENT_MODEL_EVENT));
   }
 
   private readonly listeners = new Set<() => void>();
@@ -219,7 +237,7 @@ export class HostComposerBridge {
   private reportedOverlayOpen = false;
 
   private constructor(private readonly target: Window, private readonly onEvent: (event: HostComposerEvent) => void,
-    private readonly restoreRequested: boolean) {
+    private readonly restoreRequested: boolean, private readonly agentModel: boolean) {
     this.snapshot = Object.freeze({ ...emptySnapshot, optedIn: true, restoreRequested });
     this.priorCommand = Object.getOwnPropertyDescriptor(target, HOST_COMMAND_NAME);
     this.command = (command) => this.receive(command);
@@ -245,6 +263,14 @@ export class HostComposerBridge {
       restoreRequested: this.restoreRequested,
     });
     for (const listener of this.listeners) listener();
+  }
+
+  private emitModel(lifetime: Lifetime, state: RuntimeState, force: boolean): void {
+    if (!this.agentModel) return;
+    const model = composerModelText(state);
+    if (!force && lifetime.lastModel === model) return;
+    lifetime.lastModel = model;
+    this.emit({ event: 'agent-model', version: 1, lifetimeId: lifetime.lifetimeId, sessionKey: lifetime.sessionKey, model });
   }
 
   private emit(event: HostComposerEvent): void {
@@ -340,6 +366,7 @@ export class HostComposerBridge {
             ...(this.photoCapabilities(lifetime.runtime) ? { attachments: this.photoCapabilities(lifetime.runtime) } : {}) }),
         });
         lifetime.hasBeenReady = true;
+        this.emitModel(lifetime, state, true);
         this.emitConnection(lifetime, state, true);
         if (this.overlayOpen) {
           this.reportedOverlayOpen = true;
@@ -355,7 +382,10 @@ export class HostComposerBridge {
         for (const attempt of lifetime.attempts.values()) {
           if (attempt.accepted && state.generation > attempt.lastCheckedGeneration) this.checkAccepted(lifetime, attempt, state.generation);
         }
-      } else this.emitConnection(lifetime, state);
+      } else {
+        this.emitModel(lifetime, state, false);
+        this.emitConnection(lifetime, state);
+      }
       return;
     }
     this.emitConnection(lifetime, state);
