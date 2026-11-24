@@ -1700,6 +1700,48 @@ describe('host agent-model event', () => {
     expect(modelEvents(events)).toHaveLength(before + 2);
   }, 30_000);
 
+  it('sends null when status leaves ready and the model again when it returns', async () => {
+    const transport = new HostComposerTransport();
+    transport.runningModel = running();
+    const events: HostComposerEvent[] = [];
+    installDeclaration(events, [1], modelDeclaration);
+    const { runtimes } = openChat(transport, 'model-session');
+    const ready = await waitForReady(events, 'model-session');
+    await settled(events, 'Opus 5.5');
+    const before = modelEvents(events).length;
+    transport.readGate = deferred<void>();
+    let rebuilt!: Promise<void>;
+    act(() => { rebuilt = runtimes[0].rebuild({ restart: true }) as Promise<void>; });
+    await waitFor(() => expect(runtimes[0].getSnapshot().status).not.toBe('ready'));
+    await waitFor(() => expect(models(events).at(-1)).toBeNull());
+    expect(modelEvents(events)).toHaveLength(before + 1);
+    expect(events.filter((event) => event.event === 'ready' && event.lifetimeId === ready.lifetimeId)).toHaveLength(1);
+    transport.readGate.resolve();
+    await act(async () => { await rebuilt; });
+    await waitFor(() => expect(models(events).at(-1)).toBe('Opus 5.5'), { timeout: 12_000 });
+  }, 30_000);
+
+  it('sends null before unavailable, and nothing after the lifetime ended', async () => {
+    const transport = new HostComposerTransport();
+    transport.runningModel = running();
+    const events: HostComposerEvent[] = [];
+    installDeclaration(events, [1], modelDeclaration);
+    openChat(transport, 'model-session');
+    const ready = await waitForReady(events, 'model-session');
+    await settled(events, 'Opus 5.5');
+    transport.authorizationLost = true;
+    act(() => commandEntry()({ type: 'send', lifetimeId: ready.lifetimeId, sessionKey: ready.sessionKey,
+      correlationId: correlation, content: 'authorization expired' }));
+    await waitFor(() => expect(events.some((event) => event.event === 'unavailable')).toBe(true));
+    const unavailableAt = events.findIndex((event) => event.event === 'unavailable');
+    const lastModel = events.map((event, index) => ({ event, index })).filter(({ event }) => event.event === 'agent-model').at(-1)!;
+    expect(lastModel.event).toMatchObject({ model: null });
+    expect(lastModel.index).toBeLessThan(unavailableAt);
+    const count = events.length;
+    await act(async () => { await new Promise((done) => setTimeout(done, 200)); });
+    expect(events.slice(count).some((event) => event.event === 'agent-model')).toBe(false);
+  });
+
   it('sends null when the model is unknown', async () => {
     const transport = new HostComposerTransport();
     const events: HostComposerEvent[] = [];

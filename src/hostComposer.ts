@@ -389,6 +389,8 @@ export class HostComposerBridge {
       return;
     }
     this.emitConnection(lifetime, state);
+    // Chat's composer hides the model here too, so the host hears null (never after the lifetime ended).
+    if (lifetime.hasBeenReady) this.emitModel(lifetime, state, false);
     if (unavailableReason) {
       this.markUnavailable(lifetime, unavailableReason);
       return;

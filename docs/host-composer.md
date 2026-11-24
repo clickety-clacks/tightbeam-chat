@@ -218,6 +218,6 @@ Chat's own composer shows `Name • model` when the Gateway reports the model th
 { event: 'agent-model', version: 1, lifetimeId, sessionKey, model: 'Opus 5.5' /* or null */ }
 ```
 
-- `model` is exactly the text Chat's composer would show after the agent name, or `null` when unknown: the Gateway does not report it, the report is malformed or from a different harness, or the live connection is down.
+- `model` is exactly the text Chat's composer would show after the agent name, or `null` when unknown: the Gateway does not report it, the report is malformed or from a different harness, the live connection is down, Chat's status has left ready (for example while it reloads), or the conversation has become unavailable. Once a lifetime has been ready, every change of that lifetime is evaluated, so the host hears `null` as soon as Chat's own composer would hide the model; a later `ready` always sends the value again.
 - Chat sends it right after each `ready`, and again only when the value changes, including to `null`. It never sends it for a lifetime that has ended.
 - Hosts that also declare `restore-requested` receive both events independently.
