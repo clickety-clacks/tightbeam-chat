@@ -491,10 +491,11 @@ describe('Chat theme', () => {
     expect(rule(componentCss, '.tb-chat-input-shell-empty textarea::placeholder'))
       .toContain('color: transparent');
     expect(rule(componentCss, '.tb-chat-input-shell-no-status .tb-chat-empty-title')).toContain('padding-left: 3rem');
-    // The name shrinks first; the model keeps its width until it must ellipsize itself. Both shells share the rules.
-    expect(rule(componentCss, '.tb-chat-empty-name')).toContain('flex: 0 100 auto');
-    expect(rule(componentCss, '.tb-chat-empty-model')).toContain('flex: 0 1 auto');
-    expect(rule(componentCss, '.tb-chat-empty-name:only-child')).toContain('flex: 1 1 auto');
+    // The model follows the name directly; the name shrinks to a few characters before the model ellipsizes.
+    expect(rule(componentCss, '.tb-chat-empty-name')).toContain('flex: 0 1 auto');
+    expect(rule(componentCss, '.tb-chat-empty-model')).toContain('flex: 0 0 auto');
+    expect(rule(componentCss, '.tb-chat-empty-model')).toContain('max-width: calc(100% - 4ch)');
+    expect(rule(componentCss, '.tb-chat-empty-name')).not.toContain('min-width');
     expect(title).toContain('min-width: 0');
     expect(rule(componentCss, '.tb-chat-empty-title')).toContain('padding: .425rem 3.55rem .425rem 5.35rem');
 

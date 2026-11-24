@@ -1682,6 +1682,23 @@ describe('host agent-model event', () => {
     expect(values.every((value, index) => index === 0 || value !== values[index - 1])).toBe(true);
   });
 
+  it('sends null once when the live feed starts reconnecting and the model again on recovery', async () => {
+    const transport = new HostComposerTransport();
+    transport.runningModel = running();
+    const events: HostComposerEvent[] = [];
+    installDeclaration(events, [1], modelDeclaration);
+    openChat(transport, 'model-session');
+    const ready = await waitForReady(events, 'model-session');
+    await settled(events, 'Opus 5.5');
+    const before = modelEvents(events).length;
+    act(() => transport.callbacks.get('model-session')?.onDoubt('connection closed'));
+    await settled(events, null);
+    expect(modelEvents(events)).toHaveLength(before + 1);
+    expect(events.filter((event) => event.event === 'ready' && event.lifetimeId === ready.lifetimeId)).toHaveLength(1);
+    await settled(events, 'Opus 5.5');
+    expect(modelEvents(events)).toHaveLength(before + 2);
+  });
+
   it('sends null when the model is unknown', async () => {
     const transport = new HostComposerTransport();
     const events: HostComposerEvent[] = [];

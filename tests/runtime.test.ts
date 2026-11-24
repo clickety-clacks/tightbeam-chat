@@ -167,6 +167,19 @@ function turnEvent(id: string, turnEventSeq: number, kind: TurnEventRecord['kind
     toolCall: call ?? null, rowVersion: 1 };
 }
 
+class RunningModelTransport extends ControlledTransport {
+  readSession = async (key = sessionKey): Promise<SessionRecord> => {
+    this.readSessionCalls++;
+    await this.readSessionHook?.(this.readSessionCalls);
+    return { sessionKey: key, rowVersion: 1, displayName: 'Fixture agent', harness: 'h',
+      runningModel: { id: 'base', label: null, harness: 'h' }, raw: {}, activity: 'idle' };
+  };
+  sessionNotice(rowVersion: number, id: string | null) {
+    this.callbacks?.onNotice({ operation: 'session', session: { sessionKey, rowVersion, displayName: 'Fixture agent',
+      harness: 'h', runningModel: id ? { id, label: null, harness: 'h' } : null, raw: {} } });
+  }
+}
+
 async function settle() { await vi.waitFor(() => {}, { timeout: 50 }); }
 
 describe('framework-independent runtime', () => {
@@ -2901,5 +2914,28 @@ describe('attachment submission recovery', () => {
       expect(transport.uploads).toEqual([]);
       expect(transport.submissions).toEqual([]);
     } finally { runtime.dispose(); vi.restoreAllMocks(); vi.unstubAllGlobals(); }
+  });
+
+  it('keeps a newer runningModel against older or equal session notices, buffered or live, and lets a newer null clear it', async () => {
+    const transport = new RunningModelTransport();
+    const gate = deferred<void>();
+    transport.readSessionHook = () => gate.promise;
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await vi.waitFor(() => expect(transport.callbacks).toBeDefined());
+    // Buffered while initializing: the newer notice wins over the snapshot and over an older notice.
+    transport.sessionNotice(4, 'buffered-new');
+    transport.sessionNotice(3, 'buffered-old');
+    gate.resolve();
+    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+    expect(runtime.getSnapshot().session?.runningModel?.id).toBe('buffered-new');
+    // Live: equal and older versions cannot overwrite; a newer one can, including with null.
+    transport.sessionNotice(4, 'equal');
+    transport.sessionNotice(2, 'older');
+    expect(runtime.getSnapshot().session?.runningModel?.id).toBe('buffered-new');
+    transport.sessionNotice(5, null);
+    expect(runtime.getSnapshot().session?.runningModel).toBeNull();
+    transport.sessionNotice(5, 'equal-again');
+    expect(runtime.getSnapshot().session?.runningModel).toBeNull();
+    runtime.dispose();
   });
 });

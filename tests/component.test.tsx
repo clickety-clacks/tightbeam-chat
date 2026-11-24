@@ -5281,6 +5281,8 @@ describe('composer running model', () => {
     expect(title(view.container)).toBe('Research assistant • model-x');
     act(() => runtime.update({ session: sessionWith(key, running({ label: 'GPT-6.2 Sol' }), { rowVersion: 2 }) }));
     expect(title(view.container)).toBe('Research assistant • 6.2 Sol');
+    act(() => runtime.update({ session: sessionWith(key, running({ label: 'GPT-6.2-Sol' }), { rowVersion: 2 }) }));
+    expect(title(view.container)).toBe('Research assistant • 6.2 Sol');
     act(() => runtime.update({ session: sessionWith(key, running({ label: 'Claude' }), { rowVersion: 3 }) }));
     expect(title(view.container)).toBe('Research assistant • Claude');
     act(() => runtime.update({ session: sessionWith(key, running({ label: 'GPT-5' }), { rowVersion: 4 }) }));
@@ -5303,6 +5305,14 @@ describe('composer running model', () => {
     expect(title(view.container)).toBe('Research assistant • Sonnet 5.5');
     act(() => runtime.update({ session: sessionWith(key, null, { rowVersion: 3 }) }));
     expect(title(view.container)).toBe('Research assistant');
+  });
+
+  it('shows no model when the record has no harness or the agent has no name', () => {
+    const runtime = new FakeRuntime(key, { ...live, session: sessionWith(key, running(), { harness: undefined }) });
+    const view = render(<TightbeamChat sessionKey={key} adapter={adapterFor(runtime)} />);
+    expect(title(view.container)).toBe('Research assistant');
+    act(() => runtime.update({ session: sessionWith(key, running(), { rowVersion: 2 }), agentDisplayName: '' }));
+    expect(title(view.container)).toBe('');
   });
 
   it('treats a reading from another harness as unknown', () => {

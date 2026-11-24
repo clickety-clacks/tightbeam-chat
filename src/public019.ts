@@ -34,6 +34,7 @@ import {
 import { ToolHistoryUnavailableError } from './toolHistory';
 import { TurnEventHistoryUnavailableError } from './turnEvents';
 import { normalizeSubmitterAttribution } from './submitterAttribution';
+import { decodeRunningModel } from './runningModel';
 
 // Snapshot coverage is the Chat client's subscribe-before-REST overlap, not a
 // Gateway snapshot watermark.
@@ -300,8 +301,6 @@ function decodeTriggerSource(value: unknown, origin: string): CanonicalTurn['tri
   // Gateway uses a nonstandard trigger value for human turns; the user origin disambiguates it.
   return 'human';
 }
-
-import { decodeRunningModel } from './runningModel';
 
 export function decodePublic019Session(value: unknown, sessionKey: string): SessionRecord {
   const row = record(value);
