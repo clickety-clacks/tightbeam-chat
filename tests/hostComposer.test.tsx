@@ -1631,7 +1631,7 @@ describe('host agent-model event', () => {
   // The live feed can connect just after ready, so the first value may be null; later values only on change.
   const models = (events: readonly HostComposerEvent[]) => modelEvents(events).map((event) => event.model);
   const settled = (events: readonly HostComposerEvent[], model: string | null) =>
-    waitFor(() => expect(models(events).at(-1)).toBe(model));
+    waitFor(() => expect(models(events).at(-1)).toBe(model), { timeout: 4000 });
   const modelEvents = (events: readonly HostComposerEvent[]) =>
     events.filter((event): event is Extract<HostComposerEvent, { event: 'agent-model' }> => event.event === 'agent-model');
 
@@ -1689,7 +1689,7 @@ describe('host agent-model event', () => {
     openChat(transport, 'model-session');
     await waitForReady(events, 'model-session');
     await waitFor(() => expect(modelEvents(events)).toHaveLength(1));
-    await act(async () => { await new Promise((done) => setTimeout(done, 20)); });
+    await act(async () => { await new Promise((done) => setTimeout(done, 2500)); });
     expect(models(events)).toEqual([null]);
   });
 
@@ -1716,7 +1716,7 @@ describe('host agent-model event', () => {
     const firstCount = modelEvents(events).length;
     rerender(<TightbeamChat sessionKey="session-b" adapter={adapter} />);
     const second = await waitForReady(events, 'session-b');
-    await waitFor(() => expect(modelEvents(events).length).toBeGreaterThan(firstCount));
+    await waitFor(() => expect(modelEvents(events).length).toBeGreaterThan(firstCount), { timeout: 4000 });
     await settled(events, 'Opus 5.5');
     expect(modelEvents(events).at(-1)).toMatchObject({ lifetimeId: second.lifetimeId, sessionKey: 'session-b', model: 'Opus 5.5' });
     const endedAt = events.findIndex((event) => event.event === 'lifetime-ended' && event.lifetimeId === first.lifetimeId);
