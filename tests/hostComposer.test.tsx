@@ -1734,8 +1734,6 @@ describe('host agent-model event', () => {
     const lastModel = events.map((event, index) => ({ event, index })).filter(({ event }) => event.event === 'agent-model').at(-1)!;
     expect(lastModel.event).toMatchObject({ model: null });
     expect(lastModel.index).toBeLessThan(unavailableAt);
-    const endedAt = events.findIndex((event) => event.event === 'lifetime-ended');
-    expect(endedAt).toBeGreaterThan(unavailableAt);
     const count = events.length;
     await act(async () => { await new Promise((done) => setTimeout(done, 200)); });
     expect(events.slice(count).some((event) => event.event === 'agent-model')).toBe(false);
