@@ -1781,3 +1781,17 @@ describe('host agent-model event', () => {
     expect(modelEvents(events.slice(endedAt)).every((event) => event.lifetimeId !== first.lifetimeId)).toBe(true);
   });
 });
+
+describe('host lifetime ids without crypto.randomUUID', () => {
+  afterEach(() => vi.unstubAllGlobals());
+  it('mints a version 4 lifetime id in an insecure context', async () => {
+    const original = globalThis.crypto;
+    vi.stubGlobal('crypto', { getRandomValues: (array: Uint8Array) => original.getRandomValues(array) });
+    const transport = new HostComposerTransport();
+    const events: HostComposerEvent[] = [];
+    installDeclaration(events);
+    openChat(transport, 'insecure-session');
+    const ready = await waitForReady(events, 'insecure-session');
+    expect(ready.lifetimeId).toMatch(/^l_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  });
+});

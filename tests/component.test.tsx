@@ -5351,3 +5351,32 @@ describe('composer running model', () => {
     expect(title(other.container)).toBe('Research assistant');
   });
 });
+
+describe('composer submit failures and insecure contexts', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('shows an error and keeps the draft when the send throws', () => {
+    const runtime = new FakeRuntime('send-throws');
+    runtime.send = () => { throw new TypeError('crypto.randomUUID is not a function'); };
+    render(<TightbeamChat sessionKey="send-throws" adapter={adapterFor(runtime)} />);
+    const box = screen.getByRole('textbox', { name: 'Message to Research assistant' }) as HTMLTextAreaElement;
+    fireEvent.change(box, { target: { value: 'keep this draft' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    expect(screen.getByRole('alert').textContent).toContain('crypto.randomUUID is not a function');
+    expect(screen.getByRole('alert').textContent).toContain('Your draft is still here.');
+    expect(box.value).toBe('keep this draft');
+  });
+
+  it('adds an attachment and sends it with crypto.randomUUID missing', async () => {
+    const original = globalThis.crypto;
+    vi.stubGlobal('crypto', { getRandomValues: (array: Uint8Array) => original.getRandomValues(array) });
+    mockObjectUrls(() => 'blob:insecure-image');
+    const runtime = new FakeRuntime('insecure-attachment');
+    render(<TightbeamChat sessionKey="insecure-attachment" adapter={adapterFor(runtime)} />);
+    const box = screen.getByRole('textbox', { name: 'Message to Research assistant' }) as HTMLTextAreaElement;
+    const image = new File(['bytes'], 'photo.png', { type: 'image/png' });
+    dispatchClipboardPaste(box, { items: [{ kind: 'file', type: 'image/png', getAsFile: () => image }], files: [image],
+      getData: () => '' });
+    expect(await screen.findByRole('img', { name: 'Preview of photo.png' })).toBeTruthy();
+  });
+});

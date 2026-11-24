@@ -182,6 +182,12 @@ class RunningModelTransport extends ControlledTransport {
 
 async function settle() { await vi.waitFor(() => {}, { timeout: 50 }); }
 
+function withoutRandomUUID() {
+  const original = globalThis.crypto;
+  vi.stubGlobal('crypto', { getRandomValues: (array: Uint8Array) => original.getRandomValues(array) });
+}
+const correlationV4 = /^c_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
 describe('framework-independent runtime', () => {
   it('retries transient history failures with jittered exponential backoff capped at thirty seconds', async () => {
     vi.useFakeTimers();
@@ -2937,5 +2943,21 @@ describe('attachment submission recovery', () => {
     transport.sessionNotice(5, 'equal-again');
     expect(runtime.getSnapshot().session?.runningModel).toBeNull();
     runtime.dispose();
+  });
+
+  it('sends text and attachments in an insecure context where crypto.randomUUID does not exist', async () => {
+    const transport = new RunningModelTransport();
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
+    withoutRandomUUID();
+    try {
+      const id = runtime.send('sent from a data: frame')!;
+      expect(id).toMatch(correlationV4);
+      await vi.waitFor(() => expect(transport.submissions).toHaveLength(1));
+      expect(transport.submissions[0]).toMatchObject({ content: 'sent from a data: frame', clientMessageId: id });
+      const attachmentId = runtime.sendAttachments!('with a file', [
+        { id: 'attachment-1', filename: 'a.bin', bytes: new Blob(['x']) }]);
+      expect(attachmentId).toMatch(correlationV4);
+    } finally { vi.unstubAllGlobals(); runtime.dispose(); }
   });
 });
