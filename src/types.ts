@@ -163,6 +163,12 @@ export interface ConversationPage {
   readonly coverage: unknown;
 }
 
+export interface RunningModel {
+  readonly id: string;
+  readonly label: string | null;
+  readonly harness: string;
+}
+
 export interface SessionRecord {
   readonly sessionKey: string;
   readonly rowVersion: number;
@@ -170,6 +176,8 @@ export interface SessionRecord {
   readonly displayName: string;
   readonly model?: string;
   readonly harness?: string;
+  /** The model the agent is running now, when the Gateway reports it; never a selection. */
+  readonly runningModel?: RunningModel | null;
   readonly activity?: string;
   readonly raw: Readonly<Record<string, unknown>>;
 }
