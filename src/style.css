@@ -658,8 +658,7 @@ body {
   white-space: nowrap;
   text-overflow: ellipsis;
 }
-/* The name gives way first; a very long model still ellipsizes inside the title. */
-.tb-chat-empty-name { flex: 0 100 auto; }
+.tb-chat-empty-name { flex: 0 100 auto; /* the name gives way first */ }
 .tb-chat-empty-model { flex: 0 1 auto; }
 .tb-chat-empty-name:only-child { flex: 1 1 auto; }
 .tb-chat-input-shell-no-status .tb-chat-empty-title { padding-left: 3rem; }

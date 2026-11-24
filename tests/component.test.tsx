@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { TightbeamChat, workingStateOpacity } from '../src/TightbeamChat';
 import type { RenderContext } from '../src/TightbeamChat';
+import { decodeRunningModel } from '../src/runningModel';
 import { createTurnProvenance } from '../src/provenance';
 import { decodePublic019Message, decodePublic019Notice } from '../src/public019';
 import { AttachmentPreparationError } from '../src/types';
@@ -5261,7 +5262,7 @@ describe('composer running model', () => {
   const running = (extra: Record<string, unknown> = {}) => ({ id: 'model-x', label: 'Claude Opus 5.5', harness: 'Harness A', ...extra });
   const sessionWith = (sessionKey: string, runningModel: unknown, extra: Record<string, unknown> = {}) => ({
     sessionKey, rowVersion: 1, displayName: 'Research assistant', model: 'Selected model', harness: 'Harness A',
-    runningModel, raw: {}, ...extra }) as RuntimeState['session'];
+    runningModel: decodeRunningModel(runningModel), raw: {}, ...extra }) as RuntimeState['session'];
   const live = { liveConnectionState: 'connected' as const };
   const title = (container: HTMLElement) => container.querySelector('.tb-chat-empty-title')?.textContent?.replace(/ /g, ' ');
 
