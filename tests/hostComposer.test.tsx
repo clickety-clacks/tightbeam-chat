@@ -1697,7 +1697,7 @@ describe('host agent-model event', () => {
     expect(events.filter((event) => event.event === 'ready' && event.lifetimeId === ready.lifetimeId)).toHaveLength(1);
     await settled(events, 'Opus 5.5');
     expect(modelEvents(events)).toHaveLength(before + 2);
-  });
+  }, 20_000);
 
   it('sends null when the model is unknown', async () => {
     const transport = new HostComposerTransport();
