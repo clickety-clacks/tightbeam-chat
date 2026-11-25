@@ -35,6 +35,7 @@ import { ToolHistoryUnavailableError } from './toolHistory';
 import { TurnEventHistoryUnavailableError } from './turnEvents';
 import { normalizeSubmitterAttribution } from './submitterAttribution';
 import { decodeRunningModel } from './runningModel';
+import { createWorkItemPillsTransport } from './workItemPillsTransport';
 
 // Snapshot coverage is the Chat client's subscribe-before-REST overlap, not a
 // Gateway snapshot watermark.
@@ -78,6 +79,8 @@ export interface Public019Host {
   openAuthenticatedChanges(signal: AbortSignal): Promise<Public019Channel>;
   /** Connect /ws, authenticate as the human device, await sync_complete, then return a fresh socket. */
   openAuthenticatedHuman(signal: AbortSignal): Promise<Public019Channel>;
+  /** Connect /ws/changes without a selected session; present only when work item pills are on. */
+  openAuthenticatedWorkChanges?(signal: AbortSignal): Promise<Public019Channel>;
 }
 
 export interface Public019Config {
@@ -1207,7 +1210,11 @@ export function createPublic019Transport(config: Public019Config): { transport: 
       },
     } : {};
 
+  const openWorkChanges = config.host.openAuthenticatedWorkChanges;
   const transport: ChatTransport = {
+    ...(openWorkChanges ? { workItemPills: createWorkItemPillsTransport({ baseUrl, heartbeatTimeoutMs, responseTimeoutMs: timeoutMs,
+      fetch: (input, init) => config.host.fetch(input, init),
+      openAuthenticatedWorkChanges: (signal) => openWorkChanges.call(config.host, signal) }) } : {}),
     currentIdentity: () => config.host.currentIdentity(),
     ...markerTransport,
     targetGateway: config.targetGateway,

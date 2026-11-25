@@ -19,6 +19,7 @@ import { useReadingPosition } from './useReadingPosition';
 import { firstAfterTime, getIndex, indexValues, putIndex, type RecordIndex } from './recordIndex';
 import { getHostComposerSnapshot, HostComposerBridge, subscribeHostComposer } from './hostComposer';
 import { ReleaseNotesDialog, type ChatOverlay } from './ReleaseNotesDialog';
+import { WorkItems } from './WorkItemStrip';
 import { CHAT_RELEASE_VERSION, RELEASE_NOTES, recordSeenReleaseVersion, releaseNotesForBuild, unseenReleaseNotes } from './releaseNotes';
 import { MarkdownImagePreview, MessageAttachments } from './MessageAttachments';
 import { isSettingsCommand } from './settingsCommand';
@@ -2299,6 +2300,9 @@ const ActivityRunRow = memo(function ActivityRunRow({ entry, expanded, toggle, r
   return before.lines.every((line, index) => sameActivityLine(line, after.lines[index]));
 });
 
+/** Below this the conversation needs the row more than the pills do. */
+const WORK_ITEMS_MIN_HEIGHT = 380;
+
 function ChatBody({ runtime, renderMessage, className, hostBridge, configuredConversationHref, activitySummaries,
   submitterAttributionEnabled,
   recoverySnapshot }: {
@@ -2512,6 +2516,9 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   const overlayRef = useRef<ChatOverlay | null>(null);
   const handledSettingsRevision = useRef(0);
   const overlayWasOpen = useRef(false);
+  const [workItemsShown, setWorkItemsShown] = useState(false);
+  const [workItemOpen, setWorkItemOpen] = useState(false);
+  const [workItemsFolded, setWorkItemsFolded] = useState(false);
   const setOverlayState = useCallback((next: ChatOverlay | null) => {
     overlayRef.current = next;
     setOverlay(next);
@@ -3132,8 +3139,18 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     if (isOpen) composer.current?.closeStatusPopup();
     if (!isOpen && overlayWasOpen.current && !host.composerHidden) composer.current?.focusAtEnd();
     overlayWasOpen.current = isOpen;
-    hostBridge?.setOverlayOpen(isOpen);
-  }, [overlay, host.composerHidden, host.ready, hostBridge]);
+    hostBridge?.setOverlayOpen(isOpen || workItemOpen);
+  }, [overlay, workItemOpen, host.composerHidden, host.ready, hostBridge]);
+  useLayoutEffect(() => {
+    if (typeof reading.viewport.current?.scrollTo === 'function') reading.reconcileViewportLayout();
+  }, [workItemsShown, reading.reconcileViewportLayout]);
+  useLayoutEffect(() => {
+    const element = root.current;
+    if (!runtime.workItemPills || !element || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => setWorkItemsFolded(element.clientHeight < WORK_ITEMS_MIN_HEIGHT));
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [runtime]);
 
   useEffect(() => {
     if (!agentName) return;
@@ -3156,6 +3173,8 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
       const targetNode = target instanceof Node ? target : null;
       const inChat = Boolean(targetNode && element.contains(targetNode));
       const bodyFocused = target === document.body && document.activeElement === document.body;
+      // Pills and their sheet move focus among themselves.
+      if (event.key === 'Tab' && targetNode instanceof Element && targetNode.closest('.tb-chat-work-items')) return;
       const standalonePage = Boolean(element.closest('[data-chat-standalone]'));
       // Body-targeted events belong to Chat only on the standalone example or
       // after a pointer interaction in the embedded Chat surface.
@@ -3539,7 +3558,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
 
   return <ActivitySummaryProvider transport={activitySummaries}
     connected={state.liveConnectionState ? state.liveConnectionState === 'connected' : state.status === 'ready'}
-    reconcile={reading.reconcileViewportLayout}><section ref={root} className={`tb-chat ${host.composerHidden ? 'tb-chat-host-composer-hidden' : ''} ${className || ''}`}
+    reconcile={reading.reconcileViewportLayout}><section ref={root} className={`tb-chat ${host.composerHidden ? 'tb-chat-host-composer-hidden' : ''} ${workItemsShown ? 'tb-chat-has-work-items' : ''} ${className || ''}`}
     aria-label={agentName ? `${agentName} conversation` : 'Conversation'}>
     {/* Outside the scrolling transcript so the notice stays in view wherever the reader is scrolled. */}
     {showRuntimeNotice && <div ref={runtimeNotice} className={`tb-chat-runtime-notice ${showToolHistoryStatusInNotice ? 'tb-chat-runtime-notice-with-tool-history ' : ''}${state.loadingOlder ? 'tb-chat-history-loading ' : ''} tb-chat-caption ${runtimeNoticeIsError
@@ -3633,6 +3652,8 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     {!host.composerHidden && <Composer ref={composer} runtime={runtime} state={state}
       recoverySnapshot={recoverySnapshot} agentName={agentName}
       suppressStatus={host.optedIn} onSettings={openSettings} onSubmitted={reading.scrollToLatest} />}
+    {runtime.workItemPills && <WorkItems pills={runtime.workItemPills.pills} transport={runtime.workItemPills.transport}
+      folded={workItemsFolded} sheetSlot={overlay === null} onShown={setWorkItemsShown} onSheetOpen={setWorkItemOpen} />}
     {overlay && <ReleaseNotesDialog overlay={overlay} entries={bundledNotes} onClose={closeOverlay}
       onOpenReleaseNotes={openReleaseNotes} onBack={backToSettings}
       submitterAttributionEnabled={submitterAttributionEnabled === true} />}

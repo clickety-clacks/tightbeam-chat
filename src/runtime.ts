@@ -1,5 +1,6 @@
 import { newUuid } from './uuid';
 import { FiledWorkItems } from './filedWorkItems';
+import { WorkItemPills } from './workItemPills';
 import { SessionRecordEvents } from './sessionRecordEvents';
 import {
   AuthorizationError,
@@ -281,6 +282,7 @@ class SessionRuntime implements ChatRuntime {
   private state: RuntimeState;
   private recordEventHistory?: SessionRecordEvents;
   private filedWorkItems?: FiledWorkItems;
+  readonly workItemPills?: ChatRuntime['workItemPills'];
   private recoveryRevision = 0;
   private readonly turns = new Map<number, CanonicalTurn>();
   private readonly listeners = new Set<() => void>();
@@ -379,10 +381,17 @@ class SessionRuntime implements ChatRuntime {
           if (patch.recordEvents) this.filedWorkItems?.sync(patch.recordEvents, patch.recordEventsLoading === false);
         }
       });
+    const pills = transport.readFiledWorkItems && transport.workItemPills ? new WorkItemPills({
+      transport: transport.workItemPills, refreshItems: () => { void this.refreshWorkItems(); },
+    }) : undefined;
+    if (pills) this.workItemPills = { pills, transport: transport.workItemPills! };
     if (transport.readFiledWorkItems) this.filedWorkItems = new FiledWorkItems(sessionKey,
       transport.readFiledWorkItems.bind(transport), workItems => {
-        if (!this.disposed && this.checkIdentity() && this.state.status !== 'unauthorized') this.publish({ workItems });
-      });
+        if (!this.disposed && this.checkIdentity() && this.state.status !== 'unauthorized') {
+          pills?.setItems(workItems);
+          this.publish({ workItems });
+        }
+      }, pills && (ids => pills.watch(ids)));
     if (typeof document !== 'undefined') document.addEventListener('visibilitychange', this.onVisibilityChange);
     if (typeof window !== 'undefined') {
       window.addEventListener('pagehide', this.onPageHide);
@@ -973,6 +982,7 @@ class SessionRuntime implements ChatRuntime {
     this.clearTurnEvents();
     this.recordEventHistory?.stop();
     this.filedWorkItems?.stop();
+    this.workItemPills?.pills.dispose();
     this.controller?.abort();
     this.connectionController?.abort();
     this.connectionController = undefined;
@@ -1438,6 +1448,7 @@ class SessionRuntime implements ChatRuntime {
     this.clearTurnEvents();
     this.recordEventHistory?.stop();
     this.filedWorkItems?.stop();
+    this.workItemPills?.pills.dispose();
     this.controller?.abort();
     this.connectionController?.abort();
     this.connectionController = undefined;
@@ -2603,6 +2614,7 @@ class SessionRuntime implements ChatRuntime {
     this.stopTurnEvents();
     this.recordEventHistory?.stop();
     this.filedWorkItems?.stop();
+    this.workItemPills?.pills.dispose();
     this.controller?.abort();
     this.connectionController?.abort();
     this.connectionController = undefined;

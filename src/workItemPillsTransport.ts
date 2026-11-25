@@ -1,9 +1,9 @@
-import type { Public019Channel } from './public019';
+import { decodeWorkItemSummary, type Public019Channel } from './public019';
 import type {
   WorkItemBreathing, WorkItemCards, WorkItemQuestion, WorkItemSheetTransport, WorkItemWait, AgentQuestion,
 } from './workItemChain';
 import type {
-  WorkItemChange, WorkItemChangeConnection, WorkItemLiveTransport, WorkItemSummary, WorkItemTurn,
+  WorkItemChange, WorkItemChangeConnection, WorkItemLiveTransport, WorkItemTurn,
 } from './workItemPills';
 
 export type WorkItemPillsTransport = WorkItemLiveTransport & WorkItemSheetTransport;
@@ -20,23 +20,12 @@ export interface WorkItemPillsTransportConfig {
 }
 
 const CHANGE_CLASSES = ['work_item.', 'turn.started', 'turn.ended'];
-const states = new Set(['open', 'closed', 'failed', 'iceboxed']);
 
 type Row = Record<string, unknown>;
 const isRow = (value: unknown): value is Row => typeof value === 'object' && value !== null && !Array.isArray(value);
 const text = (value: unknown): string | null => typeof value === 'string' && value ? value : null;
 const number = (value: unknown): number | null => typeof value === 'number' && Number.isFinite(value) ? value : null;
 const rows = (value: unknown): Row[] => Array.isArray(value) ? value.filter(isRow) : [];
-
-export function decodeWorkItemSummary(value: unknown): WorkItemSummary | undefined {
-  if (!isRow(value)) return undefined;
-  const { id, title, state, started, holders, createdAt, rowVersion } = value;
-  if (typeof id !== 'string' || !id || typeof title !== 'string' || typeof state !== 'string' || !states.has(state) ||
-      typeof started !== 'boolean' || !Array.isArray(holders) || holders.some((holder) => typeof holder !== 'string') ||
-      typeof createdAt !== 'number' || typeof rowVersion !== 'number') return undefined;
-  return Object.freeze({ id, title, state: state as WorkItemSummary['state'], started,
-    holders: Object.freeze([...holders as string[]]), failReason: text(value.failReason), createdAt, rowVersion });
-}
 
 export function createWorkItemPillsTransport(config: WorkItemPillsTransportConfig): WorkItemPillsTransport {
   const base = config.baseUrl.replace(/\/$/, '');
@@ -60,7 +49,7 @@ export function createWorkItemPillsTransport(config: WorkItemPillsTransportConfi
   return {
     async readItem(id, signal) {
       const body = await read(one('work-item', id), signal);
-      return body && usable(decodeWorkItemSummary(body.item));
+      return body && decodeWorkItemSummary(body.item);
     },
     async readTurn(seq, signal): Promise<WorkItemTurn | undefined> {
       const body = await read(one('turn', String(seq)), signal);
@@ -70,7 +59,7 @@ export function createWorkItemPillsTransport(config: WorkItemPillsTransportConfi
     },
     async readCards(id, signal): Promise<WorkItemCards | undefined> {
       const body = await read(one('cards', id), signal);
-      return body && { item: usable(decodeWorkItemSummary(body.item)), cards: rows(body.cards).flatMap((card) => {
+      return body && { item: decodeWorkItemSummary(body.item), cards: rows(body.cards).flatMap((card) => {
         const cardId = text(card.id);
         return cardId ? [{ id: cardId, open: card.state === 'open', holderKey: text(card.holderKey) }] : [];
       }) };

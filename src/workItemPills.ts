@@ -1,15 +1,6 @@
-/** A work item as one bounded read returns it. */
-export interface WorkItemSummary {
-  readonly id: string;
-  readonly title: string;
-  readonly state: 'open' | 'closed' | 'failed' | 'iceboxed';
-  readonly started: boolean;
-  /** Sessions holding an open assignment on it. */
-  readonly holders: readonly string[];
-  readonly failReason: string | null;
-  readonly createdAt: number;
-  readonly rowVersion: number;
-}
+import type { WorkItemSummary } from './types';
+
+export type { WorkItemSummary };
 
 export interface WorkItemTurn {
   readonly seq: number;
@@ -56,6 +47,8 @@ const REREAD_INTERVAL_MS = 120_000;
 const RING_RECHECK_MS = 600_000;
 /** More marked pills than this in view cost less as one page read. */
 const SINGLE_REREAD_LIMIT = 3;
+/** Pills that fall due this close together count as needing it together. */
+const TOGETHER_MS = 1_000;
 const RECONNECT_MIN_MS = 1_000;
 const RECONNECT_MAX_MS = 60_000;
 
@@ -83,10 +76,11 @@ export interface WorkItemPillsOptions {
   readonly now?: () => number;
 }
 
+const finished: Readonly<Record<string, WorkItemPillState>> = { closed: 'done', failed: 'failed', iceboxed: 'shelved' };
+
 function baseState(summary: WorkItemSummary): WorkItemPillState {
-  if (summary.state === 'closed') return 'done';
-  if (summary.state === 'failed') return 'failed';
-  if (summary.state === 'iceboxed') return 'shelved';
+  const end = finished[summary.state];
+  if (end) return end;
   if (summary.holders.length) return 'held';
   return summary.started ? 'between-hands' : 'not-started';
 }
@@ -310,6 +304,7 @@ export class WorkItemPills {
     const at = this.now();
     let next = Infinity;
     const due: string[] = [];
+    const together: string[] = [];
     for (const [id, entry] of this.entries) {
       if (this.connection && this.inView(id)) {
         if (this.ringing(entry)) {
@@ -319,11 +314,12 @@ export class WorkItemPills {
         for (const seq of entry.unreadTurns) this.readTurn(id, entry, seq);
       }
       const reread = this.rereadAt(id, entry);
+      if (reread <= at + TOGETHER_MS) together.push(id);
       if (reread <= at) due.push(id);
       else next = Math.min(next, reread);
     }
-    if (due.length > SINGLE_REREAD_LIMIT) {
-      for (const id of due) this.entries.get(id)!.lastRereadAt = at;
+    if (due.length && together.length > SINGLE_REREAD_LIMIT) {
+      for (const id of together) this.entries.get(id)!.lastRereadAt = at;
       this.refresh();
     } else for (const id of due) this.readItem(id, this.entries.get(id)!);
     if (next < Infinity) this.timer = setTimeout(() => { this.timer = undefined; this.pump(); }, Math.max(0, next - at));

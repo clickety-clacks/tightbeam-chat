@@ -40,6 +40,11 @@ describe('direct browser entry', () => {
     expect((await load(true)).restHumanSendEnabled).toBe(true);
     expect((await load(false)).restHumanSendEnabled).toBeUndefined();
     expect((await load('1')).restHumanSendEnabled).toBeUndefined();
+    for (const [value, expected] of [[true, true], ['1', undefined], [undefined, undefined]]) {
+      const target = await loadConfiguredChatTarget(async () => new Response(
+        JSON.stringify({ ...defaultTarget, workItemPillsEnabled: value }), { status: 200 }));
+      expect(target.workItemPillsEnabled).toBe(expected);
+    }
   });
 
   it('accepts supplied submitter fields only with the enabled REST transport', async () => {

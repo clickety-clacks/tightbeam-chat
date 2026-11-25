@@ -225,3 +225,35 @@ describe('private browser entry and same-origin gateway bridge', () => {
     await expect(opening).rejects.toBeInstanceOf(AuthorizationError);
   });
 });
+
+describe('work item change connection', () => {
+  it('exists only when pills are on, and selects no session', async () => {
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    expect(browserHost(configured).openAuthenticatedWorkChanges).toBeUndefined();
+    const opening = browserHost({ ...configured, workItemPillsEnabled: true }).openAuthenticatedWorkChanges!(new AbortController().signal);
+    const socket = FakeWebSocket.instances[0];
+    const url = new URL(socket.url);
+    expect([url.pathname, [...url.searchParams.keys()]]).toEqual(['/__chat/ws/work-changes', ['protocolVersion', 'gateway']]);
+    socket.open();
+    socket.frame({ type: 'auth_result', success: true, userId: configured.principalKey });
+    const channel = await opening;
+    channel.send({ type: 'subscribe' });
+    expect(socket.sent).toEqual(['{"type":"subscribe"}']);
+
+    const refused = browserHost({ ...configured, workItemPillsEnabled: true }).openAuthenticatedWorkChanges!(new AbortController().signal);
+    FakeWebSocket.instances[1].frame({ type: 'auth_result', success: true, userId: 'someone-else' });
+    await expect(refused).rejects.toBeInstanceOf(AuthorizationError);
+  });
+
+  it('follows the configured Gateway and never a linked one', () => {
+    const withPills = { ...configured, workItemPillsEnabled: true };
+    const linked = (gateway: string) => resolveEntrySelection(
+      `?gateway=${encodeURIComponent(gateway)}&session=${encodeURIComponent('agent:linked/chat')}`, withPills);
+    for (const [gateway, expected] of [[configured.gateway, true], ['https://other.example', undefined]] as const) {
+      const selection = linked(gateway);
+      expect(selection.kind === 'selected' && selection.target.workItemPillsEnabled).toBe(expected);
+    }
+    const root = resolveEntrySelection('', configured);
+    expect(root.kind === 'selected' && 'workItemPillsEnabled' in root.target).toBe(false);
+  });
+});
