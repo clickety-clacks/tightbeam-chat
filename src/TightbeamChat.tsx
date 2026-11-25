@@ -13,6 +13,7 @@ import type { AttachmentInput, AttachmentReference, ChatRuntime, CanonicalMessag
 import { projectMessages, type HumanMember } from './messageVisibility';
 import { ActivitySummaryProvider, useActivitySummary } from './ActivitySummaryView';
 import { ScrollPinnedPrompts, type ScrollPinnedPrompt, type ScrollPinnedPromptsHandle } from './ScrollPinnedPrompts';
+import { PromptClamp } from './PromptClamp';
 import type { SummaryAnswer, ActivitySummaryTransport } from './activitySummaries';
 import { buildActivityTrail, type ActivityFold, type ActivityLine, type ActivityOverflow, type MessageActivityItem } from './activityTrail';
 import { formatVisibleIds, type ActivityPillIcon, type ActivityPillPresentation } from './activityPresentation';
@@ -908,9 +909,11 @@ function AttachmentDisclosure({ attachments, preservePosition, reconcileLayout }
 
 function defaultBody(record: CanonicalMessage, readAttachment: ChatRuntime['readAttachment'],
   preservePosition: () => void, reconcileLayout: () => void,
-  content = record.content): ReactNode {
+  content = record.content, clampAs?: string): ReactNode {
+  const text = markdownBody(content || '(No text content)');
   return <>
-    {markdownBody(content || '(No text content)')}
+    {clampAs ? <PromptClamp conversation={record.sessionKey} identity={clampAs} beforeExpand={preservePosition}>
+      {text}</PromptClamp> : text}
     <AttachmentDetails record={record} readAttachment={readAttachment}
       preservePosition={preservePosition} reconcileLayout={reconcileLayout} />
   </>;
@@ -1095,6 +1098,7 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, re
   const time = localTimestamp(record.createdAt ?? bubble.segmentTime ?? record.receivedAt);
   const displayContent = stripProvenanceMarkup(bubble.displayContent ?? record.content);
   const failureReason = bubble.failureReason;
+  const ownPrompt = bubble.side === 'human' && bubble.ownerScoped;
   const context: RenderContext = {
     sessionKey: record.sessionKey,
     recordKey: bubble.key,
@@ -1102,8 +1106,12 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, re
       id: record.id, sessionKey: record.sessionKey, seq: record.seq, rowVersion: record.rowVersion,
       sender: record.sender, messageType: record.messageType, turnSeq: record.turnSeq, createdAt: record.createdAt,
     }), member: Object.freeze({ ...bubble.member }) } : {}),
-    defaultRender: () => bubble.derived ? markdownBody(displayContent)
-      : defaultBody(record, readAttachment, preservePosition, reconcileLayout, displayContent),
+    // The reader's own prompts show at most ten lines until expanded; attachments stay below.
+    defaultRender: () => bubble.derived
+      ? ownPrompt ? <PromptClamp conversation={record.sessionKey} identity={bubblePromptIdentity(bubble)}
+        beforeExpand={preservePosition}>{markdownBody(displayContent)}</PromptClamp> : markdownBody(displayContent)
+      : defaultBody(record, readAttachment, preservePosition, reconcileLayout, displayContent,
+        ownPrompt ? bubblePromptIdentity(bubble) : undefined),
     copyText: () => typeof navigator !== 'undefined' && navigator.clipboard
       ? navigator.clipboard.writeText(bubble.displayContent ?? record.content)
       : Promise.reject(new Error('Copying is unavailable here.')),
@@ -3572,7 +3580,10 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
           data-record-key={targetKey} data-scroll-key={targetKey}
           aria-label={formatVisibleIds(announcement)}
           data-send-state={send.reconciled ? 'solid' : refused ? 'refused' : timedOut ? 'timed-out' : uncertain ? 'uncertain' : 'ghosted'}>
-          <div className="tb-chat-bubble-body">{markdownBody(stripProvenanceMarkup(send.content))}</div>
+          <div className="tb-chat-bubble-body">
+            <PromptClamp conversation={send.sessionKey} identity={`send:${sendIdentity(send)}`}
+              beforeExpand={reading.preserveVisiblePosition}>{markdownBody(stripProvenanceMarkup(send.content))}</PromptClamp>
+          </div>
           {attachmentItems.length > 0 && <PendingSendImages items={attachmentItems} />}
           {refusalCopy && <p className="tb-chat-send-refusal" aria-hidden="true">{refusalCopy}</p>}
           {timedOut && <p className="tb-chat-send-timeout">{timeoutCopy}</p>}

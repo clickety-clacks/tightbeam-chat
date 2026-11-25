@@ -356,7 +356,7 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
     if (typeof MutationObserver !== 'undefined') {
       slot.copyObserver = new MutationObserver(copy);
       slot.copyObserver.observe(row, { subtree: true, childList: true, characterData: true, attributes: true,
-        attributeFilter: ['class', 'data-send-state', 'data-message-state', 'src'] });
+        attributeFilter: ['class', 'data-send-state', 'data-message-state', 'src', 'data-expanded', 'data-clamped'] });
     }
   }, [getRow]);
 
