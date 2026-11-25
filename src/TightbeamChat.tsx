@@ -3505,7 +3505,11 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
             ? 'The server refused this prompt because it is too large. Shorten it and try again.'
             : send.reason === 'invalid_message_id'
               ? 'This message could not be sent because its ID is invalid.'
-              : undefined
+              : send.reason === 'not_deliverable'
+                ? 'The agent cannot receive this message right now. Your draft is still here.'
+                : send.reason === 'client_message_conflict'
+                  ? 'This message conflicts with one already sent with the same ID. Check the conversation, then send it again if it is missing. Your draft is still here.'
+                  : undefined
           : undefined;
         const announcement = send.reconciled
           ? 'Your message is in the conversation.'
