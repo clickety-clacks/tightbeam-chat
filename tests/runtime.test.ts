@@ -2315,7 +2315,7 @@ it('keeps today\'s wording and makes at most one title read per settled load whe
   expect(runtime.getSnapshot()).toMatchObject({ status: 'ready', recordEventsError: undefined });
   expect(runtime.getSnapshot().workItems).toBeUndefined();
   // Paging in older history does not re-read the failed range.
-  for (let attempt = 0; attempt < 6 && runtime.getSnapshot().recordEvents.length < 6; attempt++) { await runtime.loadOlder!(); await settle(); }
+  for (let attempt = 0; attempt < 6 && (runtime.getSnapshot().recordEvents?.length ?? 0) < 6; attempt++) { await runtime.loadOlder!(); await settle(); }
   expect(runtime.getSnapshot().recordEvents).toHaveLength(6);
   expect(titleReads).toBe(1);
   // A reconnect inside the 30 second cooldown makes no new read either.
