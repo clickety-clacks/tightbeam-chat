@@ -1,3 +1,4 @@
+import type { TitledRecordEvent } from './sessionRecordEvents';
 import type { CanonicalMessage, CanonicalTransition, HistoryRailDenial, LiveRailDenial, ToolCallRecord } from './types';
 import { isUnmarkedCanonicalProcessBatch, parseBatchMembers, type HumanMember, type ParsedBatchMember } from './messageVisibility';
 import { activityPillPresentation, activitySenderLabel, type ActivityPillPresentation } from './activityPresentation';
@@ -109,6 +110,8 @@ interface EligibleCandidate {
 }
 
 type TrailEvent = BubbleEvent | CandidateEvent;
+
+const bareRecordNotice = /^\s*\[(?:work item filed|assignment opened):\s*([A-Za-z0-9_-]+)\s*\]\s*$/i;
 
 const bodyGist = (body: string): string => body.split(/\r?\n/)
   .map((line) => line.replace(/\s+/g, ' ').trim())
@@ -399,6 +402,8 @@ export function buildActivityTrail(input: {
   readonly localSendTimes?: readonly number[];
   /** Durable record events also occupy timeline positions between tool rows. */
   readonly recordEventTimes?: readonly number[];
+  /** Known titles for events a notice may cover, by event id. */
+  readonly titledRecordEvents?: ReadonlyMap<string, TitledRecordEvent>;
   readonly tools: readonly ToolCallRecord[];
   readonly toolsEnabled: boolean;
   readonly turnStateAvailable: boolean;
@@ -422,7 +427,12 @@ export function buildActivityTrail(input: {
   for (const message of input.records) {
     if (visibleIds.has(message.id)) continue;
     if (message.recordEventIds?.length) {
-      candidates.push(messageCandidate(message as CanonicalMessage, undefined, input.clearedThroughSeq)!);
+      const candidate = messageCandidate(message as CanonicalMessage, undefined, input.clearedThroughSeq)!;
+      // Only a bare notice of one event takes its title; a notice with its own content keeps it.
+      const titled = message.recordEventIds.length === 1
+        ? input.titledRecordEvents?.get(message.recordEventIds[0]) : undefined;
+      candidates.push(titled && bareRecordNotice.exec(message.content)?.[1] === titled.recordId
+        ? { ...candidate, presentation: titled.presentation } : candidate);
       continue;
     }
     const batchMembers = parseBatchMembers(message as CanonicalMessage);

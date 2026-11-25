@@ -1,6 +1,6 @@
 import { newUuid } from './uuid';
 import { composerModelText } from './runningModel';
-import { uncoveredRecordEvents, recordEventPresentation } from './sessionRecordEvents';
+import { uncoveredRecordEvents, recordEventPresentation, titledRecordEvents } from './sessionRecordEvents';
 import type { SessionRecordEvent } from './types';
 import { Component, forwardRef, memo, useCallback, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore,
   type AnchorHTMLAttributes, type ClipboardEvent as ReactClipboardEvent, type FormEvent, type HTMLAttributes, type ImgHTMLAttributes,
@@ -2075,7 +2075,8 @@ function ActivityPillContents({ presentation, summaryState }: { readonly present
     <span className="tb-chat-activity-pill-text">{presentation.text}</span>
     {summaryState === 'pending' && <span className="tb-chat-summary-pending">summarizing</span>}
     {summaryState === 'summary' && <span className="tb-chat-summary-marker">summarized</span>}
-    {presentation.metadata && <span className="tb-chat-activity-pill-meta">{presentation.metadata}</span>}
+    {presentation.metadata && <span className={`tb-chat-activity-pill-meta${
+      presentation.metadataFixed ? ' tb-chat-activity-pill-meta-fixed' : ''}`}>{presentation.metadata}</span>}
   </>;
 }
 
@@ -2628,6 +2629,8 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   }), [localSends]);
   const recordEventTimes = useMemo(() => uncoveredRecordEvents(state.recordEvents ?? [], state.records)
     .map(event => event.at), [state.recordEvents, state.records]);
+  const titledEvents = useMemo(() => titledRecordEvents(state.recordEvents ?? [], state.workItems),
+    [state.recordEvents, state.workItems]);
   const tools = useMemo(() => {
     if (!state.toolCallsEnabled) return undefined;
     if (state.toolCallIndex) return state.toolCallIndex;
@@ -2663,6 +2666,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     transitions,
     localSendTimes,
     recordEventTimes,
+    titledRecordEvents: titledEvents,
     tools: activityToolRecords,
     toolsEnabled: Boolean(state.toolCallsEnabled),
     turnStateAvailable: state.activityTurnStateAvailable === true,
@@ -2676,7 +2680,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     historyRailDenials: state.historyRailDenials ?? [],
     shownRuns,
     expandedRuns,
-  }), [activityRecords, bubbles, transitions, localSendTimes, recordEventTimes, expandedRuns, shownRuns, state.activityTurnStateAvailable, state.activeTurn,
+  }), [activityRecords, bubbles, transitions, localSendTimes, recordEventTimes, titledEvents, expandedRuns, shownRuns, state.activityTurnStateAvailable, state.activeTurn,
     state.liveRailDenials, state.historyRailDenials, state.sessionKey, state.activitySenderDisplayNames,
     state.session?.sessionKey, state.session?.clearedThroughSeq,
     state.toolCallsEnabled, activityToolRecords]);
@@ -3389,7 +3393,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
           const recordId = formatVisibleIds(item.event.record.id);
           return <div key={key} role="note" tabIndex={-1}
             ref={element => reading.registerRow(key, element)} data-record-key={key} data-scroll-key={key}
-            className="tb-chat-activity-line tb-chat-activity-substrate tb-chat-activity-pill-row tb-chat-record-event-row"
+            className="tb-chat-activity-line tb-chat-activity-substrate tb-chat-activity-pill-row"
             aria-label={`${presentation.label}: ${presentation.text}, ${recordId}`}
             title={`${presentation.text} · ${recordId}`}>
             <ActivityPillContents presentation={presentation} />
