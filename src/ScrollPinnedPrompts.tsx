@@ -210,7 +210,10 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
       options: { pinLine, fadeDistance: FADE_DISTANCE, pushGap: PUSH_GAP, minSummaryHeight } };
   }, [getRow, prompts, viewport]);
 
-  /** Which prompts need a slot: those pinned now and the next two to arrive. */
+  /**
+   * Which prompts need a slot: those pinned now, the next two to arrive, and the one just
+   * pushed off above, so a copy is ready before it is needed whichever way the reader scrolls.
+   */
   const wantedSlots = useCallback((scrollTop: number): string[] => {
     const { prompts: measured, options } = layout.current;
     let low = 0;
@@ -221,9 +224,11 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
       else high = middle;
     }
     const wanted: string[] = [];
-    for (let index = low - 1; index >= 0 && pinnedPromptFrameAt(scrollTop, measured, index, options); index--) {
+    let index = low - 1;
+    for (; index >= 0 && pinnedPromptFrameAt(scrollTop, measured, index, options); index--) {
       wanted.unshift(measured[index].identity);
     }
+    if (index >= 0) wanted.unshift(measured[index].identity);
     for (let index = low; index < Math.min(measured.length, low + 2); index++) wanted.push(measured[index].identity);
     return wanted;
   }, []);

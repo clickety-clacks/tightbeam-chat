@@ -166,7 +166,9 @@ describe('scroll-pinned prompts without scroll timelines', () => {
     scrollTo(950);
     expect(translate(slotFor('A'))).toBe(1000 - 950 - 8 - 80);
     scrollTo(1000);
-    expect(slotFor('A')).toBeNull();
+    // Kept ready, unseen, in case the reader scrolls back.
+    expect(slotFor('A')!.style.opacity).toBe('0');
+    expect(slotFor('A')!.hasAttribute('data-pinned')).toBe(false);
     expect(rows.get('A')!.style.opacity).toBe('');
     expect(slotFor('B')!.style.opacity).toBe('1');
   });
