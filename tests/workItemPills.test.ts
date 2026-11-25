@@ -201,7 +201,7 @@ describe('changes', () => {
   it('runs the one page read when more than three pills in view need it', async () => {
     const gateway = await strip(10);
     gateway.see(1, 2, 3, 4);
-    for (const n of [1, 2, 3, 4]) gateway.change(n, { holders: [] });
+    for (const n of [1, 2, 3, 4]) { gateway.change(n, { holders: [] }); vi.advanceTimersByTime(40); }
     await pass(5_000);
     expect({ pages: gateway.pageReads, items: gateway.itemReads.length }).toEqual({ pages: 2, items: 0 });
     expect(gateway.pill(4)).toMatchObject({ state: 'between-hands', stale: false });

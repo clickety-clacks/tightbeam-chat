@@ -35,6 +35,8 @@
   align-items: center;
   gap: .4rem;
   min-width: 0;
+  /* About three pills: each one in view is one the strip keeps reading. */
+  max-width: 52rem;
   height: var(--tb-chat-work-strip-height);
   pointer-events: none;
 }
