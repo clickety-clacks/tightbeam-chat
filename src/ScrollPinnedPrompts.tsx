@@ -111,6 +111,8 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
   const [mounted, setMounted] = useState<readonly string[]>([]);
   const mountedKey = useRef('');
   const scheduleRefresh = useRef<() => void>(() => {});
+  const onJumpRef = useRef(onJump);
+  onJumpRef.current = onJump;
   const promptsByIdentity = useRef(new Map<string, ScrollPinnedPrompt>());
   promptsByIdentity.current = new Map(prompts.map(prompt => [prompt.identity, prompt]));
 
@@ -393,10 +395,34 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
     onScroll();
   }, [mounted, render, onScroll]);
 
+  // The copy lets touches through so the transcript scrolls under the finger. A tap that
+  // lands inside a pinned copy's visible bubble means "take me to the original".
+  const onTranscriptClick = useCallback((event: MouseEvent) => {
+    const box = viewport.current;
+    if (!box || event.defaultPrevented || event.button !== 0) return;
+    const bounds = box.getBoundingClientRect();
+    const x = event.clientX - bounds.left - box.clientLeft;
+    const y = event.clientY - bounds.top - box.clientTop;
+    const { prompts: measured, options } = layout.current;
+    for (const identity of mountedKey.current ? mountedKey.current.split('\u0000') : []) {
+      const index = layout.current.byIdentity.get(identity);
+      const frame = index === undefined ? undefined : pinnedPromptFrameAt(box.scrollTop, measured, index, options);
+      const prompt = promptsByIdentity.current.get(identity);
+      if (!frame || !prompt || index === undefined) continue;
+      const { left, width } = measured[index];
+      if (x < left || x > left + width || y < frame.top || y > frame.top + frame.height) continue;
+      event.preventDefault();
+      event.stopPropagation();
+      onJumpRef.current(prompt);
+      return;
+    }
+  }, [viewport]);
+
   useEffect(() => {
     const box = viewport.current;
     if (!box) return;
     box.addEventListener('scroll', onScroll, { passive: true });
+    box.addEventListener('click', onTranscriptClick, { capture: true });
     let frame = 0;
     const schedule = () => {
       if (frame) return;
@@ -410,12 +436,13 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
     void document.fonts?.ready.then(schedule);
     return () => {
       box.removeEventListener('scroll', onScroll);
+      box.removeEventListener('click', onTranscriptClick, { capture: true });
       observer?.disconnect();
       window.removeEventListener('resize', schedule);
       if (frame) cancelAnimationFrame(frame);
       scheduleRefresh.current = () => {};
     };
-  }, [onScroll, refresh, viewport]);
+  }, [onScroll, onTranscriptClick, refresh, viewport]);
 
   useEffect(() => () => {
     for (const slot of slots.current.values()) {
