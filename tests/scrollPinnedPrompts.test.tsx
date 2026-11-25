@@ -186,6 +186,25 @@ describe('scroll-pinned prompts without scroll timelines', () => {
     expect(handle.current!.settledBottom('missing')).toBeUndefined();
   });
 
+  it('lets touches through to the transcript and treats a tap on the visible copy as a jump', () => {
+    const onJump = vi.fn();
+    mount({ onJump });
+    scrollTo(500);
+    const reply = document.createElement('a');
+    reply.href = '#reply';
+    viewport.firstElementChild!.append(reply);
+    const replyClicked = vi.fn();
+    reply.addEventListener('click', replyClicked);
+    // Inside the pinned copy (x 120-360, y 10-90 at summary height): the jump wins.
+    fireEvent.click(reply, { clientX: 200, clientY: 50, button: 0 });
+    expect(onJump).toHaveBeenCalledWith(prompts[0]);
+    expect(replyClicked).not.toHaveBeenCalled();
+    // Below the copy, the tap belongs to the transcript.
+    fireEvent.click(reply, { clientX: 200, clientY: 120, button: 0 });
+    expect(onJump).toHaveBeenCalledTimes(1);
+    expect(replyClicked).toHaveBeenCalledTimes(1);
+  });
+
   it('gives the original back when it unmounts', () => {
     const result = mount();
     scrollTo(500);

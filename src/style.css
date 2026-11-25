@@ -287,7 +287,8 @@ body {
   font-size: 1rem !important;
   line-height: 1;
 }
-.tb-chat-pinned-slot[data-pinned] .tb-chat-pinned-jump,
+/* Touches on the pinned copy reach the transcript, so a drag or fling there scrolls it;
+   a tap on the copy is recognised by the transcript (see ScrollPinnedPrompts). */
 .tb-chat-pinned-slot[data-pinned] .tb-chat-pinned-dismiss { pointer-events: auto; }
 .tb-chat-pinned-dismiss:hover { background: color-mix(in srgb, var(--tb-chat-human-surface) 78%, var(--tb-chat-text)); }
 
