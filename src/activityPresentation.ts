@@ -5,6 +5,8 @@ export type ActivityPillIcon = 'message' | 'attest' | 'assignment' | 'decision' 
   'alarm' | 'clock' | 'flag' | 'activity' | 'notice' | 'process';
 
 export interface ActivityPillPresentation {
+  /** The id stays whole; long text gives way to it. */
+  readonly metadataFixed?: boolean;
   readonly label: string;
   readonly tone: ActivityPillTone;
   readonly icon: ActivityPillIcon;

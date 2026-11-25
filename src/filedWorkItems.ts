@@ -1,7 +1,6 @@
 import type { ChatTransport, SessionRecordEvent, WorkItemSummary } from './types';
 
 const PAGE_LIMIT = 50;
-const LIVE_DELAY_MS = 1_000;
 // A reconnecting feed re-reads history often; a failing list must not follow it.
 const RETRY_AFTER_MS = 30_000;
 type Position = { readonly at: number; readonly id: string };
@@ -22,13 +21,12 @@ export class FiledWorkItems {
   private failedAt = -Infinity;
   private running = false;
   private again = false;
-  private timer?: ReturnType<typeof setTimeout>;
 
   constructor(private readonly sessionKey: string,
     private readonly read: NonNullable<ChatTransport['readFiledWorkItems']>,
     private readonly publish: (items: ReadonlyMap<string, WorkItemSummary>) => void) {}
 
-  /** `settled` marks a completed history read; live events are coalesced instead. */
+  /** Reads only for a completed history read. A live event waits for the next one: no read per message. */
   sync(events: readonly SessionRecordEvent[], settled: boolean): void {
     if (this.controller.signal.aborted) return;
     this.filed = events.filter(event => event.kind === 'work_item.filed')
@@ -38,9 +36,7 @@ export class FiledWorkItems {
       for (const id of this.failed) this.tried.delete(id);
       this.failed.clear();
     }
-    if (!this.missing().length) return;
-    if (settled) void this.run();
-    else this.timer ??= setTimeout(() => { void this.run(); }, LIVE_DELAY_MS);
+    if (settled && this.missing().length) void this.run();
   }
 
   /** Re-read the newest loaded filed items, for a caller that needs fresh state. */
@@ -55,8 +51,6 @@ export class FiledWorkItems {
   }
 
   private async run(): Promise<void> {
-    if (this.timer) clearTimeout(this.timer);
-    this.timer = undefined;
     if (this.running) { this.again = true; return; }
     this.running = true;
     try {
@@ -107,6 +101,5 @@ export class FiledWorkItems {
 
   stop(): void {
     this.controller.abort();
-    if (this.timer) clearTimeout(this.timer);
   }
 }

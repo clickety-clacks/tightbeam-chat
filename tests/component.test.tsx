@@ -5389,3 +5389,28 @@ describe('composer submit failures and insecure contexts', () => {
     expect(await screen.findByRole('img', { name: 'Preview of photo.png' })).toBeTruthy();
   });
 });
+
+it('keeps a known title when a bare notice replaces its event row, and a notice with its own content unchanged', () => {
+  const sessionKey = 'titled-coverage';
+  const make = (kind: string, id: string) => ({ eventId: `${kind}:${id}`, kind, sessionKey, at: 200,
+    record: { type: 'record', id, workItemId: 'wi_example', detail: '/api/example' },
+    actorSessionKey: sessionKey, tiedAs: ['creator'], cause: null, noticeMessageIds: [] });
+  const filed = make('work_item.filed', 'wi_example'), opened = make('assignment.opened', 'asg_example');
+  const human = row(sessionKey, 'human', 'Hello', { role: 'user', sender: 'user:person', seq: 1 });
+  const known = { workItems: new Map([['wi_example', { id: 'wi_example', title: 'The actual title', state: 'open',
+    started: false, holders: [], failReason: null, createdAt: 200, rowVersion: 1 }]]) };
+  const runtime = new FakeRuntime(sessionKey, { records: [human], recordEvents: [filed, opened], ...known });
+  const view = render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+  const notice = (id: string, seq: number, content: string, eventId: string) => row(sessionKey, id, content, { seq,
+    sender: 'process:events', messageType: 'substrate', recordEventIds: [eventId] });
+  const bare = [human, notice('n1', 2, '[work item filed: wi_example]', filed.eventId),
+    notice('n2', 3, '[assignment opened: asg_example]', opened.eventId)];
+  act(() => runtime.update({ records: bare }));
+  expect(view.container.textContent).toContain('Filed · The actual title');
+  expect(view.container.textContent).toContain('Opened · The actual title');
+  act(() => runtime.update({ workItems: undefined }));
+  expect(view.container.textContent).not.toContain('The actual title');
+  act(() => runtime.update({ ...known, records: [human, notice('n1', 2, 'A brief with its own words', filed.eventId)] }));
+  expect(view.container.textContent).toContain('A brief with its own words');
+  expect(view.container.textContent).not.toContain('Filed · The actual title');
+});

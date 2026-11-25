@@ -183,5 +183,22 @@ export function recordEventPresentation(event: SessionRecordEvent,
   const title = prefix && workItemId
     ? formatVisibleIds(stripProvenanceMarkup(workItems?.get(workItemId)?.title ?? '')).replace(/\s+/g, ' ').trim() : '';
   return { ...presentation, ...(title ? { text: `${prefix} · ${title}` } : {}),
-    metadata: formatVisibleIds(event.record.id) };
+    metadata: formatVisibleIds(event.record.id), metadataFixed: true };
+}
+
+export interface TitledRecordEvent {
+  readonly recordId: string;
+  readonly presentation: ActivityPillPresentation;
+}
+
+/** Titled presentations by event id, for notices that replace their event row. */
+export function titledRecordEvents(events: readonly SessionRecordEvent[],
+  workItems?: ReadonlyMap<string, WorkItemSummary>): ReadonlyMap<string, TitledRecordEvent> {
+  const titled = new Map<string, TitledRecordEvent>();
+  if (!workItems?.size) return titled;
+  for (const event of events) {
+    const presentation = recordEventPresentation(event, workItems);
+    if (presentation.text !== recordEventPresentation(event).text) titled.set(event.eventId, { recordId: event.record.id, presentation });
+  }
+  return titled;
 }

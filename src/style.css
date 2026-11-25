@@ -1265,7 +1265,7 @@ body {
   white-space: nowrap;
 }
 /* A long title gives way to the short id, not the other way round. */
-.tb-chat-record-event-row > .tb-chat-activity-pill-meta { flex-shrink: 0; }
+.tb-chat-activity-pill-meta-fixed { flex-shrink: 0; }
 .tb-chat-activity-run {
   box-sizing: border-box;
   display: flex;

@@ -57,18 +57,21 @@ describe('filed work item reads', () => {
     expect(gateway.calls.map(call => call.limit)).toEqual([50, 50, 20]);
   });
 
-  it('coalesces live filings into one read of just the new rows', async () => {
+  it('makes no read for live filings, however spaced, and names them all in the next page read', async () => {
     vi.useFakeTimers();
-    const { gateway, reader, items } = setup(10);
-    reader.sync(range(1, 10), true);
+    const { gateway, reader, items } = setup(1);
+    reader.sync(range(1, 1), true);
     await flush();
-    gateway.total = 13;
-    for (const last of [11, 12, 13]) reader.sync(range(1, last), false);
-    await flush();
+    for (const last of [2, 3, 4]) {
+      gateway.total = last;
+      reader.sync(range(1, last), false);
+      await vi.advanceTimersByTimeAsync(60_000);
+    }
     expect(gateway.calls).toHaveLength(1);
-    await vi.advanceTimersByTimeAsync(1_000);
+    reader.sync(range(1, 4), true);
+    await flush();
     expect(gateway.calls.slice(1)).toEqual([{ limit: 3, before: undefined }]);
-    expect(items().get('wi_13')?.title).toBe('Title 13');
+    expect(items().get('wi_4')?.title).toBe('Title 4');
   });
 
   it('retries a failed read only on a completed history read at least 30 seconds later, and an unlisted item never again', async () => {
@@ -137,7 +140,7 @@ describe('work item titles in event rows', () => {
     const css = readFileSync('src/style.css', 'utf8');
     const blocks = [...css.matchAll(/\.tb-chat-activity-pill-text \{([^}]*)\}/g)].map(match => match[1]);
     expect(blocks[0]).toMatch(/min-width: 0;[\s\S]*overflow: hidden;[\s\S]*text-overflow: ellipsis;[\s\S]*white-space: nowrap;/);
-    expect(css).toMatch(/\.tb-chat-record-event-row > \.tb-chat-activity-pill-meta \{ flex-shrink: 0; \}/);
+    expect(css).toMatch(/\.tb-chat-activity-pill-meta-fixed \{ flex-shrink: 0; \}/);
     expect(blocks.slice(1).join()).not.toMatch(/white-space|text-overflow/);
   });
 
