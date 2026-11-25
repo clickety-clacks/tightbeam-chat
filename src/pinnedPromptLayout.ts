@@ -45,6 +45,11 @@ export interface PinnedPromptOptions {
    * next prompt pushes it. Never more than the natural space between them.
    */
   readonly pushGap: number;
+  /**
+   * The smallest a summary may be: one line plus padding (rule 4). A measured summary
+   * below this is raised to it, but never above the prompt's own height.
+   */
+  readonly minSummaryHeight?: number;
 }
 
 export type PinnedPromptPhase =
@@ -96,10 +101,38 @@ function clamp(value: number, low: number, high: number): number {
   return Math.min(high, Math.max(low, value));
 }
 
-/** The summary height actually used: at least 0, never more than the full height. */
-export function effectiveSummaryHeight(prompt: PinnedPromptGeometry): number {
+/**
+ * A prompt can pin only when its geometry is a real, laid-out box: a finite top and a
+ * finite height above zero. Any other prompt stays in its natural place and is skipped
+ * when looking for the prompt that pushes the one before it.
+ */
+export function isPinnablePrompt(prompt: PinnedPromptGeometry | undefined): prompt is PinnedPromptGeometry {
+  return !!prompt && Number.isFinite(prompt.top) && Number.isFinite(prompt.height) && prompt.height > 0;
+}
+
+/**
+ * The summary height actually used: the measured summary, raised to the minimum (one
+ * line plus padding) and never more than the prompt's own height.
+ */
+export function effectiveSummaryHeight(prompt: PinnedPromptGeometry, minimum = 0): number {
   const height = Math.max(0, finiteOr(prompt.height, 0));
-  return clamp(finiteOr(prompt.summaryHeight, height), 0, height);
+  const floor = clamp(finiteOr(minimum, 0), 0, height);
+  return clamp(finiteOr(prompt.summaryHeight, height), floor, height);
+}
+
+/** Options with every value finite and not negative (the pin line may be any finite value). */
+function sane(options: PinnedPromptOptions): Required<PinnedPromptOptions> {
+  return {
+    pinLine: finiteOr(options.pinLine, 0),
+    fadeDistance: Math.max(0, finiteOr(options.fadeDistance, 0)),
+    pushGap: Math.max(0, finiteOr(options.pushGap, 0)),
+    minSummaryHeight: Math.max(0, finiteOr(options.minSummaryHeight ?? 0, 0)),
+  };
+}
+
+function nextPinnable(prompts: readonly PinnedPromptGeometry[], index: number): PinnedPromptGeometry | undefined {
+  for (let next = index + 1; next < prompts.length; next++) if (isPinnablePrompt(prompts[next])) return prompts[next];
+  return undefined;
 }
 
 /**
@@ -107,25 +140,29 @@ export function effectiveSummaryHeight(prompt: PinnedPromptGeometry): number {
  * line at scroll position 0 pins at its natural top instead, so nothing is ever drawn
  * below its natural place.
  */
-function promptPinLine(prompt: PinnedPromptGeometry, options: PinnedPromptOptions): number {
+function promptPinLine(prompt: PinnedPromptGeometry, options: Required<PinnedPromptOptions>): number {
   return Math.min(options.pinLine, prompt.top);
 }
 
-function pushGapBefore(prompt: PinnedPromptGeometry, next: PinnedPromptGeometry, options: PinnedPromptOptions): number {
+function pushGapBefore(prompt: PinnedPromptGeometry, next: PinnedPromptGeometry, options: Required<PinnedPromptOptions>): number {
   const naturalGap = next.top - (prompt.top + prompt.height);
-  return clamp(Math.min(options.pushGap, naturalGap), 0, Math.max(0, options.pushGap));
+  return clamp(Math.min(options.pushGap, naturalGap), 0, options.pushGap);
 }
 
+const neverPins: PinnedPromptBreakpoints = { pin: Infinity, shrinkEnd: Infinity, fadeEnd: Infinity, pushStart: Infinity, gone: Infinity };
+
 export function pinnedPromptBreakpoints(prompts: readonly PinnedPromptGeometry[], index: number,
-  options: PinnedPromptOptions): PinnedPromptBreakpoints {
+  rawOptions: PinnedPromptOptions): PinnedPromptBreakpoints {
   const prompt = prompts[index];
-  const height = Math.max(0, prompt.height);
-  const summary = effectiveSummaryHeight(prompt);
+  if (!isPinnablePrompt(prompt)) return neverPins;
+  const options = sane(rawOptions);
+  const height = prompt.height;
+  const summary = effectiveSummaryHeight(prompt, options.minSummaryHeight);
   const line = promptPinLine(prompt, options);
   const pin = prompt.top - line;
   const shrinkEnd = pin + (height - summary);
-  const fadeEnd = height > summary ? shrinkEnd + Math.max(0, options.fadeDistance) : shrinkEnd;
-  const next = prompts[index + 1];
+  const fadeEnd = height > summary ? shrinkEnd + options.fadeDistance : shrinkEnd;
+  const next = nextPinnable(prompts, index);
   if (!next) return { pin, shrinkEnd, fadeEnd, pushStart: Infinity, gone: Infinity };
   const gap = pushGapBefore(prompt, next, options);
   // Pushing starts when the next prompt's top, less the gap, reaches the pinned bottom.
@@ -141,13 +178,13 @@ type FrameValues = Omit<PinnedPromptFrame, 'phase' | 'index'>;
 
 /** The frame values at `scrollTop`, without checking whether the prompt is pinned there. */
 function frameValues(scrollTop: number, prompts: readonly PinnedPromptGeometry[], index: number,
-  options: PinnedPromptOptions, points: PinnedPromptBreakpoints): FrameValues {
+  options: Required<PinnedPromptOptions>, points: PinnedPromptBreakpoints): FrameValues {
   const prompt = prompts[index];
-  const height = Math.max(0, prompt.height);
-  const summary = effectiveSummaryHeight(prompt);
+  const height = prompt.height;
+  const summary = effectiveSummaryHeight(prompt, options.minSummaryHeight);
   const line = promptPinLine(prompt, options);
   const visibleHeight = height - clamp(scrollTop - points.pin, 0, height - summary);
-  const next = prompts[index + 1];
+  const next = nextPinnable(prompts, index);
   const top = next
     ? Math.min(line, next.top - scrollTop - pushGapBefore(prompt, next, options) - visibleHeight)
     : line;
@@ -164,9 +201,10 @@ function frameValues(scrollTop: number, prompts: readonly PinnedPromptGeometry[]
  * after it has been pushed entirely above the scrollport.
  */
 export function pinnedPromptFrameAt(scrollTop: number, prompts: readonly PinnedPromptGeometry[], index: number,
-  options: PinnedPromptOptions): PinnedPromptFrame | undefined {
+  rawOptions: PinnedPromptOptions): PinnedPromptFrame | undefined {
   const prompt = prompts[index];
-  if (!prompt || !Number.isFinite(scrollTop)) return undefined;
+  if (!isPinnablePrompt(prompt) || !Number.isFinite(scrollTop)) return undefined;
+  const options = sane(rawOptions);
   const points = pinnedPromptBreakpoints(prompts, index, options);
   if (scrollTop <= points.pin || scrollTop >= points.gone) return undefined;
   const values = frameValues(scrollTop, prompts, index, options, points);
@@ -183,18 +221,21 @@ export function pinnedPromptFrameAt(scrollTop: number, prompts: readonly PinnedP
 export function pinnedPromptFrames(scrollTop: number, prompts: readonly PinnedPromptGeometry[],
   options: PinnedPromptOptions): PinnedPromptFrame[] {
   if (!Number.isFinite(scrollTop) || prompts.length === 0) return [];
-  // Prompts are in transcript order, so their pin positions only increase. Find the
-  // last prompt that has started pinning, then walk back over any still being pushed off.
+  // Prompts are in transcript order, so the pin positions of those that can pin only
+  // increase. Find the last one that has started pinning, then walk back over any still
+  // being pushed off.
+  const pinnable: number[] = [];
+  for (let index = 0; index < prompts.length; index++) if (isPinnablePrompt(prompts[index])) pinnable.push(index);
   let low = 0;
-  let high = prompts.length;
+  let high = pinnable.length;
   while (low < high) {
     const middle = low + Math.floor((high - low) / 2);
-    if (pinnedPromptBreakpoints(prompts, middle, options).pin < scrollTop) low = middle + 1;
+    if (pinnedPromptBreakpoints(prompts, pinnable[middle], options).pin < scrollTop) low = middle + 1;
     else high = middle;
   }
   const frames: PinnedPromptFrame[] = [];
-  for (let index = low - 1; index >= 0; index--) {
-    const frame = pinnedPromptFrameAt(scrollTop, prompts, index, options);
+  for (let position = low - 1; position >= 0; position--) {
+    const frame = pinnedPromptFrameAt(scrollTop, prompts, pinnable[position], options);
     if (!frame) break;
     frames.unshift(frame);
   }
@@ -210,7 +251,9 @@ export function pinnedPromptFrames(scrollTop: number, prompts: readonly PinnedPr
  * omitted, so for the latest prompt the last entry holds from then on.
  */
 export function pinnedPromptKeyframes(prompts: readonly PinnedPromptGeometry[], index: number,
-  options: PinnedPromptOptions): Array<{ readonly scrollTop: number; readonly frame: FrameValues }> {
+  rawOptions: PinnedPromptOptions): Array<{ readonly scrollTop: number; readonly frame: FrameValues }> {
+  if (!isPinnablePrompt(prompts[index])) return [];
+  const options = sane(rawOptions);
   const points = pinnedPromptBreakpoints(prompts, index, options);
   const positions = [...new Set([points.pin, points.shrinkEnd, points.fadeEnd, points.pushStart, points.gone]
     .filter(Number.isFinite))].sort((a, b) => a - b);

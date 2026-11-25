@@ -113,7 +113,7 @@ describe('pinned prompt layout', () => {
     expect(frame.fade).toBeLessThan(1);
   });
 
-  it('rule 7: scrolling back is the mirror image', () => {
+  it('rule 7 (determinism): frames depend only on the position, so scrolling back passes the same states in reverse', () => {
     const positions = Array.from({ length: 401 }, (_, step) => step * 5);
     const down = positions.map(scrollTop => pinnedPromptFrames(scrollTop, prompts, options));
     const up = [...positions].reverse().map(scrollTop => pinnedPromptFrames(scrollTop, prompts, options)).reverse();
@@ -127,7 +127,7 @@ describe('pinned prompt layout', () => {
     expect(frameAt(90, 0)).toBeUndefined();
   });
 
-  it('rule 7: every value is continuous across each breakpoint, so nothing jumps either way', () => {
+  it('rules 7 and 8: every value is continuous across each breakpoint, so nothing jumps either way', () => {
     for (const index of [0, 1, 2]) {
       const points = pinnedPromptBreakpoints(prompts, index, options);
       for (const point of [points.shrinkEnd, points.fadeEnd, points.pushStart]) {
@@ -147,7 +147,7 @@ describe('pinned prompt layout', () => {
     }
   });
 
-  it('rule 8: an instant jump lands in the state the rules give for the new position', () => {
+  it('rule 8 (determinism): a jump gives the same frames as walking there one pixel at a time', () => {
     // Walk there 1px at a time, as a drag would, and compare with jumping straight there.
     const targets = [0, 95, 200, 333, 640, 950, 991, 1150, 1290, 1400, 1700, 120, 5];
     for (const target of targets) {
@@ -159,6 +159,94 @@ describe('pinned prompt layout', () => {
     expect(pinnedPromptFrames(1400, prompts, options)).toEqual(pinnedPromptFrames(1400, prompts, options));
     expect(pinnedPromptFrames(95, prompts, options).map(frame => frame.index)).toEqual([0]);
     expect(pinnedPromptFrames(1400, prompts, options).map(frame => frame.index)).toEqual([2]);
+  });
+
+  it('rule 6: a prompt pushed the moment it stops shrinking moves continuously across that point', () => {
+    // The next prompt sits right under a tall one, closer than the push gap, so pushing
+    // starts exactly where shrinking ends.
+    const tight = [{ top: 100, height: 300, summaryHeight: 80 }, { top: 404, height: 60, summaryHeight: 60 }];
+    const points = pinnedPromptBreakpoints(tight, 0, options);
+    expect(points.pushStart).toBe(points.shrinkEnd);
+    const before = pinnedPromptFrameAt(points.pushStart - 1e-6, tight, 0, options)!;
+    const after = pinnedPromptFrameAt(points.pushStart + 1e-6, tight, 0, options)!;
+    expect(before.phase).toBe('shrinking');
+    expect(after.phase).toBe('pushed');
+    for (const key of ['top', 'height', 'innerOffset', 'fade'] as const) expect(after[key]).toBeCloseTo(before[key], 4);
+    // From there it moves exactly with the scroll, touching the next prompt.
+    const later = pinnedPromptFrameAt(points.pushStart + 30, tight, 0, options)!;
+    expect(later.top).toBeCloseTo(after.top - 30, 4);
+    expect(bottom(later)).toBeCloseTo(naturalTop(tight[1], points.pushStart + 30) - 4, 4);
+  });
+
+  it('rule 6: a pushed prompt is dropped only once it is entirely above the scrollport, never while visible', () => {
+    for (const index of [0, 1]) {
+      const { pushStart, gone } = pinnedPromptBreakpoints(prompts, index, options);
+      for (let scrollTop = pushStart; scrollTop < gone + 5; scrollTop += .25) {
+        const frame = frameAt(scrollTop, index);
+        if (frame) expect(bottom(frame)).toBeGreaterThan(0);
+        else expect(scrollTop).toBeGreaterThanOrEqual(gone);
+      }
+      expect(bottom(frameAt(gone - .25, index)!)).toBeCloseTo(.25, 6);
+    }
+    // After the next prompt pins, the old one keeps moving with the scroll (the gap between
+    // them grows by the scroll distance) until it is off.
+    const atPin = pinnedPromptFrames(991, prompts, options);
+    const later = pinnedPromptFrames(992 - .5, prompts, options);
+    expect(later[0].top - atPin[0].top).toBeCloseTo(-.5, 6);
+    expect(later[1].top).toBe(atPin[1].top);
+  });
+
+  it('rule 4: a summary is never smaller than one line plus padding, nor larger than the prompt', () => {
+    const withMinimum = { ...options, minSummaryHeight: 52 };
+    for (const summaryHeight of [0, -10, 20, Number.NaN]) {
+      const prompt = [{ top: 100, height: 300, summaryHeight }];
+      const { shrinkEnd, pin } = pinnedPromptBreakpoints(prompt, 0, withMinimum);
+      const fallback = Number.isNaN(summaryHeight) ? 300 : 52;
+      expect(shrinkEnd - pin).toBe(300 - fallback);
+      expect(pinnedPromptFrameAt(shrinkEnd + 100, prompt, 0, withMinimum)!.height).toBe(fallback);
+    }
+    // A prompt shorter than the minimum keeps its own height.
+    const tiny = [{ top: 100, height: 40, summaryHeight: 10 }];
+    expect(pinnedPromptFrameAt(200, tiny, 0, withMinimum)).toMatchObject({ height: 40, innerOffset: 0, fade: 0 });
+  });
+
+  it('rule 2: a prompt exactly as tall as its summary pins at full height with nothing to fade', () => {
+    const exact = [{ top: 100, height: 80, summaryHeight: 80 }];
+    const points = pinnedPromptBreakpoints(exact, 0, options);
+    expect(points.shrinkEnd).toBe(points.pin);
+    expect(points.fadeEnd).toBe(points.pin);
+    for (const scrollTop of [90.5, 120, 500]) {
+      expect(pinnedPromptFrameAt(scrollTop, exact, 0, options))
+        .toMatchObject({ phase: 'pinned', top: 10, height: 80, innerOffset: 0, fade: 0 });
+    }
+  });
+
+  it('never pins a prompt without a real box, and never returns non-finite values', () => {
+    const broken = [
+      { top: Number.NaN, height: 300, summaryHeight: 80 },
+      { top: 500, height: Number.POSITIVE_INFINITY, summaryHeight: 80 },
+      { top: 600, height: 0, summaryHeight: 0 },
+      { top: 700, height: -5, summaryHeight: 0 },
+    ];
+    for (let index = 0; index < broken.length; index++) {
+      expect(pinnedPromptBreakpoints(broken, index, options).pin).toBe(Infinity);
+      expect(pinnedPromptKeyframes(broken, index, options)).toEqual([]);
+      for (const scrollTop of [0, 600, 1e6]) expect(pinnedPromptFrameAt(scrollTop, broken, index, options)).toBeUndefined();
+    }
+    // A broken prompt between two good ones is skipped: the later good one still pushes.
+    const mixed = [tall, { top: 700, height: Number.NaN, summaryHeight: 0 }, short];
+    expect(pinnedPromptBreakpoints(mixed, 0, options).gone).toBe(short.top - options.pushGap);
+    expect(pinnedPromptFrames(991, mixed, options).map(frame => frame.index)).toEqual([0, 2]);
+    // Non-finite options fall back to zero, and every value stays finite.
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      const odd = { pinLine: bad, fadeDistance: bad, pushGap: bad, minSummaryHeight: bad };
+      for (let scrollTop = 0; scrollTop < 2000; scrollTop += 37) {
+        for (const frame of pinnedPromptFrames(scrollTop, prompts, odd)) {
+          for (const value of [frame.top, frame.height, frame.innerOffset, frame.fade]) expect(Number.isFinite(value)).toBe(true);
+        }
+      }
+    }
+    expect(pinnedPromptFrames(Number.NaN, prompts, options)).toEqual([]);
   });
 
   it('keeps the latest prompt pinned however far the reader scrolls past it', () => {
