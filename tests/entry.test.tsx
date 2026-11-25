@@ -47,6 +47,14 @@ describe('direct browser entry', () => {
     }
   });
 
+  it('turns on the long-prompt view only when the server says so explicitly', async () => {
+    for (const [value, expected] of [[true, true], ['1', undefined], [false, undefined], [undefined, undefined]]) {
+      const target = await loadConfiguredChatTarget(async () => new Response(
+        JSON.stringify({ ...defaultTarget, longPromptClampEnabled: value }), { status: 200 }));
+      expect(target.longPromptClampEnabled).toBe(expected);
+    }
+  });
+
   it('turns on scroll-pinned prompts only when the server says so explicitly', async () => {
     for (const [value, expected] of [[true, true], ['1', undefined], [false, undefined], [undefined, undefined]]) {
       const target = await loadConfiguredChatTarget(async () => new Response(

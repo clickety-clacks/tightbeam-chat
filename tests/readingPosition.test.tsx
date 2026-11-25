@@ -277,11 +277,12 @@ function advanceNextFrame(at: number) {
   act(() => first[1].callback(at));
 }
 
-function setup(records = initialRows, renderMessage?: TightbeamChatProps['renderMessage'], scrollPinnedPrompts = false) {
+function setup(records = initialRows, renderMessage?: TightbeamChatProps['renderMessage'], scrollPinnedPrompts = false,
+  longPromptClamp = false) {
   const runtime = new ReadingRuntime();
   runtime.state = { ...runtime.state, records };
   render(<TightbeamChat sessionKey="reading" adapter={{ open: () => runtime }} renderMessage={renderMessage}
-    scrollPinnedPrompts={scrollPinnedPrompts} />);
+    scrollPinnedPrompts={scrollPinnedPrompts} longPromptClamp={longPromptClamp} />);
   scrollTo.mockClear();
   return { runtime, box: screen.getByRole('log'), input: screen.getByRole('textbox') as HTMLTextAreaElement };
 }
@@ -2628,11 +2629,21 @@ describe('conversation reading position', () => {
   }
   const longText = Array.from({ length: 30 }, (_, index) => `Long line ${index + 1}`).join('\n');
 
+  it.each([false, true])('with the long-prompt flag off, shows every prompt bubble exactly as before (pinned prompts=%s)', pinned => {
+    mockPromptClampLayout();
+    const rows = initialRows.map(row => row.id === 'message-3' ? { ...row, content: longText } : row);
+    const { box } = setup(rows, undefined, pinned);
+    expect(document.querySelector('.tb-chat-prompt-clamp, .tb-chat-prompt-clamp-content, .tb-chat-prompt-expand')).toBeNull();
+    const body = box.querySelector<HTMLElement>('[data-scroll-key="message-3"] .tb-chat-bubble-body')!;
+    expect(body.firstElementChild?.classList.contains('tb-chat-markdown')).toBe(true);
+    expect(body.textContent).toContain('Long line 30');
+  });
+
   it.each([false, true])('shows the reader\'s own long prompts at ten lines with an expand button (pinned prompts=%s)', pinned => {
     mockPromptClampLayout();
     const rows = initialRows.map(row => row.id === 'message-3' ? { ...row, content: longText }
       : row.id === 'message-4' ? { ...row, role: 'assistant' as const, sender: 'assistant', content: longText } : row);
-    const { box } = setup(rows, undefined, pinned);
+    const { box } = setup(rows, undefined, pinned, true);
     const own = box.querySelector<HTMLElement>('[data-scroll-key="message-3"]')!;
     const agent = box.querySelector<HTMLElement>('[data-scroll-key="message-4"]')!;
     const short = box.querySelector<HTMLElement>('[data-scroll-key="message-2"]')!;
@@ -2653,7 +2664,7 @@ describe('conversation reading position', () => {
     ['a small table', '| a | b |\n| - | - |\n| 1 | 2 |', '.tb-chat-table-scroll:only-child'],
   ])('keeps the reader\'s own prompt holding only %s frameless inside the ten-line clamp', (_name, content, inner) => {
     const rows = initialRows.map(row => row.id === 'message-3' ? { ...row, content } : row);
-    const { box } = setup(rows);
+    const { box } = setup(rows, undefined, false, true);
     const own = box.querySelector<HTMLElement>('[data-scroll-key="message-3"]')!;
     const path = `.tb-chat-bubble-body > .tb-chat-prompt-clamp > .tb-chat-prompt-clamp-content > .tb-chat-markdown > ${inner}`;
     const css = readFileSync(resolve(import.meta.dirname, '../src/style.css'), 'utf8');
@@ -2670,7 +2681,7 @@ describe('conversation reading position', () => {
   it('keeps the reading position when a prompt above the view expands', () => {
     mockPromptClampLayout();
     const rows = initialRows.map(row => row.id === 'message-3' ? { ...row, content: longText } : row);
-    const { box } = setup(rows);
+    const { box } = setup(rows, undefined, false, true);
     readAt(box, 92 * 4 + 40);
     const anchor = box.querySelector<HTMLElement>('[data-scroll-key="message-6"]')!;
     const before = anchor.getBoundingClientRect().top;
@@ -2688,7 +2699,7 @@ describe('conversation reading position', () => {
   it('with scroll-pinned prompts, the pinned copy shows the prompt as the stream does, collapsed then expanded', async () => {
     mockPromptClampLayout();
     const rows = initialRows.map(row => ({ ...row, content: longText }));
-    const { box } = setup(rows, undefined, true);
+    const { box } = setup(rows, undefined, true, true);
     pinSomePrompt(box);
     const slot = document.querySelector<HTMLElement>('.tb-chat-pinned-slot[data-pinned]')!;
     const id = slot.dataset.promptIdentity!.match(/message-\d+/)![0];

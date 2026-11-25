@@ -40,7 +40,8 @@ export function HostPage({ defaultTarget, configurationError }: {
   if (selected && adapter) return <TightbeamChat sessionKey={selected.sessionKey} adapter={adapter}
     configuredConversationHref={configuredConversationHref}
     submitterAttributionEnabled={selected.restHumanSendEnabled === true}
-    scrollPinnedPrompts={selected.scrollPinnedPromptsEnabled === true} />;
+    scrollPinnedPrompts={selected.scrollPinnedPromptsEnabled === true}
+    longPromptClamp={selected.longPromptClampEnabled === true} />;
   if (resolution.kind === 'configuration-error') return <main className="chat-entry-state">
     <p className="tb-chat-empty">No conversation is available.</p>
   </main>;
