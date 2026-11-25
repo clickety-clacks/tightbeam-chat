@@ -2,6 +2,16 @@ import type { SubmitterAttribution } from './types';
 
 export const REMEMBERED_SUBMITTER_DISPLAY_NAME_KEY = 'tightbeam-chat.submitter.display-name';
 
+/** The longest remembered display name Chat stores or uses; the agent prompt carries it as `[from <name>]`. */
+export const MAX_REMEMBERED_SUBMITTER_DISPLAY_NAME_LENGTH = 80;
+
+function capped(value: string | undefined): string | undefined {
+  if (!value) return value;
+  const characters = Array.from(value);
+  return characters.length > MAX_REMEMBERED_SUBMITTER_DISPLAY_NAME_LENGTH
+    ? characters.slice(0, MAX_REMEMBERED_SUBMITTER_DISPLAY_NAME_LENGTH).join('').trim() : value;
+}
+
 export function nonemptySubmitterText(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;
   const normalized = value.trim();
@@ -14,14 +24,14 @@ export function normalizeSubmitterAttribution(value: unknown,
   const supplied = value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown> : {};
   const identity = nonemptySubmitterText(supplied.identity);
-  const displayName = nonemptySubmitterText(supplied.displayName) ?? nonemptySubmitterText(rememberedDisplayName);
+  const displayName = nonemptySubmitterText(supplied.displayName) ?? capped(nonemptySubmitterText(rememberedDisplayName));
   if (!identity && !displayName) return undefined;
   return Object.freeze({ identity: identity ?? null, displayName: displayName ?? null });
 }
 
 export function readRememberedSubmitterDisplayName(storage: Pick<Storage, 'getItem'>): string | undefined {
   try {
-    return nonemptySubmitterText(storage.getItem(REMEMBERED_SUBMITTER_DISPLAY_NAME_KEY));
+    return capped(nonemptySubmitterText(storage.getItem(REMEMBERED_SUBMITTER_DISPLAY_NAME_KEY)));
   } catch {
     return undefined;
   }
@@ -30,7 +40,7 @@ export function readRememberedSubmitterDisplayName(storage: Pick<Storage, 'getIt
 export function writeRememberedSubmitterDisplayName(storage: Pick<Storage, 'setItem' | 'removeItem'>,
   value: unknown): boolean {
   try {
-    const displayName = nonemptySubmitterText(value);
+    const displayName = capped(nonemptySubmitterText(value));
     if (displayName) storage.setItem(REMEMBERED_SUBMITTER_DISPLAY_NAME_KEY, displayName);
     else storage.removeItem(REMEMBERED_SUBMITTER_DISPLAY_NAME_KEY);
     return true;

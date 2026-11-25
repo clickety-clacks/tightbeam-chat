@@ -172,7 +172,7 @@ export function resolveEntrySelection(
       canRecoverToConfigured: false,
     };
   }
-  const { readMarkerRoute, restHumanSendEnabled, workItemPillsEnabled, ...configuredIdentity } = fallback;
+  const { readMarkerRoute, restHumanSendEnabled, workItemPillsEnabled, submitter, ...configuredIdentity } = fallback;
   const target: ChatTarget = {
     ...configuredIdentity,
     gateway,
@@ -180,6 +180,8 @@ export function resolveEntrySelection(
     ...(gateway === fallback.gateway && readMarkerRoute ? { readMarkerRoute } : {}),
     ...(gateway === fallback.gateway && restHumanSendEnabled ? { restHumanSendEnabled: true } : {}),
     ...(gateway === fallback.gateway && workItemPillsEnabled ? { workItemPillsEnabled: true } : {}),
+    // Attribution travels only with the REST transport, and only for the configured Gateway.
+    ...(gateway === fallback.gateway && restHumanSendEnabled && submitter ? { submitter } : {}),
   };
   return {
     kind: 'selected',

@@ -30,6 +30,19 @@ describe('submitter attribution', () => {
     expect(window.localStorage.getItem(REMEMBERED_SUBMITTER_DISPLAY_NAME_KEY)).toBeNull();
   });
 
+  it('caps a long remembered name, by characters, when storing and reading', () => {
+    const long = 'Riley '.repeat(40);
+    expect(writeRememberedSubmitterDisplayName(window.localStorage, long)).toBe(true);
+    const stored = window.localStorage.getItem(REMEMBERED_SUBMITTER_DISPLAY_NAME_KEY)!;
+    expect(Array.from(stored).length).toBeLessThanOrEqual(80);
+    expect(stored.startsWith('Riley Riley')).toBe(true);
+    window.localStorage.setItem(REMEMBERED_SUBMITTER_DISPLAY_NAME_KEY, 'x'.repeat(500));
+    expect(Array.from(readRememberedSubmitterDisplayName(window.localStorage)!).length).toBe(80);
+    expect(Array.from(normalizeSubmitterAttribution(undefined, '\u{1F600}'.repeat(200))!.displayName!).length).toBe(80);
+    // A name the request supplies is used as given.
+    expect(normalizeSubmitterAttribution({ displayName: 'y'.repeat(120) }, 'Riley')!.displayName).toHaveLength(120);
+  });
+
   it('shows the remembered-name setting only while attribution is enabled and saves changes', () => {
     const settings = { kind: 'settings', page: 'home' } as const;
     const renderSettings = (enabled: boolean) => render(<ReleaseNotesDialog overlay={settings} entries={[]}
