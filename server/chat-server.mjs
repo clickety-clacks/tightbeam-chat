@@ -626,6 +626,21 @@ function jsonResponse(response, status, value) {
   writeJson(response, status, value);
 }
 
+// A Gateway that refuses a large body and resets the connection while it is still being written makes the socket emit
+// an error after its request has finished; with no listener that is an unhandled 'error' event and ends the whole process.
+// Keep-alive reuses sockets, so each socket gets exactly one listener, however many requests it carries.
+const guardedSockets = new WeakSet();
+function guardSocketErrors(socket) {
+  if (!socket || guardedSockets.has(socket)) return;
+  guardedSockets.add(socket);
+  socket.on('error', () => {});
+}
+function gatewayHttpRequest(protocol, ...args) {
+  const request = protocol.request(...args);
+  request.on('socket', guardSocketErrors);
+  return request;
+}
+
 function gatewayCliVersionFromReply(reply) {
   if (reply.status !== 200) throw new Error('Gateway version is unavailable.');
   let version;
@@ -673,7 +688,7 @@ async function gatewayRequest(
     // Set once the Gateway's reply head is in; returns true when it settled the request with the 413 refusal.
     let settleEarlyRefusal = () => false;
     const protocol = gateway.base.startsWith('https:') ? https : http;
-    const request = protocol.request(gateway.base, {
+    const request = gatewayHttpRequest(protocol, gateway.base, {
       method,
       path,
       headers: {
@@ -785,7 +800,7 @@ async function serviceHttp(request, response, runtime) {
     // Forward original multipart bytes and streamed downloads under the existing
     // service identity. The Gateway owns file/type/body limits and their errors.
     const protocol = gateway.base.startsWith('https:') ? https : http;
-    const remote = protocol.request(gateway.base, { method, path: target.path,
+    const remote = gatewayHttpRequest(protocol, gateway.base, { method, path: target.path,
       headers: { authorization: `Bearer ${gateway.token}`,
         ...(request.headers['content-type'] ? { 'content-type': request.headers['content-type'] } : {}),
         ...(request.headers['content-length'] ? { 'content-length': request.headers['content-length'] } : {}) },
@@ -954,7 +969,7 @@ function proxyServiceWebSocket(request, socket, head, target, runtime, gateway) 
     headers['sec-websocket-protocol'] = request.headers['sec-websocket-protocol'];
   }
 
-  const upstream = protocol.request(gateway.base, { method: 'GET', path: target.path, headers });
+  const upstream = gatewayHttpRequest(protocol, gateway.base, { method: 'GET', path: target.path, headers });
   upstream.on('upgrade', (reply, remote, remoteHead) => {
     const stopKeepalive = startChangesFeedKeepalive(target, remote);
     const statusText = reply.statusMessage || 'Switching Protocols';
@@ -1107,7 +1122,7 @@ function serveAsset(request, response, publicDir) {
 
 function proxyHttp(request, response, target) {
   const protocol = target.gateway.startsWith('https:') ? https : http;
-  const upstream = protocol.request(target.gateway, {
+  const upstream = gatewayHttpRequest(protocol, target.gateway, {
     method: 'GET',
     path: target.path,
     headers: request.headers.authorization
@@ -1146,7 +1161,7 @@ function proxyWebSocket(request, socket, head, target) {
     headers['sec-websocket-protocol'] = request.headers['sec-websocket-protocol'];
   }
 
-  const upstream = protocol.request(target.gateway, { method: 'GET', path: target.path, headers });
+  const upstream = gatewayHttpRequest(protocol, target.gateway, { method: 'GET', path: target.path, headers });
   upstream.on('upgrade', (reply, remote, remoteHead) => {
     const statusText = reply.statusMessage || 'Switching Protocols';
     const headerLines = [];

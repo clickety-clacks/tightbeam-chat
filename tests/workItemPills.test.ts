@@ -387,6 +387,78 @@ describe('the loaded items', () => {
     expect(gateway.pills.getSnapshot()[0].id).toBe('wi_15');
   });
 
+  it('rings for a turn that started before its newly filed item was first read', async () => {
+    const gateway = await strip(1);
+    gateway.see(1);
+    gateway.items.set('wi_9', summary(9));
+    gateway.pills.addFiled('wi_9');
+    await settle();
+    gateway.turn(7, 9, 'running');
+    gateway.turn(8, 9, 'running');
+    gateway.turn(8, 9, 'delivered');
+    await pass(4_999);
+    expect(gateway.liveReads).toBe(0);
+    await pass(1);
+    expect(gateway.pill(9).state).toBe('held');
+    expect(gateway.turnReads).toEqual([]);
+    gateway.see(1, 9);
+    await settle();
+    expect(gateway.turnReads).toEqual([7]);
+    expect(gateway.pill(9).state).toBe('working');
+    gateway.turn(7, 9, 'delivered');
+    await settle();
+    expect(gateway.pill(9).state).toBe('held');
+  });
+
+  it('checks a turn that started between the watch and the list read, and shows no ring it cannot confirm', async () => {
+    const gateway = new FakeGateway([summary(1)]);
+    gateways.push(gateway);
+    await gateway.pills.watch(['wi_1']);
+    gateway.turn(7, 1, 'running');
+    gateway.turns.set(7, { workItemId: 'wi_1', status: 'delivered' });
+    gateway.readPage();
+    gateway.see(1);
+    await settle();
+    expect(gateway.turnReads).toEqual([7]);
+    expect(gateway.pill(1).state).toBe('held');
+  });
+
+  it('reads everything filed by the time the first is due, and one list after a reconnect even if an item was just read', async () => {
+    const gateway = await strip(1);
+    gateway.see(1);
+    for (const n of [8, 9]) gateway.items.set(`wi_${n}`, summary(n));
+    gateway.pills.addFiled('wi_8');
+    await pass(4_000);
+    gateway.pills.addFiled('wi_9');
+    await pass(1_000);
+    expect(gateway.itemReads).toEqual(['wi_8', 'wi_9']);
+    await pass(120_000);
+    gateway.change(1);
+    await pass(5_000);
+    expect(gateway.itemReads).toEqual(['wi_8', 'wi_9', 'wi_1']);
+    gateway.disconnect();
+    await pass(1_000);
+    expect(gateway.pageReads).toBe(2);
+    gateway.disconnect();
+    await pass(60_000);
+    expect(gateway.pageReads).toBe(2);
+  });
+
+  it('marks a newly filed item that changed while it was being read', async () => {
+    const gateway = await strip(1);
+    gateway.see(1);
+    gateway.items.set('wi_9', summary(9));
+    gateway.pills.addFiled('wi_9');
+    await settle();
+    vi.advanceTimersByTime(5_000);
+    gateway.change(9, { holders: [] });
+    await settle();
+    expect(gateway.pill(9).stale).toBe(true);
+    gateway.see(1, 9);
+    await pass(5_000);
+    expect(gateway.pill(9)).toMatchObject({ state: 'between-hands', stale: false });
+  });
+
   it('keeps a filed item that its list read has not covered yet, and waits while out of view', async () => {
     const gateway = await strip(1);
     gateway.items.set('wi_9', summary(9));
