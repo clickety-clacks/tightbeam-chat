@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { HostPage } from '../examples/HostPage';
 import { RuntimeEntry } from '../examples/RuntimeEntry';
-import { loadConfiguredChatTarget } from '../examples/entry';
+import { loadConfiguredChatTarget, resolveEntrySelection } from '../examples/entry';
 
 const defaultTarget = {
   gateway: 'https://gateway.example:8443',
@@ -56,6 +56,28 @@ describe('direct browser entry', () => {
     const disabled = await loadConfiguredChatTarget(async () => new Response(JSON.stringify({ ...source,
       restHumanSendEnabled: false }), { status: 200 }));
     expect(disabled.submitter).toBeUndefined();
+  });
+
+  it('keeps the REST flag, marker route and submitter when a link names the configured Gateway, and drops them for another', () => {
+    const configured = { ...defaultTarget, readMarkerRoute: 'gateway-configured-user' as const, restHumanSendEnabled: true,
+      submitter: { identity: 'person@example.test', displayName: 'Riley' } };
+    const linkTo = (gateway: string) => resolveEntrySelection(
+      new URLSearchParams({ gateway, session: 'agent:example/linked' }).toString(), configured);
+
+    const same = linkTo(defaultTarget.gateway);
+    expect(same).toMatchObject({ kind: 'selected', source: 'link' });
+    expect(same.kind === 'selected' && same.target).toMatchObject({
+      gateway: defaultTarget.gateway, sessionKey: 'agent:example/linked', principalKey: 'example-user',
+      deviceId: 'chat_abc123', readMarkerRoute: 'gateway-configured-user', restHumanSendEnabled: true,
+      submitter: { identity: 'person@example.test', displayName: 'Riley' },
+    });
+
+    const other = linkTo('https://other.example');
+    expect(other.kind === 'selected' && other.target).toMatchObject({ gateway: 'https://other.example' });
+    const otherTarget = other.kind === 'selected' ? other.target : {};
+    expect(otherTarget).not.toHaveProperty('restHumanSendEnabled');
+    expect(otherTarget).not.toHaveProperty('readMarkerRoute');
+    expect(otherTarget).not.toHaveProperty('submitter');
   });
 
   it('keeps Chat and sending available when conversation endpoints are unavailable', async () => {

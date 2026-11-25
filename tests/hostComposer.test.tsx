@@ -620,6 +620,22 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     }
   });
 
+  it('reports a host-managed send refused as payload_too_large with the too-large wording', async () => {
+    const events: HostComposerEvent[] = [];
+    const transport = new HostComposerTransport();
+    transport.nextSend = async () => ({ outcome: 'refused', reason: 'payload_too_large' });
+    installDeclaration(events);
+    openChat(transport, 'conversation-a');
+    const ready = await waitForReady(events, 'conversation-a');
+    act(() => commandEntry()({ type: 'send', lifetimeId: ready.lifetimeId, sessionKey: ready.sessionKey,
+      correlationId: correlation, content: 'a prompt that is too large' }));
+    await waitFor(() => expect(events.some((event) => event.event === 'failed' && event.reason === 'refused')).toBe(true));
+    expect(events.find((event) => event.event === 'failed')).toMatchObject({ detail: 'payload_too_large', attempt: 1 });
+    expect(screen.getByRole('alert').textContent).toContain('Your message was not sent.');
+    expect(screen.getByRole('alert').textContent).toContain('too large');
+    expect(screen.queryByRole('button', { name: 'Retry message' })).toBeNull();
+  });
+
   it('restores readiness after a per-message refusal without a runtime rebuild', async () => {
     const events: HostComposerEvent[] = [];
     const transport = new HostComposerTransport();
