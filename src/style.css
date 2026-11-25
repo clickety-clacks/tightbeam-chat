@@ -372,6 +372,10 @@ body {
 .tb-chat-bubble:has(.tb-chat-bubble-body > .tb-chat-markdown > .tb-chat-code-scroll:only-child),
 .tb-chat-bubble:has(.tb-chat-bubble-body > .tb-chat-markdown > .tb-chat-table-scroll:only-child:not(:has(tbody > tr:nth-child(6)))),
 .tb-chat-bubble:has(.tb-chat-bubble-body > .tb-chat-markdown > p:only-child > .tb-chat-markdown-image:only-child),
+/* The same, for the reader's own prompts, whose text sits inside the ten-line clamp. */
+.tb-chat-bubble:has(.tb-chat-bubble-body > .tb-chat-prompt-clamp > .tb-chat-prompt-clamp-content > .tb-chat-markdown > .tb-chat-code-scroll:only-child),
+.tb-chat-bubble:has(.tb-chat-bubble-body > .tb-chat-prompt-clamp > .tb-chat-prompt-clamp-content > .tb-chat-markdown > .tb-chat-table-scroll:only-child:not(:has(tbody > tr:nth-child(6)))),
+.tb-chat-bubble:has(.tb-chat-bubble-body > .tb-chat-prompt-clamp > .tb-chat-prompt-clamp-content > .tb-chat-markdown > p:only-child > .tb-chat-markdown-image:only-child),
 .tb-chat-bubble:has(.tb-chat-bubble-body > .tb-chat-image-attachments:only-child > .tb-chat-image-attachment:only-child) {
   border-color: transparent;
   background: transparent;

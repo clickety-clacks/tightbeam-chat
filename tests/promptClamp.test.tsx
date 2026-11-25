@@ -106,6 +106,56 @@ describe('long sent prompts', () => {
     expect(document.querySelector('[data-expanded]')).not.toBeNull();
   });
 
+  it('counts rendered lines, so paragraph spacing does not take a line, and clips just above the eleventh', () => {
+    // Line boxes reported by the browser: 20px lines, with a 12px gap between paragraphs.
+    const proto = Range.prototype as Range & { getClientRects?: () => DOMRectList };
+    const original = proto.getClientRects;
+    proto.getClientRects = function (this: Range) {
+      const node = this.startContainer as Text;
+      const paragraphs = [...document.querySelectorAll('.tb-chat-markdown p')];
+      const index = paragraphs.findIndex(paragraph => paragraph.contains(node));
+      const before = paragraphs.slice(0, index).reduce((total, paragraph) =>
+        total + (paragraph.textContent ?? '').split('\n').length, 0);
+      const count = (node.textContent ?? '').split('\n').length;
+      return Array.from({ length: count }, (_, line) =>
+        ({ top: (before + line) * LINE + index * 12, height: LINE, bottom: 0, left: 0, right: 0, width: 100 })) as unknown as DOMRectList;
+    };
+    try {
+      const paragraphs = (counts: number[]) => render(<PromptClamp conversation="one" identity={`send:${counts.join('-')}`}>
+        <div className="tb-chat-markdown">{counts.map((count, index) => <p key={index}>{lines(count)}</p>)}</div>
+      </PromptClamp>);
+      paragraphs([5, 5]);
+      expect(button()).toBeNull();
+      cleanup();
+      paragraphs([5, 6]);
+      expect(button()).not.toBeNull();
+      // The eleventh line starts 10 lines and one paragraph gap down.
+      expect(document.querySelector<HTMLElement>('.tb-chat-prompt-clamp-content')!.style.maxHeight).toBe(`${10 * LINE + 12}px`);
+    } finally {
+      if (original) proto.getClientRects = original; else delete proto.getClientRects;
+    }
+  });
+
+  it('keeps keyboard focus in the prompt after expanding, instead of dropping it to the page', () => {
+    show(lines(40));
+    button()!.focus();
+    fireEvent.click(button()!);
+    expect(document.activeElement).toBe(document.querySelector('.tb-chat-prompt-clamp-content'));
+  });
+
+  it('expands when focus moves to a link in the clipped part, so focus is never on hidden text', () => {
+    render(<PromptClamp conversation="one" identity="send:link">
+      <div className="tb-chat-markdown">{lines(40)}<a href="#late">late link</a></div>
+    </PromptClamp>);
+    const link = screen.getByRole('link', { name: 'late link' });
+    vi.spyOn(link, 'getBoundingClientRect').mockReturnValue({ top: 700, bottom: 720, left: 0, right: 50, width: 50, height: 20,
+      x: 0, y: 700, toJSON: () => ({}) } as DOMRect);
+    expect(button()).not.toBeNull();
+    fireEvent.focusIn(link);
+    expect(button()).toBeNull();
+    expect(document.querySelector('[data-expanded]')).not.toBeNull();
+  });
+
   it('remembers expansion per conversation and prompt', () => {
     const first = show(lines(40), 'send:a', 'one');
     fireEvent.click(button()!);

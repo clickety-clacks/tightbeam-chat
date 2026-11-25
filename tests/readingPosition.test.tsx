@@ -2648,6 +2648,43 @@ describe('conversation reading position', () => {
     expect(box.querySelector('[data-scroll-key="message-3"] .tb-chat-prompt-clamp')!.getAttribute('data-expanded')).toBe('true');
   });
 
+  it.each([
+    ['a code block', '```\nconst x = 1;\n```', '.tb-chat-code-scroll:only-child'],
+    ['a small table', '| a | b |\n| - | - |\n| 1 | 2 |', '.tb-chat-table-scroll:only-child'],
+  ])('keeps the reader\'s own prompt holding only %s frameless inside the ten-line clamp', (_name, content, inner) => {
+    const rows = initialRows.map(row => row.id === 'message-3' ? { ...row, content } : row);
+    const { box } = setup(rows);
+    const own = box.querySelector<HTMLElement>('[data-scroll-key="message-3"]')!;
+    const path = `.tb-chat-bubble-body > .tb-chat-prompt-clamp > .tb-chat-prompt-clamp-content > .tb-chat-markdown > ${inner}`;
+    const css = readFileSync(resolve(import.meta.dirname, '../src/style.css'), 'utf8');
+    expect(css).toContain(`.tb-chat-bubble:has(${path}`);
+    let frameless: boolean;
+    try {
+      frameless = own.matches(`.tb-chat-bubble:has(${path})`);
+    } catch {
+      frameless = own.querySelector(path) !== null; // :has() not supported by this DOM
+    }
+    expect(frameless).toBe(true);
+  });
+
+  it('keeps the reading position when a prompt above the view expands', () => {
+    mockPromptClampLayout();
+    const rows = initialRows.map(row => row.id === 'message-3' ? { ...row, content: longText } : row);
+    const { box } = setup(rows);
+    readAt(box, 92 * 4 + 40);
+    const anchor = box.querySelector<HTMLElement>('[data-scroll-key="message-6"]')!;
+    const before = anchor.getBoundingClientRect().top;
+    const own = box.querySelector<HTMLElement>('[data-scroll-key="message-3"]')!;
+    expect(own.getBoundingClientRect().bottom).toBeLessThanOrEqual(box.getBoundingClientRect().top);
+    // The prompt grows by 400px once it expands (after the position is captured).
+    const grow = () => rowHeightOverrides.set('message-3', 480);
+    document.addEventListener('click', grow);
+    fireEvent.click(own.querySelector('button.tb-chat-prompt-expand')!, { clientX: 5000, clientY: 5000 });
+    document.removeEventListener('click', grow);
+    notifyResizeObservers();
+    expect(anchor.getBoundingClientRect().top).toBeCloseTo(before, 0);
+  });
+
   it('with scroll-pinned prompts, the pinned copy shows the prompt as the stream does, collapsed then expanded', async () => {
     mockPromptClampLayout();
     const rows = initialRows.map(row => ({ ...row, content: longText }));
