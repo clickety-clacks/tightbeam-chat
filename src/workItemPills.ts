@@ -119,6 +119,8 @@ export class WorkItemPills {
   private lastRefreshAt = -Infinity;
   /** Every wanted item is watched on this connection. */
   private caughtUp = false;
+  /** Turns announced for a watched item before its first read answered; they are read, never shown, from here. */
+  private readonly early = new Map<string, { changes: number; readonly turns: Set<number> }>();
   /** Items filed while this page watched; the list read has not covered them yet. */
   private readonly filedLive = new Map<string, { readonly from: number; state: 'waiting' | 'reading' | 'read' }>();
 
@@ -205,8 +207,10 @@ export class WorkItemPills {
   }
 
   private add(summary: WorkItemSummary): void {
+    const turns = this.early.get(summary.id)?.turns;
+    this.early.delete(summary.id);
     this.entries.set(summary.id, { summary, stale: false, changes: 0, lastChangeAt: 0, lastRereadAt: -Infinity, reading: false,
-      unreadTurns: new Set(), runningTurns: new Set(), readingTurns: new Set(), turnRetries: new Map(), ringReadAt: 0 });
+      unreadTurns: new Set(turns), runningTurns: new Set(), readingTurns: new Set(), turnRetries: new Map(), ringReadAt: 0 });
   }
 
   private applyRead(entry: Entry, summary: WorkItemSummary, seen: number): void {
@@ -300,7 +304,16 @@ export class WorkItemPills {
 
   private receive(change: WorkItemChange): void {
     const entry = this.entries.get(change.workItemId);
-    if (!entry) return;
+    if (!entry) {
+      if (!this.wanted.has(change.workItemId)) return;
+      const early = this.early.get(change.workItemId) ?? { changes: 0, turns: new Set<number>() };
+      this.early.set(change.workItemId, early);
+      if (change.kind === 'item') early.changes += 1;
+      // Never shown as running, so there is nothing to correct.
+      else if (change.ended) early.turns.delete(change.turnSeq);
+      else early.turns.add(change.turnSeq);
+      return;
+    }
     const at = this.now();
     if (change.kind === 'item') {
       entry.stale = true;
@@ -336,6 +349,9 @@ export class WorkItemPills {
     if (this.timer) { clearTimeout(this.timer); this.timer = undefined; }
     const at = this.now();
     let next = Infinity;
+    // Anything may have changed while not listening, so the one list read after a
+    // reconnect covers every item, even one read on its own within two minutes.
+    // List reads themselves stay two minutes apart.
     if (this.gap && this.caughtUp && this.pageVisible && this.visible.size) {
       const refreshAt = this.lastRefreshAt + REREAD_INTERVAL_MS;
       if (refreshAt <= at) {
@@ -370,7 +386,12 @@ export class WorkItemPills {
     if (next < Infinity) this.timer = setTimeout(() => { this.timer = undefined; this.pump(); }, Math.max(0, next - at));
   }
 
-  /** Newly filed items wait for a reader who could see them; a burst is one list read. */
+  /**
+   * Newly filed items wait for a reader who could see them; a burst is one list
+   * read. When the first is due, all that wait are read with it, so one filed a
+   * few seconds later may be read before its own quiet time: fewer reads, and a
+   * later change still marks it.
+   */
   private readFiled(at: number): number {
     if (!this.connection || !this.pageVisible || !this.visible.size && this.entries.size) return Infinity;
     const waiting = [...this.filedLive].filter(([id, row]) => row.state === 'waiting' && this.ready.has(id));
@@ -379,11 +400,16 @@ export class WorkItemPills {
     for (const [, row] of waiting) row.state = 'reading';
     if (waiting.length > SINGLE_REREAD_LIMIT) { this.refresh(); return Infinity; }
     for (const [id, row] of waiting) {
+      const seen = this.early.get(id)?.changes ?? 0;
       this.options.transport.readItem(id, this.lifetime.signal).then((summary) => {
         if (this.lifetime.signal.aborted || this.filedLive.get(id) !== row) return;
         if (!summary) { this.forget(id); return; }
         row.state = 'read';
-        if (!this.entries.has(id)) this.add(summary);
+        if (!this.entries.has(id)) {
+          const changed = (this.early.get(id)?.changes ?? 0) !== seen;
+          this.add(summary);
+          if (changed) Object.assign(this.entries.get(id)!, { stale: true, changes: 1, lastChangeAt: this.now() });
+        }
         this.publish();
         this.options.onFiledRead?.(summary);
       }, () => {
@@ -445,6 +471,7 @@ export class WorkItemPills {
 
   private forget(id: string): void {
     this.entries.delete(id);
+    this.early.delete(id);
     this.filedLive.delete(id);
     this.ready.delete(id);
     this.wanted.delete(id);
