@@ -1665,6 +1665,14 @@ describe('Gateway wire mapping and behavior checks', () => {
       .resolves.toEqual({ outcome: 'refused', reason: 'payload_too_large' });
   });
 
+  it('treats a 502 after a large body as retryable, not as refused or accepted', async () => {
+    const candidate = setup();
+    candidate.dispatchResponses.push(new Response(JSON.stringify({ error: { code: 'gateway_unavailable' } }), { status: 502 }));
+    await expect(candidate.transport.sendHuman({ sessionKey, deviceId: 'device-1', clientMessageId: 'c_bad_gateway',
+      content: 'a very long prompt' }, new AbortController().signal))
+      .resolves.toEqual({ outcome: 'retryable', reason: 'gateway_unavailable' });
+  });
+
   it('decodes a correlated post-time over-limit refusal without weakening its stable code', async () => {
     const candidate = setup();
     const submission = { sessionKey, deviceId: 'device-1', clientMessageId: 'c_post_over_limit', content: 'inspect',
