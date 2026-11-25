@@ -15,6 +15,7 @@ class FakeGateway {
   itemReads: string[] = [];
   turnReads: number[] = [];
   subscriptions: string[] = [];
+  removed: string[] = [];
   connections = 0;
   failReads = false;
   refuseConnections = false;
@@ -47,6 +48,7 @@ class FakeGateway {
         const beat = setInterval(() => { if (!this.silent) this.emit?.({ type: 'heartbeat', seq: this.seq }); }, 15_000);
         return {
           send: (frame) => {
+            if (frame.type === 'unsubscribe') this.removed.push(String(frame.subscriptionId));
             if (frame.type !== 'subscribe') return;
             expect(frame.filters).toEqual({ workItemId: expect.stringMatching(/^wi_/), classes: ['work_item.', 'turn.started', 'turn.ended'] });
             this.subscriptions.push(String(frame.subscriptionId));
@@ -176,11 +178,14 @@ describe('changes', () => {
     expect(gateway.pill(1)).toMatchObject({ state: 'between-hands', stale: false });
   });
 
-  it('does not put off a pill that keeps changing for ever', async () => {
+  it('waits for five quiet seconds however long a pill keeps changing', async () => {
     const gateway = await strip(1);
     gateway.see(1);
-    for (let i = 0; i < 40; i++) { gateway.change(1); await pass(4_000); }
-    expect(gateway.itemReads.length).toBeGreaterThan(0);
+    for (let i = 0; i < 100; i++) { gateway.change(1); await pass(4_000); }
+    expect(gateway.itemReads).toEqual([]);
+    expect(gateway.pill(1).stale).toBe(true);
+    await pass(1_000);
+    expect(gateway.itemReads).toEqual(['wi_1']);
   });
 
   it('waits for a pill out of view or a page in the background', async () => {
@@ -304,7 +309,116 @@ describe('the ring', () => {
   });
 });
 
+describe('a turn read that fails', () => {
+  it('is tried again ever less often while in view, until the ring can be shown', async () => {
+    const gateway = await strip(1);
+    gateway.see(1);
+    gateway.failReads = true;
+    gateway.turn(7, 1, 'running');
+    await pass(59_999);
+    expect(gateway.pill(1).state).toBe('held');
+    gateway.failReads = false;
+    await pass(1);
+    expect(gateway.pill(1).state).toBe('working');
+    gateway.failReads = true;
+    gateway.turn(7, 1, 'delivered');
+    await pass(60_000);
+    await pass(60_000);
+    gateway.failReads = false;
+    expect(gateway.pill(1).state).toBe('working');
+    await pass(60_000);
+    expect(gateway.pill(1).state).toBe('held');
+  });
+
+  it('waits out of view', async () => {
+    const gateway = await strip(1);
+    gateway.see(1);
+    gateway.failReads = true;
+    gateway.turn(7, 1, 'running');
+    await settle();
+    gateway.see();
+    gateway.failReads = false;
+    await pass(3_600_000);
+    expect(gateway.turnReads).toEqual([]);
+    gateway.see(1);
+    await settle();
+    expect(gateway.turnReads).toEqual([7]);
+  });
+});
+
+describe('the loaded items', () => {
+  it('drops items that are no longer loaded, with their subscriptions', async () => {
+    const gateway = await strip(3);
+    gateway.pills.setItems(mapOf([summary(2), summary(3)]));
+    expect(gateway.pills.getSnapshot().map((pill) => pill.id)).toEqual(['wi_3', 'wi_2']);
+    expect(gateway.removed).toEqual(['work-item:wi_1']);
+    gateway.subscriptions = [];
+    gateway.disconnect();
+    await pass(1_000);
+    expect(gateway.subscriptions.sort()).toEqual(['work-item:wi_2', 'work-item:wi_3']);
+  });
+
+  it('never fills the connection with items that have left', async () => {
+    const gateway = await strip(0);
+    for (let page = 0; page < 5; page++) {
+      const items = Array.from({ length: 60 }, (_, i) => summary(page * 60 + i + 1));
+      await gateway.pills.watch(items.map((item) => item.id));
+      gateway.pills.setItems(mapOf(items));
+    }
+    expect(gateway.pills.getSnapshot()).toHaveLength(60);
+    expect(gateway.pills.getSnapshot()[0].id).toBe('wi_300');
+  });
+
+  it('reads one newly filed item once, and a burst as one list read', async () => {
+    const gateway = await strip(2);
+    gateway.see(1);
+    gateway.items.set('wi_9', summary(9));
+    gateway.pills.addFiled('wi_9');
+    gateway.pills.addFiled('wi_9');
+    await settle();
+    expect(gateway.itemReads).toEqual([]);
+    await pass(5_000);
+    expect(gateway.itemReads).toEqual(['wi_9']);
+    expect(gateway.pills.getSnapshot()[0].id).toBe('wi_9');
+    await pass(600_000);
+    for (let n = 10; n < 16; n++) { gateway.items.set(`wi_${n}`, summary(n)); gateway.pills.addFiled(`wi_${n}`); }
+    await pass(5_000);
+    expect({ pages: gateway.pageReads, items: gateway.itemReads.length }).toEqual({ pages: 2, items: 1 });
+    expect(gateway.pills.getSnapshot()[0].id).toBe('wi_15');
+  });
+
+  it('keeps a filed item that its list read has not covered yet, and waits while out of view', async () => {
+    const gateway = await strip(1);
+    gateway.items.set('wi_9', summary(9));
+    gateway.pills.addFiled('wi_9');
+    await pass(600_000);
+    expect(gateway.itemReads).toEqual([]);
+    gateway.see(1);
+    await settle();
+    expect(gateway.itemReads).toEqual(['wi_9']);
+    gateway.pills.setItems(mapOf([summary(1, { rowVersion: 2 })]));
+    expect(gateway.pills.getSnapshot().map((pill) => pill.id)).toEqual(['wi_9', 'wi_1']);
+  });
+});
+
 describe('the connection', () => {
+  it('reads nothing on reconnecting while hidden, and at most one list in two minutes however often it drops', async () => {
+    const gateway = await strip(3);
+    gateway.pills.setVisible(new Set(['wi_1']), false);
+    gateway.disconnect();
+    await pass(60_000);
+    expect(gateway.pageReads).toBe(1);
+    gateway.see(1);
+    await settle();
+    expect(gateway.pageReads).toBe(2);
+    for (let i = 0; i < 10; i++) { gateway.disconnect(); await pass(8_000); }
+    expect({ pages: gateway.pageReads, live: gateway.liveReads }).toEqual({ pages: 2, live: 0 });
+    expect(gateway.pill(1).stale).toBe(true);
+    await pass(120_000);
+    expect(gateway.pageReads).toBe(3);
+    expect(gateway.pill(1).stale).toBe(false);
+  });
+
   it.each([10, 50])('marks all %i pills and drops rings when it is lost, then repeats one page read', async (count) => {
     const gateway = await strip(count);
     gateway.see(1, 2, 3);
@@ -322,6 +436,7 @@ describe('the connection', () => {
 
   it('treats a gap in the notices as a lost connection', async () => {
     const gateway = await strip(2);
+    gateway.see(1);
     gateway.raw({ type: 'change', seq: 5, class: 'work_item.updated', refs: { workItemId: 'wi_1' } });
     expect(gateway.pill(2).stale).toBe(true);
     await pass(1_000);
@@ -337,6 +452,7 @@ describe('the connection', () => {
     await settle();
     expect(gateway.pill(1)).toMatchObject({ state: 'held', stale: true });
     gateway.refuseConnections = false;
+    gateway.see(1);
     await pass(60_000);
     expect(gateway.pill(1).stale).toBe(false);
     expect(gateway.pageReads).toBe(2);
@@ -346,6 +462,7 @@ describe('the connection', () => {
     const gateway = new FakeGateway([summary(1), summary(2)]);
     gateways.push(gateway);
     gateway.readPage();
+    gateway.see(1);
     await settle();
     expect(gateway.pageReads).toBe(2);
   });

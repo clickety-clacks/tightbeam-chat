@@ -377,8 +377,15 @@ class SessionRuntime implements ChatRuntime {
     if (transport.readRecordEvents) this.recordEventHistory = new SessionRecordEvents(sessionKey,
       transport.readRecordEvents.bind(transport), patch => {
         if (!this.disposed && this.checkIdentity() && this.state.status !== 'unauthorized') {
+          const known = new Set(this.state.recordEvents);
           this.publish(patch);
-          if (patch.recordEvents) this.filedWorkItems?.sync(patch.recordEvents, patch.recordEventsLoading === false);
+          if (!patch.recordEvents) return;
+          const settled = patch.recordEventsLoading === false;
+          this.filedWorkItems?.sync(patch.recordEvents, settled);
+          if (settled || !this.workItemPills) return;
+          for (const event of patch.recordEvents) {
+            if (event.kind === 'work_item.filed' && !known.has(event)) this.workItemPills.pills.addFiled(event.record.id);
+          }
         }
       });
     const pills = transport.readFiledWorkItems && transport.workItemPills ? new WorkItemPills({
