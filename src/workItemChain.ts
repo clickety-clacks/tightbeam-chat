@@ -120,6 +120,15 @@ export async function readWorkItemSheet(id: string, transport: WorkItemSheetTran
     reads += 1;
     return read();
   };
+  // Cards of one item often lead to the same agent or wait; one tap reads each record once.
+  const answers = new Map<string, Promise<unknown>>();
+  const once = <T>(key: string, read: () => Promise<T>): Promise<T> => {
+    let answer = answers.get(key) as Promise<T> | undefined;
+    if (!answer) answers.set(key, answer = spend(read));
+    return answer;
+  };
+  const readBreathing = (kind: 'work-item' | 'assignment' | 'session', target: string) =>
+    once(`${kind} ${target}`, () => transport.readBreathing(kind, target, signal));
   const pendingNames = new Map<string, Promise<string>>();
   const name = (key: string | null): Promise<string> => {
     if (!key) return Promise.resolve(UNKNOWN_AGENT);
@@ -140,7 +149,9 @@ export async function readWorkItemSheet(id: string, transport: WorkItemSheetTran
   if (!cards) return undefined;
   const { item } = cards;
   const open = item.state === 'open' ? cards.cards.filter((card) => card.open) : [];
-  const shown = open.slice(0, MAX_CARDS);
+  // Every agent before any agent's second card.
+  const repeats = (card: typeof open[number], at: number) => card.holderKey !== null && open.findIndex((other) => other.holderKey === card.holderKey) < at;
+  const shown = [...open.filter((card, at) => !repeats(card, at)), ...open.filter(repeats)].slice(0, MAX_CARDS);
   const raisers = [...new Set(shown.flatMap((card) => card.holderKey ?? []))];
   const [mine, asked] = await Promise.all([
     item.state === 'open' ? spend(() => transport.readMyQuestions(signal)).catch(() => undefined) : Promise.resolve([]),
@@ -155,7 +166,7 @@ export async function readWorkItemSheet(id: string, transport: WorkItemSheetTran
   /** A wait's record, then whatever it names. What was already read stays shown. */
   async function followWait(wakeId: string, holder: string | null, title: string | null, tied: boolean,
     visited: ReadonlySet<string>): Promise<ChainStep[]> {
-    const wait = await spend(() => transport.readWait(wakeId, signal));
+    const wait = await once(`wake ${wakeId}`, () => transport.readWait(wakeId, signal));
     if (!wait) return [{ kind: 'unreadable', what: 'wait' }];
     const agent = await name(wait.sessionKey ?? holder);
     const step = { kind: 'wait' as const, agent, since: wait.createdAt, until: wait.dueAt, recurring: wait.recurring,
@@ -169,7 +180,7 @@ export async function readWorkItemSheet(id: string, transport: WorkItemSheetTran
         { kind: 'loop', title: target === item.id ? item.title : title ?? item.title }];
     }
     let named: WorkItemSummary | undefined;
-    try { named = await spend(() => transport.readItem(target, signal)); }
+    try { named = await once(`item ${target}`, () => transport.readItem(target, signal)); }
     catch (error) { return [{ ...step, target: { kind: 'notice', name: wait.conditionKind, scope: null } }, ...stopped(error)]; }
     if (!named) return [{ ...step, target: { kind: 'notice', name: wait.conditionKind, scope: null } }, { kind: 'unreadable', what: 'item' }];
     return [{ ...step, target: { kind: 'item', title: named.title } }, ...await followItem(named, new Set([...visited, target])).catch(stopped)];
@@ -180,12 +191,12 @@ export async function readWorkItemSheet(id: string, transport: WorkItemSheetTran
     // An unheld item only carries Tightbeam's own reminder, which is not an agent's wait.
     if (!target.holders.length) return [{ kind: 'nobody', title: target.title }];
     if (visited.size >= MAX_CHAIN_STEPS) return [{ kind: 'limit' }];
-    const state = await spend(() => transport.readBreathing('work-item', target.id, signal));
+    const state = await readBreathing('work-item', target.id);
     if (!state) return [{ kind: 'unreadable', what: 'item' }];
     const holder = state.holders[0] ?? target.holders[0];
     const step = await followState(state, holder, target.title, true, visited);
     if (step) return step;
-    const agent = await spend(() => transport.readBreathing('session', holder, signal));
+    const agent = await readBreathing('session', holder);
     const own = agent && await followState(agent, holder, target.title, false, visited, target.id);
     return own ?? [await idle(agent, holder, target.title)];
   }
@@ -218,7 +229,7 @@ export async function readWorkItemSheet(id: string, transport: WorkItemSheetTran
     const holder = card.holderKey;
     const steps = await (async (): Promise<readonly ChainStep[]> => {
       const visited = new Set([item.id]);
-      const state = await spend(() => transport.readBreathing('assignment', card.id, signal));
+      const state = await readBreathing('assignment', card.id);
       const question = asked.find((row) => row.assignmentId === card.id);
       if (state?.reason !== 'running_turn' && state?.reason !== 'queued_turn' && question) {
         const agent = await name(holder);
@@ -227,25 +238,41 @@ export async function readWorkItemSheet(id: string, transport: WorkItemSheetTran
           recurring: false, reason: question.question || null, tied: true, setByOther: false };
         if (!question.expecterSessionKey) return [wait];
         const expecter = question.expecterSessionKey;
-        const doing = await spend(() => transport.readBreathing('session', expecter, signal));
+        const doing = await readBreathing('session', expecter);
         return [wait, ...(doing && await followState(doing, expecter, null, false, visited, item.id)) ??
           [await idle(doing, expecter, null)]];
       }
       const own = state && holder && await followState(state, holder, null, true, visited);
       if (own) return own;
       if (!holder) return [{ kind: 'unreadable', what: 'item' }];
-      const agent = await spend(() => transport.readBreathing('session', holder, signal));
+      const agent = await readBreathing('session', holder);
       return (agent && await followState(agent, holder, null, false, visited, item.id)) ??
         [await idle(state && agent, holder, null)];
     })().catch(stopped);
     return { agent: await name(holder), steps };
   }
 
-  const groups: ChainGroup[] = [];
+  const followed: { readonly holder: string | null; readonly group: ChainGroup }[] = [];
   // One agent at a time, so a tap never bursts and the read limit falls on the last ones.
-  for (const card of shown) groups.push(await followCard(card));
+  for (const card of shown) followed.push({ holder: card.holderKey, group: await followCard(card) });
   if (signal.aborted) throw new Error('Work item sheet closed.');
-  return { item, questions, groups, moreHolders: open.length - shown.length, reads };
+  const groups = onePerChain(followed);
+  const seen = new Set(shown.map((card) => card.holderKey ?? card.id));
+  const moreHolders = new Set(open.map((card) => card.holderKey ?? card.id).filter((key) => !seen.has(key))).size;
+  return { item, questions, groups, moreHolders, reads };
+}
+
+/** An agent's several cards repeat what it is doing. Show each chain once, and what it did not tie to this item only if nothing is tied. */
+function onePerChain(followed: readonly { readonly holder: string | null; readonly group: ChainGroup }[]): ChainGroup[] {
+  const tied = ({ group }: { readonly group: ChainGroup }) => {
+    const [first] = group.steps;
+    return (first?.kind === 'wait' || first?.kind === 'running') ? first.tied : first?.kind === 'queued';
+  };
+  const same = (group: ChainGroup) => JSON.stringify(group.steps);
+  return followed.filter((row, at) => row.holder === null || (
+    (tied(row) || !followed.some((other) => other.holder === row.holder && tied(other))) &&
+    !followed.slice(0, at).some((other) => other.holder === row.holder && same(other.group) === same(row.group))
+  )).map(({ group }) => group);
 }
 
 function raiserSession(raiserId: string | null): string | null {
