@@ -25,7 +25,7 @@ class Visible {
   }
 }
 
-function chat(items: readonly WorkItemSummary[], options: { pills?: boolean } = {}) {
+function chat(items: readonly WorkItemSummary[], options: { pills?: boolean; failList?: boolean } = {}) {
   const counts: Record<string, number> = {};
   const count = (name: string) => { counts[name] = (counts[name] ?? 0) + 1; };
   let emit: (change: WorkItemChange) => void = () => {};
@@ -40,19 +40,20 @@ function chat(items: readonly WorkItemSummary[], options: { pills?: boolean } = 
     readItem: async (id) => { count('item'); return items.find((item) => item.id === id); },
     readTurn: async (seq) => { count('turn'); return { seq, workItemId: uuid(1), status: 'running' }; },
     readCards: async (id) => { count('cards'); const item = items.find((row) => row.id === id)!;
-      return { item, cards: [{ id: 'asg_1', open: true, holderKey: 'agent:a' }] }; },
+      return { item, cards: [{ id: 'asg_1', open: item.holders.length > 0, holderKey: 'agent:a' }] }; },
     readBreathing: async () => { count('breathing'); return { reason: 'pending_wake', holders: [],
       wake: { wakeId: 'w1', sessionKey: 'agent:a', dueAt: Date.now() + 3_600_000, createdAt: 1 } }; },
     readWait: async (id) => { count('wait'); return { id, sessionKey: 'agent:a', creatorSessionKey: 'agent:a', state: 'pending', recurring: false,
       conditionKind: null, conditionScope: null, dueAt: Date.now() + 3_600_000, createdAt: Date.now() - 60_000, reason: null }; },
-    readMyQuestions: async () => { count('questions'); return []; },
+    readMyQuestions: async () => { count('questions'); return items.some((row) => !row.holders.length) ? [{ id: 'dr_1', question: 'Go ahead?', options: ['Yes'],
+      assignmentId: 'asg_1', raiserId: null, raisedAt: 1, deadlineAt: null }] : []; },
     readAgentQuestions: async () => { count('agent questions'); return []; },
     readAgentName: async () => { count('name'); return 'Coder'; },
   };
   const transport = Object.assign(fixture, { targetGateway: 'https://gateway.example',
     openChanges: ((open) => (key: string, callbacks: ChangeCallbacks, signal: AbortSignal) => { notices = callbacks; return open(key, callbacks, signal); })(fixture.openChanges),
     readRecordEvents: async (sessionKey: string) => ({ items: items.map((item) => filed(item, sessionKey)), oldestCursor: null, hasOlder: false }),
-    readFiledWorkItems: async () => { count('page'); order.push('page'); return { items: [...items], oldestCursor: null, hasOlder: false }; },
+    readFiledWorkItems: async () => { count('page'); order.push('page'); if (options.failList) throw new Error('HTTP 500'); return { items: [...items], oldestCursor: null, hasOlder: false }; },
     ...(options.pills === false ? {} : { workItemPills: pills }),
   });
   const view = render(<TightbeamChat sessionKey="fixture-session" adapter={createTightbeamAdapter(transport, { ...fixtureTarget, label: 'fixture' })} />);
@@ -121,6 +122,8 @@ describe('the strip', () => {
     await run.file(summary(2, { title: 'Product: Filed now', createdAt: Date.now() + 1000 }));
     await waitFor(async () => expect((await pills())[0].textContent).toBe('Filed nowHeld'), { timeout: 7_000 });
     expect(run.counts).toEqual({ page: 1, item: 1 });
+    // The same read names its message; titles make none of their own for it.
+    expect(run.view.container.textContent).toContain('Filed · Product: Filed now');
   }, 10_000);
 
   it('folds to its button and remembers it', async () => {
@@ -159,6 +162,28 @@ describe('the sheet', () => {
     await run.emit({ kind: 'item', workItemId: uuid(1) });
     fireEvent.click((await pills())[0]);
     await waitFor(() => expect(run.counts.cards).toBe(1));
+  });
+
+  it.each([['between hands', { holders: [] }], ['not started', { holders: [], started: false }]])(
+    'still reads the open questions of work %s', async (_name, patch) => {
+      const run = chat([summary(1, patch)]);
+      fireEvent.click((await pills())[0]);
+      const dialog = await screen.findByRole('dialog');
+      await waitFor(() => expect(run.counts).toEqual({ page: 1, cards: 1, questions: 1 }));
+      expect(await within(dialog).findByText(/Go ahead\?/)).toBeTruthy();
+      expect(dialog.textContent).toContain('Waiting on you');
+    });
+
+  it('hides the strip and asks once when the list read fails, without touching another page', async () => {
+    const broken = chat([summary(1)], { failList: true });
+    await waitFor(() => expect(broken.counts.page).toBe(1));
+    const healthy = chat([summary(2)]);
+    await waitFor(() => expect(healthy.view.container.querySelectorAll('.tb-chat-work-pill')).toHaveLength(1));
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+    expect(broken.view.container.querySelector('.tb-chat-work-strip')).toBeNull();
+    expect(broken.view.container.querySelector('.tb-chat-has-work-items')).toBeNull();
+    expect(broken.counts).toEqual({ page: 1 });
+    expect(healthy.counts).toEqual({ page: 1 });
   });
 
   it('keeps focus inside and returns it to the pill', async () => {
