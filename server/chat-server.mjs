@@ -184,7 +184,7 @@ function loadRuntimeConfig(environment) {
   const configuredGateway = canonicalOrigin(environment.CHAT_DEFAULT_GATEWAY_ORIGIN);
   const gatewayMap = loadGatewayMap(environment, configuredGateway);
   const restHumanSendEnabled = environment.CHAT_REST_HUMAN_SEND === '1';
-  const workItemPillsEnabled = environment.CHAT_WORK_ITEM_PILLS === '1';
+  const workItemPillsEnabled = environment.CHAT_WORK_ITEM_PILLS !== '0';
   let markerDeviceToken = '';
   if (!restHumanSendEnabled && typeof environment.CHAT_READ_MARKER_DEVICE_CREDENTIAL_FILE === 'string' &&
       environment.CHAT_READ_MARKER_DEVICE_CREDENTIAL_FILE) {
