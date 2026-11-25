@@ -1,5 +1,22 @@
 [
   {
+    "version": "v0.1.114",
+    "items": [
+      {
+        "title": "Sending clears the message box at once",
+        "description": "The message box now clears as soon as you send, so a message no longer shows in the conversation and in the box at the same time. If a send fails or is refused, your text comes back to the box or can be restored from the message. If Chat loses access, your unconfirmed messages stay on screen with Restore text."
+      },
+      {
+        "title": "Clearer refusal messages",
+        "description": "Two rare messages about a refused send now read as plain sentences."
+      },
+      {
+        "title": "Gateway compatibility",
+        "description": "Chat supports Gateway 0.1.16. Human prompts use the authenticated WebSocket connection by default."
+      }
+    ]
+  },
+  {
     "version": "v0.1.113",
     "items": [
       {
