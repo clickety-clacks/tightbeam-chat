@@ -383,6 +383,32 @@ body {
 .tb-chat-local[data-send-state="timed-out"] { border-color: var(--tb-chat-danger); }
 .tb-chat-bubble[data-message-state="failed"] { border-color: var(--tb-chat-danger); }
 .tb-chat-bubble-body { min-width: 0; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
+/* The reader's own long prompts: at most ten lines of text until expanded (no collapse). The
+   text stays in the page for copy, find and selection; attachments and status lines are outside. */
+.tb-chat-prompt-clamp:not([data-expanded]) > .tb-chat-prompt-clamp-content {
+  max-height: 15em;
+  max-height: 10lh;
+  overflow: clip;
+}
+.tb-chat-prompt-clamp[data-clamped] > .tb-chat-prompt-clamp-content {
+  -webkit-mask-image: linear-gradient(to bottom, currentColor calc(100% - 1lh), transparent);
+  mask-image: linear-gradient(to bottom, currentColor calc(100% - 1lh), transparent);
+}
+.tb-chat-prompt-expand {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem;
+  margin-top: .25rem;
+  padding: .25rem 0;
+  border: 0;
+  background: transparent;
+  color: var(--tb-chat-fjord);
+  font-size: .875rem !important;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: .15em;
+}
+.tb-chat-prompt-expand:hover { text-decoration-thickness: 2px; }
 .tb-chat-markdown { min-width: 0; overflow-wrap: anywhere; }
 .tb-chat-markdown > :first-child { margin-top: 0; }
 .tb-chat-markdown > :last-child { margin-bottom: 0; }

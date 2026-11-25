@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { TightbeamChat, type TightbeamChatProps } from '../src/TightbeamChat';
 import { useReadingPosition } from '../src/useReadingPosition';
+import { resetExpandedPromptsForTests } from '../src/PromptClamp';
 import { createTightbeamAdapter } from '../src/runtime';
 import { createTurnProvenance } from '../src/provenance';
 import { type ChangeCallbacks, type ChatTransport, type ConversationPage, type TargetProfile } from '../src/types';
@@ -254,6 +255,7 @@ beforeEach(() => {
   Object.defineProperty(HTMLElement.prototype, 'scrollTo', { configurable: true, value: scrollTo });
 });
 afterEach(() => {
+  resetExpandedPromptsForTests();
   vi.useRealTimers();
   cleanup();
   window.localStorage.removeItem('tb-chat:dismissed-prompt:reading');
@@ -2606,6 +2608,61 @@ describe('conversation reading position', () => {
     expect([...document.querySelectorAll('[data-pinned-original]')]
       .every(element => element !== hidden && current.contains(element))).toBe(true);
     expect(document.querySelectorAll('.tb-chat-pinned-layer').length).toBeLessThanOrEqual(1);
+  });
+
+  function mockPromptClampLayout() {
+    // Each line is 20px; collapsed prompts show ten.
+    const linesOf = (element: HTMLElement) => (element.textContent ?? '').split('\n').length;
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      if (this.classList.contains('tb-chat-prompt-clamp-content')) return linesOf(this) * 20;
+      return this.classList.contains('tb-chat-viewport') ? scrollHeight() : 40;
+    });
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(function (this: HTMLElement) {
+      if (this.classList.contains('tb-chat-prompt-clamp-content')) {
+        const full = linesOf(this) * 20;
+        return this.parentElement?.dataset.expanded ? full : Math.min(full, 200);
+      }
+      if (this.classList.contains('tb-chat-viewport')) return renderedViewportHeight();
+      return this.classList.contains('tb-chat') && keyboardViewportSimulation ? viewportHeight : 300;
+    });
+  }
+  const longText = Array.from({ length: 30 }, (_, index) => `Long line ${index + 1}`).join('\n');
+
+  it.each([false, true])('shows the reader\'s own long prompts at ten lines with an expand button (pinned prompts=%s)', pinned => {
+    mockPromptClampLayout();
+    const rows = initialRows.map(row => row.id === 'message-3' ? { ...row, content: longText }
+      : row.id === 'message-4' ? { ...row, role: 'assistant' as const, sender: 'assistant', content: longText } : row);
+    const { box } = setup(rows, undefined, pinned);
+    const own = box.querySelector<HTMLElement>('[data-scroll-key="message-3"]')!;
+    const agent = box.querySelector<HTMLElement>('[data-scroll-key="message-4"]')!;
+    const short = box.querySelector<HTMLElement>('[data-scroll-key="message-2"]')!;
+    expect(own.querySelector('button.tb-chat-prompt-expand')?.textContent).toBe('Show full message');
+    expect(own.textContent).toContain('Long line 30');
+    expect(agent.querySelector('.tb-chat-prompt-expand, .tb-chat-prompt-clamp')).toBeNull();
+    expect(short.querySelector('.tb-chat-prompt-expand')).toBeNull();
+    fireEvent.click(own.querySelector('button.tb-chat-prompt-expand')!);
+    expect(own.querySelector('.tb-chat-prompt-expand')).toBeNull();
+    expect(own.querySelector('.tb-chat-prompt-clamp')!.getAttribute('data-expanded')).toBe('true');
+    // A live update re-renders the transcript; the prompt stays expanded.
+    act(() => { notifyResizeObservers(); });
+    expect(box.querySelector('[data-scroll-key="message-3"] .tb-chat-prompt-clamp')!.getAttribute('data-expanded')).toBe('true');
+  });
+
+  it('with scroll-pinned prompts, the pinned copy shows the prompt as the stream does, collapsed then expanded', async () => {
+    mockPromptClampLayout();
+    const rows = initialRows.map(row => ({ ...row, content: longText }));
+    const { box } = setup(rows, undefined, true);
+    pinSomePrompt(box);
+    const slot = document.querySelector<HTMLElement>('.tb-chat-pinned-slot[data-pinned]')!;
+    const id = slot.dataset.promptIdentity!.match(/message-\d+/)![0];
+    const original = box.querySelector<HTMLElement>(`[data-scroll-key="${id}"]`)!;
+    expect(slot.querySelector('.tb-chat-pinned-full .tb-chat-prompt-clamp')!.getAttribute('data-clamped')).toBe('true');
+    // The pinned card keeps its own three-line summary of the full text.
+    expect(slot.querySelector('.tb-chat-pinned-summary')!.textContent).toContain('Long line 30');
+    fireEvent.click(original.querySelector('button.tb-chat-prompt-expand')!);
+    await act(async () => { await Promise.resolve(); });
+    expect(slot.querySelector('.tb-chat-pinned-full .tb-chat-prompt-clamp')!.getAttribute('data-expanded')).toBe('true');
+    expect(slot.querySelector('.tb-chat-pinned-full .tb-chat-prompt-expand')).toBeNull();
   });
 
   it('moves the prompt instantly with reduced motion enabled', () => {
