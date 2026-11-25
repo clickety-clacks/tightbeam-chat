@@ -1665,6 +1665,18 @@ describe('Gateway wire mapping and behavior checks', () => {
       .resolves.toEqual({ outcome: 'refused', reason: 'payload_too_large' });
   });
 
+  it('raises one error, with one request and no internal retry, when the filed work item list answers HTTP 500', async () => {
+    const candidate = setup();
+    const before = candidate.paths.length;
+    candidate.host.fetch = async (input: RequestInfo | URL) => {
+      candidate.paths.push(String(input));
+      return new Response(JSON.stringify({ error: { code: 'internal_error' } }), { status: 500 });
+    };
+    await expect(candidate.transport.readFiledWorkItems!(sessionKey, { limit: 50 }, new AbortController().signal)).rejects.toThrow();
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(candidate.paths.slice(before).filter(path => path.includes('/filed-work-items'))).toHaveLength(1);
+  });
+
   it('treats a 502 after a large body as retryable, not as refused or accepted', async () => {
     const candidate = setup();
     candidate.dispatchResponses.push(new Response(JSON.stringify({ error: { code: 'gateway_unavailable' } }), { status: 502 }));
