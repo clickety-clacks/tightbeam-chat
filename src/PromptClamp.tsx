@@ -1,13 +1,15 @@
-import { useCallback, useId, useLayoutEffect, useRef, useState, type FocusEvent, type ReactNode } from 'react';
+import { useCallback, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 
 /**
  * The reader's own sent prompt, shown at most ten lines tall in the conversation, with a
  * button that reveals the rest in place (wi_ef2dbd5b). There is no collapse.
  *
  * The full text stays in the page, clipped only visually, so copy, find-in-page and selection
- * still see all of it. "Ten lines" is ten rendered lines of text at the current width: wrapped
- * lines count, paragraph and code-block spacing does not, and the limit follows rotation and
- * pane resizes. The clip falls just above the eleventh line. Once expanded,
+ * still see all of it, though find-in-page cannot scroll text inside the clip into view (a known
+ * limit). "Ten lines" is ten line-heights of the prompt's text at the current width: wrapped
+ * lines count, and so does the spacing between paragraphs and around code (the delivery owner's
+ * decision: Mike asked for "maybe 10 lines"). The limit follows rotation and pane resizes. Links
+ * and controls in the clipped part cannot take focus until the prompt is expanded. Once expanded,
  * a prompt stays expanded for the life of the page: across live updates, transcript rebuilds and
  * reconnects.
  */
@@ -25,36 +27,15 @@ function rememberExpanded(conversation: string, identity: string) {
   identities.add(identity);
 }
 
-/** Lines shown before the rest is clipped. */
-const VISIBLE_LINES = 10;
+const FOCUSABLE = 'a[href], button, input, select, textarea, summary, [tabindex]:not([tabindex="-1"])';
+/** Holds a parked element's own tabindex (empty when it had none). */
+const PARKED = 'data-clamp-tabindex';
 
-/**
- * Where the clip goes: the distance from the content's top to the top of its eleventh rendered
- * line of text, or undefined when it has ten lines or fewer. Walks text in order and stops at the
- * eleventh line, so a very long prompt costs no more than a short one. Returns null where the
- * browser cannot report line boxes; the caller then falls back to ten line-heights.
- */
-function clipHeight(content: HTMLElement): number | undefined | null {
-  if (typeof document.createRange !== 'function') return null;
-  const range = document.createRange();
-  if (typeof range.getClientRects !== 'function') return null;
-  const top = content.getBoundingClientRect().top;
-  const lineTops: number[] = [];
-  const walker = document.createTreeWalker(content, NodeFilter.SHOW_TEXT);
-  let reported = false;
-  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-    if (!node.textContent?.trim()) continue;
-    range.selectNodeContents(node);
-    for (const rect of range.getClientRects()) {
-      if (rect.height <= 0) continue;
-      reported = true;
-      // A new line starts when a box begins below every line seen so far.
-      if (lineTops.length && rect.top < lineTops[lineTops.length - 1] + rect.height / 2) continue;
-      lineTops.push(rect.top);
-      if (lineTops.length > VISIBLE_LINES) return lineTops[VISIBLE_LINES] - top;
-    }
-  }
-  return reported ? undefined : null;
+function unpark(element: HTMLElement) {
+  const own = element.getAttribute(PARKED);
+  element.removeAttribute(PARKED);
+  if (own) element.setAttribute('tabindex', own);
+  else element.removeAttribute('tabindex');
 }
 
 /** Test hook: forget every expanded prompt. */
@@ -81,18 +62,19 @@ export function PromptClamp({ conversation, identity, beforeExpand, children }: 
   const measure = useCallback(() => {
     const element = content.current;
     if (!element) return;
-    const clip = clipHeight(element);
-    if (clip === null) {
-      // No line boxes to read: ten line-heights from CSS, overflow judged by height.
-      element.style.removeProperty('max-height');
-      const next = element.scrollHeight > element.clientHeight + 1;
-      setOverflowing(current => current === next ? current : next);
-      return;
-    }
-    if (clip === undefined) element.style.setProperty('max-height', 'none');
-    else element.style.setProperty('max-height', `${Math.ceil(clip)}px`);
-    const next = clip !== undefined;
+    // Clipped to ten line-heights by CSS while collapsed; anything beyond is hidden text.
+    const next = element.scrollHeight > element.clientHeight + 1;
     setOverflowing(current => current === next ? current : next);
+    // Nothing hidden may take focus: park links and controls below the clip until expanded.
+    const limit = element.getBoundingClientRect().top + element.clientHeight;
+    for (const focusable of element.querySelectorAll<HTMLElement>(FOCUSABLE)) {
+      const hidden = next && focusable.getBoundingClientRect().top >= limit - 1;
+      const parked = focusable.hasAttribute(PARKED);
+      if (hidden && !parked) {
+        focusable.setAttribute(PARKED, focusable.getAttribute('tabindex') ?? '');
+        focusable.setAttribute('tabindex', '-1');
+      } else if (!hidden && parked) unpark(focusable);
+    }
   }, []);
 
   useLayoutEffect(() => {
@@ -107,31 +89,20 @@ export function PromptClamp({ conversation, identity, beforeExpand, children }: 
     return () => observer.disconnect();
   }, [expanded, measure, children]);
 
-  const expand = (focusText: boolean) => {
+  const expand = () => {
     beforeExpand?.();
     rememberExpanded(conversation, identity);
-    content.current?.style.removeProperty('max-height');
+    for (const parked of content.current?.querySelectorAll<HTMLElement>(`[${PARKED}]`) ?? []) unpark(parked);
     setExpanded(true);
-    // The button goes away; keep keyboard focus in the prompt rather than dropping it to the page.
-    if (focusText) content.current?.focus({ preventScroll: true });
-  };
-
-  // Tabbing into a link or control in the clipped part reveals the whole prompt, so focus never
-  // sits on something the reader cannot see.
-  const onFocus = (event: FocusEvent<HTMLDivElement>) => {
-    if (expanded || !overflowing || event.target === content.current) return;
-    const element = content.current;
-    if (!element) return;
-    const limit = element.getBoundingClientRect().top + element.clientHeight;
-    if ((event.target as HTMLElement).getBoundingClientRect().bottom > limit) expand(false);
+    // The button goes away; keep keyboard focus on the message rather than dropping it to the page.
+    content.current?.focus({ preventScroll: true });
   };
 
   const clamped = !expanded && overflowing;
   return <div className="tb-chat-prompt-clamp" data-expanded={expanded ? 'true' : undefined}
     data-clamped={clamped ? 'true' : undefined}>
-    <div ref={content} id={contentId} className="tb-chat-prompt-clamp-content" tabIndex={-1}
-      onFocus={onFocus}>{children}</div>
+    <div ref={content} id={contentId} className="tb-chat-prompt-clamp-content" tabIndex={-1}>{children}</div>
     {clamped && <button type="button" className="tb-chat-prompt-expand" aria-controls={contentId}
-      aria-expanded="false" onClick={() => expand(true)}>Show full message</button>}
+      aria-expanded="false" onClick={expand}>Show full message</button>}
   </div>;
 }

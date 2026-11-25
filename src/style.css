@@ -398,6 +398,8 @@ body {
   -webkit-mask-image: linear-gradient(to bottom, currentColor calc(100% - 1lh), transparent);
   mask-image: linear-gradient(to bottom, currentColor calc(100% - 1lh), transparent);
 }
+/* Focus lands on the message after expanding; it is not a control, so no focus ring. */
+.tb-chat-prompt-clamp-content:focus { outline: none; }
 .tb-chat-prompt-expand {
   display: inline-flex;
   align-items: center;
