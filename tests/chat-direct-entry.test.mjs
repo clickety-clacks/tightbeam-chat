@@ -1550,8 +1550,11 @@ describe('large REST sends through the Chat service when the Gateway refuses ear
       body: JSON.stringify({ verb: 'post', sessionKey, params: { clientMessageId: 'c_00000000-0000-4000-8000-000000000002',
         deviceId: 'chat_x', content: 'z'.repeat(40_000_000), attachments: [] } }) });
     for (let attempt = 0; attempt < 3; attempt += 1) {
+      // A reset right after an early reply can destroy the reply before Chat reads it (macOS drops it, Linux usually
+      // delivers it), so the answer is the Gateway's 413 when it arrived and an honest 502 when it did not.
+      // What must hold on every platform is that the service survives and keeps answering.
       const response = await post();
-      expect(response.status).toBe(413);
+      expect([413, 502]).toContain(response.status);
       await new Promise((resolve) => setTimeout(resolve, 150));
       expect((await fetch(`${chatOrigin}/chat-config.json`)).status).toBe(200);
     }
