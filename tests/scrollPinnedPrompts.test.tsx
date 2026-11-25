@@ -257,6 +257,29 @@ describe('scroll-pinned prompts without scroll timelines', () => {
     expect(translate(slotFor('C')!.querySelector<HTMLElement>('.tb-chat-pinned-body'))).toBe(-(layout.C.height - summaryHeight));
   });
 
+  it('re-measures within the resize callback, so a push-off point is never a layout behind', () => {
+    const callbacks: ResizeObserverCallback[] = [];
+    const frames = vi.spyOn(window, 'requestAnimationFrame');
+    vi.stubGlobal('ResizeObserver', class { constructor(callback: ResizeObserverCallback) { callbacks.push(callback); }
+      observe() {} unobserve() {} disconnect() {} });
+    try {
+      mount();
+      scrollTo(950);
+      expect(translate(slotFor('A'))).toBe(1000 - 950 - 8 - 80);
+      // The transcript above B grows shorter: B now sits 40px higher and pushes A sooner.
+      const moved = layout as unknown as Record<string, { top: number; height: number; left: number; width: number }>;
+      const original = moved.B;
+      moved.B = { ...original, top: original.top - 40 };
+      frames.mockClear();
+      act(() => { for (const callback of callbacks) callback([], {} as ResizeObserver); });
+      expect(translate(slotFor('A'))).toBe(960 - 950 - 8 - 80);
+      expect(frames).not.toHaveBeenCalled();
+      moved.B = original;
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('gives the original back when it unmounts', () => {
     const result = mount();
     scrollTo(500);
