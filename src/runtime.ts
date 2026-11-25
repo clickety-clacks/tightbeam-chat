@@ -2044,6 +2044,8 @@ class SessionRuntime implements ChatRuntime {
       attachmentsPrepared: isPreparedAttachmentSelection(inputs),
       ...(context?.hostSend ? { hostSend: Object.freeze({ ...context.hostSend }) } : {}) });
     this.publish({ sends: Object.freeze([...this.state.sends, send]) });
+    // Sending photos or files is Mike's own send: it advances the read marker like a text send.
+    void this.markReadPosition();
     void this.prepareAttachments(clientMessageId);
     return clientMessageId;
   };

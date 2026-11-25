@@ -2325,6 +2325,17 @@ describe('attachment submission recovery', () => {
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('ready'));
     return runtime;
   }
+  it('advances the read marker once when Mike sends photos or files, and not for an invalid attachment send', async () => {
+    const transport = new AttachmentsTransport();
+    const runtime = await ready(transport);
+    const mark = vi.fn(async () => {});
+    runtime.markReadPosition = mark;
+    expect(runtime.sendAttachments!('with a file', [input('marked')])).toMatch(/^c_/);
+    expect(mark).toHaveBeenCalledTimes(1);
+    expect(runtime.sendAttachments!('wrong session', [input('other')], { expectedSessionKey: 'another-session', clientMessageId: 'c_00000000-0000-4000-8000-000000000001' })).toBeNull();
+    expect(mark).toHaveBeenCalledTimes(1);
+    runtime.dispose();
+  });
   it('retains ordered bytes and successful references after a later upload fails; retries only missing preparation', async () => {
     const transport = new AttachmentsTransport(); transport.failItem = 'second';
     transport.identity = { ...transport.identity,
