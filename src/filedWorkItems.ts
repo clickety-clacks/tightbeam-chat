@@ -7,21 +7,22 @@ const WATCH_WAIT_MS = 1_500;
 type Position = { readonly at: number; readonly id: string };
 const newer = (a: Position, b: Position) => a.at > b.at || (a.at === b.at && a.id > b.id);
 
+export type RecordEventLoad = 'newest' | 'older' | 'live';
+
 /**
- * Optional names for the agent's loaded filed work items. One list read covers
- * a page of filed events; nothing here delays or fails the events themselves.
+ * Optional names for the agent's loaded filed work items. A settled history load
+ * makes at most one list read; nothing here delays or fails the events themselves.
  */
 export class FiledWorkItems {
   private items: ReadonlyMap<string, WorkItemSummary> = new Map();
   private filed: readonly Position[] = []; // Newest first, as the Gateway lists them.
-  private readonly tried = new Set<string>();
-  private readonly failed = new Set<string>();
+  private readonly absent = new Set<string>(); // Listed range held no such row for this reader.
   private floor?: Position; // Oldest row listed so far; `cursor` continues below it.
   private cursor: string | null = null;
+  private olderFailed = false;
   private readonly controller = new AbortController();
   private failedAt = -Infinity;
-  private running = false;
-  private again = false;
+  private queue: Promise<void> = Promise.resolve();
 
   constructor(private readonly sessionKey: string,
     private readonly read: NonNullable<ChatTransport['readFiledWorkItems']>,
@@ -29,17 +30,19 @@ export class FiledWorkItems {
     /** Watch the loaded items first, so a change cannot fall between the read and the watch. */
     private readonly beforeRead?: (ids: readonly string[]) => Promise<unknown>) {}
 
-  /** Reads only for a completed history read. A live event waits for the next one: no read per message. */
-  sync(events: readonly SessionRecordEvent[], settled: boolean): void {
+  /** A live event makes no read; its title waits for the next newest-history load. */
+  sync(events: readonly SessionRecordEvent[], load: RecordEventLoad): void {
     if (this.controller.signal.aborted) return;
+    const before = new Set(this.filed.map(row => row.id));
     this.filed = events.filter(event => event.kind === 'work_item.filed')
       .map(event => ({ at: event.at, id: event.record.id }))
       .sort((a, b) => newer(a, b) ? -1 : 1);
-    if (settled && Date.now() - this.failedAt >= RETRY_AFTER_MS) {
-      for (const id of this.failed) this.tried.delete(id);
-      this.failed.clear();
-    }
-    if (settled && this.missing().length) void this.run();
+    if (load === 'live') return;
+    const added = this.filed.filter(row => !before.has(row.id));
+    if (load === 'older' && !added.length) return;
+    // Each load keeps its own rows, even when it waits behind a slow read.
+    const filed = this.filed;
+    this.queue = this.queue.then(() => this.load(load, filed, added)).catch(() => { this.failedAt = Date.now(); });
   }
 
   /** Re-read the newest loaded filed items, for a caller that needs fresh state. */
@@ -56,31 +59,48 @@ export class FiledWorkItems {
     this.publish(this.items);
   }
 
-  private missing(): readonly Position[] {
-    return this.filed.filter(row => !this.items.has(row.id) && !this.tried.has(row.id));
+  private missing(rows: readonly Position[]): readonly Position[] {
+    return rows.filter(row => !this.items.has(row.id) && !this.absent.has(row.id));
   }
 
-  private async run(): Promise<void> {
-    if (this.running) { this.again = true; return; }
-    this.running = true;
-    try {
-      do {
-        this.again = false;
-        const missing = this.missing();
-        for (const row of missing) this.tried.add(row.id);
-        const floor = this.floor;
-        const above = floor ? missing.filter(row => newer(row, floor)) : missing;
-        try {
-          if (above.length) await this.walk(this.filed.indexOf(above[above.length - 1]) + 1);
-          if (missing.length > above.length && this.cursor && !this.controller.signal.aborted) {
-            await this.walk(missing.length - above.length, this.cursor);
-          }
-        } catch {
-          this.failedAt = Date.now();
-          for (const row of missing) if (!this.items.has(row.id)) this.failed.add(row.id);
-        }
-      } while (this.again && !this.controller.signal.aborted);
-    } finally { this.running = false; }
+  private below(rows: readonly Position[]): readonly Position[] {
+    const floor = this.floor;
+    return floor ? this.missing(rows).filter(row => newer(floor, row)) : [];
+  }
+
+  private async load(load: RecordEventLoad, filed: readonly Position[], added: readonly Position[]): Promise<void> {
+    if (this.controller.signal.aborted) return;
+    if (load === 'older') {
+      // Only this page's own rows, below what is listed. A failed range above
+      // them has no cursor past it, so they keep the fixed wording until it reads.
+      const own = this.below(added).length;
+      if (own && !this.olderFailed) await this.continueBelow(own);
+      return;
+    }
+    if (Date.now() - this.failedAt < RETRY_AFTER_MS) return;
+    const newest = filed.slice(0, PAGE_LIMIT);
+    const floor = this.floor;
+    const above = this.missing(newest).filter(row => !floor || newer(row, floor));
+    if (above.length) {
+      const limit = newest.indexOf(above[above.length - 1]) + 1;
+      await this.watchFirst();
+      await this.page(limit);
+      for (const row of this.missing(newest.slice(0, limit))) this.absent.add(row.id);
+      return;
+    }
+    const left = this.below(filed).length;
+    if (left) await this.continueBelow(left);
+  }
+
+  private async continueBelow(count: number): Promise<void> {
+    if (!this.cursor) return;
+    await this.watchFirst();
+    const rows = this.below(this.filed);
+    this.olderFailed = true;
+    await this.page(Math.min(PAGE_LIMIT, count), this.cursor);
+    this.olderFailed = false;
+    const floor = this.floor;
+    for (const row of this.missing(rows)) if (floor && newer(row, floor)) this.absent.add(row.id);
   }
 
   /** Names and first paint never wait long for the change feed. */
@@ -92,18 +112,10 @@ export class FiledWorkItems {
     clearTimeout(timer);
   }
 
-  private async walk(count: number, before?: string): Promise<void> {
-    await this.watchFirst();
-    for (let left = count; left > 0; left -= PAGE_LIMIT) {
-      const next = await this.page(Math.min(PAGE_LIMIT, left), before);
-      if (!next || next === before) return;
-      before = next;
-    }
-  }
-
-  private async page(limit: number, before?: string): Promise<string | null> {
+  private async page(limit: number, before?: string): Promise<void> {
+    if (this.controller.signal.aborted) return;
     const page = await this.read(this.sessionKey, { limit, before }, this.controller.signal);
-    if (this.controller.signal.aborted || !page.items.length) return null;
+    if (this.controller.signal.aborted || !page.items.length) return;
     const items = new Map(this.items);
     for (const item of page.items) {
       const known = items.get(item.id);
@@ -116,7 +128,6 @@ export class FiledWorkItems {
     }
     this.items = items;
     this.publish(items);
-    return page.hasOlder ? page.oldestCursor : null;
   }
 
   stop(): void {

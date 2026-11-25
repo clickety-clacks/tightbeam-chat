@@ -1651,6 +1651,28 @@ describe('Gateway wire mapping and behavior checks', () => {
     log.mockRestore();
   });
 
+  it('maps a bare HTTP 413 to the too-large refusal but keeps the attachment over-limit code', async () => {
+    const candidate = setup();
+    const submission = { sessionKey, deviceId: 'device-1', clientMessageId: 'c_bare_413', content: 'a prompt past the limit' };
+    candidate.dispatchResponses.push(new Response('', { status: 413 }));
+    await expect(candidate.transport.sendHuman(submission, new AbortController().signal))
+      .resolves.toEqual({ outcome: 'refused', reason: 'payload_too_large' });
+    candidate.dispatchResponses.push(new Response(JSON.stringify({ error: { code: 'invalid_message' } }), { status: 413 }));
+    await expect(candidate.transport.sendHuman({ ...submission, clientMessageId: 'c_coded_413' }, new AbortController().signal))
+      .resolves.toEqual({ outcome: 'refused', reason: 'payload_too_large' });
+    candidate.dispatchResponses.push(new Response(JSON.stringify({ error: { code: 'payload_too_large' } }), { status: 413 }));
+    await expect(candidate.transport.sendHuman({ ...submission, clientMessageId: 'c_named_413' }, new AbortController().signal))
+      .resolves.toEqual({ outcome: 'refused', reason: 'payload_too_large' });
+  });
+
+  it('treats a 502 after a large body as retryable, not as refused or accepted', async () => {
+    const candidate = setup();
+    candidate.dispatchResponses.push(new Response(JSON.stringify({ error: { code: 'gateway_unavailable' } }), { status: 502 }));
+    await expect(candidate.transport.sendHuman({ sessionKey, deviceId: 'device-1', clientMessageId: 'c_bad_gateway',
+      content: 'a very long prompt' }, new AbortController().signal))
+      .resolves.toEqual({ outcome: 'retryable', reason: 'gateway_unavailable' });
+  });
+
   it('decodes a correlated post-time over-limit refusal without weakening its stable code', async () => {
     const candidate = setup();
     const submission = { sessionKey, deviceId: 'device-1', clientMessageId: 'c_post_over_limit', content: 'inspect',

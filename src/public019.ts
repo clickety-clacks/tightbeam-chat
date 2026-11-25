@@ -1587,6 +1587,10 @@ export function createPublic019Transport(config: Public019Config): { transport: 
         const overLimit = attachmentLimitRefusal(error, submission);
         const withOverLimit = (reason: string): HumanSendResult => ({ outcome: 'refused', reason,
           ...(overLimit ? { attachmentLimitRefusal: overLimit } : {}) });
+        // A bare HTTP 413 (a proxy or the router rejecting the body) is the same refusal as payload_too_large.
+        if (response.status === 413 && !overLimit && error.code !== 'attachment_over_limit') {
+          return { outcome: 'refused', reason: 'payload_too_large' };
+        }
         if (error.code && (response.status < 500 || definitiveRefusal.has(error.code))) {
           return withOverLimit(error.code);
         }

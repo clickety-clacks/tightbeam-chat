@@ -107,12 +107,47 @@ describe('a tap follows the waits', () => {
     expect(kinds(deep.groups[0].steps)).toEqual(['wait', 'wait', 'wait', 'wait', 'wait', 'limit']);
     expect(deep.reads).toBeLessThanOrEqual(MAX_SHEET_READS);
     fake.calls = [];
-    fake.cards = Array.from({ length: 9 }, (_, i) => ({ id: 'asg_1', open: true, holderKey: `agent:${i}` }));
+    fake.cards = Array.from({ length: 9 }, (_, i) => ({ id: `asg_${i + 1}`, open: true, holderKey: `agent:${i}` }));
+    for (let card = 1; card <= 6; card++) {
+      const at = (n: number) => uuid(100 * card + n);
+      fake.states.set(`asg_${card}`, pending(`c${card}w0`));
+      for (let n = 0; n <= 4; n++) {
+        fake.items.set(at(n + 1), item(100 * card + n + 1));
+        fake.waits.set(`c${card}w${n}`, wait(`c${card}w${n}`, { conditionKind: 'next', conditionScope: at(n + 1) }));
+        fake.states.set(at(n + 1), pending(`c${card}w${n + 1}`));
+      }
+    }
     const wide = await fake.open();
     expect(wide.reads).toBe(MAX_SHEET_READS);
     expect(wide.moreHolders).toBe(3);
     expect(wide.groups[0].steps[0].kind).toBe('wait');
     expect(kinds(wide.groups.at(-1)!.steps)).toEqual(['limit']);
+  });
+
+  it('shows an agent with several cards once for each thing it waits on, and reads each record once', async () => {
+    const card = (id: string, holderKey: string) => ({ id, open: true, holderKey });
+    const fake = new Fake(item(1));
+    fake.cards = [card('asg_1', 'agent:1'), card('asg_2', 'agent:1'), card('asg_3', 'agent:1')];
+    fake.states.set('agent:1', pending('w1'));
+    fake.waits.set('w1', wait('w1'));
+    const loose = await fake.open();
+    expect(loose.groups.map((group) => kinds(group.steps))).toEqual([['wait', 'unreadable']]);
+    expect(fake.calls.filter((call) => call === 'breathing session' || call === 'wait')).toEqual(['breathing session', 'wait']);
+    fake.states.set('asg_2', pending('w2'));
+    fake.states.set('asg_3', pending('w3'));
+    fake.waits.set('w2', wait('w2', { conditionKind: 'two' }));
+    fake.waits.set('w3', wait('w3', { conditionKind: 'three' }));
+    expect((await fake.again()).groups.map(({ steps: [step] }) => step)).toEqual([
+      expect.objectContaining({ tied: true, target: { kind: 'notice', name: 'two', scope: null } }),
+      expect.objectContaining({ tied: true, target: { kind: 'notice', name: 'three', scope: null } })]);
+  });
+
+  it('follows every agent before any agent’s second card', async () => {
+    const fake = new Fake(item(1));
+    fake.cards = [1, 1, 1, 1, 1, 1, 2, 3].map((agent, i) => ({ id: `asg_${i + 1}`, open: true, holderKey: `agent:${agent}` }));
+    const data = await fake.open();
+    expect(data.groups.map((group) => group.agent)).toEqual(['Agent 1', 'Agent 2', 'Agent 3']);
+    expect(data.moreHolders).toBe(0);
   });
 
   it('looks at the agent itself when nothing is tied to the work', async () => {

@@ -5,6 +5,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import net from 'node:net';
 import { createChatServer } from '../server/chat-server.mjs';
 import { createPublic019Transport } from '../src/public019';
 import { createTightbeamAdapter } from '../src/runtime';
@@ -1457,5 +1458,80 @@ describe('attachment byte routes', () => {
     await expect(transport.readAttachment({ ...refs[0], assetId: 'missing' }, new AbortController().signal)).rejects.toThrow('404');
     expect((await fetch(origin + '/__chat/upload', { headers: { origin } })).status).toBe(405);
     expect((await fetch(origin + '/__chat/download/asset_0', { method: 'POST', headers: { origin } })).status).toBe(405);
+  });
+});
+
+describe('large REST sends through the Chat service when the Gateway refuses early', () => {
+  const sessionKey = 'agent:example:size-limit';
+  const refusal = JSON.stringify({ error: { code: 'invalid_message', message: 'request body too large' } });
+  const head = (extra = '') => `HTTP/1.1 413 Payload Too Large\r\ncontent-type: application/json\r\ncontent-length: ${Buffer.byteLength(refusal)}${extra}\r\n\r\n${refusal}`;
+
+  async function chatWithUpstream(mode) {
+    const upstream = net.createServer({ allowHalfOpen: true }, (socket) => {
+      let seen = Buffer.alloc(0); let handled = false; let bodyBytes = 0; let expected = Infinity;
+      socket.on('error', () => {});
+      socket.on('data', (chunk) => {
+        if (handled) {
+          bodyBytes += chunk.length;
+          if (mode === 'half-close-then-reset' && bodyBytes >= expected) socket.resetAndDestroy();
+          return;
+        }
+        seen = Buffer.concat([seen, chunk]);
+        const end = seen.indexOf('\r\n\r\n');
+        if (end < 0) return;
+        const text = seen.subarray(0, end).toString('utf8');
+        if (text.startsWith('GET /version')) {
+          const body = JSON.stringify({ version: '0.1.17' });
+          socket.end(`HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: ${body.length}\r\nconnection: close\r\n\r\n${body}`);
+          handled = true; return;
+        }
+        handled = true;
+        expected = Number(/content-length: (\d+)/i.exec(text)?.[1] ?? Infinity);
+        bodyBytes = seen.length - end - 4;
+        if (mode === 'half-close-then-reset') { socket.write(head()); socket.end(); }
+        else if (mode === 'reset-after-reply') { socket.write(head()); setTimeout(() => socket.resetAndDestroy(), 80); }
+        else if (mode === 'partial-then-reset') {
+          socket.write(`HTTP/1.1 413 Payload Too Large\r\ncontent-type: application/json\r\ncontent-length: 400\r\n\r\n{"error":{"code":"inv`);
+          setTimeout(() => socket.resetAndDestroy(), 80);
+        } else if (mode === 'reset-before-reply') socket.resetAndDestroy();
+      });
+    });
+    await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+    const gatewayOrigin = `http://127.0.0.1:${upstream.address().port}`;
+    const sockets = new Set(); upstream.on('connection', (socket) => { sockets.add(socket); socket.on('close', () => sockets.delete(socket)); });
+    upstream._connectionsSet = sockets; createdServers.push(upstream);
+    const chatPort = await unusedPort();
+    const chatOrigin = `http://127.0.0.1:${chatPort}`;
+    const { root, publicDir } = await temporaryDirectory();
+    const gatewayBaseDir = await writeGatewayDescriptor(path.join(root, 'gateway-base'), gatewayOrigin, TOKEN);
+    const chat = createChatServer({ rootDir: root, publicDir,
+      releaseInfo: { tag: 'v0.1.2', sourceCommit: '1234567890abcdef1234567890abcdef12345678' },
+      environment: { CHAT_PUBLIC_ORIGIN: chatOrigin, CHAT_DEFAULT_GATEWAY_ORIGIN: gatewayOrigin,
+        CHAT_DEFAULT_SESSION_KEY: sessionKey, CHAT_DEFAULT_PRINCIPAL_KEY: OPERATOR_PRINCIPAL,
+        CHAT_REST_HUMAN_SEND: '1', TIGHTBEAM_BASE_DIR: gatewayBaseDir } });
+    await listen(chat, chatPort);
+    return chatOrigin;
+  }
+  const bigPost = (chatOrigin) => fetch(`${chatOrigin}/__chat/agent/dispatch`, { method: 'POST',
+    headers: { origin: chatOrigin, 'content-type': 'application/json' },
+    body: JSON.stringify({ verb: 'post', sessionKey, params: { clientMessageId: 'c_00000000-0000-4000-8000-000000000001',
+      deviceId: 'chat_x', content: 'x'.repeat(9_000_000), attachments: [] } }) });
+
+  it.each(['half-close-then-reset', 'reset-after-reply', 'partial-then-reset'])(
+    'returns the Gateway 413 invalid_message to the browser when the connection ends with %s after a 9 MB body', async (mode) => {
+      const chatOrigin = await chatWithUpstream(mode);
+      const response = await bigPost(chatOrigin);
+      expect(response.status).toBe(413);
+      expect((await response.json()).error.code).toBe('invalid_message');
+      // The service keeps running after the reset.
+      expect((await fetch(`${chatOrigin}/chat-config.json`)).status).toBe(200);
+    });
+
+  it('says plainly that the Gateway was unavailable when it resets before any reply was seen', async () => {
+    const chatOrigin = await chatWithUpstream('reset-before-reply');
+    const response = await bigPost(chatOrigin);
+    expect(response.status).toBe(502);
+    expect((await response.json()).error.code).toBe('gateway_unavailable');
+    expect((await fetch(`${chatOrigin}/chat-config.json`)).status).toBe(200);
   });
 });

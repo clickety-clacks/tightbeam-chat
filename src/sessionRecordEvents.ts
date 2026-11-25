@@ -1,3 +1,4 @@
+import type { RecordEventLoad } from './filedWorkItems';
 import { formatVisibleIds, type ActivityPillPresentation } from './activityPresentation';
 import { stripProvenanceMarkup } from './displayText';
 import type { ChatTransport, ConversationRecord, RuntimeState, SessionRecordEvent, WorkItemSummary } from './types';
@@ -20,7 +21,7 @@ export class SessionRecordEvents {
 
   constructor(private readonly sessionKey: string,
     private readonly read: NonNullable<ChatTransport['readRecordEvents']>,
-    private readonly publish: (patch: Partial<RuntimeState>) => void) {}
+    private readonly publish: (patch: Partial<RuntimeState>, load: RecordEventLoad) => void) {}
 
   private merge(events: readonly SessionRecordEvent[]): void {
     if (this.stopped) return;
@@ -58,7 +59,7 @@ export class SessionRecordEvents {
   receive(event: SessionRecordEvent): void {
     const previous = this.rows;
     this.merge([event]);
-    if (this.rows !== previous) this.publish({ recordEvents: this.rows });
+    if (this.rows !== previous) this.publish({ recordEvents: this.rows }, 'live');
   }
 
   refresh(floor: number): Promise<void> {
@@ -78,7 +79,8 @@ export class SessionRecordEvents {
     const controller = new AbortController();
     this.controller = controller;
     this.requestedFloor = floor;
-    this.publish({ recordEventsLoading: true, recordEventsError: undefined });
+    const load: RecordEventLoad = before === undefined ? 'newest' : 'older';
+    this.publish({ recordEventsLoading: true, recordEventsError: undefined }, load);
     const pending: SessionRecordEvent[] = [];
     let overlap = before === undefined ? this.historyHead : undefined;
     let head = this.historyHead;
@@ -129,7 +131,7 @@ export class SessionRecordEvents {
       commit();
       this.historyHead = head;
       this.publish({ recordEvents: this.rows, recordEventsHasOlder: this.hasOlder,
-        recordEventsLoading: false, recordEventsError: undefined });
+        recordEventsLoading: false, recordEventsError: undefined }, load);
     } catch (error) {
       if (!controller.signal.aborted && !this.stopped) {
         // Retain successfully read rows, but do not advance the catch-up head:
@@ -137,7 +139,7 @@ export class SessionRecordEvents {
         commit();
         this.publish({ recordEvents: this.rows,
           recordEventsHasOlder: this.hasOlder, recordEventsLoading: false,
-          recordEventsError: error instanceof Error ? error.message : String(error) });
+          recordEventsError: error instanceof Error ? error.message : String(error) }, load);
       }
     } finally {
       if (this.controller === controller) this.controller = undefined;
