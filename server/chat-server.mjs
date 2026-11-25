@@ -670,6 +670,8 @@ async function gatewayRequest(
 ) {
   const cliVersion = authorize ? await gatewayCliVersion(gateway) : undefined;
   const reply = await new Promise((resolve, reject) => {
+    // Set once the Gateway's reply head is in; returns true when it settled the request with the 413 refusal.
+    let settleEarlyRefusal = () => false;
     const protocol = gateway.base.startsWith('https:') ? https : http;
     const request = protocol.request(gateway.base, {
       method,
@@ -695,9 +697,9 @@ async function gatewayRequest(
         resolve({ status: 413, contentType: reply.headers['content-type'] ?? 'application/json; charset=utf-8', body: partial });
         return true;
       };
+      settleEarlyRefusal = settleRefusal;
       reply.on('error', (error) => { if (!settleRefusal() && !settled) { settled = true; reject(error); } });
       reply.on('close', () => { if (!reply.complete && !settleRefusal() && !settled) { settled = true; reject(new Error('Gateway response was cut off')); } });
-      request.on('error', () => { settleRefusal(); });
       reply.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
       reply.on('end', () => {
         if (settled) return;
@@ -715,7 +717,8 @@ async function gatewayRequest(
       });
     });
     request.setTimeout(15000, () => request.destroy(new Error('Gateway request timed out')));
-    request.on('error', reject);
+    // The request error can arrive before or after the reply head: a 413 that already arrived wins.
+    request.on('error', (error) => { if (!settleEarlyRefusal()) reject(error); });
     request.end(body);
   });
 
