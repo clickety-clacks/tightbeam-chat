@@ -800,11 +800,13 @@ async function serviceHttp(request, response, runtime) {
     // Forward original multipart bytes and streamed downloads under the existing
     // service identity. The Gateway owns file/type/body limits and their errors.
     const protocol = gateway.base.startsWith('https:') ? https : http;
+    let replyStarted = false;
     const remote = gatewayHttpRequest(protocol, gateway.base, { method, path: target.path,
       headers: { authorization: `Bearer ${gateway.token}`,
         ...(request.headers['content-type'] ? { 'content-type': request.headers['content-type'] } : {}),
         ...(request.headers['content-length'] ? { 'content-length': request.headers['content-length'] } : {}) },
     }, reply => {
+      replyStarted = true;
       response.writeHead(reply.statusCode ?? 502, {
         'content-type': reply.headers['content-type'] ?? 'application/octet-stream',
         'cache-control': 'no-store',
@@ -814,6 +816,9 @@ async function serviceHttp(request, response, runtime) {
       reply.pipe(response);
     });
     remote.on('error', () => {
+      // A Gateway that refuses an upload early and then resets the connection has already given its answer:
+      // let that reply reach the browser instead of cutting it off with the failed write.
+      if (replyStarted && target.kind === 'upload') return;
       if (!response.headersSent) jsonResponse(response, 502, { error: { code: 'gateway_unavailable' } });
       else response.destroy();
     });

@@ -1633,6 +1633,33 @@ describe('large REST sends through the Chat service when the Gateway refuses ear
     }
   });
 
+  it('hands the browser the Gateway 413 for an upload even when the connection is reset while the upload is still being written', async () => {
+    const gateway = http.createServer((request, response) => {
+      if (request.url === '/version') { response.setHeader('content-type', 'application/json'); response.end(JSON.stringify({ version: '0.1.17' })); return; }
+      response.writeHead(413, { 'content-type': 'application/json', connection: 'close' });
+      response.end(refusal, () => setTimeout(() => request.socket.resetAndDestroy(), 150));
+    });
+    const gatewayPort = await listen(gateway);
+    const gatewayOrigin = `http://127.0.0.1:${gatewayPort}`;
+    const chatPort = await unusedPort();
+    const chatOrigin = `http://127.0.0.1:${chatPort}`;
+    const { root, publicDir } = await temporaryDirectory();
+    const gatewayBaseDir = await writeGatewayDescriptor(path.join(root, 'gateway-base'), gatewayOrigin, TOKEN);
+    const chat = createChatServer({ rootDir: root, publicDir,
+      releaseInfo: { tag: 'v0.1.2', sourceCommit: '1234567890abcdef1234567890abcdef12345678' },
+      environment: { CHAT_PUBLIC_ORIGIN: chatOrigin, CHAT_DEFAULT_GATEWAY_ORIGIN: gatewayOrigin,
+        CHAT_DEFAULT_SESSION_KEY: sessionKey, CHAT_DEFAULT_PRINCIPAL_KEY: OPERATOR_PRINCIPAL,
+        TIGHTBEAM_BASE_DIR: gatewayBaseDir } });
+    await listen(chat, chatPort);
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const response = await fetch(`${chatOrigin}/__chat/upload`, { method: 'POST',
+        headers: { origin: chatOrigin, 'content-type': 'application/octet-stream' }, body: Buffer.alloc(40_000_000, 1) });
+      expect(response.status).toBe(413);
+      expect((await response.json()).error.code).toBe('invalid_message');
+    }
+    expect((await fetch(`${chatOrigin}/chat-config.json`)).status).toBe(200);
+  });
+
   it('says plainly that the Gateway was unavailable when it resets before any reply was seen', async () => {
     const chatOrigin = await chatWithUpstream('reset-before-reply');
     const response = await bigPost(chatOrigin);
