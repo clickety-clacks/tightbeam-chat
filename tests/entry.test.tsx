@@ -47,6 +47,14 @@ describe('direct browser entry', () => {
     }
   });
 
+  it('turns on scroll-pinned prompts only when the server says so explicitly', async () => {
+    for (const [value, expected] of [[true, true], ['1', undefined], [false, undefined], [undefined, undefined]]) {
+      const target = await loadConfiguredChatTarget(async () => new Response(
+        JSON.stringify({ ...defaultTarget, scrollPinnedPromptsEnabled: value }), { status: 200 }));
+      expect(target.scrollPinnedPromptsEnabled).toBe(expected);
+    }
+  });
+
   it('accepts supplied submitter fields only with the enabled REST transport', async () => {
     const source = { ...defaultTarget, restHumanSendEnabled: true,
       submitter: { identity: 'person@example.test', displayName: '  Riley  ' } };
