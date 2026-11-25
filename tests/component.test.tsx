@@ -4339,6 +4339,7 @@ describe('conversation surface', () => {
     const composer = screen.getByRole('textbox', { name: 'Message to Research assistant' }) as HTMLTextAreaElement;
     fireEvent.change(composer, { target: { value: content } });
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    fireEvent.change(composer, { target: { value: 'An edit made while the send is pending' } });
     act(() => runtime.update({ sends: [{ sessionKey, deviceId: 'device', clientMessageId: 'fixture-send',
       content, submittedAt: new Date().toISOString(), status: 'failed', reconciled: false, reason: code }] }));
     const refused = screen.getByText(content).closest('article');
