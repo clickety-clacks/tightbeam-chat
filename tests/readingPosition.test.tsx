@@ -2295,7 +2295,7 @@ describe('conversation reading position', () => {
     expect(box.scrollTop).toBe(40 + 12 * 92);
   });
 
-  it('returns to the newest message after submission, clears on acceptance, and leaves a rejected draft alone', () => {
+  it('returns to the newest message after submission, clears the composer at once, and leaves a rejected draft alone', () => {
     const { runtime, box, input } = setup();
     readAt(box, 600);
     fireEvent.change(input, { target: { value: 'Send from an earlier message' } });
@@ -2304,7 +2304,7 @@ describe('conversation reading position', () => {
     fireEvent.submit(input.closest('form')!);
 
     expect(scrollTo).toHaveBeenLastCalledWith({ top: box.scrollHeight - box.clientHeight, behavior: 'smooth' });
-    expect(input.value).toBe('Send from an earlier message');
+    expect(input.value).toBe('');
     act(() => runtime.publish({ sends: [{
       sessionKey: 'reading', deviceId: 'device', clientMessageId: 'client-send',
       content: 'Send from an earlier message', submittedAt: new Date().toISOString(),

@@ -3969,7 +3969,7 @@ describe('conversation surface', () => {
     fireEvent.change(composer, { target: { value: '  exact  ' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
     expect(runtime.sent).toEqual(['  exact  ']);
-    expect(composer).toHaveProperty('value', '  exact  ');
+    expect(composer).toHaveProperty('value', '');
     act(() => runtime.update({ sends: [{
       sessionKey: 'send-session', deviceId: 'device', clientMessageId: 'fixture-send', content: '  exact  ',
       submittedAt: new Date().toISOString(), status: 'accepted', reconciled: false,
@@ -4127,7 +4127,7 @@ describe('conversation surface', () => {
 
     expect(fireEvent.keyDown(composer, { key: 'Enter' })).toBe(false);
     expect(runtime.sent).toEqual(['plain Return draft']);
-    expect(composer).toHaveProperty('value', 'plain Return draft');
+    expect(composer).toHaveProperty('value', '');
     act(() => runtime.update({ sends: [{
       sessionKey: 'keyboard-eligibility', deviceId: 'device', clientMessageId: 'fixture-send',
       content: 'plain Return draft', submittedAt: new Date().toISOString(),
@@ -4137,7 +4137,7 @@ describe('conversation surface', () => {
     expect(document.activeElement).toBe(composer);
   });
 
-  it.each(['failed', 'uncertain'] as const)('retains the submitted draft when delivery is %s', (status) => {
+  it.each([['failed', 'Keep this text'], ['uncertain', '']] as const)('leaves the right composer text when delivery is %s', (status, expected) => {
     const runtime = new FakeRuntime(`send-${status}`);
     render(<TightbeamChat sessionKey={`send-${status}`} adapter={adapterFor(runtime)} />);
     const composer = screen.getByRole('textbox', { name: 'Message to Research assistant' }) as HTMLTextAreaElement;
@@ -4147,7 +4147,7 @@ describe('conversation surface', () => {
       sessionKey: `send-${status}`, deviceId: 'device', clientMessageId: 'fixture-send',
       content: 'Keep this text', submittedAt: new Date().toISOString(), status, reconciled: false,
     }] }));
-    expect(composer.value).toBe('Keep this text');
+    expect(composer.value).toBe(expected);
   });
 
   it('keeps edits made after submission even when the text later matches the submitted text', () => {
@@ -4351,69 +4351,105 @@ describe('conversation surface', () => {
     expect(composer.value).toBe(content);
   });
 
-  describe('composer text after an uncertain send', () => {
-    const content = 'Sent while the Gateway was unreachable';
-    const outageSend = (sessionKey: string, patch: Partial<LocalSend>): LocalSend => ({ sessionKey, deviceId: 'device',
-      clientMessageId: 'fixture-send', content, submittedAt: new Date().toISOString(), status: 'uncertain',
-      reconciled: false, reason: 'connection-closed-before-acknowledgement', ...patch });
-    const sendDuringOutage = (sessionKey: string) => {
+  describe('composer text around a send', () => {
+    const content = 'Sent while the Gateway was slow';
+    const slowSend = (sessionKey: string, patch: Partial<LocalSend>): LocalSend => ({ sessionKey, deviceId: 'device',
+      clientMessageId: 'fixture-send', content, submittedAt: new Date().toISOString(), status: 'pending',
+      reconciled: false, ...patch });
+    const submit = (sessionKey: string) => {
       const runtime = new FakeRuntime(sessionKey);
       render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
       const composer = screen.getByRole('textbox', { name: 'Message to Research assistant' }) as HTMLTextAreaElement;
       fireEvent.change(composer, { target: { value: content } });
       fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
       expect(runtime.sent).toEqual([content]);
-      act(() => runtime.update({ sends: [outageSend(sessionKey, { status: 'pending', reason: undefined })] }));
-      act(() => runtime.update({ sends: [outageSend(sessionKey, {})] }));
-      expect(composer.value).toBe(content);
-      const row = screen.getByText(content, { selector: '.tb-chat-local *' }).closest('article')!;
-      expect(row.getAttribute('data-send-state')).toBe('uncertain');
+      // Cleared at submit: the posted message and the same text are never both on screen as editable.
+      expect(composer.value).toBe('');
+      act(() => runtime.update({ sends: [slowSend(sessionKey, {})] }));
+      expect(composer.value).toBe('');
+      expect(screen.getByRole('button', { name: 'Send message' })).toHaveProperty('disabled', true);
+      const row = () => screen.getByText(content, { selector: '.tb-chat-local *' }).closest('article')!;
       return { runtime, composer, row };
     };
 
-    it('clears the composer once Check and retry reconciles the message', () => {
-      const sessionKey = 'uncertain-then-delivered';
-      const { runtime, composer, row } = sendDuringOutage(sessionKey);
-      fireEvent.click(within(row).getByRole('button', { name: 'Check and retry' }));
-      expect(runtime.retried).toEqual(['fixture-send']);
-      act(() => runtime.update({ sends: [outageSend(sessionKey, { status: 'pending', reason: undefined })] }));
-      expect(composer.value).toBe(content);
-      // The retry's acceptance alone is not confirmation; the canonical row is.
-      act(() => runtime.update({ sends: [outageSend(sessionKey, { status: 'accepted', reason: undefined })] }));
-      expect(composer.value).toBe(content);
-      act(() => runtime.update({ sends: [outageSend(sessionKey, { status: 'accepted', reason: undefined, reconciled: true })] }));
+    it('stays clear while the send is pending, accepted and reconciled', () => {
+      const sessionKey = 'slow-then-delivered';
+      const { runtime, composer } = submit(sessionKey);
+      act(() => runtime.update({ sends: [slowSend(sessionKey, { status: 'accepted' })] }));
       expect(composer.value).toBe('');
-      expect(screen.getByRole('button', { name: 'Send message' })).toHaveProperty('disabled', true);
-    });
-
-    it('clears the composer when the canonical row shows the uncertain message arrived', () => {
-      const sessionKey = 'uncertain-then-found';
-      const { runtime, composer } = sendDuringOutage(sessionKey);
-      act(() => runtime.update({ sends: [outageSend(sessionKey, { status: 'accepted', reason: undefined, reconciled: true })] }));
+      act(() => runtime.update({ sends: [slowSend(sessionKey, { status: 'accepted', reconciled: true })] }));
       expect(composer.value).toBe('');
     });
 
-    it('keeps the composer text while delivery stays uncertain or the retry fails', () => {
-      const sessionKey = 'uncertain-then-failed';
-      const { runtime, composer, row } = sendDuringOutage(sessionKey);
-      fireEvent.click(within(row).getByRole('button', { name: 'Check and retry' }));
-      act(() => runtime.update({ sends: [outageSend(sessionKey, { status: 'pending', reason: undefined })] }));
-      act(() => runtime.update({ sends: [outageSend(sessionKey, { reason: 'Canonical history could not be checked before retry.' })] }));
-      expect(composer.value).toBe(content);
-      act(() => runtime.update({ sends: [outageSend(sessionKey, { status: 'accepted', reason: undefined })] }));
-      act(() => runtime.update({ sends: [outageSend(sessionKey, { reason: 'accepted-unreconciled' })] }));
-      expect(composer.value).toBe(content);
-      act(() => runtime.update({ sends: [outageSend(sessionKey, { status: 'failed', reason: 'Gateway unavailable' })] }));
-      expect(composer.value).toBe(content);
-      expect(screen.getByRole('button', { name: 'Send message' })).toHaveProperty('disabled', false);
+    it('keeps text typed after submit when the send is confirmed or fails', () => {
+      const sessionKey = 'typed-after-submit';
+      const { runtime, composer } = submit(sessionKey);
+      fireEvent.change(composer, { target: { value: 'the next message' } });
+      act(() => runtime.update({ sends: [slowSend(sessionKey, { status: 'failed', reason: 'Gateway unavailable' })] }));
+      expect(composer.value).toBe('the next message');
     });
 
-    it('leaves a draft edited after the uncertain send when the message is later reconciled', () => {
-      const sessionKey = 'uncertain-then-edited';
-      const { runtime, composer } = sendDuringOutage(sessionKey);
-      fireEvent.change(composer, { target: { value: `${content} and more` } });
-      act(() => runtime.update({ sends: [outageSend(sessionKey, { status: 'accepted', reason: undefined, reconciled: true })] }));
-      expect(composer.value).toBe(`${content} and more`);
+    it('puts the text back when the send definitely fails, and clears it again for a retry', () => {
+      const sessionKey = 'failed-then-retried';
+      const { runtime, composer, row } = submit(sessionKey);
+      act(() => runtime.update({ sends: [slowSend(sessionKey, { status: 'failed', reason: 'Gateway unavailable' })] }));
+      expect(composer.value).toBe(content);
+      fireEvent.click(within(row()).getByRole('button', { name: 'Retry message' }));
+      act(() => runtime.update({ sends: [slowSend(sessionKey, { status: 'pending' })] }));
+      expect(composer.value).toBe('');
+      act(() => runtime.update({ sends: [slowSend(sessionKey, { status: 'accepted', reconciled: true })] }));
+      expect(composer.value).toBe('');
+    });
+
+    // The runtime keeps unconfirmed sends when access is lost; these are the states it publishes.
+    it('puts the text back when the post is refused for authorization', () => {
+      const sessionKey = 'unauthorized-refusal';
+      const { runtime, composer, row } = submit(sessionKey);
+      act(() => runtime.update({ status: 'unauthorized', records: [],
+        sends: [slowSend(sessionKey, { status: 'failed', reason: 'Post authorization refused' })] }));
+      expect(composer.value).toBe(content);
+      expect(within(row()).getByRole('button', { name: 'Restore text to the composer' })).toBeTruthy();
+    });
+
+    it('keeps text typed after submit, and offers the sent text for restore, when access is lost', () => {
+      const sessionKey = 'unauthorized-with-new-draft';
+      const { runtime, composer, row } = submit(sessionKey);
+      fireEvent.change(composer, { target: { value: 'the next message' } });
+      act(() => runtime.update({ status: 'unauthorized', records: [],
+        sends: [slowSend(sessionKey, { status: 'uncertain', reason: 'Older history is not authorized.' })] }));
+      expect(composer.value).toBe('the next message');
+      expect(within(row()).getByRole('button', { name: 'Restore text to the composer' })).toHaveProperty('disabled', false);
+    });
+
+    it('keeps the composer clear through a reconnect during the send, and restores a refusal that arrives after it', () => {
+      const sessionKey = 'reconnect-during-send';
+      const { runtime, composer } = submit(sessionKey);
+      act(() => runtime.update({ liveConnectionState: 'reconnecting', sends: [slowSend(sessionKey, {})] }));
+      expect(composer.value).toBe('');
+      act(() => runtime.update({ status: 'stale', liveConnectionState: 'disconnected' }));
+      expect(composer.value).toBe('');
+      act(() => runtime.update({ status: 'ready', liveConnectionState: 'connected', sends: [slowSend(sessionKey, {})] }));
+      expect(composer.value).toBe('');
+      act(() => runtime.update({ sends: [slowSend(sessionKey, { status: 'failed', reason: 'payload_too_large' })] }));
+      expect(composer.value).toBe(content);
+    });
+
+    it('puts the text back for a refused send as well as a failed one', () => {
+      const sessionKey = 'refused-restores';
+      const { runtime, composer, row } = submit(sessionKey);
+      act(() => runtime.update({ sends: [slowSend(sessionKey, { status: 'failed', reason: 'not_deliverable' })] }));
+      expect(composer.value).toBe(content);
+      expect(within(row()).getByRole('button', { name: 'Restore text to the composer' })).toBeTruthy();
+    });
+
+    it('does not put text back for an uncertain send, which keeps its bubble actions', () => {
+      const sessionKey = 'uncertain-stays-clear';
+      const { runtime, composer, row } = submit(sessionKey);
+      act(() => runtime.update({ sends: [slowSend(sessionKey, { status: 'uncertain', reason: 'connection-closed-before-acknowledgement' })] }));
+      expect(composer.value).toBe('');
+      expect(within(row()).getByRole('button', { name: 'Check and retry' })).toBeTruthy();
+      fireEvent.click(within(row()).getByRole('button', { name: 'Restore text to the composer' }));
+      expect(composer.value).toBe(content);
     });
   });
 

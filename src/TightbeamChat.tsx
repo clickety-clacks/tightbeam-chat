@@ -1331,7 +1331,12 @@ interface ComposerHandle {
 }
 
 interface SubmittedDraft {
-  readonly revision: number;
+  /** The text that was sent, so a failed send can put it back. */
+  readonly content: string;
+  /** The composer's edit count after Chat last cleared or restored it; any later edit leaves the draft alone. */
+  revision: number;
+  /** True while the failed text is back in the composer. */
+  restored: boolean;
   // Set once the send's delivery became uncertain or failed. From then on only
   // its reconciled canonical row confirms delivery, not a later acceptance.
   awaitingCanonical: boolean;
@@ -1727,20 +1732,30 @@ const Composer = forwardRef<ComposerHandle, {
   }, [draft]);
 
   useEffect(() => {
-    // The composer keeps a sent message's text until that message is confirmed
-    // delivered. An uncertain or failed send stays tracked, so a later Check and
-    // retry that reconciles its row clears the text and a second Send cannot
-    // post it again. Any edit since the send leaves the draft alone.
+    // Submit clears the composer at once, so a posted message never sits in it too. A definite
+    // failure puts the text back if the composer is still empty. An uncertain send does not, because
+    // the message may exist; its bubble offers Check and retry and Restore. If a failed text is back
+    // in the composer, a retry or its confirmation clears it again so a second Send cannot post it twice.
     for (const send of state.sends) {
       const submitted = recoverySnapshot.submittedRevisions.get(send.clientMessageId);
       if (!submitted) continue;
-      if (send.status === 'uncertain' || send.status === 'failed') submitted.awaitingCanonical = true;
-      const confirmed = send.reconciled || (send.status === 'accepted' && !submitted.awaitingCanonical);
-      if (!confirmed) continue;
-      recoverySnapshot.submittedRevisions.delete(send.clientMessageId);
-      if (recoverySnapshot.editRevision === submitted.revision) {
+      const untouched = recoverySnapshot.editRevision === submitted.revision;
+      const replace = (content: string, restored: boolean) => {
         recoverySnapshot.editRevision++;
-        updateDraft('');
+        submitted.revision = recoverySnapshot.editRevision;
+        submitted.restored = restored;
+        updateDraft(content);
+      };
+      if (send.status === 'uncertain' || send.status === 'failed') submitted.awaitingCanonical = true;
+      if (send.reconciled || (send.status === 'accepted' && !submitted.awaitingCanonical)) {
+        recoverySnapshot.submittedRevisions.delete(send.clientMessageId);
+        if (submitted.restored && untouched) replace('', false);
+        continue;
+      }
+      if (send.status === 'failed' && !submitted.restored && untouched && !recoverySnapshot.draft) {
+        replace(submitted.content, true);
+      } else if (send.status === 'pending' && submitted.restored && untouched) {
+        replace('', false);
       }
     }
   }, [recoverySnapshot, state.sends, updateDraft]);
@@ -1783,7 +1798,7 @@ const Composer = forwardRef<ComposerHandle, {
       preparationController.current?.abort();
       preparationController.current = null;
       publishAttachments([]);
-      recoverySnapshot.submittedRevisions.set(sendId, { revision: recoverySnapshot.editRevision, awaitingCanonical: false });
+      // Photo and file sends already clear at submit; their text is restored by the bubble's actions.
       recoverySnapshot.editRevision++;
       updateDraft('');
     } else {
@@ -1793,7 +1808,13 @@ const Composer = forwardRef<ComposerHandle, {
         setAcquisitionError(`The message was not submitted: ${errorReason(error)}. Your draft is still here.`);
         return;
       }
-      if (sendId) recoverySnapshot.submittedRevisions.set(sendId, { revision: recoverySnapshot.editRevision, awaitingCanonical: false });
+      if (sendId) {
+        const content = draft;
+        recoverySnapshot.editRevision++;
+        updateDraft('');
+        recoverySnapshot.submittedRevisions.set(sendId,
+          { content, revision: recoverySnapshot.editRevision, restored: false, awaitingCanonical: false });
+      }
     }
     if (sendId) {
       setAcquisitionError(null);

@@ -2011,7 +2011,8 @@ describe('framework-independent runtime', () => {
     expect(runtime.getSnapshot().records).toHaveLength(0);
     pending.resolve({ outcome: 'accepted' });
     await settle();
-    expect(runtime.getSnapshot().sends.find((send) => send.clientMessageId === id)).toBeUndefined();
+    // The reader's own unconfirmed text stays, with its Restore action; a late reply changes nothing.
+    expect(runtime.getSnapshot().sends).toMatchObject([{ clientMessageId: id, content: 'private', status: 'uncertain' }]);
     expect(transport.closed).toBeGreaterThan(0);
     runtime.dispose();
   });
@@ -2022,10 +2023,27 @@ describe('framework-independent runtime', () => {
     const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
     await runtime.rebuild();
     expect(runtime.getSnapshot().records.length).toBeGreaterThan(0);
-    runtime.send('private');
+    const id = runtime.send('private');
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('unauthorized'));
     expect(runtime.getSnapshot().records).toHaveLength(0);
-    expect(runtime.getSnapshot().sends).toHaveLength(0);
+    expect(runtime.getSnapshot().sends).toMatchObject([
+      { clientMessageId: id, content: 'private', status: 'failed', reason: 'human access revoked' }]);
+    runtime.dispose();
+  });
+
+  it.each(['pending', 'uncertain'] as const)('keeps the text of a %s send when rereading history loses authorization', async (status) => {
+    const transport = new ControlledTransport();
+    transport.nextSend = status === 'pending' ? () => new Promise<never>(() => {})
+      : async () => ({ outcome: 'uncertain', reason: 'Socket dropped' });
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await runtime.rebuild();
+    const id = runtime.send('still mine');
+    await vi.waitFor(() => expect(runtime.getSnapshot().sends[0]?.status).toBe(status));
+    // A rebuild rereads either the newest page or the rows after the held cursor; refuse both.
+    transport.readTail = transport.readAfter = async () => { throw new AuthorizationError('History is not authorized.'); };
+    await runtime.rebuild();
+    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('unauthorized'));
+    expect(runtime.getSnapshot().sends).toMatchObject([{ clientMessageId: id, content: 'still mine', status: 'uncertain' }]);
     runtime.dispose();
   });
 });
