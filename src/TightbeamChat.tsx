@@ -3508,7 +3508,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
               : send.reason === 'not_deliverable'
                 ? 'The agent cannot receive this message right now. Your draft is still here.'
                 : send.reason === 'client_message_conflict'
-                  ? 'This message conflicts with one already sent with the same ID. Check the conversation, then send it again if it is missing. Your draft is still here.'
+                  ? 'This message conflicts with one already sent with the same ID. Check the conversation; if it is missing, restore the text and send it as a new message. Your draft is still here.'
                   : undefined
           : undefined;
         const announcement = send.reconciled

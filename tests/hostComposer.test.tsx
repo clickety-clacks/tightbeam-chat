@@ -654,6 +654,7 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     expect(screen.getByRole('alert').textContent).toContain(sentence);
     expect(screen.getByRole('alert').textContent).not.toContain(code);
     expect(screen.getByRole('alert').textContent).toContain('Your draft is still here.');
+    if (code === 'client_message_conflict') expect(screen.getByRole('alert').textContent).toContain('send it as a new message');
   });
 
   it('restores readiness after a per-message refusal without a runtime rebuild', async () => {

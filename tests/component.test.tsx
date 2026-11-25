@@ -4328,6 +4328,28 @@ describe('conversation surface', () => {
     expect(within(refused!).getByRole('button', { name: 'Retry message' })).toBeTruthy();
   });
 
+  it.each([
+    ['not_deliverable', 'The agent cannot receive this message right now. Your draft is still here.'],
+    ['client_message_conflict', 'This message conflicts with one already sent with the same ID. Check the conversation; if it is missing, restore the text and send it as a new message. Your draft is still here.'],
+  ])('words a %s refusal as a sentence on the web composer and offers restoring the text', (code, sentence) => {
+    const sessionKey = `sentence-refusal-${code}`;
+    const content = 'The prompt the Gateway refused.';
+    const runtime = new FakeRuntime(sessionKey);
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+    const composer = screen.getByRole('textbox', { name: 'Message to Research assistant' }) as HTMLTextAreaElement;
+    fireEvent.change(composer, { target: { value: content } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    act(() => runtime.update({ sends: [{ sessionKey, deviceId: 'device', clientMessageId: 'fixture-send',
+      content, submittedAt: new Date().toISOString(), status: 'failed', reconciled: false, reason: code }] }));
+    const refused = screen.getByText(content).closest('article');
+    expect(refused?.getAttribute('data-send-state')).toBe('refused');
+    expect(refused?.getAttribute('aria-label')).toBe(`Your message was not sent. ${sentence}`);
+    expect(within(refused!).getByText(sentence)).toBeTruthy();
+    expect(refused?.textContent).not.toContain(code);
+    fireEvent.click(within(refused!).getByRole('button', { name: 'Restore text to the composer' }));
+    expect(composer.value).toBe(content);
+  });
+
   describe('composer text after an uncertain send', () => {
     const content = 'Sent while the Gateway was unreachable';
     const outageSend = (sessionKey: string, patch: Partial<LocalSend>): LocalSend => ({ sessionKey, deviceId: 'device',
