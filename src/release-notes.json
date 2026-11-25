@@ -8,7 +8,7 @@
       },
       {
         "title": "Large prompts are refused clearly",
-        "description": "A prompt too large for the Gateway to accept is refused with a clear message, and your draft stays in the box. Chat's own server no longer stops when the Gateway refuses a large message."
+        "description": "Chat's own server no longer stops when the Gateway refuses a very large message. Where prompts are sent through the Gateway's request route, a prompt that is too large is refused with a clear message and your draft stays in the box."
       },
       {
         "title": "Photos and files record your read position",
