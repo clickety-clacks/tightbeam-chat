@@ -132,7 +132,8 @@ describe('long sent prompts', () => {
       // The eleventh line starts 10 lines and one paragraph gap down.
       expect(document.querySelector<HTMLElement>('.tb-chat-prompt-clamp-content')!.style.maxHeight).toBe(`${10 * LINE + 12}px`);
     } finally {
-      if (original) proto.getClientRects = original; else delete proto.getClientRects;
+      if (original) proto.getClientRects = original;
+      else delete (proto as { getClientRects?: unknown }).getClientRects;
     }
   });
 
