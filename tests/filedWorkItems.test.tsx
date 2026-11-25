@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FiledWorkItems } from '../src/filedWorkItems';
 import { decodeWorkItemSummary } from '../src/public019';
 import { recordEventPresentation } from '../src/sessionRecordEvents';
@@ -15,92 +15,137 @@ const flush = () => vi.advanceTimersByTimeAsync(0);
 
 /** Lists newest first by position, as the Gateway does for one creator. */
 function setup(total: number) {
-  const gateway = { total, fail: false, version: 1, calls: [] as Array<{ limit: number; before?: string }> };
+  const gateway = { total, unreadable: 0, version: 1, calls: [] as Array<{ limit: number; before?: string }> };
   let items: ReadonlyMap<string, WorkItemSummary> = new Map();
   const reader = new FiledWorkItems('selected', async (_key, { limit, before }): Promise<FiledWorkItemPage> => {
     gateway.calls.push({ limit, before });
-    if (gateway.fail) throw new Error('unavailable');
     const end = before ? Number(before) - 1 : gateway.total;
     const start = Math.max(1, end - limit + 1);
+    // One bad row fails every page that includes it.
+    if (gateway.unreadable >= start && gateway.unreadable <= end) throw new Error('unavailable');
     return { items: range(start, end).map(row => item(row.at, gateway.version)), oldestCursor: String(start), hasOlder: start > 1 };
   }, next => { items = next; });
   return { gateway, reader, items: () => items };
 }
 
 describe('filed work item reads', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); });
 
-  it('reads one loaded page once, not once per event, and does not repeat a page it knows', async () => {
-    vi.useFakeTimers();
+  it('reads one loaded page once, not once per event, and an older page only for its own rows', async () => {
     const { gateway, reader, items } = setup(200);
-    reader.sync(range(161, 200), true);
+    reader.sync(range(161, 200), 'newest');
     await flush();
     expect(gateway.calls).toEqual([{ limit: 40, before: undefined }]);
-    expect(items().size).toBe(40);
-    reader.sync(range(161, 200), true);
+    reader.sync(range(161, 200), 'newest');
+    reader.sync(range(161, 200), 'older');
     await flush();
     expect(gateway.calls).toHaveLength(1);
-    reader.sync(range(131, 200), true);
+    reader.sync(range(131, 200), 'older');
     await flush();
     expect(gateway.calls.slice(1)).toEqual([{ limit: 30, before: '161' }]);
     expect(items().size).toBe(70);
   });
 
-  it('makes no read without filed items, and at most one per 50 of them', async () => {
-    vi.useFakeTimers();
-    const { gateway, reader } = setup(120);
-    reader.sync([{ ...event(1), kind: 'assignment.opened' }], true);
+  it('makes no read without filed items, and one bounded read however many a load holds', async () => {
+    const { gateway, reader, items } = setup(120);
+    reader.sync([{ ...event(1), kind: 'assignment.opened' }], 'newest');
     await flush();
     expect(gateway.calls).toHaveLength(0);
-    reader.sync(range(1, 120), true);
-    await flush();
+    for (const size of [50, 100, 120, 120]) {
+      reader.sync(range(1, 120), 'newest');
+      await flush();
+      expect(items().size).toBe(size);
+    }
     expect(gateway.calls.map(call => call.limit)).toEqual([50, 50, 20]);
   });
 
-  it('makes no read for live filings, however spaced, and names them all in the next page read', async () => {
-    vi.useFakeTimers();
-    const { gateway, reader, items } = setup(1);
-    reader.sync(range(1, 1), true);
+  it('makes no read for live filings, and an older page does not catch them up', async () => {
+    const { gateway, reader, items } = setup(110);
+    reader.sync(range(100, 110), 'newest');
     await flush();
-    for (const last of [2, 3, 4]) {
-      gateway.total = last;
-      reader.sync(range(1, last), false);
-      await vi.advanceTimersByTimeAsync(60_000);
-    }
+    gateway.total = 111;
+    reader.sync(range(100, 111), 'live');
+    await vi.advanceTimersByTimeAsync(60_000);
     expect(gateway.calls).toHaveLength(1);
-    reader.sync(range(1, 4), true);
+    reader.sync(range(90, 111), 'older');
     await flush();
-    expect(gateway.calls.slice(1)).toEqual([{ limit: 3, before: undefined }]);
-    expect(items().get('wi_4')?.title).toBe('Title 4');
+    expect(gateway.calls.slice(1)).toEqual([{ limit: 10, before: '100' }]);
+    expect(items().has('wi_111')).toBe(false);
+    reader.sync(range(90, 111), 'newest');
+    await flush();
+    expect(gateway.calls.slice(2)).toEqual([{ limit: 1, before: undefined }]);
+    expect(items().get('wi_111')?.title).toBe('Title 111');
   });
 
-  it('retries a failed read only on a completed history read at least 30 seconds later, and an unlisted item never again', async () => {
-    vi.useFakeTimers();
+  it('does not re-read a failed newest range for older pages, and retries it once per reload after 30 seconds', async () => {
+    const { gateway, reader, items } = setup(110);
+    gateway.unreadable = 110;
+    reader.sync(range(100, 110), 'newest');
+    await flush();
+    for (const from of [90, 80]) {
+      reader.sync(range(from, 110), 'older');
+      await vi.advanceTimersByTimeAsync(60_000);
+    }
+    expect(gateway.calls).toEqual([{ limit: 11, before: undefined }]);
+    gateway.unreadable = 0;
+    reader.sync(range(80, 110), 'newest');
+    await flush();
+    expect(gateway.calls.slice(1)).toEqual([{ limit: 31, before: undefined }]);
+    expect(items().size).toBe(31);
+  });
+
+  it('does not retry a failed newest range on reloads within 30 seconds', async () => {
+    const { gateway, reader } = setup(3);
+    gateway.unreadable = 2;
+    for (let reload = 0; reload < 5; reload++) {
+      reader.sync(range(1, 3), 'newest');
+      await vi.advanceTimersByTimeAsync(5_000);
+    }
+    expect(gateway.calls).toHaveLength(1);
+  });
+
+  it('stops below a failed older range until a later reload reads it, keeping newer titles', async () => {
+    const { gateway, reader, items } = setup(110);
+    gateway.unreadable = 95;
+    reader.sync(range(100, 110), 'newest');
+    reader.sync(range(90, 110), 'older');
+    await flush();
+    reader.sync(range(80, 110), 'older');
+    reader.sync(range(70, 110), 'older');
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(gateway.calls).toEqual([{ limit: 11, before: undefined }, { limit: 10, before: '100' }]);
+    expect(items().size).toBe(11);
+    gateway.unreadable = 0;
+    reader.sync(range(70, 110), 'newest');
+    await flush();
+    expect(gateway.calls.slice(2)).toEqual([{ limit: 30, before: '100' }]);
+    expect(items().size).toBe(41);
+  });
+
+  it('reads loads that overlap a slow read in turn, one read each', async () => {
+    const { gateway, reader, items } = setup(30);
+    reader.sync(range(21, 30), 'newest');
+    reader.sync(range(11, 30), 'older');
+    reader.sync(range(1, 30), 'older');
+    await flush();
+    expect(gateway.calls.map(call => call.limit)).toEqual([10, 10, 10]);
+    expect(items().size).toBe(30);
+  });
+
+  it('asks only once for an item the list does not hold', async () => {
     const { gateway, reader, items } = setup(2);
-    gateway.fail = true;
-    reader.sync(range(1, 3), true);
-    await flush();
-    reader.sync(range(1, 3), false);
-    await vi.advanceTimersByTimeAsync(5_000);
+    for (let reload = 0; reload < 3; reload++) {
+      reader.sync(range(1, 3), 'newest');
+      await flush();
+    }
     expect(gateway.calls).toHaveLength(1);
-    gateway.fail = false;
-    reader.sync(range(1, 3), true);
-    await flush();
-    expect(gateway.calls).toHaveLength(1);
-    await vi.advanceTimersByTimeAsync(30_000);
-    reader.sync(range(1, 3), true);
-    await flush();
     expect(items().size).toBe(2);
-    reader.sync(range(1, 3), true);
-    await flush();
-    expect(gateway.calls).toHaveLength(2);
-    reader.stop();
   });
 
   it('refreshes known rows with one read and stops cleanly', async () => {
-    vi.useFakeTimers();
     const { gateway, reader, items } = setup(5);
-    reader.sync(range(1, 5), true);
+    reader.sync(range(1, 5), 'newest');
     await flush();
     gateway.version = 2;
     await reader.refresh();
@@ -108,7 +153,7 @@ describe('filed work item reads', () => {
     expect(items().get('wi_1')?.rowVersion).toBe(2);
     reader.stop();
     await reader.refresh();
-    reader.sync(range(1, 6), true);
+    reader.sync(range(1, 6), 'newest');
     await vi.advanceTimersByTimeAsync(5_000);
     expect(gateway.calls).toHaveLength(2);
   });
