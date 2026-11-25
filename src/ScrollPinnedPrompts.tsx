@@ -326,7 +326,10 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
     const prompt = promptsByIdentity.current.get(identity);
     const row = prompt ? getRow(prompt.scrollKey) : undefined;
     if (!slot.full || !row) return;
-    const measured = layout.current.prompts[layout.current.byIdentity.get(identity) ?? -1];
+    // Always the latest measurement: a copy made later (by the observer below) must use the
+    // bubble's current width, not the width when the observer was set up.
+    const current = () => layout.current.prompts[layout.current.byIdentity.get(identity) ?? -1];
+    const measured = current();
     const place = () => {
       if (!slot.slot || !measured) return;
       slot.slot.style.left = `${measured.left}px`;
@@ -342,13 +345,16 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
         slot.summary.style.height = `${measured.summaryHeight}px`;
         slot.summary.style.padding = `${style.paddingTop} ${style.paddingRight} ${style.paddingBottom} ${style.paddingLeft}`;
       }
+      // An existing copy follows a width change too, so it wraps as the stream does.
+      const copied = slot.full?.firstElementChild as HTMLElement | null | undefined;
+      if (copied) copied.style.width = `${measured.width}px`;
     };
     place();
     if (slot.copiedFrom === row) return;
     slot.copyObserver?.disconnect();
     const copy = () => {
       const bubble = copyBubble(row);
-      bubble.style.width = `${measured?.width ?? row.getBoundingClientRect().width}px`;
+      bubble.style.width = `${current()?.width ?? row.getBoundingClientRect().width}px`;
       slot.full!.replaceChildren(bubble);
     };
     copy();
@@ -356,7 +362,8 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
     if (typeof MutationObserver !== 'undefined') {
       slot.copyObserver = new MutationObserver(copy);
       slot.copyObserver.observe(row, { subtree: true, childList: true, characterData: true, attributes: true,
-        attributeFilter: ['class', 'data-send-state', 'data-message-state', 'src', 'data-expanded', 'data-clamped'] });
+        // 'style' carries the prompt clamp's height, which changes when the bubble is resized.
+        attributeFilter: ['class', 'style', 'data-send-state', 'data-message-state', 'src', 'data-expanded', 'data-clamped'] });
     }
   }, [getRow]);
 

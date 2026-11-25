@@ -280,6 +280,53 @@ describe('scroll-pinned prompts without scroll timelines', () => {
     }
   });
 
+  it('copies the bubble again when an inline style inside it changes, such as the prompt clamp height', async () => {
+    const clip = document.createElement('div');
+    clip.className = 'tb-chat-prompt-clamp-content';
+    clip.style.maxHeight = '200px';
+    clip.textContent = 'Clipped text';
+    rows.get('A')!.replaceChildren(clip);
+    mount();
+    scrollTo(200);
+    const copied = () => slotFor('A')!.querySelector<HTMLElement>('.tb-chat-pinned-full .tb-chat-prompt-clamp-content')!;
+    expect(copied().style.maxHeight).toBe('200px');
+    clip.style.maxHeight = '140px';
+    await act(async () => { await Promise.resolve(); });
+    expect(copied().style.maxHeight).toBe('140px');
+  });
+
+  it('keeps the copy at the bubble\'s current width when the bubble is resized and copied again', async () => {
+    const callbacks: ResizeObserverCallback[] = [];
+    vi.stubGlobal('ResizeObserver', class { constructor(callback: ResizeObserverCallback) { callbacks.push(callback); }
+      observe() {} unobserve() {} disconnect() {} });
+    const clip = document.createElement('div');
+    clip.className = 'tb-chat-prompt-clamp-content';
+    clip.style.maxHeight = '200px';
+    clip.textContent = 'Clipped text';
+    rows.get('A')!.replaceChildren(clip);
+    const moved = layout as unknown as Record<string, { top: number; height: number; left: number; width: number }>;
+    const original = moved.A;
+    try {
+      mount();
+      scrollTo(200);
+      const copy = () => slotFor('A')!.querySelector<HTMLElement>('.tb-chat-pinned-full > .tb-chat-pinned-copy')!;
+      expect(copy().style.width).toBe('240px');
+      // The pane narrows: the bubble is re-measured at 180px...
+      moved.A = { ...original, width: 180 };
+      act(() => { for (const callback of callbacks) callback([], {} as ResizeObserver); });
+      expect(slotFor('A')!.style.width).toBe('180px');
+      expect(copy().style.width).toBe('180px');
+      // ...and its clamp height changes, so the copy is taken again: still at the new width.
+      clip.style.maxHeight = '260px';
+      await act(async () => { await Promise.resolve(); });
+      expect(copy().style.width).toBe('180px');
+      expect(copy().querySelector<HTMLElement>('.tb-chat-prompt-clamp-content')!.style.maxHeight).toBe('260px');
+    } finally {
+      moved.A = original;
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('gives the original back when it unmounts', () => {
     const result = mount();
     scrollTo(500);

@@ -1,5 +1,7 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { PromptClamp, resetExpandedPromptsForTests } from '../src/PromptClamp';
 
 // Layout by hand: each wrapped line is 20px; while collapsed the box shows ten lines (200px).
@@ -7,6 +9,7 @@ import { PromptClamp, resetExpandedPromptsForTests } from '../src/PromptClamp';
 const LINE = 20;
 let wrapWidth = 400;
 let resizeCallbacks: ResizeObserverCallback[] = [];
+let observed: Element[] = [];
 
 function wrappedLines(element: HTMLElement): number {
   return (element.textContent ?? '').split('\n').reduce((lines, paragraph) =>
@@ -17,9 +20,10 @@ beforeEach(() => {
   resetExpandedPromptsForTests();
   wrapWidth = 400;
   resizeCallbacks = [];
+  observed = [];
   vi.stubGlobal('ResizeObserver', class {
     constructor(callback: ResizeObserverCallback) { resizeCallbacks.push(callback); }
-    observe() {} unobserve() {} disconnect() {}
+    observe(target: Element) { observed.push(target); } unobserve() {} disconnect() {}
   });
   vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function (this: HTMLElement) {
     return this.classList.contains('tb-chat-prompt-clamp-content') ? wrappedLines(this) * LINE : 0;
@@ -155,6 +159,18 @@ describe('long sent prompts', () => {
     fireEvent.focusIn(link);
     expect(button()).toBeNull();
     expect(document.querySelector('[data-expanded]')).not.toBeNull();
+  });
+
+  it('watches the text inside the clip, not the clipped box, so clipping cannot loop the resize observer', () => {
+    show(lines(40));
+    const content = document.querySelector('.tb-chat-prompt-clamp-content')!;
+    expect(observed).toContain(content.firstElementChild);
+    expect(observed).not.toContain(content);
+  });
+
+  it('shows no focus ring on the message when focus moves to it after expanding', () => {
+    const css = readFileSync(resolve(import.meta.dirname, '../src/style.css'), 'utf8');
+    expect(css).toMatch(/\.tb-chat-prompt-clamp-content:focus\s*\{\s*outline:\s*none;/);
   });
 
   it('remembers expansion per conversation and prompt', () => {
