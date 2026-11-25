@@ -1729,6 +1729,20 @@ const Composer = forwardRef<ComposerHandle, {
     // failure puts the text back if the composer is still empty. An uncertain send does not, because
     // the message may exist; its bubble offers Check and retry and Restore. If a failed text is back
     // in the composer, a retry or its confirmation clears it again so a second Send cannot post it twice.
+    // Losing authorization or identity drops every send and its bubble, so the composer takes back each
+    // unconfirmed text, ahead of anything typed since. Send is disabled then, so nothing can post twice.
+    if (state.status === 'unauthorized') {
+      const dropped: string[] = [];
+      for (const [sendId, submitted] of recoverySnapshot.submittedRevisions) {
+        if (state.sends.some(send => send.clientMessageId === sendId)) continue;
+        recoverySnapshot.submittedRevisions.delete(sendId);
+        if (!submitted.restored) dropped.push(submitted.content);
+      }
+      if (dropped.length) {
+        recoverySnapshot.editRevision++;
+        updateDraft([...dropped, recoverySnapshot.draft].filter(Boolean).join('\n\n'));
+      }
+    }
     for (const send of state.sends) {
       const submitted = recoverySnapshot.submittedRevisions.get(send.clientMessageId);
       if (!submitted) continue;
@@ -1751,7 +1765,7 @@ const Composer = forwardRef<ComposerHandle, {
         replace('', false);
       }
     }
-  }, [recoverySnapshot, state.sends, updateDraft]);
+  }, [recoverySnapshot, state.sends, state.status, updateDraft]);
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
