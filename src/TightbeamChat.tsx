@@ -3411,7 +3411,9 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     setPromptDismissal({ sessionKey: state.sessionKey, dismissed: true });
   };
   const scrollPinnedPromptList = useMemo<readonly ScrollPinnedPrompt[]>(() => scrollPinnedPrompts
-    ? promptCandidates.map(prompt => ({ identity: prompt.identity, text: formatVisibleIds(prompt.content),
+    // Blank lines between paragraphs would spend the summary's three lines on nothing.
+    ? promptCandidates.map(prompt => ({ identity: prompt.identity,
+      text: formatVisibleIds(prompt.content).replace(/\n[^\S\n]*(?:\n[^\S\n]*)+/g, '\n').trim(),
       scrollKey: prompt.scrollKey, targetId: `${promptTargetPrefix}-${encodeURIComponent(prompt.targetKey)}` }))
     : [], [scrollPinnedPrompts, promptCandidates, promptTargetPrefix]);
   const renderToolHistoryStatus = (placeholder = false) => <div
