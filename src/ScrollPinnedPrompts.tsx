@@ -146,6 +146,8 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
     const pinLine = pinFromRoot - (portTop - rootBounds.top);
     const scrollTop = box.scrollTop;
     const measured: Measured[] = [];
+    // Rule 4's floor: one line of prompt text plus the bubble's vertical padding.
+    let minSummaryHeight = 0;
     const ownAnimations = new Set([...slots.current.values()].flatMap(slot => slot.animations ?? []));
     const cacheFor = (row: HTMLElement) => {
       let cache = summaryCache.get(row);
@@ -159,6 +161,11 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
       if (!Number.isFinite(bounds.top) || bounds.height <= 0) continue;
       const style = getComputedStyle(row);
       const padding = `${style.paddingTop} ${style.paddingRight} ${style.paddingBottom} ${style.paddingLeft}`;
+      if (!minSummaryHeight) {
+        const fontSize = Number.parseFloat(style.fontSize) || 0;
+        const lineHeight = Number.parseFloat(style.lineHeight) || fontSize * 1.5;
+        minSummaryHeight = lineHeight + (Number.parseFloat(style.paddingTop) || 0) + (Number.parseFloat(style.paddingBottom) || 0);
+      }
       const cacheKey = `${bounds.width}\u0000${padding}\u0000${style.fontSize}\u0000${prompt.text}`;
       const cache = cacheFor(row);
       let summary = cache.get(cacheKey);
@@ -200,7 +207,7 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
       }
     }
     layout.current = { prompts: measured, byIdentity: new Map(measured.map((prompt, index) => [prompt.identity, index])),
-      options: { pinLine, fadeDistance: FADE_DISTANCE, pushGap: PUSH_GAP } };
+      options: { pinLine, fadeDistance: FADE_DISTANCE, pushGap: PUSH_GAP, minSummaryHeight } };
   }, [getRow, prompts, viewport]);
 
   /** Which prompts need a slot: those pinned now and the next two to arrive. */
@@ -381,7 +388,8 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
       if (!layout.current.prompts.some(prompt => prompt.scrollKey === scrollKey)) measureLayout();
       const { prompts: measured, options } = layout.current;
       const prompt = measured.find(candidate => candidate.scrollKey === scrollKey);
-      return prompt ? Math.min(options.pinLine, prompt.top) + effectiveSummaryHeight(prompt) : undefined;
+      return prompt ? Math.min(options.pinLine, prompt.top) + effectiveSummaryHeight(prompt, options.minSummaryHeight)
+        : undefined;
     },
   }), [measureLayout, refresh]);
 

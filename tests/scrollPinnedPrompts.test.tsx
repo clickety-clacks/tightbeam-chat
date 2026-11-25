@@ -133,6 +133,24 @@ describe('scroll-pinned prompts without scroll timelines', () => {
     expect(slot.querySelector('.tb-chat-pinned-full [id]')).toBeNull();
   });
 
+  it('shortens by clipping, never by scaling: the text keeps its size and width at every position', () => {
+    mount();
+    const widths = new Set<string>();
+    for (const position of [95, 150, 250, 309, 330, 600, 950, 985]) {
+      scrollTo(position);
+      const slot = slotFor('A')!;
+      const copy = slot.querySelector<HTMLElement>('.tb-chat-pinned-full > .tb-chat-pinned-copy')!;
+      for (const element of [slot, slot.querySelector<HTMLElement>('.tb-chat-pinned-body')!, copy]) {
+        expect(element.style.transform).not.toMatch(/scale|matrix|rotate|skew/);
+        expect(element.style.zoom || '').toBe('');
+      }
+      expect(slot.style.height).toBe(`${layout.A.height}px`);
+      widths.add(`${slot.style.width}|${copy.style.width}`);
+    }
+    // One width for the whole journey, equal to the bubble's.
+    expect([...widths]).toEqual([`${layout.A.width}px|${layout.A.width}px`]);
+  });
+
   it('fades the full text into the summary once at summary height', () => {
     mount();
     scrollTo(310 + 24);
