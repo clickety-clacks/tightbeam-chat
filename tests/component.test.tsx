@@ -4401,6 +4401,27 @@ describe('conversation surface', () => {
       expect(composer.value).toBe('');
     });
 
+    it('keeps the composer clear through a reconnect during the send, and restores a refusal that arrives after it', () => {
+      const sessionKey = 'reconnect-during-send';
+      const { runtime, composer } = submit(sessionKey);
+      act(() => runtime.update({ liveConnectionState: 'reconnecting', sends: [slowSend(sessionKey, {})] }));
+      expect(composer.value).toBe('');
+      act(() => runtime.update({ status: 'stale', liveConnectionState: 'disconnected' }));
+      expect(composer.value).toBe('');
+      act(() => runtime.update({ status: 'ready', liveConnectionState: 'connected', sends: [slowSend(sessionKey, {})] }));
+      expect(composer.value).toBe('');
+      act(() => runtime.update({ sends: [slowSend(sessionKey, { status: 'failed', reason: 'payload_too_large' })] }));
+      expect(composer.value).toBe(content);
+    });
+
+    it('puts the text back for a refused send as well as a failed one', () => {
+      const sessionKey = 'refused-restores';
+      const { runtime, composer, row } = submit(sessionKey);
+      act(() => runtime.update({ sends: [slowSend(sessionKey, { status: 'failed', reason: 'not_deliverable' })] }));
+      expect(composer.value).toBe(content);
+      expect(within(row()).getByRole('button', { name: 'Restore text to the composer' })).toBeTruthy();
+    });
+
     it('does not put text back for an uncertain send, which keeps its bubble actions', () => {
       const sessionKey = 'uncertain-stays-clear';
       const { runtime, composer, row } = submit(sessionKey);
