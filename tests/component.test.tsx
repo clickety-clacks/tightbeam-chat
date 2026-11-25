@@ -3969,7 +3969,7 @@ describe('conversation surface', () => {
     fireEvent.change(composer, { target: { value: '  exact  ' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
     expect(runtime.sent).toEqual(['  exact  ']);
-    expect(composer).toHaveProperty('value', '  exact  ');
+    expect(composer).toHaveProperty('value', '');
     act(() => runtime.update({ sends: [{
       sessionKey: 'send-session', deviceId: 'device', clientMessageId: 'fixture-send', content: '  exact  ',
       submittedAt: new Date().toISOString(), status: 'accepted', reconciled: false,
@@ -4127,7 +4127,7 @@ describe('conversation surface', () => {
 
     expect(fireEvent.keyDown(composer, { key: 'Enter' })).toBe(false);
     expect(runtime.sent).toEqual(['plain Return draft']);
-    expect(composer).toHaveProperty('value', 'plain Return draft');
+    expect(composer).toHaveProperty('value', '');
     act(() => runtime.update({ sends: [{
       sessionKey: 'keyboard-eligibility', deviceId: 'device', clientMessageId: 'fixture-send',
       content: 'plain Return draft', submittedAt: new Date().toISOString(),
@@ -4137,7 +4137,7 @@ describe('conversation surface', () => {
     expect(document.activeElement).toBe(composer);
   });
 
-  it.each(['failed', 'uncertain'] as const)('retains the submitted draft when delivery is %s', (status) => {
+  it.each([['failed', 'Keep this text'], ['uncertain', '']] as const)('leaves the right composer text when delivery is %s', (status, expected) => {
     const runtime = new FakeRuntime(`send-${status}`);
     render(<TightbeamChat sessionKey={`send-${status}`} adapter={adapterFor(runtime)} />);
     const composer = screen.getByRole('textbox', { name: 'Message to Research assistant' }) as HTMLTextAreaElement;
@@ -4147,7 +4147,7 @@ describe('conversation surface', () => {
       sessionKey: `send-${status}`, deviceId: 'device', clientMessageId: 'fixture-send',
       content: 'Keep this text', submittedAt: new Date().toISOString(), status, reconciled: false,
     }] }));
-    expect(composer.value).toBe('Keep this text');
+    expect(composer.value).toBe(expected);
   });
 
   it('keeps edits made after submission even when the text later matches the submitted text', () => {
