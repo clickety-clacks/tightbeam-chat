@@ -1,7 +1,8 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { createRef } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { pinnedPromptKeyframes } from '../src/pinnedPromptLayout';
-import { ScrollPinnedPrompts, type ScrollPinnedPrompt } from '../src/ScrollPinnedPrompts';
+import { ScrollPinnedPrompts, type ScrollPinnedPrompt, type ScrollPinnedPromptsHandle } from '../src/ScrollPinnedPrompts';
 
 // A transcript laid out by hand: the viewport is 600px tall at the top of the page and
 // the pin line is 10px below it. Prompt A is tall (300px, summary 80px), B is one line.
@@ -65,13 +66,15 @@ beforeEach(() => {
     return rect(0, 0);
   });
   // The summary probe reports three clamped lines; long text is cut, the short prompt is not.
+  const isProbeText = (element: HTMLElement) => element.classList.contains('tb-chat-pinned-summary-text') &&
+    !!element.parentElement?.classList.contains('tb-chat-pinned-summary-measure');
   vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function (this: HTMLElement) {
-    if (!this.classList.contains('tb-chat-pinned-summary-measure')) return 0;
+    if (!isProbeText(this)) return 0;
     return (this.textContent ?? '').length > 40 ? 400 : summaryHeight;
   });
   vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(function (this: HTMLElement) {
     if (this === viewport) return 600;
-    return this.classList.contains('tb-chat-pinned-summary-measure') ? summaryHeight : 0;
+    return isProbeText(this) ? summaryHeight : 0;
   });
 });
 
@@ -172,6 +175,15 @@ describe('scroll-pinned prompts without scroll timelines', () => {
     expect(onJump).toHaveBeenCalledWith(prompts[0]);
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss user prompt preview' }));
     expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it('says where a prompt settles at summary height, for placing a reply below it', () => {
+    const handle = createRef<ScrollPinnedPromptsHandle>();
+    render(<ScrollPinnedPrompts ref={handle} prompts={prompts} viewport={{ current: viewport }}
+      getRow={key => rows.get(key)} onJump={() => {}} onDismiss={() => {}} />, { container: root });
+    expect(handle.current!.settledBottom('A')).toBe(10 + summaryHeight);
+    expect(handle.current!.settledBottom('B')).toBe(10 + layout.B.height);
+    expect(handle.current!.settledBottom('missing')).toBeUndefined();
   });
 
   it('gives the original back when it unmounts', () => {

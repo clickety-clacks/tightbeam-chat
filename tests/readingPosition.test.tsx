@@ -275,10 +275,11 @@ function advanceNextFrame(at: number) {
   act(() => first[1].callback(at));
 }
 
-function setup(records = initialRows, renderMessage?: TightbeamChatProps['renderMessage']) {
+function setup(records = initialRows, renderMessage?: TightbeamChatProps['renderMessage'], scrollPinnedPrompts = false) {
   const runtime = new ReadingRuntime();
   runtime.state = { ...runtime.state, records };
-  render(<TightbeamChat sessionKey="reading" adapter={{ open: () => runtime }} renderMessage={renderMessage} />);
+  render(<TightbeamChat sessionKey="reading" adapter={{ open: () => runtime }} renderMessage={renderMessage}
+    scrollPinnedPrompts={scrollPinnedPrompts} />);
   scrollTo.mockClear();
   return { runtime, box: screen.getByRole('log'), input: screen.getByRole('textbox') as HTMLTextAreaElement };
 }
@@ -440,6 +441,27 @@ describe('conversation reading position', () => {
     expect(previousRow.querySelector<HTMLElement>('.tb-chat-bubble-body')!.getBoundingClientRect().bottom)
       .toBeCloseTo(box.getBoundingClientRect().top + expectedVisibleMessageTail);
     expect(screen.getByRole('button', { name: /^[1-9]\d* unseen messages?$/ })).toBeTruthy();
+  });
+
+  it('with scroll-pinned prompts, places a tall reply below where its prompt settles at the pin line', () => {
+    extraBottomSpace = 178;
+    const { runtime, box } = setup(initialRows, undefined, true);
+    rowHeightOverrides.set('message-20', 320);
+    const reply = { ...message(20), role: 'assistant' as const, sender: 'assistant' };
+    act(() => runtime.publish({ records: [...initialRows, reply] }));
+    advanceNextFrame(performance.now() + 300);
+    fireEvent.scroll(box);
+
+    const chat = box.closest<HTMLElement>('.tb-chat')!;
+    const prompt = box.querySelector<HTMLElement>('[data-scroll-key="message-19"]')!;
+    const firstReply = box.querySelector<HTMLElement>('[data-scroll-key="message-20"]')!;
+    const viewportTop = box.getBoundingClientRect().top;
+    const promptBounds = prompt.getBoundingClientRect();
+    // This prompt fits its three-line summary, so it pins at its own height: its top sits
+    // on the pin line and the reply starts below it, uncovered.
+    expect(chat.querySelector('.tb-chat-latest-user-prompt')).toBeNull();
+    expect(promptBounds.top).toBeCloseTo(viewportTop + 10);
+    expect(firstReply.getBoundingClientRect().top).toBeGreaterThan(promptBounds.bottom);
   });
 
   it.each([false, true])('keeps the prompt tail and first reply line below top overlays (runtime notice=%s)', runtimeNoticeVisible => {

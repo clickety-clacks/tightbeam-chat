@@ -241,9 +241,6 @@ body {
   position: absolute;
   left: 0;
   right: 0;
-  display: -webkit-box;
-  overflow: hidden;
-  -webkit-box-orient: vertical;
   color: var(--tb-chat-text);
   font-size: .9375rem;
   font-weight: 400;
@@ -252,6 +249,12 @@ body {
   white-space: pre-wrap;
   opacity: 0;
   will-change: opacity;
+}
+/* Clamped inside the padding, so lines past the third cannot show in the bottom padding. */
+.tb-chat-pinned-summary-text {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
 }
 .tb-chat-pinned-summary-measure {
   top: 0;
