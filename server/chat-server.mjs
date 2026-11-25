@@ -184,6 +184,7 @@ function loadRuntimeConfig(environment) {
   const configuredGateway = canonicalOrigin(environment.CHAT_DEFAULT_GATEWAY_ORIGIN);
   const gatewayMap = loadGatewayMap(environment, configuredGateway);
   const restHumanSendEnabled = environment.CHAT_REST_HUMAN_SEND === '1';
+  const workItemPillsEnabled = environment.CHAT_WORK_ITEM_PILLS === '1';
   let markerDeviceToken = '';
   if (!restHumanSendEnabled && typeof environment.CHAT_READ_MARKER_DEVICE_CREDENTIAL_FILE === 'string' &&
       environment.CHAT_READ_MARKER_DEVICE_CREDENTIAL_FILE) {
@@ -214,6 +215,7 @@ function loadRuntimeConfig(environment) {
       ...(principalKey ? { principalKey, deviceId } : {}),
       ...(readMarkerRoute ? { readMarkerRoute } : {}),
       ...(restHumanSendEnabled ? { restHumanSendEnabled: true } : {}),
+      ...(workItemPillsEnabled && principalKey ? { workItemPillsEnabled: true } : {}),
     }
     : {};
 
@@ -225,6 +227,7 @@ function loadRuntimeConfig(environment) {
     gatewayMapValid: gatewayMap.valid,
     gateways: gatewayMap.gateways,
     restHumanSendEnabled,
+    workItemPillsEnabled,
     markerDeviceToken,
     sessionKey,
     principalKey,
@@ -252,6 +255,135 @@ function selectedGatewayOrigin(searchParams, defaultGatewayOrigin) {
   return values.length === 0 ? defaultGatewayOrigin : canonicalOrigin(values[0]);
 }
 
+const numberOrNull = (value) => Number.isFinite(value) ? value : null;
+const textOrNull = (value) => typeof value === 'string' && value ? value : null;
+const textList = (value) => Array.isArray(value) ? value.filter((item) => typeof item === 'string') : [];
+
+function pillWorkItem(value) {
+  if (!value || typeof value !== 'object' || typeof value.id !== 'string' || typeof value.title !== 'string') return undefined;
+  return {
+    id: value.id, title: value.title, state: textOrNull(value.state), started: value.started === true,
+    holders: textList(value.holders), failReason: textOrNull(value.failReason),
+    createdAt: numberOrNull(value.createdAt), rowVersion: numberOrNull(value.rowVersion),
+  };
+}
+
+// Each read keeps only the fields a pill or its sheet shows. Prompts, bodies and
+// histories that the Gateway sends with them never reach the browser.
+const WORK_ITEM_PILL_PROJECTIONS = {
+  'work-item': (body) => {
+    const item = pillWorkItem(body.item);
+    return item && { item };
+  },
+  cards: (body) => {
+    const item = pillWorkItem(body.result?.workItem);
+    return item && Array.isArray(body.result.assignments) ? { item,
+      cards: body.result.assignments.filter((card) => card && typeof card.id === 'string').map((card) => ({
+        id: card.id, state: textOrNull(card.state), holderKey: textOrNull(card.holderKey),
+      })) } : undefined;
+  },
+  breathing: (body) => {
+    const result = body.result;
+    if (!result || typeof result !== 'object' || typeof result.reason !== 'string') return undefined;
+    // A work item answers through the one open card that is doing something.
+    const card = result.reason === 'open_assignment_lively' ? result.evidence?.assignment : undefined;
+    const evidence = card?.evidence ?? result.evidence ?? {};
+    const held = [evidence.assignment, ...(Array.isArray(evidence.openAssignments)
+      ? evidence.openAssignments.map((row) => row?.evidence?.assignment) : [])];
+    const turn = evidence.turn && { seq: numberOrNull(evidence.turn.seq), sessionKey: textOrNull(evidence.turn.sessionKey),
+      assignmentId: textOrNull(evidence.turn.assignmentId), workItemId: textOrNull(evidence.turn.jobRef),
+      startedAt: numberOrNull(evidence.turn.startedAt), endedAt: numberOrNull(evidence.turn.endedAt) };
+    const wake = evidence.wake && { wakeId: textOrNull(evidence.wake.wakeId), sessionKey: textOrNull(evidence.wake.sessionKey),
+      dueAt: numberOrNull(evidence.wake.dueAt), createdAt: numberOrNull(evidence.wake.createdAt) };
+    return { reason: card?.reason ?? result.reason, holders: textList([...new Set(held.map((row) => row?.holderKey))]),
+      ...(turn ? { turn } : {}), ...(wake ? { wake } : {}) };
+  },
+  wake: (body) => {
+    const wake = body.item;
+    return wake && typeof wake.wakeId === 'string' ? { wake: {
+      wakeId: wake.wakeId, sessionKey: textOrNull(wake.sessionKey), state: textOrNull(wake.state),
+      consumer: textOrNull(wake.consumer), creatorSessionKey: textOrNull(wake.creatorSessionKey),
+      assignmentId: textOrNull(wake.assignmentId), workItemId: textOrNull(wake.workItemId),
+      conditionKind: textOrNull(wake.conditionKind), conditionScope: textOrNull(wake.conditionScope),
+      dueAt: numberOrNull(wake.dueAt), createdAt: numberOrNull(wake.createdAt), reason: textOrNull(wake.waitReason),
+    } } : undefined;
+  },
+  turn: (body) => {
+    const turn = body.item;
+    return turn && Number.isSafeInteger(turn.seq) ? { turn: {
+      seq: turn.seq, sessionKey: textOrNull(turn.sessionKey), status: textOrNull(turn.status),
+      workItemId: textOrNull(turn.jobRef),
+    } } : undefined;
+  },
+  'open-questions': (body, principalKey) => Array.isArray(body.result?.decisionRequests) ? {
+    // The list is the reader's own; agent-to-agent questions in it are not theirs to answer.
+    questions: body.result.decisionRequests.filter((row) => row && typeof row.id === 'string' &&
+      (row.kind === 'operator' || row.kind === 'statute' ||
+        (!textOrNull(row.expecterSessionKey) && row.expecterUserId === principalKey))).map((row) => ({
+      id: row.id, question: textOrNull(row.question), assignmentId: textOrNull(row.assignmentId),
+      raiserId: textOrNull(row.raiserId), raisedAt: numberOrNull(row.raisedAt), deadlineAt: numberOrNull(row.deadlineAt),
+      options: (Array.isArray(row.options) ? row.options : [])
+        .map((option) => typeof option === 'string' ? option : option?.label).filter((label) => typeof label === 'string'),
+    })) } : undefined,
+  'agent-questions': (body) => Array.isArray(body.items) ? {
+    questions: body.items.filter((row) => row && typeof row.id === 'string').map((row) => ({
+      id: row.id, question: textOrNull(row.question), assignmentId: textOrNull(row.assignmentId),
+      raiserSessionKey: textOrNull(row.raiserSessionKey), expecterSessionKey: textOrNull(row.expecterSessionKey),
+      raisedAt: numberOrNull(row.raisedAt),
+    })) } : undefined,
+};
+
+// Every route makes exactly one Gateway read, for one item, agent, turn or wait,
+// or for the reader's own questions. None lists the org.
+function parseWorkItemPillsTarget(pathname, routeParams, principalKey) {
+  const asUser = `asUser=${encodeURIComponent(principalKey)}`;
+  const dispatch = (verb, params) => ({ dispatch: { verb, asUser: principalKey, params } });
+  const route = /^\/__chat\/api\/pills\/([a-z-]+)(?:\/(.+))?$/.exec(pathname);
+  if (!route) return undefined;
+  const [, projection, rest] = route;
+  if (projection === 'agent-questions' && rest === undefined) {
+    const raisers = routeParams.map(([, value]) => value);
+    if (!raisers.length || raisers.length > 20 || routeParams.some(([name, value]) => name !== 'raiser' || !value.trim())) return undefined;
+    const query = new URLSearchParams([['asUser', principalKey], ['kind', 'agent'], ['status', 'open'], ['limit', '50'],
+      ...raisers.map((raiser) => ['raiserSessionKey', raiser])]);
+    return { projection, path: `/api/decision-requests?${query}` };
+  }
+  if (routeParams.length) return undefined;
+  if (projection === 'open-questions' && rest === undefined) return { projection, ...dispatch('decision-requests', { status: 'open' }) };
+  if (rest === undefined) return undefined;
+  if (projection === 'breathing') {
+    const [, targetKind, encodedId] = /^(work-item|assignment|session)\/([^/]+)$/.exec(rest) ?? [];
+    const targetId = encodedId && decodeSessionPath(encodedId);
+    return targetId ? { projection, ...dispatch('breathing', { targetKind, targetId }) } : undefined;
+  }
+  if (rest.includes('/')) return undefined;
+  const id = decodeSessionPath(rest);
+  if (!id) return undefined;
+  if (projection === 'work-item') return { projection, path: `/api/work-items/${encodeURIComponent(id)}?${asUser}` };
+  if (projection === 'wake') return { projection, path: `/api/wakes/${encodeURIComponent(id)}?${asUser}` };
+  if (projection === 'cards') return { projection, ...dispatch('work-item-get', { workItemId: id }) };
+  if (projection === 'turn' && /^[1-9][0-9]*$/.test(id) && Number.isSafeInteger(Number(id))) {
+    return { projection, path: `/api/turns/${id}?${asUser}` };
+  }
+  return undefined;
+}
+
+async function serveWorkItemPills(response, gateway, target, principalKey) {
+  const reply = target.dispatch
+    ? await gatewayRequest(gateway, '/agent/dispatch', { method: 'POST',
+      headers: { 'content-type': 'application/json' }, body: Buffer.from(JSON.stringify(target.dispatch)) })
+    : await gatewayRequest(gateway, target.path);
+  if (reply.status !== 200) {
+    jsonResponse(response, reply.status === 404 ? 404 : 502, { error: { code: reply.status === 404 ? 'not_found' : 'gateway_refused' } });
+    return;
+  }
+  let projected;
+  try { projected = WORK_ITEM_PILL_PROJECTIONS[target.projection](JSON.parse(reply.body.toString('utf8')), principalKey); }
+  catch { /* Answered below as unusable Gateway data. */ }
+  if (projected) jsonResponse(response, 200, projected);
+  else jsonResponse(response, 502, { error: { code: 'gateway_unusable' } });
+}
+
 export function parseServiceHttpTarget(rawUrl, runtime) {
   try {
     const request = new URL(rawUrl, 'http://chat-service.invalid');
@@ -262,6 +394,10 @@ export function parseServiceHttpTarget(rawUrl, runtime) {
     if (request.pathname === '/__chat/gateway/version' && routeParams.length === 0) {
       return { kind: 'version', gatewayOrigin, path: '/version' };
     }
+
+    const pills = runtime.workItemPillsEnabled === true && runtime.principalKey
+      ? parseWorkItemPillsTarget(request.pathname, routeParams, runtime.principalKey) : undefined;
+    if (pills) return { kind: 'work-item-pills', gatewayOrigin, ...pills };
 
     const attest = /^\/__chat\/api\/attests\/([^/]+)$/.exec(request.pathname);
     const attestId = attest && decodeSessionPath(attest[1]);
@@ -440,6 +576,14 @@ export function parseServiceWebSocketTarget(rawUrl, runtime) {
     if (request.origin !== 'http://chat-service.invalid') return undefined;
     const gatewayOrigin = selectedGatewayOrigin(request.searchParams, runtime.gatewayOrigin);
     if (!gatewayOrigin) return undefined;
+    if (request.pathname === '/__chat/ws/work-changes') {
+      const names = [...request.searchParams.keys()];
+      if (runtime.workItemPillsEnabled !== true || !runtime.principalKey ||
+          names.some((name) => name !== 'gateway' && name !== 'protocolVersion') ||
+          request.searchParams.getAll('protocolVersion').join() !== '2') return undefined;
+      // No selected session: the browser subscribes to each work item it shows.
+      return { path: '/ws/changes?protocolVersion=2', kind: 'work-changes', gatewayOrigin };
+    }
     const sessionKeys = request.searchParams.getAll('sessionKey');
     if (sessionKeys.length !== 1 || !sessionKeys[0]?.trim()) return undefined;
     if ([...request.searchParams.keys()].some((key) => !['gateway', 'sessionKey', 'protocolVersion'].includes(key))) {
@@ -543,7 +687,7 @@ async function gatewayRequest(
     request.end(body);
   });
 
-  // serviceAgentDispatch validates these requests as post, read-marker-set or assess_attachments before forwarding.
+  // Callers fix the dispatched verb: serviceAgentDispatch's post, read-marker-set or assess_attachments, or one pill read.
   if (!retriedAfterVersionRefresh && authorize && path === '/agent/dispatch' &&
       isIncompatibleCliReply(reply)) {
     if (gateway.cliVersion === cliVersion) gateway.cliVersion = undefined;
@@ -620,6 +764,10 @@ async function serviceHttp(request, response, runtime) {
     return;
   }
   try {
+    if (target.kind === 'work-item-pills') {
+      await serveWorkItemPills(response, gateway, target, runtime.principalKey);
+      return;
+    }
     if (target.kind === 'version' || target.kind === 'detail' || target.kind === 'transcript' || target.kind === 'read-marker') {
       writeGatewayReply(response, await gatewayRequest(gateway, target.path, {
         authorize: target.kind !== 'version',
@@ -735,7 +883,7 @@ function websocketClientPingFrame() {
 }
 
 export function startChangesFeedKeepalive(target, remote) {
-  if (target.kind !== 'changes') return () => {};
+  if (target.kind !== 'changes' && target.kind !== 'work-changes') return () => {};
 
   const keepalive = setInterval(() => {
     if (!remote.destroyed && remote.writable) remote.write(websocketClientPingFrame());
@@ -774,7 +922,7 @@ function proxyServiceWebSocket(request, socket, head, target, runtime, gateway) 
       type: 'auth',
       token: gateway.token,
       asUser: runtime.principalKey,
-      sessionKey: target.sessionKey,
+      ...(target.sessionKey === undefined ? {} : { sessionKey: target.sessionKey }),
     };
     if (target.kind === 'human') {
       auth.deviceId = runtime.deviceId;
