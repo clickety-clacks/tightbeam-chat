@@ -2663,7 +2663,8 @@ describe('conversation reading position', () => {
     fireEvent.click(original.querySelector('button.tb-chat-prompt-expand')!, { clientX: 5000, clientY: 5000 });
     expect(original.querySelector('.tb-chat-prompt-clamp')!.getAttribute('data-expanded')).toBe('true');
     await act(async () => { await Promise.resolve(); });
-    const current = document.querySelector<HTMLElement>(`.tb-chat-pinned-slot[data-prompt-identity="${slot.dataset.promptIdentity}"]`)!;
+    const current = [...document.querySelectorAll<HTMLElement>('.tb-chat-pinned-slot')]
+      .find(candidate => candidate.dataset.promptIdentity === slot.dataset.promptIdentity)!;
     expect(current.querySelector('.tb-chat-pinned-full .tb-chat-prompt-clamp')!.getAttribute('data-expanded')).toBe('true');
     expect(current.querySelector('.tb-chat-pinned-full .tb-chat-prompt-expand')).toBeNull();
   });
