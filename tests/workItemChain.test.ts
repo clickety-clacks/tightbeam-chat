@@ -29,7 +29,7 @@ class Fake implements WorkItemSheetTransport {
   private call<T>(name: string, value: T): Promise<T> { this.calls.push(name); return Promise.resolve(value); }
   readCards = (id: string) => { const found = this.items.get(id); return this.call('cards', found && { item: found, cards: this.cards }); };
   readItem = (id: string) => this.call('item', this.items.get(id));
-  readBreathing = (kind: string, id: string) => this.call(`breathing ${kind}`, this.states.get(id) ?? idle);
+  readBreathing = (kind: string, id: string): Promise<WorkItemBreathing | undefined> => this.call(`breathing ${kind}`, this.states.get(id) ?? idle);
   readWait = (id: string) => this.call('wait', this.waits.get(id));
   readMyQuestions = () => this.call('my questions', this.mine);
   readAgentQuestions = () => this.call('agent questions', this.asked);
@@ -127,6 +127,24 @@ describe('a tap follows the waits', () => {
     expect(foundState(busy)).toBeUndefined();
     fake.states.set('agent:1', { ...idle, turn: { seq: 1, sessionKey: 'agent:1', workItemId: null, startedAt: 1, endedAt: 9 } });
     expect((await fake.again()).groups[0].steps).toEqual([{ kind: 'idle', agent: 'Agent 1', title: null, endedAt: 9 }]);
+  });
+
+  it('never calls an answer it did not get idle, or another wait this item’s', async () => {
+    const fake = new Fake(item(1), item(2));
+    fake.readBreathing = async () => { fake.calls.push('breathing'); return undefined; };
+    expect((await fake.open()).groups[0].steps).toEqual([{ kind: 'unreadable', what: 'item' }]);
+    const gone = new Fake(item(1));
+    gone.states.set('asg_1', { reason: 'assignment_missing', holders: [] });
+    gone.states.set('agent:1', { reason: 'session_missing', holders: [] });
+    expect((await gone.open()).groups[0].steps).toEqual([{ kind: 'unreadable', what: 'item' }]);
+    const asked = new Fake(item(1));
+    asked.asked = [{ question: 'Which?', assignmentId: 'asg_1', raiserSessionKey: 'agent:1', expecterSessionKey: 'agent:2', raisedAt: 3 }];
+    asked.states.set('agent:2', { reason: 'session_missing', holders: [] });
+    expect(kinds((await asked.open()).groups[0].steps)).toEqual(['wait', 'unreadable']);
+    const untied = new Fake(item(1));
+    untied.states.set('agent:1', pending('w1'));
+    untied.waits.set('w1', wait('w1'));
+    expect(foundState(await untied.open())).toBeUndefined();
   });
 
   it('shows a question to another agent, and what that agent is doing', async () => {
