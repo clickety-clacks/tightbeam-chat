@@ -1,5 +1,26 @@
 [
   {
+    "version": "v0.1.113",
+    "items": [
+      {
+        "title": "Work item titles on one line",
+        "description": "Filed work items show their title on one line, including notices that cover several records. Chat loads the titles in one small batch for each page of history it shows."
+      },
+      {
+        "title": "Large prompts are refused clearly",
+        "description": "A prompt too large for the Gateway to accept is refused with a clear message, and your draft stays in the box. Chat's own server no longer stops when the Gateway refuses a large message."
+      },
+      {
+        "title": "Photos and files record your read position",
+        "description": "Sending a photo or file now records your read position the way a text message does, on installations where read-position syncing is switched on."
+      },
+      {
+        "title": "Gateway compatibility",
+        "description": "Chat supports Gateway 0.1.16. Human prompts use the authenticated WebSocket connection by default."
+      }
+    ]
+  },
+  {
     "version": "v0.1.112",
     "items": [
       {
