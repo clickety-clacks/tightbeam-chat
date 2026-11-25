@@ -717,6 +717,9 @@ async function gatewayRequest(
       });
     });
     request.setTimeout(15000, () => request.destroy(new Error('Gateway request timed out')));
+    // A Gateway that refuses a large body and resets the connection while the upload is still being written
+    // makes the socket emit an error after the request has finished; with no listener that ends the whole process.
+    request.on('socket', (socket) => { socket.on('error', () => {}); });
     // The request error can arrive before or after the reply head: a 413 that already arrived wins.
     request.on('error', (error) => { if (!settleEarlyRefusal()) reject(error); });
     request.end(body);
