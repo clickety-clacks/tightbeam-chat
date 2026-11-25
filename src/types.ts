@@ -1,5 +1,7 @@
 import type { ActivitySummaryTransport } from './activitySummaries';
 import type { RecordIndex } from './recordIndex';
+import type { WorkItemPills } from './workItemPills';
+import type { WorkItemPillsTransport } from './workItemPillsTransport';
 /** The host decodes the elected backend's wire schema into these canonical records. */
 export interface CanonicalMessage {
   readonly kind: 'message';
@@ -417,6 +419,8 @@ export interface ChatTransport {
   /** Newest items this session filed, in one bounded list read; older pages use the opaque cursor. */
   readFiledWorkItems?(sessionKey: string, page: { readonly limit: number; readonly before?: string },
     signal: AbortSignal): Promise<FiledWorkItemPage>;
+  /** Live and tapped reads for work item pills; absent unless the host turns pills on. */
+  readonly workItemPills?: WorkItemPillsTransport;
   readTail(sessionKey: string, signal: AbortSignal): Promise<ConversationPage>;
   readOlder(sessionKey: string, before: string, signal: AbortSignal): Promise<ConversationPage>;
   /** Read only rows newer than a held Gateway transcript cursor. */
@@ -572,6 +576,8 @@ export interface ChatRuntime {
   retryRecordEvents?(): void;
   /** Re-read the newest loaded filed items once. */
   refreshWorkItems?(): Promise<void>;
+  /** Present only when the host turns pills on. */
+  readonly workItemPills?: { readonly pills: WorkItemPills; readonly transport: WorkItemPillsTransport };
   send(content: string, clientMessageId?: string, hostSend?: HostSendContext): string | null;
   /** Prepare the whole selection before enabling Send; preview and submit the exact returned list. */
   prepareAttachmentInputs?(inputs: readonly AttachmentInput[], signal: AbortSignal): Promise<readonly AttachmentInput[]>;

@@ -9,11 +9,13 @@ function isAuthorizationFailureCode(value: unknown): boolean {
     'authentication_failed', 'auth_failed'].includes(value.toLowerCase());
 }
 
-function chatSocketUrl(path: '/ws' | '/ws/changes', target: ChatTarget): URL {
+type SocketPath = '/ws' | '/ws/changes' | '/ws/work-changes';
+
+function chatSocketUrl(path: SocketPath, target: ChatTarget): URL {
   const url = new URL(`/__chat${path}`, window.location.origin);
-  if (path === '/ws/changes') url.searchParams.set('protocolVersion', '2');
+  if (path !== '/ws') url.searchParams.set('protocolVersion', '2');
   url.searchParams.set('gateway', target.gateway);
-  url.searchParams.set('sessionKey', target.sessionKey);
+  if (path !== '/ws/work-changes') url.searchParams.set('sessionKey', target.sessionKey);
   url.protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   return url;
 }
@@ -27,7 +29,7 @@ export function browserHost(target: ChatTarget): Public019Host {
     return submitter ? Object.freeze({ ...identity, submitter }) : identity;
   };
 
-  function open(path: '/ws' | '/ws/changes', signal: AbortSignal): Promise<Public019Channel> {
+  function open(path: SocketPath, signal: AbortSignal): Promise<Public019Channel> {
     const human = path === '/ws';
     const socket = new WebSocket(chatSocketUrl(path, target));
     return new Promise((resolve, reject) => {
@@ -79,7 +81,7 @@ export function browserHost(target: ChatTarget): Public019Host {
               }
               authenticated = true;
             } else {
-              if (frame.sessionKey !== target.sessionKey) {
+              if (path === '/ws/changes' && frame.sessionKey !== target.sessionKey) {
                 fail(new AuthorizationError('The configured Chat conversation was refused.'));
                 return;
               }
@@ -136,5 +138,7 @@ export function browserHost(target: ChatTarget): Public019Host {
     },
     openAuthenticatedChanges: (signal) => open('/ws/changes', signal),
     openAuthenticatedHuman: (signal) => open('/ws', signal),
+    ...(target.workItemPillsEnabled === true
+      ? { openAuthenticatedWorkChanges: (signal: AbortSignal) => open('/ws/work-changes', signal) } : {}),
   };
 }

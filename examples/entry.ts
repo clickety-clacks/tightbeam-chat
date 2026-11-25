@@ -8,6 +8,7 @@ export interface ChatTarget {
   readonly deviceId: string;
   readonly readMarkerRoute?: 'gateway-configured-user' | 'gateway-user-device';
   readonly restHumanSendEnabled?: boolean;
+  readonly workItemPillsEnabled?: boolean;
   readonly submitter?: SubmitterAttribution;
 }
 
@@ -23,6 +24,7 @@ export interface ConfiguredChatTarget {
   readonly deviceId?: string;
   readonly readMarkerRoute?: 'gateway-configured-user' | 'gateway-user-device';
   readonly restHumanSendEnabled?: boolean;
+  readonly workItemPillsEnabled?: boolean;
   readonly submitter?: SubmitterAttribution;
 }
 
@@ -64,6 +66,7 @@ export async function loadConfiguredChatTarget(
       ? config.readMarkerRoute : undefined,
     config.restHumanSendEnabled === true,
     normalizeSubmitterAttribution(config.submitter),
+    config.workItemPillsEnabled === true,
   );
   if (!target) throw new Error('The Chat server returned an invalid default target.');
   return target;
@@ -101,6 +104,7 @@ function targetFrom(
   readMarkerRoute: 'gateway-configured-user' | 'gateway-user-device' | undefined,
   restHumanSendEnabled: boolean,
   submitter?: SubmitterAttribution,
+  workItemPillsEnabled = false,
 ): ChatTarget | undefined {
   const normalizedGateway = canonicalGateway(gateway);
   if (!normalizedGateway || !sessionKey?.trim() || !principalKey?.trim() || !deviceId?.trim()) return undefined;
@@ -112,13 +116,14 @@ function targetFrom(
     ...(readMarkerRoute ? { readMarkerRoute } : {}),
     ...(restHumanSendEnabled ? { restHumanSendEnabled: true } : {}),
     ...(restHumanSendEnabled && submitter ? { submitter } : {}),
+    ...(workItemPillsEnabled ? { workItemPillsEnabled: true } : {}),
   };
 }
 
 function configuredTarget(value: ConfiguredChatTarget | undefined): ChatTarget | undefined {
   return targetFrom(value?.gateway, value?.sessionKey, value?.principalKey, value?.deviceId,
     value?.readMarkerRoute, value?.restHumanSendEnabled === true,
-    normalizeSubmitterAttribution(value?.submitter));
+    normalizeSubmitterAttribution(value?.submitter), value?.workItemPillsEnabled === true);
 }
 
 function wellFormedQuery(search: string): boolean {
@@ -167,13 +172,14 @@ export function resolveEntrySelection(
       canRecoverToConfigured: false,
     };
   }
-  const { readMarkerRoute, restHumanSendEnabled, ...configuredIdentity } = fallback;
+  const { readMarkerRoute, restHumanSendEnabled, workItemPillsEnabled, ...configuredIdentity } = fallback;
   const target: ChatTarget = {
     ...configuredIdentity,
     gateway,
     sessionKey,
     ...(gateway === fallback.gateway && readMarkerRoute ? { readMarkerRoute } : {}),
     ...(gateway === fallback.gateway && restHumanSendEnabled ? { restHumanSendEnabled: true } : {}),
+    ...(gateway === fallback.gateway && workItemPillsEnabled ? { workItemPillsEnabled: true } : {}),
   };
   return {
     kind: 'selected',

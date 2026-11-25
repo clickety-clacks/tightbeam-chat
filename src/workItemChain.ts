@@ -1,4 +1,4 @@
-import type { WorkItemSummary } from './workItemPills';
+import type { WorkItemSummary } from './types';
 
 export interface WorkItemCards {
   readonly item: WorkItemSummary;

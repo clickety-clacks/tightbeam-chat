@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WorkItemPills, type WorkItemSummary } from '../src/workItemPills';
-import { createWorkItemPillsTransport, decodeWorkItemSummary } from '../src/workItemPillsTransport';
+import { createWorkItemPillsTransport } from '../src/workItemPillsTransport';
 
 const summary = (n: number, patch: Partial<WorkItemSummary> = {}): WorkItemSummary => ({
   id: `wi_${n}`, title: `Item ${n}`, state: 'open', started: true, holders: ['agent:a'], failReason: null,
@@ -144,13 +144,6 @@ describe('states from the one read', () => {
       summary(5, { state: 'failed' }), summary(6, { state: 'iceboxed' })]));
     expect(gateway.pills.getSnapshot().map((pill) => [pill.id, pill.state])).toEqual([
       ['wi_6', 'shelved'], ['wi_5', 'failed'], ['wi_4', 'done'], ['wi_3', 'between-hands'], ['wi_2', 'held'], ['wi_1', 'not-started']]);
-  });
-
-  it('decodes only a complete item', () => {
-    expect(decodeWorkItemSummary({ ...summary(1), landings: [1] })).toEqual(summary(1));
-    for (const broken of [null, {}, { ...summary(1), state: 'other' }, { ...summary(1), holders: [1] }, { ...summary(1), started: 1 }]) {
-      expect(decodeWorkItemSummary(broken)).toBeUndefined();
-    }
   });
 });
 

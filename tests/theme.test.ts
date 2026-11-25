@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 const themeCss = readFileSync(resolve(process.cwd(), 'src/theme.css'), 'utf8');
 const componentCss = readFileSync(resolve(process.cwd(), 'src/style.css'), 'utf8');
 const imageCss = readFileSync(resolve(process.cwd(), 'src/messageAttachments.css'), 'utf8');
+const workItemCss = readFileSync(resolve(process.cwd(), 'src/workItemPills.css'), 'utf8');
 const siteCss = readFileSync(resolve(process.cwd(), 'examples/site.css'), 'utf8');
 const hostComposerCss = readFileSync(resolve(process.cwd(), 'examples/hostComposer.css'), 'utf8');
 const componentSource = readFileSync(resolve(process.cwd(), 'src/TightbeamChat.tsx'), 'utf8');
@@ -126,6 +127,24 @@ const expectedGlassMinimums = {
 } as const;
 
 describe('Chat theme', () => {
+  it('keeps work item pill, sheet and ring colors legible on their own tints', () => {
+    const { light, dark } = tokenBlocks(themeCss);
+    for (const tokens of [light, dark]) {
+      const surface = tokenColor(tokens, 'agent-surface-start');
+      for (const ink of ['fjord', 'pill-purple', 'caution', 'ok', 'danger', 'idle']) {
+        const tint = mix(tokenColor(tokens, ink), surface, .09);
+        expect(contrast(tokenColor(tokens, ink), tint), ink).toBeGreaterThanOrEqual(4.5);
+        expect(contrast(tokenColor(tokens, 'text'), tint), ink).toBeGreaterThanOrEqual(4.5);
+        expect(contrast(tokenColor(tokens, 'muted'), tint), ink).toBeGreaterThanOrEqual(4.5);
+        // Glyphs need 3:1 on the stronger disc, and reversed on a solid one.
+        expect(contrast(tokenColor(tokens, ink), mix(tokenColor(tokens, ink), surface, .18)), ink).toBeGreaterThanOrEqual(3);
+        expect(contrast(surface, tokenColor(tokens, ink)), ink).toBeGreaterThanOrEqual(3);
+      }
+    }
+    expect(workItemCss).not.toMatch(/#[\da-f]{3,8}\b|rgba?\(/i);
+    expect(rule(workItemCss, '.tb-chat-work-pill')).toContain('var(--tb-chat-work-ink) 9%');
+  });
+
   it('defines the exact light and dark palette selected by system appearance', () => {
     const { light, dark } = tokenBlocks(themeCss);
     expect(light).toEqual(expectedLight);

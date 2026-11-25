@@ -1,0 +1,187 @@
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { LocalFixtureTransport, fixtureTarget } from '../examples/mockTransport';
+import { createTightbeamAdapter, TightbeamChat } from '../src';
+import { pillTitle } from '../src/WorkItemStrip';
+import { agoText, clockText, durationText, untilText } from '../src/workItemTime';
+import type { WorkItemSummary } from '../src/types';
+import type { WorkItemChange } from '../src/workItemPills';
+import type { WorkItemPillsTransport } from '../src/workItemPillsTransport';
+
+const uuid = (n: number) => `wi_00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
+const summary = (n: number, patch: Partial<WorkItemSummary> = {}): WorkItemSummary => ({ id: uuid(n), title: `Product: Item ${n}`,
+  state: 'open', started: true, holders: ['agent:a'], failReason: null, createdAt: Date.now() - n * 1000, rowVersion: 1, ...patch });
+
+class Visible {
+  static all: Visible[] = [];
+  readonly seen = new Set<Element>();
+  constructor(readonly report: (entries: { target: Element; intersectionRatio: number }[]) => void) { Visible.all.push(this); }
+  observe(element: Element) { this.seen.add(element); }
+  unobserve(element: Element) { this.seen.delete(element); }
+  disconnect() { this.seen.clear(); }
+  show(...ids: string[]) {
+    this.report([...this.seen].map((target) => ({ target,
+      intersectionRatio: ids.includes((target as HTMLElement).dataset.workItem!) ? 1 : 0 })));
+  }
+}
+
+function chat(items: readonly WorkItemSummary[], options: { pills?: boolean } = {}) {
+  const counts: Record<string, number> = {};
+  const count = (name: string) => { counts[name] = (counts[name] ?? 0) + 1; };
+  let emit: (change: WorkItemChange) => void = () => {};
+  const order: string[] = [];
+  const pills: WorkItemPillsTransport = {
+    openChanges: async (onChange) => { emit = onChange; return { watch: async () => { order.push('watch'); }, unwatch() {}, close() {} }; },
+    readItem: async (id) => { count('item'); return items.find((item) => item.id === id); },
+    readTurn: async (seq) => { count('turn'); return { seq, workItemId: uuid(1), status: 'running' }; },
+    readCards: async (id) => { count('cards'); const item = items.find((row) => row.id === id)!;
+      return { item, cards: [{ id: 'asg_1', open: true, holderKey: 'agent:a' }] }; },
+    readBreathing: async () => { count('breathing'); return { reason: 'pending_wake', holders: [],
+      wake: { wakeId: 'w1', sessionKey: 'agent:a', dueAt: Date.now() + 3_600_000, createdAt: 1 } }; },
+    readWait: async (id) => { count('wait'); return { id, sessionKey: 'agent:a', creatorSessionKey: 'agent:a', state: 'pending', recurring: false,
+      conditionKind: null, conditionScope: null, dueAt: Date.now() + 3_600_000, createdAt: Date.now() - 60_000, reason: null }; },
+    readMyQuestions: async () => { count('questions'); return []; },
+    readAgentQuestions: async () => { count('agent questions'); return []; },
+    readAgentName: async () => { count('name'); return 'Coder'; },
+  };
+  const transport = Object.assign(new LocalFixtureTransport(), { targetGateway: 'https://gateway.example',
+    readRecordEvents: async (sessionKey: string) => ({ items: items.map((item) => ({ eventId: `work_item.filed:${item.id}`, sessionKey,
+      kind: 'work_item.filed', at: item.createdAt, record: { type: 'work-item', id: item.id, workItemId: item.id, detail: '' },
+      actorSessionKey: sessionKey, tiedAs: ['creator'], cause: null, noticeMessageIds: [] })), oldestCursor: null, hasOlder: false }),
+    readFiledWorkItems: async () => { count('page'); order.push('page'); return { items: [...items], oldestCursor: null, hasOlder: false }; },
+    ...(options.pills === false ? {} : { workItemPills: pills }),
+  });
+  const view = render(<TightbeamChat sessionKey="fixture-session" adapter={createTightbeamAdapter(transport, { ...fixtureTarget, label: 'fixture' })} />);
+  return { view, counts, order, emit: (change: WorkItemChange) => act(async () => { emit(change); }) };
+}
+const strip = () => screen.findByRole('group', { name: 'Work items, newest first' });
+const pills = async () => within(await strip()).getAllByRole('button');
+
+beforeEach(() => {
+  Visible.all = [];
+  vi.stubGlobal('IntersectionObserver', Visible);
+  window.localStorage.clear();
+});
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+
+describe('the strip', () => {
+  it('does not exist unless the host turns pills on, or while there is nothing to show', async () => {
+    const off = chat([summary(1)], { pills: false });
+    await waitFor(() => expect(off.counts.page).toBe(1));
+    expect(off.view.container.querySelector('.tb-chat-work-items')).toBeNull();
+    expect(off.view.container.querySelector('.tb-chat-has-work-items')).toBeNull();
+    cleanup();
+    const empty = chat([]);
+    await screen.findByText(/Fixture message 124/);
+    expect(empty.view.container.querySelector('.tb-chat-work-items')).toBeNull();
+    expect(empty.counts).toEqual({});
+  });
+
+  it.each([10, 50])('paints %i pills from one page read, watched first', async (n) => {
+    const run = chat(Array.from({ length: n }, (_, i) => summary(i + 1)));
+    expect(await pills()).toHaveLength(n);
+    await act(async () => { Visible.all.at(-1)!.show(uuid(1), uuid(2), uuid(3)); });
+    expect(run.counts).toEqual({ page: 1 });
+    expect(run.order.indexOf('page')).toBe(n);
+    expect(run.view.container.querySelector('.tb-chat-has-work-items')).not.toBeNull();
+  });
+
+  it('shows each state in words, drops the product from the pill and keeps it in the label', async () => {
+    chat([summary(1), summary(2, { holders: [] }), summary(3, { holders: [], started: false }), summary(4, { state: 'closed', holders: [] })]);
+    const shown = await pills();
+    expect(shown.map((pill) => pill.textContent)).toEqual(['Item 1Held', 'Item 2Between hands', 'Item 3Not started', 'Item 4Done']);
+    expect(shown[0].getAttribute('aria-label')).toBe('Product: Item 1. Held');
+  });
+
+  it('marks a changed pill as past and rings only after its turn is read', async () => {
+    const run = chat([summary(1)]);
+    await pills();
+    await run.emit({ kind: 'item', workItemId: uuid(1) });
+    expect((await pills())[0].textContent).toBe('Item 1Was held');
+    expect((await pills())[0].getAttribute('aria-label')).toContain('not read again yet');
+    await act(async () => { Visible.all.at(-1)!.show(uuid(1)); });
+    await run.emit({ kind: 'turn', workItemId: uuid(1), turnSeq: 4, ended: false });
+    await waitFor(async () => expect((await pills())[0].textContent).toBe('Item 1Working now'));
+    expect(run.counts.turn).toBe(1);
+    expect((await pills())[0].querySelector('.tb-chat-work-ring')).not.toBeNull();
+  });
+
+  it('folds to its button and remembers it', async () => {
+    const run = chat([summary(1), summary(2)]);
+    await pills();
+    fireEvent.click(screen.getByRole('button', { name: 'Hide 2 work items' }));
+    expect(screen.queryByRole('group', { name: 'Work items, newest first' })).toBeNull();
+    run.view.unmount();
+    chat([summary(1), summary(2)]);
+    expect(await screen.findByRole('button', { name: 'Show 2 work items' })).toBeTruthy();
+  });
+});
+
+describe('the sheet', () => {
+  it('reads nothing until a tap, then shows the wait, its time and that no reason was given', async () => {
+    const run = chat([summary(1)]);
+    fireEvent.click((await pills())[0]);
+    const dialog = await screen.findByRole('dialog');
+    expect(await within(dialog).findByText('This is what it waits on, step by step.')).toBeTruthy();
+    expect(dialog.textContent).toContain('Waiting');
+    expect(dialog.textContent).toContain('Coder');
+    expect(dialog.textContent).toContain('No reason given');
+    expect(dialog.textContent).toContain('in 1 h');
+    expect(dialog.textContent).toContain('Can’t tell what comes next');
+    expect(run.counts).toEqual({ page: 1, cards: 1, questions: 1, 'agent questions': 1, breathing: 1, wait: 1, name: 1 });
+    expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: 'Close work item' }));
+  });
+
+  it('opens finished work without a read, and reads it once it has changed', async () => {
+    const run = chat([summary(1, { state: 'failed', holders: [], failReason: 'A duplicate.' })]);
+    fireEvent.click((await pills())[0]);
+    expect((await screen.findByRole('dialog')).textContent).toContain('A duplicate.');
+    expect(run.counts).toEqual({ page: 1 });
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).toBeNull();
+    await run.emit({ kind: 'item', workItemId: uuid(1) });
+    fireEvent.click((await pills())[0]);
+    await waitFor(() => expect(run.counts.cards).toBe(1));
+  });
+
+  it('keeps focus inside and returns it to the pill', async () => {
+    chat([summary(1)]);
+    const pill = (await pills())[0];
+    pill.focus();
+    fireEvent.click(pill);
+    const dialog = await screen.findByRole('dialog');
+    await within(dialog).findByText('No reason given');
+    fireEvent.keyDown(document.activeElement!, { key: 'Tab' });
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(document.activeElement).toBe(pill);
+  });
+
+  it('tells a host when the sheet opens and closes', async () => {
+    const events: { event: string; open?: boolean }[] = [];
+    Object.assign(window, { __TIGHTBEAM_CHAT_HOST__: { versions: [1], onEvent: (event: { event: string; open?: boolean }) => events.push(event) } });
+    try {
+      const run = chat([summary(1)]);
+      await waitFor(() => expect(events.some((event) => event.event === 'ready')).toBe(true));
+      fireEvent.click((await pills())[0]);
+      await screen.findByRole('dialog');
+      fireEvent.keyDown(document, { key: 'Escape' });
+      await waitFor(() => expect(events.filter((event) => event.event === 'overlay').map((event) => event.open)).toEqual([true, false]));
+      run.view.unmount();
+    } finally { delete (window as unknown as Record<string, unknown>).__TIGHTBEAM_CHAT_HOST__; }
+  });
+});
+
+it('writes titles and times plainly', () => {
+  expect(pillTitle('Tightbeam Chat: Show it')).toBe('Show it');
+  expect(pillTitle('Plain title')).toBe('Plain title');
+  expect(pillTitle('A very long sentence that only later reaches: a colon')).toBe('A very long sentence that only later reaches: a colon');
+  expect([0, 59, 192, 1440, 2520, 13_000].map((minutes) => durationText(minutes * 60_000)))
+    .toEqual(['less than a minute', '59 min', '3 h 12 min', '1 day', '1 day 18 h', '9 days']);
+  const now = new Date(2026, 10, 24, 12, 0).getTime();
+  expect(clockText(now + 60_000, now)).not.toContain(',');
+  expect(clockText(now + 86_400_000, now)).toContain(',');
+  expect(agoText(now - 60_000, now)).toBe('1 min ago');
+  expect(untilText(now + 60_000, now)).toBe('in 1 min');
+  expect(untilText(now - 60_000, now)).toBe('1 min ago');
+});

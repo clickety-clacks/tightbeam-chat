@@ -1,15 +1,6 @@
-/** A work item as one bounded read returns it. */
-export interface WorkItemSummary {
-  readonly id: string;
-  readonly title: string;
-  readonly state: 'open' | 'closed' | 'failed' | 'iceboxed';
-  readonly started: boolean;
-  /** Sessions holding an open assignment on it. */
-  readonly holders: readonly string[];
-  readonly failReason: string | null;
-  readonly createdAt: number;
-  readonly rowVersion: number;
-}
+import type { WorkItemSummary } from './types';
+
+export type { WorkItemSummary };
 
 export interface WorkItemTurn {
   readonly seq: number;
@@ -83,10 +74,11 @@ export interface WorkItemPillsOptions {
   readonly now?: () => number;
 }
 
+const finished: Readonly<Record<string, WorkItemPillState>> = { closed: 'done', failed: 'failed', iceboxed: 'shelved' };
+
 function baseState(summary: WorkItemSummary): WorkItemPillState {
-  if (summary.state === 'closed') return 'done';
-  if (summary.state === 'failed') return 'failed';
-  if (summary.state === 'iceboxed') return 'shelved';
+  const end = finished[summary.state];
+  if (end) return end;
   if (summary.holders.length) return 'held';
   return summary.started ? 'between-hands' : 'not-started';
 }
