@@ -53,6 +53,11 @@ export interface TightbeamChatProps {
    * default (CHAT_SCROLL_PINNED_PROMPTS, docs/feature-flags.md).
    */
   readonly scrollPinnedPrompts?: boolean;
+  /**
+   * Shows the reader's own long prompts at most ten lines tall with a button to expand them.
+   * Unfinished; off by default (CHAT_LONG_PROMPT_CLAMP, docs/feature-flags.md).
+   */
+  readonly longPromptClamp?: boolean;
   /** Change when the host changes principal or transport lifetime. */
   readonly identityKey?: string;
   readonly renderMessage?: (record: ConversationRecord, context: RenderContext) => ReactNode | undefined;
@@ -1076,7 +1081,8 @@ function StatusIcon({ state }: { state: RuntimeState }) {
 }
 
 const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, registerRow, readAttachment, preservePosition,
-  reconcileLayout, onRetryRender, onRestoreFailedMessage, canEditResend, scrollKey: scrollKeyOverride, promptTargetPrefix }: {
+  reconcileLayout, onRetryRender, onRestoreFailedMessage, canEditResend, scrollKey: scrollKeyOverride, promptTargetPrefix,
+  longPromptClamp }: {
   bubble: Bubble;
   renderMessage?: TightbeamChatProps['renderMessage'];
   agentName: string;
@@ -1087,6 +1093,7 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, re
   onRetryRender: () => void;
   onRestoreFailedMessage: (bubble: Bubble) => void;
   canEditResend: boolean;
+  longPromptClamp?: boolean;
   scrollKey?: string;
   promptTargetPrefix: string;
 }) {
@@ -1098,7 +1105,7 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, re
   const time = localTimestamp(record.createdAt ?? bubble.segmentTime ?? record.receivedAt);
   const displayContent = stripProvenanceMarkup(bubble.displayContent ?? record.content);
   const failureReason = bubble.failureReason;
-  const ownPrompt = bubble.side === 'human' && bubble.ownerScoped;
+  const ownPrompt = longPromptClamp === true && bubble.side === 'human' && bubble.ownerScoped;
   const context: RenderContext = {
     sessionKey: record.sessionKey,
     recordKey: bubble.key,
@@ -1163,7 +1170,7 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, re
     before.derived === after.derived && sameMember && previous.renderMessage === next.renderMessage &&
     previous.onRetryRender === next.onRetryRender && previous.readAttachment === next.readAttachment &&
     previous.onRestoreFailedMessage === next.onRestoreFailedMessage &&
-    previous.promptTargetPrefix === next.promptTargetPrefix &&
+    previous.promptTargetPrefix === next.promptTargetPrefix && previous.longPromptClamp === next.longPromptClamp &&
     previous.agentName === next.agentName && previous.registerRow === next.registerRow &&
     previous.preservePosition === next.preservePosition && previous.reconcileLayout === next.reconcileLayout &&
     previous.scrollKey === next.scrollKey;
@@ -2319,7 +2326,7 @@ const ActivityRunRow = memo(function ActivityRunRow({ entry, expanded, toggle, r
 const WORK_ITEMS_MIN_HEIGHT = 380;
 
 function ChatBody({ runtime, renderMessage, className, hostBridge, configuredConversationHref, activitySummaries,
-  submitterAttributionEnabled, scrollPinnedPrompts,
+  submitterAttributionEnabled, scrollPinnedPrompts, longPromptClamp,
   recoverySnapshot }: {
   activitySummaries?: ActivitySummaryTransport;
   runtime: ChatRuntime;
@@ -2329,6 +2336,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   configuredConversationHref?: string;
   submitterAttributionEnabled?: boolean;
   scrollPinnedPrompts?: boolean;
+  longPromptClamp?: boolean;
   recoverySnapshot: ChatRecoverySnapshot;
 }) {
   const state = useSyncExternalStore(runtime.subscribe, runtime.getSnapshot, runtime.getSnapshot);
@@ -3524,7 +3532,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
             readAttachment={runtime.readAttachment}
             preservePosition={preserveReadingPosition} reconcileLayout={reading.reconcileViewportLayout}
             onRetryRender={retryTranscript} onRestoreFailedMessage={restoreFailedMessage} canEditResend={canEditResend}
-            promptTargetPrefix={promptTargetPrefix} />;
+            promptTargetPrefix={promptTargetPrefix} longPromptClamp={longPromptClamp} />;
         }
         const { send } = item;
         const time = localTimestamp(send.submittedAt);
@@ -3581,8 +3589,9 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
           aria-label={formatVisibleIds(announcement)}
           data-send-state={send.reconciled ? 'solid' : refused ? 'refused' : timedOut ? 'timed-out' : uncertain ? 'uncertain' : 'ghosted'}>
           <div className="tb-chat-bubble-body">
-            <PromptClamp conversation={send.sessionKey} identity={`send:${sendIdentity(send)}`}
+            {longPromptClamp ? <PromptClamp conversation={send.sessionKey} identity={`send:${sendIdentity(send)}`}
               beforeExpand={reading.preserveVisiblePosition}>{markdownBody(stripProvenanceMarkup(send.content))}</PromptClamp>
+              : markdownBody(stripProvenanceMarkup(send.content))}
           </div>
           {attachmentItems.length > 0 && <PendingSendImages items={attachmentItems} />}
           {refusalCopy && <p className="tb-chat-send-refusal" aria-hidden="true">{refusalCopy}</p>}
@@ -3607,7 +3616,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     revealingActivityItems, finishActivityReveal, reading.registerRow, reading.preserveVisiblePosition,
     reading.reconcileViewportLayout, preserveReadingPosition, expandRun,
     renderMessage, agentName, state.status, runtime, retryTranscript, restoreFailedMessage,
-    pendingSendClock, promptTargetPrefix, sendsByIdentity, host.composerHidden, host.restoreRequested, host.ready,
+    pendingSendClock, promptTargetPrefix, sendsByIdentity, longPromptClamp, host.composerHidden, host.restoreRequested, host.ready,
     state.sessionKey, projection.compactionsDuringFailedTurn]);
 
   return <ActivitySummaryProvider transport={activitySummaries}
@@ -3716,7 +3725,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
 
 /** One host-selected session. Changing selection/identity disposes the old runtime. */
 export function TightbeamChat({ sessionKey, adapter, identityKey, renderMessage, className,
-  configuredConversationHref, submitterAttributionEnabled, scrollPinnedPrompts }: TightbeamChatProps) {
+  configuredConversationHref, submitterAttributionEnabled, scrollPinnedPrompts, longPromptClamp }: TightbeamChatProps) {
   const key = `${sessionKey}\u0000${identityKey || ''}`;
   const recoverySnapshot = useRef<ChatRecoverySnapshot>({ key, draft: '', editRevision: 0,
     submittedRevisions: new Map(), scrollTop: 0, followLatest: true, hasReadingPosition: false });
@@ -3770,6 +3779,7 @@ export function TightbeamChat({ sessionKey, adapter, identityKey, renderMessage,
     <ChatBody key={key} runtime={opened.runtime} renderMessage={renderMessage}
       className={className} hostBridge={hostBridge} configuredConversationHref={configuredConversationHref}
       submitterAttributionEnabled={submitterAttributionEnabled} scrollPinnedPrompts={scrollPinnedPrompts === true}
+      longPromptClamp={longPromptClamp === true}
       activitySummaries={adapter.activitySummaries} recoverySnapshot={recoverySnapshot.current} />
   </TranscriptRenderBoundary>;
 }
