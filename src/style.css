@@ -204,7 +204,9 @@ body {
    position and width; script sets its geometry, scroll-driven animations move it. */
 .tb-chat-pinned-layer {
   position: absolute;
-  z-index: 6;
+  /* Above the transcript, below the composer, notices, pills and the scroll-to-latest control:
+     a tall prompt still shrinking passes under them like the transcript does. */
+  z-index: 2;
   overflow: hidden;
   pointer-events: none;
 }
