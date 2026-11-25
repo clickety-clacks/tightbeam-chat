@@ -144,10 +144,12 @@ does not backfill them from message text, tool output, or storage. Work-item fil
 and assignment opened are the first stage. Later kinds are retained in the wire
 model but are not displayed by this stage.
 
-Titles for filed items come from one bounded read per loaded page
+Titles for filed items come from one bounded read per settled
+history load
 (`/api/work-items`, always narrowed to the selected session's own filings, at
 most 50 rows). Chat's server returns only the few fields it uses. The read
 never delays events. Until a title is known, or if the read fails, the fixed
-wording stays.
+wording stays. An unreadable range leaves its rows, and older rows below it, with
+the fixed wording until a later reload reads it.
 
 `CHAT_WORK_ITEM_PILLS=1` turns on work item pills, their read-only `/__chat/api/pills/` routes and the `/__chat/ws/work-changes` connection, all as the configured Chat user with the provisioned Gateway CLI credential. When unset or any other value, none of them exist.
