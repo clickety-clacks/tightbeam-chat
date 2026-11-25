@@ -4401,22 +4401,24 @@ describe('conversation surface', () => {
       expect(composer.value).toBe('');
     });
 
-    it.each(['pending', 'uncertain'] as const)('takes the text back when losing authorization drops a %s send', (status) => {
-      const sessionKey = `unauthorized-drops-${status}`;
-      const { runtime, composer } = submit(sessionKey);
-      act(() => runtime.update({ sends: [slowSend(sessionKey, { status })] }));
-      expect(composer.value).toBe('');
-      // What the runtime publishes when a post is refused for authorization, or history is.
-      act(() => runtime.update({ status: 'unauthorized', sends: [], records: [] }));
+    // The runtime keeps unconfirmed sends when access is lost; these are the states it publishes.
+    it('puts the text back when the post is refused for authorization', () => {
+      const sessionKey = 'unauthorized-refusal';
+      const { runtime, composer, row } = submit(sessionKey);
+      act(() => runtime.update({ status: 'unauthorized', records: [],
+        sends: [slowSend(sessionKey, { status: 'failed', reason: 'Post authorization refused' })] }));
       expect(composer.value).toBe(content);
+      expect(within(row()).getByRole('button', { name: 'Restore text to the composer' })).toBeTruthy();
     });
 
-    it('keeps both the dropped text and a new draft when authorization is lost', () => {
+    it('keeps text typed after submit, and offers the sent text for restore, when access is lost', () => {
       const sessionKey = 'unauthorized-with-new-draft';
-      const { runtime, composer } = submit(sessionKey);
+      const { runtime, composer, row } = submit(sessionKey);
       fireEvent.change(composer, { target: { value: 'the next message' } });
-      act(() => runtime.update({ status: 'unauthorized', sends: [], records: [] }));
-      expect(composer.value).toBe(`${content}\n\nthe next message`);
+      act(() => runtime.update({ status: 'unauthorized', records: [],
+        sends: [slowSend(sessionKey, { status: 'uncertain', reason: 'Older history is not authorized.' })] }));
+      expect(composer.value).toBe('the next message');
+      expect(within(row()).getByRole('button', { name: 'Restore text to the composer' })).toHaveProperty('disabled', false);
     });
 
     it('keeps the composer clear through a reconnect during the send, and restores a refusal that arrives after it', () => {
