@@ -45,6 +45,8 @@ export const MAX_WORK_ITEM_PILLS = 100;
 const SETTLE_MS = 5_000;
 const REREAD_INTERVAL_MS = 120_000;
 const RING_RECHECK_MS = 600_000;
+/** A turn read that failed is tried again, ever less often, while its pill is in view. */
+const TURN_RETRY_MS = 60_000;
 /** More marked pills than this in view cost less as one page read. */
 const SINGLE_REREAD_LIMIT = 3;
 /** Pills that fall due this close together count as needing it together. */
@@ -57,7 +59,6 @@ interface Entry {
   stale: boolean;
   /** Advances with every notice, so a read cannot clear a change it did not see. */
   changes: number;
-  firstChangeAt: number;
   lastChangeAt: number;
   lastRereadAt: number;
   reading: boolean;
@@ -66,6 +67,8 @@ interface Entry {
   /** Turns this page read as running and has not read as ended. */
   runningTurns: Set<number>;
   readingTurns: Set<number>;
+  /** When a turn whose read failed may be tried again. */
+  turnRetries: Map<number, { readonly at: number; readonly delay: number }>;
   ringReadAt: number;
 }
 
@@ -111,6 +114,11 @@ export class WorkItemPills {
   private timer: ReturnType<typeof setTimeout> | undefined;
   private lastItems: ReadonlyMap<string, WorkItemSummary> | undefined;
   private changesAtRefresh = new Map<string, number>();
+  private lastRefreshAt = -Infinity;
+  /** Every wanted item is watched on this connection. */
+  private caughtUp = false;
+  /** Items filed while this page watched; the list read has not covered them yet. */
+  private readonly filedLive = new Map<string, { readonly from: number; state: 'waiting' | 'reading' | 'read' }>();
 
   constructor(private readonly options: WorkItemPillsOptions) {
     this.now = options.now ?? Date.now;
@@ -124,14 +132,23 @@ export class WorkItemPills {
   };
 
   /**
-   * Watch the page's items before they are read, so no change falls between the
-   * read and the subscription. Resolves when every one is watched.
+   * The page's loaded items, newest first. They are watched before they are read,
+   * so no change falls between the read and the subscription.
    */
   async watch(ids: Iterable<string>): Promise<void> {
-    for (const id of ids) if (this.wanted.size < MAX_WORK_ITEM_PILLS) this.wanted.add(id);
+    const loaded = new Set([...ids].slice(0, MAX_WORK_ITEM_PILLS));
+    for (const id of [...this.wanted]) if (!loaded.has(id) && !this.filedLive.has(id)) this.forget(id);
+    for (const id of loaded) this.want(id);
     if (!this.wanted.size) return;
     await this.connect();
     await Promise.all(this.watchWanted());
+  }
+
+  /** One item filed while the page is open. It costs one item read, for its title. */
+  addFiled(id: string): void {
+    if (this.lifetime.signal.aborted || this.entries.has(id) || this.filedLive.has(id) || !this.want(id)) return;
+    this.filedLive.set(id, { from: this.now() + SETTLE_MS, state: 'waiting' });
+    void this.catchUp().catch(() => {});
   }
 
   /** The result of the one read of the loaded items. */
@@ -139,16 +156,15 @@ export class WorkItemPills {
     if (this.lifetime.signal.aborted || items === this.lastItems) return;
     const previous = this.lastItems;
     this.lastItems = items;
+    for (const id of [...this.entries.keys()]) if (!items.has(id) && !this.filedLive.has(id)) this.forget(id);
     for (const summary of items.values()) {
+      this.filedLive.delete(summary.id);
       const entry = this.entries.get(summary.id);
-      if (!entry) {
-        if (this.entries.size >= MAX_WORK_ITEM_PILLS) continue;
-        this.entries.set(summary.id, { summary, stale: false, changes: 0, firstChangeAt: 0, lastChangeAt: 0,
-          lastRereadAt: -Infinity, reading: false, unreadTurns: new Set(), runningTurns: new Set(), readingTurns: new Set(), ringReadAt: 0 });
-        this.wanted.add(summary.id);
+      if (entry) {
+        if (previous?.get(summary.id) !== summary) this.applyRead(entry, summary, this.changesAtRefresh.get(summary.id) ?? 0);
+      } else if (this.want(summary.id)) {
+        this.add(summary);
         if (!this.ready.has(summary.id)) this.gap = true;
-      } else if (previous?.get(summary.id) !== summary) {
-        this.applyRead(entry, summary, this.changesAtRefresh.get(summary.id) ?? 0);
       }
     }
     void this.catchUp().catch(() => {});
@@ -180,6 +196,17 @@ export class WorkItemPills {
     this.listeners.clear();
   }
 
+  private want(id: string): boolean {
+    if (!this.wanted.has(id) && this.wanted.size >= MAX_WORK_ITEM_PILLS) return false;
+    this.wanted.add(id);
+    return true;
+  }
+
+  private add(summary: WorkItemSummary): void {
+    this.entries.set(summary.id, { summary, stale: false, changes: 0, lastChangeAt: 0, lastRereadAt: -Infinity, reading: false,
+      unreadTurns: new Set(), runningTurns: new Set(), readingTurns: new Set(), turnRetries: new Map(), ringReadAt: 0 });
+  }
+
   private applyRead(entry: Entry, summary: WorkItemSummary, seen: number): void {
     // A slower answer can be older than one already shown.
     if (summary.rowVersion >= entry.summary.rowVersion) entry.summary = summary;
@@ -188,6 +215,7 @@ export class WorkItemPills {
 
   private refresh(): void {
     this.gap = false;
+    this.lastRefreshAt = this.now();
     this.changesAtRefresh = new Map([...this.entries].map(([id, entry]) => [id, entry.changes]));
     this.options.refreshItems();
   }
@@ -200,6 +228,7 @@ export class WorkItemPills {
       entry.changes += 1;
       for (const seq of entry.runningTurns) entry.unreadTurns.add(seq);
       entry.runningTurns.clear();
+      entry.turnRetries.clear();
     }
     this.publish();
   }
@@ -217,6 +246,7 @@ export class WorkItemPills {
       lost = true;
       if (!current || this.connection !== current || this.lifetime.signal.aborted) return;
       this.connection = undefined;
+      this.caughtUp = false;
       this.watched.clear();
       this.ready.clear();
       this.markAllUnknown();
@@ -250,7 +280,7 @@ export class WorkItemPills {
     const connection = this.connection;
     await Promise.all(this.watchWanted());
     if (!connection || this.connection !== connection) return;
-    if (this.gap) this.refresh();
+    this.caughtUp = true;
     this.pump();
   }
 
@@ -271,7 +301,6 @@ export class WorkItemPills {
     if (!entry) return;
     const at = this.now();
     if (change.kind === 'item') {
-      if (!entry.stale) entry.firstChangeAt = at;
       entry.stale = true;
       entry.changes += 1;
       entry.lastChangeAt = at;
@@ -279,8 +308,10 @@ export class WorkItemPills {
         !entry.readingTurns.has(change.turnSeq)) {
       // Never shown as running, so there is nothing to correct when it is seen.
       entry.unreadTurns.delete(change.turnSeq);
+      entry.turnRetries.delete(change.turnSeq);
     } else {
       entry.unreadTurns.add(change.turnSeq);
+      entry.turnRetries.delete(change.turnSeq);
     }
     this.publish();
   }
@@ -293,9 +324,9 @@ export class WorkItemPills {
 
   /** When this marked pill may be read again; Infinity while it may not. */
   private rereadAt(id: string, entry: Entry): number {
-    if (!entry.stale || entry.reading || !this.connection || !this.inView(id) || this.ringing(entry)) return Infinity;
-    const settled = Math.min(entry.lastChangeAt + SETTLE_MS, entry.firstChangeAt + REREAD_INTERVAL_MS);
-    return Math.max(settled, entry.lastRereadAt + REREAD_INTERVAL_MS);
+    // A missed stretch is settled by the one list read, not item by item.
+    if (!entry.stale || entry.reading || this.gap || !this.connection || !this.inView(id) || this.ringing(entry)) return Infinity;
+    return Math.max(entry.lastChangeAt + SETTLE_MS, entry.lastRereadAt + REREAD_INTERVAL_MS);
   }
 
   private pump(): void {
@@ -303,6 +334,14 @@ export class WorkItemPills {
     if (this.timer) { clearTimeout(this.timer); this.timer = undefined; }
     const at = this.now();
     let next = Infinity;
+    if (this.gap && this.caughtUp && this.pageVisible && this.visible.size) {
+      const refreshAt = this.lastRefreshAt + REREAD_INTERVAL_MS;
+      if (refreshAt <= at) {
+        for (const entry of this.entries.values()) if (entry.stale) entry.lastRereadAt = at;
+        this.refresh();
+      } else next = refreshAt;
+    }
+    next = Math.min(next, this.readFiled(at));
     const due: string[] = [];
     const together: string[] = [];
     for (const [id, entry] of this.entries) {
@@ -311,7 +350,11 @@ export class WorkItemPills {
           if (entry.ringReadAt + RING_RECHECK_MS <= at) for (const seq of entry.runningTurns) entry.unreadTurns.add(seq);
           else next = Math.min(next, entry.ringReadAt + RING_RECHECK_MS);
         }
-        for (const seq of entry.unreadTurns) this.readTurn(id, entry, seq);
+        for (const seq of entry.unreadTurns) {
+          const retry = entry.turnRetries.get(seq);
+          if (!retry || retry.at <= at) this.readTurn(id, entry, seq);
+          else next = Math.min(next, retry.at);
+        }
       }
       const reread = this.rereadAt(id, entry);
       if (reread <= at + TOGETHER_MS) together.push(id);
@@ -323,6 +366,29 @@ export class WorkItemPills {
       this.refresh();
     } else for (const id of due) this.readItem(id, this.entries.get(id)!);
     if (next < Infinity) this.timer = setTimeout(() => { this.timer = undefined; this.pump(); }, Math.max(0, next - at));
+  }
+
+  /** Newly filed items wait for a reader who could see them; a burst is one list read. */
+  private readFiled(at: number): number {
+    if (!this.connection || !this.pageVisible || !this.visible.size && this.entries.size) return Infinity;
+    const waiting = [...this.filedLive].filter(([id, row]) => row.state === 'waiting' && this.ready.has(id));
+    const next = Math.min(Infinity, ...waiting.map(([, row]) => row.from));
+    if (next > at) return next;
+    for (const [, row] of waiting) row.state = 'reading';
+    if (waiting.length > SINGLE_REREAD_LIMIT) { this.refresh(); return Infinity; }
+    for (const [id, row] of waiting) {
+      this.options.transport.readItem(id, this.lifetime.signal).then((summary) => {
+        if (this.lifetime.signal.aborted || this.filedLive.get(id) !== row) return;
+        if (!summary) { this.forget(id); return; }
+        row.state = 'read';
+        if (!this.entries.has(id)) this.add(summary);
+        this.publish();
+      }, () => {
+        // The next list read of the page covers it.
+        if (!this.lifetime.signal.aborted && this.filedLive.get(id) === row) this.forget(id);
+      });
+    }
+    return Infinity;
   }
 
   private readItem(id: string, entry: Entry): void {
@@ -344,12 +410,14 @@ export class WorkItemPills {
 
   private readTurn(id: string, entry: Entry, seq: number): void {
     if (entry.readingTurns.has(seq)) return;
+    const tried = entry.turnRetries.get(seq);
     entry.unreadTurns.delete(seq);
     entry.readingTurns.add(seq);
     entry.ringReadAt = this.now();
     const connection = this.connection;
     this.options.transport.readTurn(seq, this.lifetime.signal).then((turn) => {
       entry.readingTurns.delete(seq);
+      entry.turnRetries.delete(seq);
       if (this.lifetime.signal.aborted || this.entries.get(id) !== entry) return;
       if (connection !== this.connection) { entry.unreadTurns.add(seq); this.publish(); return; }
       const running = turn?.status === 'running' && turn.workItemId === id;
@@ -357,17 +425,25 @@ export class WorkItemPills {
       if (running) entry.runningTurns.add(seq);
       else entry.runningTurns.delete(seq);
       // A change held back by the ring settles from when the ring ends.
-      if (before && !this.ringing(entry) && entry.stale) entry.firstChangeAt = entry.lastChangeAt = this.now();
+      if (before && !this.ringing(entry) && entry.stale) entry.lastChangeAt = this.now();
       this.publish();
     }, () => {
-      // The ring keeps its last read answer until the bounded recheck.
+      // The ring keeps its last read answer. A notice that came meanwhile is tried at once.
       entry.readingTurns.delete(seq);
-      if (!this.lifetime.signal.aborted) this.pump();
+      if (this.lifetime.signal.aborted) return;
+      if (!entry.unreadTurns.has(seq)) {
+        const delay = Math.min(tried ? tried.delay * 2 : TURN_RETRY_MS, RING_RECHECK_MS);
+        entry.unreadTurns.add(seq);
+        entry.turnRetries.set(seq, { at: this.now() + delay, delay });
+      }
+      this.pump();
     });
   }
 
   private forget(id: string): void {
     this.entries.delete(id);
+    this.filedLive.delete(id);
+    this.ready.delete(id);
     this.wanted.delete(id);
     if (this.watched.delete(id)) this.connection?.unwatch(id);
   }

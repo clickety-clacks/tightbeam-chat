@@ -97,6 +97,7 @@ export const MAX_SHEET_READS = 30;
 const MAX_CARDS = 6;
 const FULL_ITEM = /^(?:wi:)?(wi_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/;
 const UNKNOWN_AGENT = 'An agent';
+const IDLE_REASONS = new Set(['no_current_path', 'latest_terminal_failed', 'latest_terminal_canceled', 'all_open_assignments_not_lively']);
 
 class ReadLimit extends Error {}
 
@@ -186,7 +187,7 @@ export async function readWorkItemSheet(id: string, transport: WorkItemSheetTran
     if (step) return step;
     const agent = await spend(() => transport.readBreathing('session', holder, signal));
     const own = agent && await followState(agent, holder, target.title, false, visited, target.id);
-    return own ?? [{ kind: 'idle', agent: await name(holder), title: target.title, endedAt: agent?.turn?.endedAt ?? null }];
+    return own ?? [await idle(agent, holder, target.title)];
   }
 
   /** Undefined when nothing is going on, so the caller can look at the agent itself. */
@@ -207,6 +208,12 @@ export async function readWorkItemSheet(id: string, transport: WorkItemSheetTran
     return undefined;
   }
 
+  /** Only a read answer that nothing is going on may say so. */
+  async function idle(state: WorkItemBreathing | undefined, holder: string, title: string | null): Promise<ChainStep> {
+    if (!state || !IDLE_REASONS.has(state.reason)) return { kind: 'unreadable', what: 'item' };
+    return { kind: 'idle', agent: await name(holder), title, endedAt: state.turn?.endedAt ?? null };
+  }
+
   async function followCard(card: { readonly id: string; readonly holderKey: string | null }): Promise<ChainGroup> {
     const holder = card.holderKey;
     const steps = await (async (): Promise<readonly ChainStep[]> => {
@@ -222,14 +229,14 @@ export async function readWorkItemSheet(id: string, transport: WorkItemSheetTran
         const expecter = question.expecterSessionKey;
         const doing = await spend(() => transport.readBreathing('session', expecter, signal));
         return [wait, ...(doing && await followState(doing, expecter, null, false, visited, item.id)) ??
-          [{ kind: 'idle' as const, agent: other, title: null, endedAt: doing?.turn?.endedAt ?? null }]];
+          [await idle(doing, expecter, null)]];
       }
       const own = state && holder && await followState(state, holder, null, true, visited);
       if (own) return own;
       if (!holder) return [{ kind: 'unreadable', what: 'item' }];
       const agent = await spend(() => transport.readBreathing('session', holder, signal));
       return (agent && await followState(agent, holder, null, false, visited, item.id)) ??
-        [{ kind: 'idle', agent: await name(holder), title: null, endedAt: agent?.turn?.endedAt ?? state?.turn?.endedAt ?? null }];
+        [await idle(state && agent, holder, null)];
     })().catch(stopped);
     return { agent: await name(holder), steps };
   }
@@ -251,5 +258,5 @@ export function foundState(data: WorkItemSheetData): 'you' | 'waiting' | 'workin
   if (data.questions?.length) return 'you';
   const first = data.groups.flatMap((group) => group.steps[0] ?? []);
   if (first.some((step) => step.kind === 'running' && step.tied)) return 'working';
-  return first.some((step) => step.kind === 'wait') ? 'waiting' : undefined;
+  return first.some((step) => step.kind === 'wait' && step.tied) ? 'waiting' : undefined;
 }

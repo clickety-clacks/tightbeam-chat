@@ -4,7 +4,7 @@ import { LocalFixtureTransport, fixtureTarget } from '../examples/mockTransport'
 import { createTightbeamAdapter, TightbeamChat } from '../src';
 import { pillTitle } from '../src/WorkItemStrip';
 import { agoText, clockText, durationText, untilText } from '../src/workItemTime';
-import type { WorkItemSummary } from '../src/types';
+import type { ChangeCallbacks, SessionRecordEvent, WorkItemSummary } from '../src/types';
 import type { WorkItemChange } from '../src/workItemPills';
 import type { WorkItemPillsTransport } from '../src/workItemPillsTransport';
 
@@ -30,6 +30,11 @@ function chat(items: readonly WorkItemSummary[], options: { pills?: boolean } = 
   const count = (name: string) => { counts[name] = (counts[name] ?? 0) + 1; };
   let emit: (change: WorkItemChange) => void = () => {};
   const order: string[] = [];
+  let notices: ChangeCallbacks | undefined;
+  const fixture = new LocalFixtureTransport();
+  const filed = (item: WorkItemSummary, sessionKey: string): SessionRecordEvent => ({ eventId: `work_item.filed:${item.id}`, sessionKey,
+    kind: 'work_item.filed', at: item.createdAt, record: { type: 'work-item', id: item.id, workItemId: item.id, detail: '' },
+    actorSessionKey: sessionKey, tiedAs: ['creator'], cause: null, noticeMessageIds: [] });
   const pills: WorkItemPillsTransport = {
     openChanges: async (onChange) => { emit = onChange; return { watch: async () => { order.push('watch'); }, unwatch() {}, close() {} }; },
     readItem: async (id) => { count('item'); return items.find((item) => item.id === id); },
@@ -44,15 +49,18 @@ function chat(items: readonly WorkItemSummary[], options: { pills?: boolean } = 
     readAgentQuestions: async () => { count('agent questions'); return []; },
     readAgentName: async () => { count('name'); return 'Coder'; },
   };
-  const transport = Object.assign(new LocalFixtureTransport(), { targetGateway: 'https://gateway.example',
-    readRecordEvents: async (sessionKey: string) => ({ items: items.map((item) => ({ eventId: `work_item.filed:${item.id}`, sessionKey,
-      kind: 'work_item.filed', at: item.createdAt, record: { type: 'work-item', id: item.id, workItemId: item.id, detail: '' },
-      actorSessionKey: sessionKey, tiedAs: ['creator'], cause: null, noticeMessageIds: [] })), oldestCursor: null, hasOlder: false }),
+  const transport = Object.assign(fixture, { targetGateway: 'https://gateway.example',
+    openChanges: ((open) => (key: string, callbacks: ChangeCallbacks, signal: AbortSignal) => { notices = callbacks; return open(key, callbacks, signal); })(fixture.openChanges),
+    readRecordEvents: async (sessionKey: string) => ({ items: items.map((item) => filed(item, sessionKey)), oldestCursor: null, hasOlder: false }),
     readFiledWorkItems: async () => { count('page'); order.push('page'); return { items: [...items], oldestCursor: null, hasOlder: false }; },
     ...(options.pills === false ? {} : { workItemPills: pills }),
   });
   const view = render(<TightbeamChat sessionKey="fixture-session" adapter={createTightbeamAdapter(transport, { ...fixtureTarget, label: 'fixture' })} />);
-  return { view, counts, order, emit: (change: WorkItemChange) => act(async () => { emit(change); }) };
+  const file = (item: WorkItemSummary) => act(async () => {
+    (items as WorkItemSummary[]).push(item);
+    notices!.onNotice({ operation: 'record-event', event: filed(item, 'fixture-session') });
+  });
+  return { view, counts, order, file, emit: (change: WorkItemChange) => act(async () => { emit(change); }) };
 }
 const strip = () => screen.findByRole('group', { name: 'Work items, newest first' });
 const pills = async () => within(await strip()).getAllByRole('button');
@@ -105,6 +113,15 @@ describe('the strip', () => {
     expect(run.counts.turn).toBe(1);
     expect((await pills())[0].querySelector('.tb-chat-work-ring')).not.toBeNull();
   });
+
+  it('adds one filed while the page is open, from one item read and no list read', async () => {
+    const run = chat([summary(1)]);
+    await pills();
+    await act(async () => { Visible.all.at(-1)!.show(uuid(1)); });
+    await run.file(summary(2, { title: 'Product: Filed now', createdAt: Date.now() + 1000 }));
+    await waitFor(async () => expect((await pills())[0].textContent).toBe('Filed nowHeld'), { timeout: 7_000 });
+    expect(run.counts).toEqual({ page: 1, item: 1 });
+  }, 10_000);
 
   it('folds to its button and remembers it', async () => {
     const run = chat([summary(1), summary(2)]);

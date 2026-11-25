@@ -5414,3 +5414,25 @@ it('keeps a known title when a bare notice replaces its event row, and a notice 
   expect(view.container.textContent).toContain('A brief with its own words');
   expect(view.container.textContent).not.toContain('Filed · The actual title');
 });
+
+it('titles a covering filed notice in every order of notice, event and title arrival', () => {
+  const sessionKey = 'titled-orders';
+  const event = { eventId: 'work_item.filed:wi_example', kind: 'work_item.filed', sessionKey, at: 200,
+    record: { type: 'work-item', id: 'wi_example', workItemId: 'wi_example', detail: '/api/example' },
+    actorSessionKey: sessionKey, tiedAs: ['creator'], cause: null, noticeMessageIds: [] };
+  const human = row(sessionKey, 'human', 'Hello', { role: 'user', sender: 'user:person', seq: 1 });
+  const notice = row(sessionKey, 'notice', '[work item filed: wi_example]', { seq: 2, sender: 'process:events',
+    messageType: 'substrate', recordEventIds: ['assignment.opened:asg_other', event.eventId] });
+  const patches = { notice: { records: [human, notice] }, event: { recordEvents: [event] },
+    title: { workItems: new Map([['wi_example', { id: 'wi_example', title: 'The actual title', state: 'open',
+      started: false, holders: [], failReason: null, createdAt: 200, rowVersion: 1 }]]) } };
+  for (const order of ['notice event title', 'notice title event', 'event notice title',
+    'event title notice', 'title notice event', 'title event notice']) {
+    const runtime = new FakeRuntime(sessionKey, { records: [human] });
+    const view = render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+    for (const step of order.split(' ') as Array<keyof typeof patches>) act(() => runtime.update(patches[step]));
+    const pills = [...view.container.querySelectorAll('.tb-chat-activity-pill-text')].map(element => element.textContent);
+    expect(pills, order).toEqual(['Filed · The actual title']);
+    view.unmount();
+  }
+});
