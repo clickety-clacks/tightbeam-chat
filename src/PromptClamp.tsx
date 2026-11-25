@@ -104,7 +104,9 @@ export function PromptClamp({ conversation, identity, beforeExpand, children }: 
     if (!element || typeof ResizeObserver === 'undefined') return;
     // Watch the text inside the clip, not the clipped box: its width follows the bubble (rewrapping
     // the text) and its height follows images or code, but setting the clip never resizes it, so
-    // measuring cannot set off another resize notification (no ResizeObserver loop).
+    // the clamp cannot notify itself in a loop. A change of clip height still resizes the bubble,
+    // which other observers watch, so the browser may report one benign loop notice and apply that
+    // change a frame later; with writes only on change this happens only when the clip moves.
     const observer = new ResizeObserver(measure);
     observer.observe(element.firstElementChild ?? element);
     return () => observer.disconnect();
