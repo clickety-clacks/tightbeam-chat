@@ -4351,69 +4351,64 @@ describe('conversation surface', () => {
     expect(composer.value).toBe(content);
   });
 
-  describe('composer text after an uncertain send', () => {
-    const content = 'Sent while the Gateway was unreachable';
-    const outageSend = (sessionKey: string, patch: Partial<LocalSend>): LocalSend => ({ sessionKey, deviceId: 'device',
-      clientMessageId: 'fixture-send', content, submittedAt: new Date().toISOString(), status: 'uncertain',
-      reconciled: false, reason: 'connection-closed-before-acknowledgement', ...patch });
-    const sendDuringOutage = (sessionKey: string) => {
+  describe('composer text around a send', () => {
+    const content = 'Sent while the Gateway was slow';
+    const slowSend = (sessionKey: string, patch: Partial<LocalSend>): LocalSend => ({ sessionKey, deviceId: 'device',
+      clientMessageId: 'fixture-send', content, submittedAt: new Date().toISOString(), status: 'pending',
+      reconciled: false, ...patch });
+    const submit = (sessionKey: string) => {
       const runtime = new FakeRuntime(sessionKey);
       render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
       const composer = screen.getByRole('textbox', { name: 'Message to Research assistant' }) as HTMLTextAreaElement;
       fireEvent.change(composer, { target: { value: content } });
       fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
       expect(runtime.sent).toEqual([content]);
-      act(() => runtime.update({ sends: [outageSend(sessionKey, { status: 'pending', reason: undefined })] }));
-      act(() => runtime.update({ sends: [outageSend(sessionKey, {})] }));
-      expect(composer.value).toBe(content);
-      const row = screen.getByText(content, { selector: '.tb-chat-local *' }).closest('article')!;
-      expect(row.getAttribute('data-send-state')).toBe('uncertain');
+      // Cleared at submit: the posted message and the same text are never both on screen as editable.
+      expect(composer.value).toBe('');
+      act(() => runtime.update({ sends: [slowSend(sessionKey, {})] }));
+      expect(composer.value).toBe('');
+      expect(screen.getByRole('button', { name: 'Send message' })).toHaveProperty('disabled', true);
+      const row = () => screen.getByText(content, { selector: '.tb-chat-local *' }).closest('article')!;
       return { runtime, composer, row };
     };
 
-    it('clears the composer once Check and retry reconciles the message', () => {
-      const sessionKey = 'uncertain-then-delivered';
-      const { runtime, composer, row } = sendDuringOutage(sessionKey);
-      fireEvent.click(within(row).getByRole('button', { name: 'Check and retry' }));
-      expect(runtime.retried).toEqual(['fixture-send']);
-      act(() => runtime.update({ sends: [outageSend(sessionKey, { status: 'pending', reason: undefined })] }));
-      expect(composer.value).toBe(content);
-      // The retry's acceptance alone is not confirmation; the canonical row is.
-      act(() => runtime.update({ sends: [outageSend(sessionKey, { status: 'accepted', reason: undefined })] }));
-      expect(composer.value).toBe(content);
-      act(() => runtime.update({ sends: [outageSend(sessionKey, { status: 'accepted', reason: undefined, reconciled: true })] }));
+    it('stays clear while the send is pending, accepted and reconciled', () => {
+      const sessionKey = 'slow-then-delivered';
+      const { runtime, composer } = submit(sessionKey);
+      act(() => runtime.update({ sends: [slowSend(sessionKey, { status: 'accepted' })] }));
       expect(composer.value).toBe('');
-      expect(screen.getByRole('button', { name: 'Send message' })).toHaveProperty('disabled', true);
-    });
-
-    it('clears the composer when the canonical row shows the uncertain message arrived', () => {
-      const sessionKey = 'uncertain-then-found';
-      const { runtime, composer } = sendDuringOutage(sessionKey);
-      act(() => runtime.update({ sends: [outageSend(sessionKey, { status: 'accepted', reason: undefined, reconciled: true })] }));
+      act(() => runtime.update({ sends: [slowSend(sessionKey, { status: 'accepted', reconciled: true })] }));
       expect(composer.value).toBe('');
     });
 
-    it('keeps the composer text while delivery stays uncertain or the retry fails', () => {
-      const sessionKey = 'uncertain-then-failed';
-      const { runtime, composer, row } = sendDuringOutage(sessionKey);
-      fireEvent.click(within(row).getByRole('button', { name: 'Check and retry' }));
-      act(() => runtime.update({ sends: [outageSend(sessionKey, { status: 'pending', reason: undefined })] }));
-      act(() => runtime.update({ sends: [outageSend(sessionKey, { reason: 'Canonical history could not be checked before retry.' })] }));
-      expect(composer.value).toBe(content);
-      act(() => runtime.update({ sends: [outageSend(sessionKey, { status: 'accepted', reason: undefined })] }));
-      act(() => runtime.update({ sends: [outageSend(sessionKey, { reason: 'accepted-unreconciled' })] }));
-      expect(composer.value).toBe(content);
-      act(() => runtime.update({ sends: [outageSend(sessionKey, { status: 'failed', reason: 'Gateway unavailable' })] }));
-      expect(composer.value).toBe(content);
-      expect(screen.getByRole('button', { name: 'Send message' })).toHaveProperty('disabled', false);
+    it('keeps text typed after submit when the send is confirmed or fails', () => {
+      const sessionKey = 'typed-after-submit';
+      const { runtime, composer } = submit(sessionKey);
+      fireEvent.change(composer, { target: { value: 'the next message' } });
+      act(() => runtime.update({ sends: [slowSend(sessionKey, { status: 'failed', reason: 'Gateway unavailable' })] }));
+      expect(composer.value).toBe('the next message');
     });
 
-    it('leaves a draft edited after the uncertain send when the message is later reconciled', () => {
-      const sessionKey = 'uncertain-then-edited';
-      const { runtime, composer } = sendDuringOutage(sessionKey);
-      fireEvent.change(composer, { target: { value: `${content} and more` } });
-      act(() => runtime.update({ sends: [outageSend(sessionKey, { status: 'accepted', reason: undefined, reconciled: true })] }));
-      expect(composer.value).toBe(`${content} and more`);
+    it('puts the text back when the send definitely fails, and clears it again for a retry', () => {
+      const sessionKey = 'failed-then-retried';
+      const { runtime, composer, row } = submit(sessionKey);
+      act(() => runtime.update({ sends: [slowSend(sessionKey, { status: 'failed', reason: 'Gateway unavailable' })] }));
+      expect(composer.value).toBe(content);
+      fireEvent.click(within(row()).getByRole('button', { name: 'Retry message' }));
+      act(() => runtime.update({ sends: [slowSend(sessionKey, { status: 'pending' })] }));
+      expect(composer.value).toBe('');
+      act(() => runtime.update({ sends: [slowSend(sessionKey, { status: 'accepted', reconciled: true })] }));
+      expect(composer.value).toBe('');
+    });
+
+    it('does not put text back for an uncertain send, which keeps its bubble actions', () => {
+      const sessionKey = 'uncertain-stays-clear';
+      const { runtime, composer, row } = submit(sessionKey);
+      act(() => runtime.update({ sends: [slowSend(sessionKey, { status: 'uncertain', reason: 'connection-closed-before-acknowledgement' })] }));
+      expect(composer.value).toBe('');
+      expect(within(row()).getByRole('button', { name: 'Check and retry' })).toBeTruthy();
+      fireEvent.click(within(row()).getByRole('button', { name: 'Restore text to the composer' }));
+      expect(composer.value).toBe(content);
     });
   });
 
