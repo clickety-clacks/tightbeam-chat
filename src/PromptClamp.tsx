@@ -89,8 +89,10 @@ export function PromptClamp({ conversation, identity, beforeExpand, children }: 
       setOverflowing(current => current === next ? current : next);
       return;
     }
-    if (clip === undefined) element.style.setProperty('max-height', 'none');
-    else element.style.setProperty('max-height', `${Math.ceil(clip)}px`);
+    // Write only a change: the clip resizes this element, and a needless write would ask the
+    // browser for another resize pass.
+    const maxHeight = clip === undefined ? 'none' : `${Math.ceil(clip)}px`;
+    if (element.style.getPropertyValue('max-height') !== maxHeight) element.style.setProperty('max-height', maxHeight);
     const next = clip !== undefined;
     setOverflowing(current => current === next ? current : next);
   }, []);
@@ -100,10 +102,11 @@ export function PromptClamp({ conversation, identity, beforeExpand, children }: 
     measure();
     const element = content.current;
     if (!element || typeof ResizeObserver === 'undefined') return;
-    // Width changes rewrap the text; images or code inside the prompt can change its height.
+    // Watch the text inside the clip, not the clipped box: its width follows the bubble (rewrapping
+    // the text) and its height follows images or code, but setting the clip never resizes it, so
+    // measuring cannot set off another resize notification (no ResizeObserver loop).
     const observer = new ResizeObserver(measure);
-    observer.observe(element);
-    if (element.firstElementChild) observer.observe(element.firstElementChild);
+    observer.observe(element.firstElementChild ?? element);
     return () => observer.disconnect();
   }, [expanded, measure, children]);
 

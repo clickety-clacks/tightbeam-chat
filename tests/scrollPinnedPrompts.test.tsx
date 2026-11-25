@@ -280,6 +280,21 @@ describe('scroll-pinned prompts without scroll timelines', () => {
     }
   });
 
+  it('copies the bubble again when an inline style inside it changes, such as the prompt clamp height', async () => {
+    const clip = document.createElement('div');
+    clip.className = 'tb-chat-prompt-clamp-content';
+    clip.style.maxHeight = '200px';
+    clip.textContent = 'Clipped text';
+    rows.get('A')!.replaceChildren(clip);
+    mount();
+    scrollTo(200);
+    const copied = () => slotFor('A')!.querySelector<HTMLElement>('.tb-chat-pinned-full .tb-chat-prompt-clamp-content')!;
+    expect(copied().style.maxHeight).toBe('200px');
+    clip.style.maxHeight = '140px';
+    await act(async () => { await Promise.resolve(); });
+    expect(copied().style.maxHeight).toBe('140px');
+  });
+
   it('gives the original back when it unmounts', () => {
     const result = mount();
     scrollTo(500);
