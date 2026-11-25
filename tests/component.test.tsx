@@ -5219,6 +5219,15 @@ it('places durable pills at record time after a tied tool, and lets an exact not
   const keys = () => [...view.container.querySelectorAll('[data-record-key]')].map(element => element.getAttribute('data-record-key'));
   expect(keys().indexOf('record-event:' + event.eventId)).toBeGreaterThan(keys().indexOf('tool-tool-example'));
   expect(keys().indexOf('record-event:' + event.eventId)).toBeLessThan(keys().indexOf('answer'));
+  const pill = () => view.container.querySelector<HTMLElement>(`[data-record-key="record-event:${event.eventId}"]`)!;
+  expect(pill().textContent).toContain('Work item filed');
+  const before = pill();
+  act(() => runtime.update({ workItems: new Map([['example', { id: 'example', title: 'One line title', state: 'open',
+    started: false, holders: [], failReason: null, createdAt: 200, rowVersion: 1 }]]) }));
+  expect(pill()).toBe(before);
+  expect(pill().querySelector('.tb-chat-activity-pill-text')!.textContent).toBe('Filed · One line title');
+  expect(pill().querySelector('.tb-chat-activity-pill-meta')!.textContent).toBe('example');
+  expect(pill().getAttribute('title')).toContain('One line title');
   const textbox = screen.getByRole('textbox') as HTMLTextAreaElement;
   fireEvent.change(textbox, { target: { value: 'Unsent draft' } });
   textbox.focus();

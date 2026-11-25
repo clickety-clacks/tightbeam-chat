@@ -2264,6 +2264,35 @@ it('rebuilds record-event history after feed recovery, merges overlap and keeps 
   runtime.dispose();
 });
 
+it.each([true, false])('shows events and stays ready while the one filed titles read is pending (succeeds: %s)', async succeeds => {
+  const transport = new ControlledTransport();
+  const occurrences = ['a', 'b', 'c'].map((id, index) => ({ eventId: `work_item.filed:${id}`, sessionKey, kind: 'work_item.filed',
+    at: 100 + index, record: { type: 'work-item', id, workItemId: id, detail: '/api/work-items/' + id },
+    actorSessionKey: sessionKey, tiedAs: ['creator'], cause: null, noticeMessageIds: [] }));
+  const gates: Array<ReturnType<typeof deferred<boolean>>> = [];
+  const extended: ChatTransport = Object.assign(transport, {
+    readRecordEvents: async () => ({ items: occurrences, oldestCursor: null, hasOlder: false }),
+    readFiledWorkItems: async () => {
+      const gate = deferred<boolean>();
+      gates.push(gate);
+      if (!await gate.promise) throw new Error('slow read failed');
+      return { oldestCursor: null, hasOlder: false, items: occurrences.map(row => ({ id: row.record.id, title: 'Title ' + row.record.id,
+        state: 'open', started: false, holders: [], failReason: null, createdAt: row.at, rowVersion: 1 })) };
+    } });
+  const runtime = createTightbeamAdapter(extended, profile).open(sessionKey);
+  await vi.waitFor(() => expect(runtime.getSnapshot().recordEvents).toHaveLength(3));
+  await vi.waitFor(() => expect(gates).toHaveLength(1));
+  expect(runtime.getSnapshot()).toMatchObject({ status: 'ready', recordEventsLoading: false });
+  expect(runtime.getSnapshot().workItems).toBeUndefined();
+  gates[0].resolve(succeeds);
+  if (succeeds) await vi.waitFor(() => expect(runtime.getSnapshot().workItems?.get('c')?.title).toBe('Title c'));
+  else await new Promise(resolve => setTimeout(resolve, 20));
+  expect(runtime.getSnapshot()).toMatchObject({ status: 'ready', recordEventsError: undefined });
+  if (!succeeds) expect(runtime.getSnapshot().workItems).toBeUndefined();
+  expect(gates).toHaveLength(1);
+  runtime.dispose();
+});
+
 describe('attachment submission recovery', () => {
   const input = (id: string) => ({ id, filename: id + '.bin', bytes: new Blob([new Uint8Array([0, 128, 255])]) });
   class AttachmentsTransport extends ControlledTransport {

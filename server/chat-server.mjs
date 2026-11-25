@@ -392,6 +392,20 @@ export function parseServiceHttpTarget(rawUrl, runtime) {
         path: `/api/sessions/${encodeURIComponent(selected)}/record-events?${query}` };
     }
 
+    const filedWorkItems = /^\/__chat\/api\/sessions\/([^/]+)\/filed-work-items$/.exec(request.pathname);
+    if (filedWorkItems) {
+      const selected = decodeSessionPath(filedWorkItems[1]);
+      const limit = request.searchParams.get('limit') ?? '';
+      const before = request.searchParams.get('before');
+      if (!selected || !/^[1-9][0-9]?$/.test(limit) || Number(limit) > 50 || before === '' ||
+          routeParams.some(([name]) => !['limit', 'before'].includes(name)) ||
+          new Set(routeParams.map(([name]) => name)).size !== routeParams.length) return undefined;
+      const query = new URLSearchParams({ asUser: runtime.principalKey, createdBySession: selected, limit });
+      if (before) query.set('before', before);
+      else query.set('tail', 'true');
+      return { kind: 'filed-work-items', gatewayOrigin, path: `/api/work-items?${query}` };
+    }
+
     const messages = /^\/__chat\/api\/sessions\/([^/]+)\/messages$/.exec(request.pathname);
     const messageSession = messages && decodeSessionPath(messages[1]);
     if (!messageSession) return undefined;
@@ -568,6 +582,16 @@ function writeGatewayReply(response, reply) {
   response.end(reply.body);
 }
 
+// Gateway rows are large; the browser needs only these fields.
+function filedWorkItemsReply(reply) {
+  if (reply.status !== 200) return reply;
+  const value = JSON.parse(reply.body.toString('utf8'));
+  const items = value.items.map(({ id, title, state, started, holders, failReason, createdAt, rowVersion }) =>
+    ({ id, title, state, started, holders, failReason, createdAt, rowVersion }));
+  return { ...reply, body: Buffer.from(JSON.stringify({ items,
+    oldestCursor: value.page?.oldestCursor ?? null, hasOlder: value.page?.hasMoreBefore === true })) };
+}
+
 async function serviceHttp(request, response, runtime) {
   if (request.method === 'POST' && request.url?.startsWith('/__chat/agent/dispatch')) {
     await serviceAgentDispatch(request, response, runtime);
@@ -620,6 +644,10 @@ async function serviceHttp(request, response, runtime) {
     return;
   }
   try {
+    if (target.kind === 'filed-work-items') {
+      writeGatewayReply(response, filedWorkItemsReply(await gatewayRequest(gateway, target.path)));
+      return;
+    }
     if (target.kind === 'version' || target.kind === 'detail' || target.kind === 'transcript' || target.kind === 'read-marker') {
       writeGatewayReply(response, await gatewayRequest(gateway, target.path, {
         authorize: target.kind !== 'version',
