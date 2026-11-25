@@ -223,8 +223,9 @@ export function WorkItemSheet({ id, pills, transport, names, onClose }: {
 }) {
   const snapshot = useSyncExternalStore(pills.subscribe, pills.getSnapshot, pills.getSnapshot);
   const pill = snapshot.find((row) => row.id === id);
-  // Finished work that has not changed since its one read needs nothing more.
-  const settled = pill && !pill.stale && endings[pill.state] !== undefined;
+  // Finished work that has not changed since its one read needs nothing more. Open
+  // work is always read: a question can be open with no agent holding it.
+  const settled = pill && !pill.stale && pill.summary.state !== 'open';
   const [state, setState] = useState<SheetState>({ status: 'looking' });
   const [attempt, setAttempt] = useState(0);
   const [now, setNow] = useState(() => Date.now());

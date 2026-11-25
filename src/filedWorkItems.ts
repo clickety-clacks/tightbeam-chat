@@ -49,6 +49,13 @@ export class FiledWorkItems {
     try { await this.page(limit); } catch { /* Keep the last known rows. */ }
   }
 
+  /** A row another read already brought, so its title shows without a read here. */
+  adopt(item: WorkItemSummary): void {
+    if (this.controller.signal.aborted || this.items.has(item.id)) return;
+    this.items = new Map(this.items).set(item.id, item);
+    this.publish(this.items);
+  }
+
   private missing(): readonly Position[] {
     return this.filed.filter(row => !this.items.has(row.id) && !this.tried.has(row.id));
   }

@@ -390,6 +390,7 @@ class SessionRuntime implements ChatRuntime {
       });
     const pills = transport.readFiledWorkItems && transport.workItemPills ? new WorkItemPills({
       transport: transport.workItemPills, refreshItems: () => { void this.refreshWorkItems(); },
+      onFiledRead: item => this.filedWorkItems?.adopt(item),
     }) : undefined;
     if (pills) this.workItemPills = { pills, transport: transport.workItemPills! };
     if (transport.readFiledWorkItems) this.filedWorkItems = new FiledWorkItems(sessionKey,

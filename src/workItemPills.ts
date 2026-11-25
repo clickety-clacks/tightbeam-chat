@@ -76,6 +76,8 @@ export interface WorkItemPillsOptions {
   readonly transport: WorkItemLiveTransport;
   /** Repeat the one read of the loaded items; its result comes back through setItems. */
   readonly refreshItems: () => void;
+  /** An item filed while watching was read; the page can use its title too. */
+  readonly onFiledRead?: (summary: WorkItemSummary) => void;
   readonly now?: () => number;
 }
 
@@ -383,6 +385,7 @@ export class WorkItemPills {
         row.state = 'read';
         if (!this.entries.has(id)) this.add(summary);
         this.publish();
+        this.options.onFiledRead?.(summary);
       }, () => {
         // The next list read of the page covers it.
         if (!this.lifetime.signal.aborted && this.filedLive.get(id) === row) this.forget(id);
