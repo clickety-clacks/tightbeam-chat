@@ -428,10 +428,11 @@ export function buildActivityTrail(input: {
     if (visibleIds.has(message.id)) continue;
     if (message.recordEventIds?.length) {
       const candidate = messageCandidate(message as CanonicalMessage, undefined, input.clearedThroughSeq)!;
-      // Only a bare notice of one event takes its title; a notice with its own content keeps it.
-      const titled = message.recordEventIds.length === 1
-        ? input.titledRecordEvents?.get(message.recordEventIds[0]) : undefined;
-      candidates.push(titled && bareRecordNotice.exec(message.content)?.[1] === titled.recordId
+      // Only a bare notice naming a covered record takes its title; a notice with its own content keeps it.
+      const namedId = bareRecordNotice.exec(message.content)?.[1];
+      const titled = namedId === undefined ? undefined : message.recordEventIds
+        .map(id => input.titledRecordEvents?.get(id)).find(row => row?.recordId === namedId);
+      candidates.push(titled
         ? { ...candidate, presentation: titled.presentation } : candidate);
       continue;
     }
