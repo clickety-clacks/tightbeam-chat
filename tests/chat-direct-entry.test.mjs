@@ -1527,6 +1527,112 @@ describe('large REST sends through the Chat service when the Gateway refuses ear
       expect((await fetch(`${chatOrigin}/chat-config.json`)).status).toBe(200);
     });
 
+  it('survives a Gateway that answers 413 at once and destroys the connection while a 40 MB body is still uploading', async () => {
+    const gateway = http.createServer((request, response) => {
+      if (request.url === '/version') { response.setHeader('content-type', 'application/json'); response.end(JSON.stringify({ version: '0.1.17' })); return; }
+      response.writeHead(413, { 'content-type': 'application/json', connection: 'close' });
+      response.end(refusal, () => setTimeout(() => request.socket.resetAndDestroy(), 20));
+    });
+    const gatewayPort = await listen(gateway);
+    const gatewayOrigin = `http://127.0.0.1:${gatewayPort}`;
+    const chatPort = await unusedPort();
+    const chatOrigin = `http://127.0.0.1:${chatPort}`;
+    const { root, publicDir } = await temporaryDirectory();
+    const gatewayBaseDir = await writeGatewayDescriptor(path.join(root, 'gateway-base'), gatewayOrigin, TOKEN);
+    const chat = createChatServer({ rootDir: root, publicDir,
+      releaseInfo: { tag: 'v0.1.2', sourceCommit: '1234567890abcdef1234567890abcdef12345678' },
+      environment: { CHAT_PUBLIC_ORIGIN: chatOrigin, CHAT_DEFAULT_GATEWAY_ORIGIN: gatewayOrigin,
+        CHAT_DEFAULT_SESSION_KEY: sessionKey, CHAT_DEFAULT_PRINCIPAL_KEY: OPERATOR_PRINCIPAL,
+        CHAT_REST_HUMAN_SEND: '1', TIGHTBEAM_BASE_DIR: gatewayBaseDir } });
+    await listen(chat, chatPort);
+    const post = () => fetch(`${chatOrigin}/__chat/agent/dispatch`, { method: 'POST',
+      headers: { origin: chatOrigin, 'content-type': 'application/json' },
+      body: JSON.stringify({ verb: 'post', sessionKey, params: { clientMessageId: 'c_00000000-0000-4000-8000-000000000002',
+        deviceId: 'chat_x', content: 'z'.repeat(40_000_000), attachments: [] } }) });
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const response = await post();
+      expect(response.status).toBe(413);
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect((await fetch(`${chatOrigin}/chat-config.json`)).status).toBe(200);
+    }
+  });
+
+  it('does not pile up socket error listeners when many requests reuse one keep-alive connection', async () => {
+    const connections = new Set();
+    const gateway = http.createServer((request, response) => {
+      response.setHeader('content-type', 'application/json');
+      if (request.url === '/version') response.end(JSON.stringify({ version: '0.1.17' }));
+      else response.end(JSON.stringify({ schemaVersion: 1, resource: 'read markers', item: { userId: PRINCIPAL, scopeKey: 'k', marker: null } }));
+    });
+    gateway.keepAliveTimeout = 30_000;
+    gateway.on('connection', (socket) => connections.add(socket));
+    const gatewayPort = await listen(gateway);
+    const gatewayOrigin = `http://127.0.0.1:${gatewayPort}`;
+    const chatPort = await unusedPort();
+    const chatOrigin = `http://127.0.0.1:${chatPort}`;
+    const { root, publicDir } = await temporaryDirectory();
+    const gatewayBaseDir = await writeGatewayDescriptor(path.join(root, 'gateway-base'), gatewayOrigin, TOKEN);
+    const chat = createChatServer({ rootDir: root, publicDir,
+      releaseInfo: { tag: 'v0.1.2', sourceCommit: '1234567890abcdef1234567890abcdef12345678' },
+      environment: { CHAT_PUBLIC_ORIGIN: chatOrigin, CHAT_DEFAULT_GATEWAY_ORIGIN: gatewayOrigin,
+        CHAT_DEFAULT_SESSION_KEY: sessionKey, CHAT_DEFAULT_PRINCIPAL_KEY: OPERATOR_PRINCIPAL,
+        TIGHTBEAM_BASE_DIR: gatewayBaseDir } });
+    await listen(chat, chatPort);
+    const warnings = [];
+    const onWarning = (warning) => warnings.push(warning.name);
+    process.on('warning', onWarning);
+    try {
+      for (let index = 0; index < 40; index += 1) {
+        const response = await fetch(`${chatOrigin}/__chat/api/read-markers/${encodeURIComponent('k')}`);
+        expect(response.status).toBe(200);
+        await response.text();
+      }
+      await new Promise((resolve) => setImmediate(resolve));
+    } finally { process.off('warning', onWarning); }
+    expect(connections.size).toBeLessThan(40);
+    expect(warnings).not.toContain('MaxListenersExceededWarning');
+    for (const socket of connections) expect(socket.listenerCount('error')).toBeLessThanOrEqual(2);
+  });
+
+  it.each([
+    ['upload', 'POST'],
+    ['download', 'GET'],
+  ])('survives a Gateway that resets the connection during an %s through the Chat service', async (kind, method) => {
+    const gateway = http.createServer((request, response) => {
+      if (request.url === '/version') { response.setHeader('content-type', 'application/json'); response.end(JSON.stringify({ version: '0.1.17' })); return; }
+      if (kind === 'upload') {
+        response.writeHead(413, { 'content-type': 'application/json', connection: 'close' });
+        response.end(refusal, () => setTimeout(() => request.socket.resetAndDestroy(), 20));
+      } else {
+        response.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': String(50_000_000) });
+        response.write(Buffer.alloc(1_000_000, 7));
+        setTimeout(() => request.socket.resetAndDestroy(), 30);
+      }
+    });
+    const gatewayPort = await listen(gateway);
+    const gatewayOrigin = `http://127.0.0.1:${gatewayPort}`;
+    const chatPort = await unusedPort();
+    const chatOrigin = `http://127.0.0.1:${chatPort}`;
+    const { root, publicDir } = await temporaryDirectory();
+    const gatewayBaseDir = await writeGatewayDescriptor(path.join(root, 'gateway-base'), gatewayOrigin, TOKEN);
+    const chat = createChatServer({ rootDir: root, publicDir,
+      releaseInfo: { tag: 'v0.1.2', sourceCommit: '1234567890abcdef1234567890abcdef12345678' },
+      environment: { CHAT_PUBLIC_ORIGIN: chatOrigin, CHAT_DEFAULT_GATEWAY_ORIGIN: gatewayOrigin,
+        CHAT_DEFAULT_SESSION_KEY: sessionKey, CHAT_DEFAULT_PRINCIPAL_KEY: OPERATOR_PRINCIPAL,
+        TIGHTBEAM_BASE_DIR: gatewayBaseDir } });
+    await listen(chat, chatPort);
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const response = kind === 'upload'
+          ? await fetch(`${chatOrigin}/__chat/upload`, { method, headers: { origin: chatOrigin, 'content-type': 'application/octet-stream' }, body: Buffer.alloc(40_000_000, 1) })
+          : await fetch(`${chatOrigin}/__chat/download/a_00000000-0000-4000-8000-000000000001`, { method, headers: { origin: chatOrigin } });
+        await response.arrayBuffer().catch(() => {});
+      } catch { /* the browser may see the connection end; the service must still run */ }
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect((await fetch(`${chatOrigin}/chat-config.json`)).status).toBe(200);
+    }
+  });
+
   it('says plainly that the Gateway was unavailable when it resets before any reply was seen', async () => {
     const chatOrigin = await chatWithUpstream('reset-before-reply');
     const response = await bigPost(chatOrigin);
