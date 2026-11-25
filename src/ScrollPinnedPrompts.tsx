@@ -460,7 +460,13 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
       frame = requestAnimationFrame(() => { frame = 0; refresh(); });
     };
     scheduleRefresh.current = schedule;
-    const observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(schedule);
+    // A transcript resize (a streaming reply, an image loading) is measured in the same frame,
+    // before it is drawn: waiting a frame left a pinned copy's geometry, and so its push-off
+    // point, one layout behind while content kept changing.
+    const observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(() => {
+      if (frame) { cancelAnimationFrame(frame); frame = 0; }
+      refresh();
+    });
     observer?.observe(box);
     if (box.firstElementChild) observer?.observe(box.firstElementChild);
     window.addEventListener('resize', schedule);
