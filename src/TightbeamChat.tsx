@@ -12,6 +12,7 @@ import { highlightRecognizedCode } from './markdownHighlight';
 import type { AttachmentInput, AttachmentReference, ChatRuntime, CanonicalMessage, CanonicalTransition, ToolCallRecord, ToolCallIndex, ConversationRecord, LocalSend, RuntimeState, TightbeamAdapter, TurnProvenance } from './types';
 import { projectMessages, type HumanMember } from './messageVisibility';
 import { ActivitySummaryProvider, useActivitySummary } from './ActivitySummaryView';
+import { ScrollPinnedPrompts, type ScrollPinnedPrompt, type ScrollPinnedPromptsHandle } from './ScrollPinnedPrompts';
 import type { SummaryAnswer, ActivitySummaryTransport } from './activitySummaries';
 import { buildActivityTrail, type ActivityFold, type ActivityLine, type ActivityOverflow, type MessageActivityItem } from './activityTrail';
 import { formatVisibleIds, type ActivityPillIcon, type ActivityPillPresentation } from './activityPresentation';
@@ -45,6 +46,12 @@ export interface TightbeamChatProps {
   readonly configuredConversationHref?: string;
   /** Enables canonical submitter labels once the compatible Gateway contract is available. */
   readonly submitterAttributionEnabled?: boolean;
+  /**
+   * Pins the reader's prompts by scroll position: each one shortens as it scrolls under
+   * the pin line, fades to its summary and is pushed off by the next. Unfinished; off by
+   * default (CHAT_SCROLL_PINNED_PROMPTS, docs/feature-flags.md).
+   */
+  readonly scrollPinnedPrompts?: boolean;
   /** Change when the host changes principal or transport lifetime. */
   readonly identityKey?: string;
   readonly renderMessage?: (record: ConversationRecord, context: RenderContext) => ReactNode | undefined;
@@ -2304,7 +2311,7 @@ const ActivityRunRow = memo(function ActivityRunRow({ entry, expanded, toggle, r
 const WORK_ITEMS_MIN_HEIGHT = 380;
 
 function ChatBody({ runtime, renderMessage, className, hostBridge, configuredConversationHref, activitySummaries,
-  submitterAttributionEnabled,
+  submitterAttributionEnabled, scrollPinnedPrompts,
   recoverySnapshot }: {
   activitySummaries?: ActivitySummaryTransport;
   runtime: ChatRuntime;
@@ -2313,6 +2320,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   hostBridge: HostComposerBridge | null;
   configuredConversationHref?: string;
   submitterAttributionEnabled?: boolean;
+  scrollPinnedPrompts?: boolean;
   recoverySnapshot: ChatRecoverySnapshot;
 }) {
   const state = useSyncExternalStore(runtime.subscribe, runtime.getSnapshot, runtime.getSnapshot);
@@ -2447,9 +2455,13 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   const arrivalEligible = state.status === 'ready' && priorArrivalContext?.ready === true &&
     priorArrivalContext.sessionKey === state.sessionKey && priorArrivalContext.generation === state.generation &&
     priorArrivalContext.recoveryRevision === recoveryRevision;
+  const scrollPinnedPromptsHandle = useRef<ScrollPinnedPromptsHandle>(null);
+  const pinnedPromptBottom = useCallback((scrollKey: string) =>
+    scrollPinnedPromptsHandle.current?.settledBottom(scrollKey), []);
   const reading = useReadingPosition(state.status === 'ready', readingRevision, box =>
     Boolean(state.loadingOlder || state.recordEventsLoading || (!state.historyError && (state.hasOlder || state.recordEventsHasOlder) && box.scrollTop < olderHistoryPrefetchDistance(box))),
-    arrivalEligible, state.sessionKey, markReadPosition, state.activeTurn?.turn.status === 'running');
+    arrivalEligible, state.sessionKey, markReadPosition, state.activeTurn?.turn.status === 'running',
+    scrollPinnedPrompts ? pinnedPromptBottom : undefined);
   const { viewport } = reading;
   const rememberReadingPosition = useCallback(() => {
     const box = viewport.current;
@@ -2859,8 +2871,11 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
       const topValue = `${top}px`;
       if (element.style.getPropertyValue('--tb-chat-floating-prompt-top') !== topValue) {
         element.style.setProperty('--tb-chat-floating-prompt-top', topValue);
+        if (scrollPinnedPrompts) scrollPinnedPromptsHandle.current?.remeasure();
       }
     }
+    // Scroll-pinned prompts follow the scroll position themselves and need only the pin line.
+    if (scrollPinnedPrompts) return;
 
     const box = viewport.current;
     const viewportBounds = box?.getBoundingClientRect();
@@ -2947,7 +2962,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     if (stickyPromptIdentity === identity) reading.reconcileReducedMotionTopAnchor();
     else setStickyPromptIdentity(identity);
   }, [promptCandidates, promptsByIdentity, reading.getRow, reading.getTopAnchoredPromptScrollKey,
-    reading.reconcileReducedMotionTopAnchor, stickyPromptIdentity, promptHandoff?.identity]);
+    reading.reconcileReducedMotionTopAnchor, stickyPromptIdentity, promptHandoff?.identity, scrollPinnedPrompts]);
   const restorePromptHandoffSource = useCallback(() => {
     const source = promptHandoffSource.current;
     if (!source) return;
@@ -3374,10 +3389,10 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     !isOriginalPromptVisible(stickyPromptIdentity!) &&
     (!overlappingPromptIdentity || overlappingPromptIdentity === stickyPromptIdentity);
   const showStickyPrompt = promptHandoff ? activeHandoffVisible : candidatePromptVisible;
-  const jumpToStickyPrompt = () => {
+  const jumpToPrompt = (prompt: { readonly scrollKey: string }) => {
     const box = viewport.current;
-    if (!box || !displayedPrompt || !displayedPromptTargetId) return;
-    const target = reading.getRow(displayedPrompt.scrollKey);
+    if (!box) return;
+    const target = reading.getRow(prompt.scrollKey);
     if (!target) return;
     const viewportRect = box.getBoundingClientRect();
     const targetRect = target.getBoundingClientRect();
@@ -3391,6 +3406,30 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     box.scrollTo({ top: destination, behavior: reducedMotion ? 'instant' : 'smooth' });
     updateStickyPrompt();
   };
+  const jumpToStickyPrompt = () => {
+    if (displayedPrompt && displayedPromptTargetId) jumpToPrompt(displayedPrompt);
+  };
+  const dismissLatestPrompt = () => {
+    storeDismissedPrompt(state.sessionKey, true);
+    setPromptDismissal({ sessionKey: state.sessionKey, dismissed: true });
+  };
+  // Timeline updates (a streamed reply, a tool call) rebuild the candidates; keep the same
+  // list while the prompts themselves are unchanged, so the pinned layer does not re-measure.
+  const stableScrollPinnedPromptList = useRef<readonly ScrollPinnedPrompt[]>([]);
+  const nextScrollPinnedPromptList = useMemo<readonly ScrollPinnedPrompt[]>(() => scrollPinnedPrompts
+    // Blank lines between paragraphs would spend the summary's three lines on nothing.
+    ? promptCandidates.map(prompt => ({ identity: prompt.identity,
+      text: formatVisibleIds(prompt.content).replace(/\n[^\S\n]*(?:\n[^\S\n]*)+/g, '\n').trim(),
+      scrollKey: prompt.scrollKey, targetId: `${promptTargetPrefix}-${encodeURIComponent(prompt.targetKey)}` }))
+    : [], [scrollPinnedPrompts, promptCandidates, promptTargetPrefix]);
+  const previousList = stableScrollPinnedPromptList.current;
+  const scrollPinnedPromptList = previousList.length === nextScrollPinnedPromptList.length &&
+    previousList.every((prompt, index) => {
+      const next = nextScrollPinnedPromptList[index];
+      return prompt.identity === next.identity && prompt.text === next.text &&
+        prompt.scrollKey === next.scrollKey && prompt.targetId === next.targetId;
+    }) ? previousList : nextScrollPinnedPromptList;
+  stableScrollPinnedPromptList.current = scrollPinnedPromptList;
   const renderToolHistoryStatus = (placeholder = false) => <div
     ref={placeholder ? undefined : toolHistoryStatus}
     className={`tb-chat-tool-history-status${placeholder ? ' tb-chat-tool-history-status-placeholder' : ''}`}
@@ -3623,23 +3662,23 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
       </TranscriptRenderBoundary>
       </div>
     </div>
-    {measurementPrompt && <div ref={stickyPromptMeasurement} className="tb-chat-latest-user-prompt-measurement"
+    {scrollPinnedPrompts && !latestPromptDismissed && <ScrollPinnedPrompts ref={scrollPinnedPromptsHandle}
+      prompts={scrollPinnedPromptList} viewport={viewport} getRow={reading.getRow}
+      onJump={jumpToPrompt} onDismiss={dismissLatestPrompt} />}
+    {!scrollPinnedPrompts && measurementPrompt && <div ref={stickyPromptMeasurement} className="tb-chat-latest-user-prompt-measurement"
       aria-hidden="true" inert>
       <button type="button" className="tb-chat-latest-user-prompt-jump" tabIndex={-1}>
         <span className="tb-chat-latest-user-prompt-text">{formatVisibleIds(measurementPrompt.content)}</span>
       </button>
       <button type="button" className="tb-chat-latest-user-prompt-dismiss" tabIndex={-1}>×</button>
     </div>}
-    {showStickyPrompt && displayedPrompt && <div ref={stickyPromptOverlay} className="tb-chat-latest-user-prompt">
+    {!scrollPinnedPrompts && showStickyPrompt && displayedPrompt && <div ref={stickyPromptOverlay} className="tb-chat-latest-user-prompt">
       <button type="button" className="tb-chat-latest-user-prompt-jump" aria-controls={displayedPromptTargetId}
         aria-label="Jump to user prompt" onClick={jumpToStickyPrompt}>
         <span className="tb-chat-latest-user-prompt-text">{formatVisibleIds(displayedPrompt.content)}</span>
       </button>
       <button type="button" className="tb-chat-latest-user-prompt-dismiss" aria-label="Dismiss user prompt preview"
-        onClick={() => {
-          storeDismissedPrompt(state.sessionKey, true);
-          setPromptDismissal({ sessionKey: state.sessionKey, dismissed: true });
-        }}>×</button>
+        onClick={dismissLatestPrompt}>×</button>
     </div>}
     {reading.showLatest && <button type="button" className="tb-chat-scroll-latest" data-scroll-latest="true"
       data-scroll-control-hidden={reading.hideLatestControl ? 'true' : undefined}
@@ -3666,7 +3705,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
 
 /** One host-selected session. Changing selection/identity disposes the old runtime. */
 export function TightbeamChat({ sessionKey, adapter, identityKey, renderMessage, className,
-  configuredConversationHref, submitterAttributionEnabled }: TightbeamChatProps) {
+  configuredConversationHref, submitterAttributionEnabled, scrollPinnedPrompts }: TightbeamChatProps) {
   const key = `${sessionKey}\u0000${identityKey || ''}`;
   const recoverySnapshot = useRef<ChatRecoverySnapshot>({ key, draft: '', editRevision: 0,
     submittedRevisions: new Map(), scrollTop: 0, followLatest: true, hasReadingPosition: false });
@@ -3719,7 +3758,7 @@ export function TightbeamChat({ sessionKey, adapter, identityKey, renderMessage,
   </section>}>
     <ChatBody key={key} runtime={opened.runtime} renderMessage={renderMessage}
       className={className} hostBridge={hostBridge} configuredConversationHref={configuredConversationHref}
-      submitterAttributionEnabled={submitterAttributionEnabled}
+      submitterAttributionEnabled={submitterAttributionEnabled} scrollPinnedPrompts={scrollPinnedPrompts === true}
       activitySummaries={adapter.activitySummaries} recoverySnapshot={recoverySnapshot.current} />
   </TranscriptRenderBoundary>;
 }

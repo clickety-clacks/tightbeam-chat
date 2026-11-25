@@ -275,10 +275,11 @@ function advanceNextFrame(at: number) {
   act(() => first[1].callback(at));
 }
 
-function setup(records = initialRows, renderMessage?: TightbeamChatProps['renderMessage']) {
+function setup(records = initialRows, renderMessage?: TightbeamChatProps['renderMessage'], scrollPinnedPrompts = false) {
   const runtime = new ReadingRuntime();
   runtime.state = { ...runtime.state, records };
-  render(<TightbeamChat sessionKey="reading" adapter={{ open: () => runtime }} renderMessage={renderMessage} />);
+  render(<TightbeamChat sessionKey="reading" adapter={{ open: () => runtime }} renderMessage={renderMessage}
+    scrollPinnedPrompts={scrollPinnedPrompts} />);
   scrollTo.mockClear();
   return { runtime, box: screen.getByRole('log'), input: screen.getByRole('textbox') as HTMLTextAreaElement };
 }
@@ -440,6 +441,27 @@ describe('conversation reading position', () => {
     expect(previousRow.querySelector<HTMLElement>('.tb-chat-bubble-body')!.getBoundingClientRect().bottom)
       .toBeCloseTo(box.getBoundingClientRect().top + expectedVisibleMessageTail);
     expect(screen.getByRole('button', { name: /^[1-9]\d* unseen messages?$/ })).toBeTruthy();
+  });
+
+  it('with scroll-pinned prompts, places a tall reply below where its prompt settles at the pin line', () => {
+    extraBottomSpace = 178;
+    const { runtime, box } = setup(initialRows, undefined, true);
+    rowHeightOverrides.set('message-20', 320);
+    const reply = { ...message(20), role: 'assistant' as const, sender: 'assistant' };
+    act(() => runtime.publish({ records: [...initialRows, reply] }));
+    advanceNextFrame(performance.now() + 300);
+    fireEvent.scroll(box);
+
+    const chat = box.closest<HTMLElement>('.tb-chat')!;
+    const prompt = box.querySelector<HTMLElement>('[data-scroll-key="message-19"]')!;
+    const firstReply = box.querySelector<HTMLElement>('[data-scroll-key="message-20"]')!;
+    const viewportTop = box.getBoundingClientRect().top;
+    const promptBounds = prompt.getBoundingClientRect();
+    // This prompt fits its three-line summary, so it pins at its own height: its top sits
+    // on the pin line and the reply starts below it, uncovered.
+    expect(chat.querySelector('.tb-chat-latest-user-prompt')).toBeNull();
+    expect(promptBounds.top).toBeCloseTo(viewportTop + 10);
+    expect(firstReply.getBoundingClientRect().top).toBeGreaterThan(promptBounds.bottom);
   });
 
   it.each([false, true])('keeps the prompt tail and first reply line below top overlays (runtime notice=%s)', runtimeNoticeVisible => {
@@ -2542,6 +2564,48 @@ describe('conversation reading position', () => {
     expect(bubbleBottom()).toBe(70);
     expect(screen.getByRole('button', { name: 'Jump to user prompt' }).textContent).toBe('Message 6');
     expect(nextPrompt.style.visibility).toBe('hidden');
+  });
+
+  function pinSomePrompt(box: HTMLElement): HTMLElement {
+    for (let position = 0; position <= 2000; position += 25) {
+      readAt(box, position);
+      const slot = document.querySelector<HTMLElement>('.tb-chat-pinned-slot[data-pinned]');
+      if (slot) return slot;
+    }
+    throw new Error('No prompt pinned while scrolling.');
+  }
+
+  it('with scroll-pinned prompts, dismissing removes the pinned copy, gives every original back and is remembered', () => {
+    const { box } = setup(initialRows, undefined, true);
+    const chat = box.closest<HTMLElement>('.tb-chat')!;
+    pinSomePrompt(box);
+    expect(chat.querySelector('.tb-chat-latest-user-prompt')).toBeNull();
+    expect(box.querySelectorAll('[data-pinned-original]').length).toBe(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss user prompt preview' }));
+    expect(chat.querySelector('.tb-chat-pinned-layer')).toBeNull();
+    expect(box.querySelectorAll('[data-pinned-original]').length).toBe(0);
+    expect(window.localStorage.getItem('tb-chat:dismissed-prompt:reading')).toBe('true');
+    readAt(box, 300);
+    expect(chat.querySelector('.tb-chat-pinned-slot')).toBeNull();
+  });
+
+  it('with scroll-pinned prompts, switching conversation leaves no pinned copy or hidden original behind', () => {
+    const runtime = new ReadingRuntime();
+    runtime.state = { ...runtime.state, records: initialRows };
+    const adapter = { open: () => runtime };
+    const view = render(<TightbeamChat sessionKey="reading" adapter={adapter} scrollPinnedPrompts />);
+    const box = screen.getByRole('log');
+    pinSomePrompt(box);
+    const hidden = box.querySelector<HTMLElement>('[data-pinned-original]')!;
+    expect(hidden).not.toBeNull();
+    view.rerender(<TightbeamChat sessionKey="reading-other" adapter={adapter} scrollPinnedPrompts />);
+    expect(hidden.hasAttribute('data-pinned-original')).toBe(false);
+    // The new conversation may pin one of its own prompts; nothing of the old one remains.
+    const current = screen.getByRole('log');
+    expect(document.querySelectorAll('.tb-chat-pinned-slot[data-pinned]').length).toBeLessThanOrEqual(1);
+    expect([...document.querySelectorAll('[data-pinned-original]')]
+      .every(element => element !== hidden && current.contains(element))).toBe(true);
+    expect(document.querySelectorAll('.tb-chat-pinned-layer').length).toBeLessThanOrEqual(1);
   });
 
   it('moves the prompt instantly with reduced motion enabled', () => {

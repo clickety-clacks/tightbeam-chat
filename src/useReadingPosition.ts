@@ -44,7 +44,14 @@ export function useReadingPosition(
   arrivalScope?: string,
   onManualScroll?: () => void,
   arrivalStreaming = false,
+  /**
+   * With scroll-pinned prompts, where an answered prompt's bottom belongs (scrollport
+   * coordinates) so its pinned copy sits above the reply instead of over it.
+   */
+  pinnedPromptBottom?: (scrollKey: string) => number | undefined,
 ) {
+  const pinnedPromptBottomRef = useRef(pinnedPromptBottom);
+  pinnedPromptBottomRef.current = pinnedPromptBottom;
   const viewport = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const initialized = useRef(false);
@@ -278,9 +285,17 @@ export function useReadingPosition(
         // just above the viewport when a tall reply arrives.
         const anchorBody = anchorRow.querySelector<HTMLElement>('.tb-chat-bubble-body') ?? anchorRow;
         const anchorBodyBounds = anchorBody.getBoundingClientRect();
-        const visibleTailBottom = bounds.top + arrivalVisibleTail;
-        destination = box.scrollTop + anchorBodyBounds.bottom - visibleTailBottom;
         const viewportBounds = box.getBoundingClientRect();
+        const pinnedBottom = pinnedPromptBottomRef.current?.(anchorRow.dataset.scrollKey ?? '');
+        let visibleTailBottom = bounds.top + arrivalVisibleTail;
+        if (pinnedBottom !== undefined) {
+          // The prompt pins at the top and shrinks to its summary there, so place its
+          // whole bubble's bottom where that pinned copy ends: the reply follows it.
+          visibleTailBottom = Math.max(visibleTailBottom, viewportBounds.top + box.clientTop + pinnedBottom);
+          destination = box.scrollTop + anchorRow.getBoundingClientRect().bottom - visibleTailBottom;
+        } else {
+          destination = box.scrollTop + anchorBodyBounds.bottom - visibleTailBottom;
+        }
         topAnchoredPrompt.current = arrival.answeredPromptScrollKey
           ? { scrollKey: arrival.answeredPromptScrollKey,
             bottomOffset: visibleTailBottom - viewportBounds.top }

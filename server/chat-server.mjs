@@ -185,6 +185,7 @@ function loadRuntimeConfig(environment) {
   const gatewayMap = loadGatewayMap(environment, configuredGateway);
   const restHumanSendEnabled = environment.CHAT_REST_HUMAN_SEND === '1';
   const workItemPillsEnabled = environment.CHAT_WORK_ITEM_PILLS === '1';
+  const scrollPinnedPromptsEnabled = environment.CHAT_SCROLL_PINNED_PROMPTS === '1';
   let markerDeviceToken = '';
   if (!restHumanSendEnabled && typeof environment.CHAT_READ_MARKER_DEVICE_CREDENTIAL_FILE === 'string' &&
       environment.CHAT_READ_MARKER_DEVICE_CREDENTIAL_FILE) {
@@ -216,6 +217,7 @@ function loadRuntimeConfig(environment) {
       ...(readMarkerRoute ? { readMarkerRoute } : {}),
       ...(restHumanSendEnabled ? { restHumanSendEnabled: true } : {}),
       ...(workItemPillsEnabled && principalKey ? { workItemPillsEnabled: true } : {}),
+      ...(scrollPinnedPromptsEnabled ? { scrollPinnedPromptsEnabled: true } : {}),
     }
     : {};
 
