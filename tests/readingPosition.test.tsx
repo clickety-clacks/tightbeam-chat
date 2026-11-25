@@ -2660,9 +2660,11 @@ describe('conversation reading position', () => {
     // The pinned card keeps its own three-line summary of the full text.
     expect(slot.querySelector('.tb-chat-pinned-summary')!.textContent).toContain('Long line 30');
     fireEvent.click(original.querySelector('button.tb-chat-prompt-expand')!);
+    expect(original.querySelector('.tb-chat-prompt-clamp')!.getAttribute('data-expanded')).toBe('true');
     await act(async () => { await Promise.resolve(); });
-    expect(slot.querySelector('.tb-chat-pinned-full .tb-chat-prompt-clamp')!.getAttribute('data-expanded')).toBe('true');
-    expect(slot.querySelector('.tb-chat-pinned-full .tb-chat-prompt-expand')).toBeNull();
+    const current = document.querySelector<HTMLElement>(`.tb-chat-pinned-slot[data-prompt-identity="${slot.dataset.promptIdentity}"]`)!;
+    expect(current.querySelector('.tb-chat-pinned-full .tb-chat-prompt-clamp')!.getAttribute('data-expanded')).toBe('true');
+    expect(current.querySelector('.tb-chat-pinned-full .tb-chat-prompt-expand')).toBeNull();
   });
 
   it('moves the prompt instantly with reduced motion enabled', () => {
