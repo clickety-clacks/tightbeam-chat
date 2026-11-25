@@ -200,6 +200,94 @@ body {
 }
 .tb-chat-latest-user-prompt-dismiss:hover { background: color-mix(in srgb, var(--tb-chat-human-surface) 78%, var(--tb-chat-text)); }
 .tb-chat-tool-history-status-placeholder { visibility: hidden; pointer-events: none; }
+/* Scroll-pinned prompts (CHAT_SCROLL_PINNED_PROMPTS). A copy of the bubble at its own
+   position and width; script sets its geometry, scroll-driven animations move it. */
+.tb-chat-pinned-layer {
+  position: absolute;
+  z-index: 6;
+  overflow: hidden;
+  pointer-events: none;
+}
+.tb-chat-pinned-slot {
+  position: absolute;
+  top: 0;
+  opacity: 0;
+  will-change: transform, opacity;
+  filter: drop-shadow(0 4px 10px color-mix(in srgb, var(--tb-chat-shadow) 8%, transparent))
+    drop-shadow(0 1px 2px color-mix(in srgb, var(--tb-chat-shadow) 5%, transparent));
+}
+.tb-chat-pinned-window {
+  position: absolute;
+  inset: 0;
+  overflow: clip;
+  border-radius: var(--tb-chat-pinned-radius-top-left, 28px) var(--tb-chat-pinned-radius-top-right, 28px) 0 0;
+}
+.tb-chat-pinned-body {
+  position: absolute;
+  inset: 0;
+  overflow: clip;
+  border-radius: 0 0 var(--tb-chat-pinned-radius-bottom-right, 4px) var(--tb-chat-pinned-radius-bottom-left, 28px);
+  background: linear-gradient(135deg, var(--tb-chat-human-surface), var(--tb-chat-human-surface-end));
+  will-change: transform;
+}
+.tb-chat-pinned-full { position: absolute; inset: 0 auto auto 0; will-change: opacity; }
+.tb-chat-pinned-copy {
+  margin: 0 !important;
+  max-width: none !important;
+  min-width: 0 !important;
+  box-shadow: none !important;
+}
+.tb-chat-pinned-summary {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  color: var(--tb-chat-text);
+  font-size: .9375rem;
+  font-weight: 400;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  opacity: 0;
+  will-change: opacity;
+}
+.tb-chat-pinned-summary-measure {
+  top: 0;
+  left: 0;
+  right: auto;
+  height: auto;
+  visibility: hidden;
+}
+.tb-chat-pinned-jump {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.tb-chat-pinned-dismiss {
+  position: absolute;
+  top: -.35rem;
+  left: -.35rem;
+  display: grid;
+  place-items: center;
+  width: 1.55rem;
+  height: 1.55rem;
+  padding: 0;
+  border: 1px solid var(--tb-chat-border);
+  border-radius: 50%;
+  background: var(--tb-chat-human-surface);
+  color: var(--tb-chat-text);
+  font-size: 1rem !important;
+  line-height: 1;
+}
+.tb-chat-pinned-slot[data-pinned] .tb-chat-pinned-jump,
+.tb-chat-pinned-slot[data-pinned] .tb-chat-pinned-dismiss { pointer-events: auto; }
+.tb-chat-pinned-dismiss:hover { background: color-mix(in srgb, var(--tb-chat-human-surface) 78%, var(--tb-chat-text)); }
+
 .tb-chat-scroll-latest {
   display: inline-flex;
   align-items: center;
