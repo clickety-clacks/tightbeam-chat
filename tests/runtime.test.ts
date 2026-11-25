@@ -2039,7 +2039,8 @@ describe('framework-independent runtime', () => {
     await runtime.rebuild();
     const id = runtime.send('still mine');
     await vi.waitFor(() => expect(runtime.getSnapshot().sends[0]?.status).toBe(status));
-    transport.readTail = async () => { throw new AuthorizationError('History is not authorized.'); };
+    // A rebuild rereads either the newest page or the rows after the held cursor; refuse both.
+    transport.readTail = transport.readAfter = async () => { throw new AuthorizationError('History is not authorized.'); };
     await runtime.rebuild();
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('unauthorized'));
     expect(runtime.getSnapshot().sends).toMatchObject([{ clientMessageId: id, content: 'still mine', status: 'uncertain' }]);
