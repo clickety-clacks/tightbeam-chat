@@ -2566,6 +2566,48 @@ describe('conversation reading position', () => {
     expect(nextPrompt.style.visibility).toBe('hidden');
   });
 
+  function pinSomePrompt(box: HTMLElement): HTMLElement {
+    for (let position = 0; position <= 2000; position += 25) {
+      readAt(box, position);
+      const slot = document.querySelector<HTMLElement>('.tb-chat-pinned-slot[data-pinned]');
+      if (slot) return slot;
+    }
+    throw new Error('No prompt pinned while scrolling.');
+  }
+
+  it('with scroll-pinned prompts, dismissing removes the pinned copy, gives every original back and is remembered', () => {
+    const { box } = setup(initialRows, undefined, true);
+    const chat = box.closest<HTMLElement>('.tb-chat')!;
+    pinSomePrompt(box);
+    expect(chat.querySelector('.tb-chat-latest-user-prompt')).toBeNull();
+    expect(box.querySelectorAll('[data-pinned-original]').length).toBe(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Dismiss user prompt preview' }));
+    expect(chat.querySelector('.tb-chat-pinned-layer')).toBeNull();
+    expect(box.querySelectorAll('[data-pinned-original]').length).toBe(0);
+    expect(window.localStorage.getItem('tb-chat:dismissed-prompt:reading')).toBe('true');
+    readAt(box, 300);
+    expect(chat.querySelector('.tb-chat-pinned-slot')).toBeNull();
+  });
+
+  it('with scroll-pinned prompts, switching conversation leaves no pinned copy or hidden original behind', () => {
+    const runtime = new ReadingRuntime();
+    runtime.state = { ...runtime.state, records: initialRows };
+    const adapter = { open: () => runtime };
+    const view = render(<TightbeamChat sessionKey="reading" adapter={adapter} scrollPinnedPrompts />);
+    const box = screen.getByRole('log');
+    pinSomePrompt(box);
+    const hidden = box.querySelector<HTMLElement>('[data-pinned-original]')!;
+    expect(hidden).not.toBeNull();
+    view.rerender(<TightbeamChat sessionKey="reading-other" adapter={adapter} scrollPinnedPrompts />);
+    expect(hidden.hasAttribute('data-pinned-original')).toBe(false);
+    // The new conversation may pin one of its own prompts; nothing of the old one remains.
+    const current = screen.getByRole('log');
+    expect(document.querySelectorAll('.tb-chat-pinned-slot[data-pinned]').length).toBeLessThanOrEqual(1);
+    expect([...document.querySelectorAll('[data-pinned-original]')]
+      .every(element => element !== hidden && current.contains(element))).toBe(true);
+    expect(document.querySelectorAll('.tb-chat-pinned-layer').length).toBeLessThanOrEqual(1);
+  });
+
   it('moves the prompt instantly with reduced motion enabled', () => {
     reducedMotion = true;
     latestPromptOverlayHeight = 60;

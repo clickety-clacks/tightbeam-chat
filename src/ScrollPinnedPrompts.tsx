@@ -50,6 +50,8 @@ interface Props {
 const FADE_DISTANCE = 48;
 /** Space between a pushed prompt and the prompt pushing it. */
 const PUSH_GAP = 8;
+/** Marks an original bubble hidden while its copy is pinned (scroll-listener path only). */
+const HIDDEN_ORIGINAL = 'data-pinned-original';
 /** Lines in a summary. */
 const SUMMARY_LINES = 3;
 
@@ -88,8 +90,6 @@ function scrollTimelineConstructor(): TimelineConstructor | undefined {
     typeof Element.prototype.animate === 'function' ? candidate : undefined;
 }
 
-const summaryCache = new WeakMap<HTMLElement, Map<string, { height: number; truncated: boolean }>>();
-
 function copyBubble(row: HTMLElement): HTMLElement {
   const copy = row.cloneNode(true) as HTMLElement;
   copy.removeAttribute('id');
@@ -111,10 +111,15 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
   const [mounted, setMounted] = useState<readonly string[]>([]);
   const mountedKey = useRef('');
   const scheduleRefresh = useRef<() => void>(() => {});
+  const summaries = useRef(new WeakMap<HTMLElement, { key: string; summaryHeight: number; minimum: number }>());
   const onJumpRef = useRef(onJump);
   onJumpRef.current = onJump;
   const promptsByIdentity = useRef(new Map<string, ScrollPinnedPrompt>());
-  promptsByIdentity.current = new Map(prompts.map(prompt => [prompt.identity, prompt]));
+  const promptsRef = useRef(prompts);
+  if (promptsRef.current !== prompts || promptsByIdentity.current.size !== prompts.length) {
+    promptsRef.current = prompts;
+    promptsByIdentity.current = new Map(prompts.map(prompt => [prompt.identity, prompt]));
+  }
 
   const scrollTimeline = useCallback((): AnimationTimeline | null => {
     const box = viewport.current;
@@ -128,7 +133,34 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
     return timeline.current;
   }, [viewport]);
 
-  /** Reads layout. Runs on layout changes only, never per scroll frame. */
+  /**
+   * Which prompts need a slot: those pinned now, the next two to arrive, and the one just
+   * pushed off above, so a copy is ready before it is needed whichever way the reader scrolls.
+   */
+  const wantedSlots = useCallback((scrollTop: number, extra = 0): string[] => {
+    const { prompts: measured, options } = layout.current;
+    let low = 0;
+    let high = measured.length;
+    while (low < high) {
+      const middle = low + Math.floor((high - low) / 2);
+      if (pinnedPromptBreakpoints(measured, middle, options).pin < scrollTop) low = middle + 1;
+      else high = middle;
+    }
+    const wanted: string[] = [];
+    let index = low - 1;
+    for (; index >= 0 && pinnedPromptFrameAt(scrollTop, measured, index, options); index--) {
+      wanted.unshift(measured[index].identity);
+    }
+    for (let above = 0; above <= extra && index - above >= 0; above++) wanted.unshift(measured[index - above].identity);
+    for (let index = low; index < Math.min(measured.length, low + 2 + extra); index++) wanted.push(measured[index].identity);
+    return wanted;
+  }, []);
+
+  /**
+   * Reads layout. Runs on layout changes only, never per scroll frame. Every prompt's box
+   * is read (one layout pass; the boxes place the pin points), but style, summary and
+   * running-animation checks run only for the prompts near the pin line.
+   */
   const measureLayout = useCallback(() => {
     const box = viewport.current;
     const overlay = layer.current;
@@ -146,42 +178,37 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
     const pinLine = pinFromRoot - (portTop - rootBounds.top);
     const scrollTop = box.scrollTop;
     const measured: Measured[] = [];
-    // Rule 4's floor: one line of prompt text plus the bubble's vertical padding.
-    let minSummaryHeight = 0;
-    const ownAnimations = new Set([...slots.current.values()].flatMap(slot => slot.animations ?? []));
-    const cacheFor = (row: HTMLElement) => {
-      let cache = summaryCache.get(row);
-      if (!cache) summaryCache.set(row, cache = new Map());
-      return cache;
-    };
-    for (const prompt of prompts) {
+    const rowsByIndex: HTMLElement[] = [];
+    for (const prompt of promptsRef.current) {
       const row = getRow(prompt.scrollKey);
       if (!row) continue;
       const bounds = row.getBoundingClientRect();
       if (!Number.isFinite(bounds.top) || bounds.height <= 0) continue;
-      const style = getComputedStyle(row);
-      const padding = `${style.paddingTop} ${style.paddingRight} ${style.paddingBottom} ${style.paddingLeft}`;
-      if (!minSummaryHeight) {
-        const fontSize = Number.parseFloat(style.fontSize) || 0;
-        const lineHeight = Number.parseFloat(style.lineHeight) || fontSize * 1.5;
-        minSummaryHeight = lineHeight + (Number.parseFloat(style.paddingTop) || 0) + (Number.parseFloat(style.paddingBottom) || 0);
-      }
-      const cacheKey = `${bounds.width}\u0000${padding}\u0000${style.fontSize}\u0000${prompt.text}`;
-      const cache = cacheFor(row);
-      let summary = cache.get(cacheKey);
-      const probe = measure.current;
-      if (!summary && probe) {
-        probe.style.width = `${bounds.width}px`;
-        probe.style.padding = padding;
-        const probeText = probe.firstElementChild as HTMLElement;
-        probeText.textContent = prompt.text;
-        const height = probe.getBoundingClientRect().height;
-        // The summary is the prompt's text clamped to three lines. When nothing is cut,
-        // the summary says everything the prompt says: it is already at pinned size.
-        const truncated = probeText.scrollHeight > probeText.clientHeight + 1;
-        summary = { height, truncated };
-        cache.clear();
-        cache.set(cacheKey, summary);
+      // Prompts are in transcript order; a row that is not laid out yet must not break it.
+      const top = bounds.top - portTop + scrollTop;
+      if (measured.length && top < measured[measured.length - 1].top) break;
+      rowsByIndex.push(row);
+      measured.push({ identity: prompt.identity, scrollKey: prompt.scrollKey, top, height: bounds.height,
+        // Until measured near the pin line, a summary is taken as the full height: pin
+        // points and push-off points do not depend on it.
+        summaryHeight: summaries.current.get(row)?.summaryHeight ?? bounds.height,
+        left: bounds.left - portLeft, width: bounds.width });
+    }
+    const previousOptions = layout.current.options;
+    layout.current = { prompts: measured, byIdentity: new Map(measured.map((prompt, index) => [prompt.identity, index])),
+      options: { pinLine, fadeDistance: FADE_DISTANCE, pushGap: PUSH_GAP,
+        minSummaryHeight: previousOptions.minSummaryHeight ?? 0 } };
+    const near = new Set(wantedSlots(scrollTop, 1));
+    const ownAnimations = new Set([...slots.current.values()].flatMap(slot => slot.animations ?? []));
+    let minSummaryHeight = previousOptions.minSummaryHeight ?? 0;
+    measured.forEach((prompt, index) => {
+      if (!near.has(prompt.identity)) return;
+      const row = rowsByIndex[index];
+      const text = promptsByIdentity.current.get(prompt.identity)?.text ?? '';
+      const summary = summaryFor(row, prompt.width, text);
+      if (summary) {
+        if (!minSummaryHeight) minSummaryHeight = summary.minimum;
+        measured[index] = { ...prompt, summaryHeight: summary.summaryHeight };
       }
       for (const animation of row.getAnimations?.() ?? []) {
         // An arrival slide moves the row while it plays; measure again once it settles.
@@ -189,52 +216,44 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
           void animation.finished.then(() => scheduleRefresh.current(), () => {});
         }
       }
-      measured.push({
-        identity: prompt.identity,
-        scrollKey: prompt.scrollKey,
-        top: bounds.top - portTop + scrollTop,
-        height: bounds.height,
-        summaryHeight: summary?.truncated ? summary.height : bounds.height,
-        left: bounds.left - portLeft,
-        width: bounds.width,
-      });
-    }
-    // Prompts are in transcript order; a row that is not laid out yet must not break the order.
-    for (let index = 1; index < measured.length; index++) {
-      if (measured[index].top < measured[index - 1].top) {
-        measured.splice(index);
-        break;
-      }
-    }
-    layout.current = { prompts: measured, byIdentity: new Map(measured.map((prompt, index) => [prompt.identity, index])),
-      options: { pinLine, fadeDistance: FADE_DISTANCE, pushGap: PUSH_GAP, minSummaryHeight } };
-  }, [getRow, prompts, viewport]);
+    });
+    layout.current = { ...layout.current, options: { ...layout.current.options, minSummaryHeight } };
+  }, [getRow, viewport]);
 
   /**
-   * Which prompts need a slot: those pinned now, the next two to arrive, and the one just
-   * pushed off above, so a copy is ready before it is needed whichever way the reader scrolls.
+   * A prompt's summary: its text clamped to three lines. A prompt whose text fits and
+   * that holds nothing but text is already at pinned size; one with images, code or a
+   * table is taller than its text, so it shrinks to the text summary like a long prompt.
+   * Cached per row, width and text.
    */
-  const wantedSlots = useCallback((scrollTop: number): string[] => {
-    const { prompts: measured, options } = layout.current;
-    let low = 0;
-    let high = measured.length;
-    while (low < high) {
-      const middle = low + Math.floor((high - low) / 2);
-      if (pinnedPromptBreakpoints(measured, middle, options).pin < scrollTop) low = middle + 1;
-      else high = middle;
-    }
-    const wanted: string[] = [];
-    let index = low - 1;
-    for (; index >= 0 && pinnedPromptFrameAt(scrollTop, measured, index, options); index--) {
-      wanted.unshift(measured[index].identity);
-    }
-    if (index >= 0) wanted.unshift(measured[index].identity);
-    for (let index = low; index < Math.min(measured.length, low + 2); index++) wanted.push(measured[index].identity);
-    return wanted;
+  const summaryFor = useCallback((row: HTMLElement, width: number, text: string) => {
+    const probe = measure.current;
+    const style = getComputedStyle(row);
+    const padding = `${style.paddingTop} ${style.paddingRight} ${style.paddingBottom} ${style.paddingLeft}`;
+    const key = `${width}\u0000${padding}\u0000${style.fontSize}\u0000${text}`;
+    const cached = summaries.current.get(row);
+    if (cached?.key === key) return cached;
+    if (!probe) return undefined;
+    probe.style.width = `${width}px`;
+    probe.style.padding = padding;
+    const probeText = probe.firstElementChild as HTMLElement;
+    probeText.textContent = text;
+    const height = probe.getBoundingClientRect().height;
+    const truncated = probeText.scrollHeight > probeText.clientHeight + 1;
+    const hasMedia = !!row.querySelector('img, video, pre, table, .tb-chat-attachments, .tb-chat-image-attachments');
+    const fontSize = Number.parseFloat(style.fontSize) || 0;
+    const lineHeight = Number.parseFloat(style.lineHeight) || fontSize * 1.5;
+    const entry = { key, summaryHeight: truncated || hasMedia ? height : row.getBoundingClientRect().height,
+      // Rule 4's floor: one line of prompt text plus the bubble's vertical padding.
+      minimum: lineHeight + (Number.parseFloat(style.paddingTop) || 0) + (Number.parseFloat(style.paddingBottom) || 0) };
+    summaries.current.set(row, entry);
+    return entry;
   }, []);
 
+  // Without scroll timelines the original is hidden by an attribute (styled in style.css),
+  // never by inline style, so Chat's own row styles and animations are left alone.
   const releaseRow = (slot: SlotElements) => {
-    if (slot.hiddenRow) slot.hiddenRow.style.removeProperty('opacity');
+    slot.hiddenRow?.removeAttribute(HIDDEN_ORIGINAL);
     slot.hiddenRow = undefined;
   };
 
@@ -263,7 +282,7 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
     slot.summary.style.opacity = String(frame.fade);
     if (slot.hiddenRow !== row) {
       releaseRow(slot);
-      row.style.opacity = '0';
+      row.setAttribute(HIDDEN_ORIGINAL, '');
       slot.hiddenRow = row;
     }
   }, [getRow]);
@@ -402,11 +421,10 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
     refresh();
   }, [refresh, prompts]);
 
-  // Newly mounted slots need their copy and animations before the next paint.
+  // Newly mounted slots need their summaries, copy and animations before the next paint.
   useLayoutEffect(() => {
-    render();
-    onScroll();
-  }, [mounted, render, onScroll]);
+    refresh();
+  }, [mounted, refresh]);
 
   // The copy lets touches through so the transcript scrolls under the finger. A tap that
   // lands inside a pinned copy's visible bubble means "take me to the original".
@@ -506,8 +524,8 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
         data-prompt-identity={identity} aria-hidden="true" inert>
         <div className="tb-chat-pinned-window">
           <div ref={slotRef(identity, 'body')} className="tb-chat-pinned-body">
-            <div ref={slotRef(identity, 'full')} className="tb-chat-pinned-full" aria-hidden="true" />
-            <div ref={slotRef(identity, 'summary')} className="tb-chat-pinned-summary" aria-hidden="true">
+            <div ref={slotRef(identity, 'full')} className="tb-chat-pinned-full" aria-hidden="true" inert />
+            <div ref={slotRef(identity, 'summary')} className="tb-chat-pinned-summary" aria-hidden="true" inert>
               <div className="tb-chat-pinned-summary-text" style={{ WebkitLineClamp: SUMMARY_LINES }}>{prompt.text}</div>
             </div>
             <button type="button" className="tb-chat-pinned-jump" aria-label="Jump to user prompt"

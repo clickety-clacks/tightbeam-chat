@@ -3413,12 +3413,23 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     storeDismissedPrompt(state.sessionKey, true);
     setPromptDismissal({ sessionKey: state.sessionKey, dismissed: true });
   };
-  const scrollPinnedPromptList = useMemo<readonly ScrollPinnedPrompt[]>(() => scrollPinnedPrompts
+  // Timeline updates (a streamed reply, a tool call) rebuild the candidates; keep the same
+  // list while the prompts themselves are unchanged, so the pinned layer does not re-measure.
+  const stableScrollPinnedPromptList = useRef<readonly ScrollPinnedPrompt[]>([]);
+  const nextScrollPinnedPromptList = useMemo<readonly ScrollPinnedPrompt[]>(() => scrollPinnedPrompts
     // Blank lines between paragraphs would spend the summary's three lines on nothing.
     ? promptCandidates.map(prompt => ({ identity: prompt.identity,
       text: formatVisibleIds(prompt.content).replace(/\n[^\S\n]*(?:\n[^\S\n]*)+/g, '\n').trim(),
       scrollKey: prompt.scrollKey, targetId: `${promptTargetPrefix}-${encodeURIComponent(prompt.targetKey)}` }))
     : [], [scrollPinnedPrompts, promptCandidates, promptTargetPrefix]);
+  const previousList = stableScrollPinnedPromptList.current;
+  const scrollPinnedPromptList = previousList.length === nextScrollPinnedPromptList.length &&
+    previousList.every((prompt, index) => {
+      const next = nextScrollPinnedPromptList[index];
+      return prompt.identity === next.identity && prompt.text === next.text &&
+        prompt.scrollKey === next.scrollKey && prompt.targetId === next.targetId;
+    }) ? previousList : nextScrollPinnedPromptList;
+  stableScrollPinnedPromptList.current = scrollPinnedPromptList;
   const renderToolHistoryStatus = (placeholder = false) => <div
     ref={placeholder ? undefined : toolHistoryStatus}
     className={`tb-chat-tool-history-status${placeholder ? ' tb-chat-tool-history-status-placeholder' : ''}`}

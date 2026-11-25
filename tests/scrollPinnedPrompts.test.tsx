@@ -89,9 +89,10 @@ afterEach(() => {
   delete (globalThis as { ScrollTimeline?: unknown }).ScrollTimeline;
 });
 
-function mount(handlers: { onJump?: (prompt: ScrollPinnedPrompt) => void; onDismiss?: () => void } = {}) {
+function mount(handlers: { onJump?: (prompt: ScrollPinnedPrompt) => void; onDismiss?: () => void } = {},
+  list: ScrollPinnedPrompt[] = prompts) {
   const viewportRef = { current: viewport };
-  const result = render(<ScrollPinnedPrompts prompts={prompts} viewport={viewportRef}
+  const result = render(<ScrollPinnedPrompts prompts={list} viewport={viewportRef}
     getRow={key => rows.get(key)} onJump={handlers.onJump ?? (() => {})} onDismiss={handlers.onDismiss ?? (() => {})} />,
   { container: root });
   return result;
@@ -113,7 +114,7 @@ describe('scroll-pinned prompts without scroll timelines', () => {
     expect(slotFor('A')?.style.opacity).toBe('0');
     expect(slotFor('A')?.hasAttribute('data-pinned')).toBe(false);
     expect(slotFor('A')?.getAttribute('aria-hidden')).toBe('true');
-    expect(rows.get('A')!.style.opacity).toBe('');
+    expect(rows.get('A')!.hasAttribute('data-pinned-original')).toBe(false);
   });
 
   it('draws a copy at the bubble position and width, shortening with the scroll, and hides the original', () => {
@@ -126,7 +127,7 @@ describe('scroll-pinned prompts without scroll timelines', () => {
     expect(translate(slot)).toBe(10);
     // 100px scrolled past the pin point: the text has moved up 100px inside the bubble.
     expect(translate(slot.querySelector<HTMLElement>('.tb-chat-pinned-body'))).toBe(-100);
-    expect(rows.get('A')!.style.opacity).toBe('0');
+    expect(rows.get('A')!.hasAttribute('data-pinned-original')).toBe(true);
     expect(slot.hasAttribute('data-pinned')).toBe(true);
     expect(slot.hasAttribute('aria-hidden')).toBe(false);
     expect(slot.querySelector('.tb-chat-pinned-full')!.textContent).toBe('Bubble A');
@@ -169,7 +170,7 @@ describe('scroll-pinned prompts without scroll timelines', () => {
     // Kept ready, unseen, in case the reader scrolls back.
     expect(slotFor('A')!.style.opacity).toBe('0');
     expect(slotFor('A')!.hasAttribute('data-pinned')).toBe(false);
-    expect(rows.get('A')!.style.opacity).toBe('');
+    expect(rows.get('A')!.hasAttribute('data-pinned-original')).toBe(false);
     expect(slotFor('B')!.style.opacity).toBe('1');
   });
 
@@ -180,7 +181,7 @@ describe('scroll-pinned prompts without scroll timelines', () => {
     expect(slotFor('A')).toBeNull();
     scrollTo(200);
     expect(slotFor('C')?.style.opacity ?? '0').toBe('0');
-    expect(rows.get('C')!.style.opacity).toBe('');
+    expect(rows.get('C')!.hasAttribute('data-pinned-original')).toBe(false);
     expect(translate(slotFor('A')?.querySelector<HTMLElement>('.tb-chat-pinned-body'))).toBe(-110);
   });
 
@@ -225,12 +226,43 @@ describe('scroll-pinned prompts without scroll timelines', () => {
     expect(replyClicked).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps the copied bubble and summary out of reach of focus and screen readers while pinned', () => {
+    rows.get('A')!.innerHTML = 'See <a href="#x">this link</a> <button type="button">Retry</button>';
+    mount();
+    scrollTo(200);
+    const slot = slotFor('A')!;
+    expect(slot.hasAttribute('data-pinned')).toBe(true);
+    expect(slot.hasAttribute('inert')).toBe(false);
+    for (const layer of ['.tb-chat-pinned-full', '.tb-chat-pinned-summary']) {
+      const element = slot.querySelector<HTMLElement>(layer)!;
+      expect(element.hasAttribute('inert')).toBe(true);
+      expect(element.getAttribute('aria-hidden')).toBe('true');
+    }
+    expect(slot.querySelector('.tb-chat-pinned-full a')).not.toBeNull();
+    // Only the jump and dismiss controls remain reachable.
+    expect(screen.getAllByRole('button').map(button => button.getAttribute('aria-label')))
+      .toEqual(expect.arrayContaining(['Jump to user prompt', 'Dismiss user prompt preview']));
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'this link' })).toBeNull();
+  });
+
+  it('shrinks a prompt with an image to its text summary even when the text is short', () => {
+    rows.get('C')!.append(document.createElement('img'));
+    const list = prompts.map(prompt => prompt.identity === 'send:C' ? { ...prompt, text: 'Look at this' } : prompt);
+    mount({}, list);
+    scrollTo(1290 + 50);
+    // Taller than its one-line text: the bubble shortens with the scroll, clipping the image.
+    expect(translate(slotFor('C')!.querySelector<HTMLElement>('.tb-chat-pinned-body'))).toBe(-50);
+    scrollTo(1290 + 500);
+    expect(translate(slotFor('C')!.querySelector<HTMLElement>('.tb-chat-pinned-body'))).toBe(-(layout.C.height - summaryHeight));
+  });
+
   it('gives the original back when it unmounts', () => {
     const result = mount();
     scrollTo(500);
-    expect(rows.get('A')!.style.opacity).toBe('0');
+    expect(rows.get('A')!.hasAttribute('data-pinned-original')).toBe(true);
     result.unmount();
-    expect(rows.get('A')!.style.opacity).toBe('');
+    expect(rows.get('A')!.hasAttribute('data-pinned-original')).toBe(false);
   });
 });
 
