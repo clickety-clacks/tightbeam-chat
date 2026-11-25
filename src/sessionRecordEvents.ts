@@ -1,5 +1,6 @@
 import { formatVisibleIds, type ActivityPillPresentation } from './activityPresentation';
-import type { ChatTransport, ConversationRecord, RuntimeState, SessionRecordEvent } from './types';
+import { stripProvenanceMarkup } from './displayText';
+import type { ChatTransport, ConversationRecord, RuntimeState, SessionRecordEvent, WorkItemSummary } from './types';
 
 const compare = (a: SessionRecordEvent, b: SessionRecordEvent) => a.at - b.at || a.eventId.localeCompare(b.eventId);
 
@@ -170,7 +171,17 @@ const presentations: Readonly<Record<string, ActivityPillPresentation>> = {
   'decision.ruled': { label: 'Decision', text: 'Decision ruled', tone: 'green', icon: 'decision-answered' },
   'artifact.recorded': { label: 'Artifact', text: 'Artifact recorded', tone: 'blue', icon: 'activity' },
 };
-export function recordEventPresentation(event: SessionRecordEvent): ActivityPillPresentation {
-  return { ...(presentations[event.kind] ?? { label: 'Activity', text: event.kind, tone: 'slate', icon: 'activity' }),
+const titlePrefixes: Readonly<Record<string, string>> = { 'work_item.filed': 'Filed', 'assignment.opened': 'Opened' };
+
+/** A title is used only when already known; otherwise the fixed wording stands. */
+export function recordEventPresentation(event: SessionRecordEvent,
+  workItems?: ReadonlyMap<string, WorkItemSummary>): ActivityPillPresentation {
+  const presentation: ActivityPillPresentation = presentations[event.kind] ??
+    { label: 'Activity', text: event.kind, tone: 'slate', icon: 'activity' };
+  const workItemId = event.kind === 'work_item.filed' ? event.record.id : event.record.workItemId;
+  const prefix = titlePrefixes[event.kind];
+  const title = prefix && workItemId
+    ? formatVisibleIds(stripProvenanceMarkup(workItems?.get(workItemId)?.title ?? '')).replace(/\s+/g, ' ').trim() : '';
+  return { ...presentation, ...(title ? { text: `${prefix} · ${title}` } : {}),
     metadata: formatVisibleIds(event.record.id) };
 }

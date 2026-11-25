@@ -3385,11 +3385,11 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   const renderItem = useCallback((item: TimelineItem) => {
         if (item.kind === 'record-event') {
           const key = 'record-event:' + item.event.eventId;
-          const presentation = recordEventPresentation(item.event);
+          const presentation = recordEventPresentation(item.event, state.workItems);
           const recordId = formatVisibleIds(item.event.record.id);
           return <div key={key} role="note" tabIndex={-1}
             ref={element => reading.registerRow(key, element)} data-record-key={key} data-scroll-key={key}
-            className="tb-chat-activity-line tb-chat-activity-substrate tb-chat-activity-pill-row"
+            className="tb-chat-activity-line tb-chat-activity-substrate tb-chat-activity-pill-row tb-chat-record-event-row"
             aria-label={`${presentation.label}: ${presentation.text}, ${recordId}`}
             title={`${presentation.text} · ${recordId}`}>
             <ActivityPillContents presentation={presentation} />
@@ -3526,7 +3526,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
           </div>}
           <time className="tb-chat-time" dateTime={time.dateTime}>{time.text}</time>
         </article>;
-  }, [activityPlan.toolItems, expandedActivityRuns, expandedToolCalls, toggleActivityRun, setToolCallExpanded,
+  }, [state.workItems, activityPlan.toolItems, expandedActivityRuns, expandedToolCalls, toggleActivityRun, setToolCallExpanded,
     revealingActivityItems, finishActivityReveal, reading.registerRow, reading.preserveVisiblePosition,
     reading.reconcileViewportLayout, preserveReadingPosition, expandRun,
     renderMessage, agentName, state.status, runtime, retryTranscript, restoreFailedMessage,

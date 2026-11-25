@@ -1,4 +1,4 @@
-import type { SessionRecordEvent, RecordEventPage } from './types';
+import type { FiledWorkItemPage, SessionRecordEvent, RecordEventPage, WorkItemSummary } from './types';
 import {
   AuthorizationError,
   AttachmentUploadError,
@@ -370,6 +370,15 @@ export function decodeRecordEvent(value: unknown, sessionKey: string): SessionRe
     noticeMessageIds: stringList(row.noticeMessageIds, 'record-event notice references'),
     cause: cause ? Object.freeze({ turnSeq: causeTurnSeq, messageId: causeMessageId ?? null }) : null,
   });
+}
+
+export function decodeWorkItemSummary(value: unknown): WorkItemSummary {
+  const row = record(value);
+  return Object.freeze({ id: requiredString(row, 'id'), title: requiredString(row, 'title'),
+    state: requiredString(row, 'state'), started: row.started === true,
+    holders: stringList(row.holders ?? [], 'work item holders'),
+    failReason: readableOptionalString(row, 'failReason', 'work item') ?? null,
+    createdAt: nonnegativeInteger(row, 'createdAt'), rowVersion: nonnegativeInteger(row, 'rowVersion') });
 }
 
 /** REST and changes carry the same tool-call projection. */
@@ -1350,6 +1359,22 @@ export function createPublic019Transport(config: Public019Config): { transport: 
         throw new UnsupportedTargetError('Record-event page contains no usable entries.');
       }
       return Object.freeze({ items: Object.freeze(items), oldestCursor, hasOlder: page.hasMoreBefore });
+    },
+    async readFiledWorkItems(sessionKey, { limit, before }, signal): Promise<FiledWorkItemPage> {
+      const query = new URLSearchParams({ limit: String(limit) });
+      if (before) query.set('before', before);
+      const body = await get('/api/sessions/' + encodeURIComponent(sessionKey) + '/filed-work-items?' + query, signal);
+      if (!Array.isArray(body.items)) throw new Error('Unexpected filed work item envelope.');
+      const items: WorkItemSummary[] = [];
+      for (const item of body.items) {
+        try { items.push(decodeWorkItemSummary(item)); }
+        catch (error) {
+          if (!(error instanceof UnsupportedTargetError)) throw error;
+          logDecodeFailure('filed work item', error);
+        }
+      }
+      return Object.freeze({ items: Object.freeze(items),
+        oldestCursor: typeof body.oldestCursor === 'string' ? body.oldestCursor : null, hasOlder: body.hasOlder === true });
     },
     async readToolCalls(sessionKey, range, signal) {
       const filters = new URLSearchParams({ limit: '50', afterMessageSeqFromInclusive: String(range.fromInclusive) });

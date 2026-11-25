@@ -139,6 +139,23 @@ export interface RecordEventPage {
   readonly hasOlder: boolean;
 }
 
+/** The few work item fields Chat needs; never the body, counts or landings. */
+export interface WorkItemSummary {
+  readonly id: string;
+  readonly title: string;
+  readonly state: string;
+  readonly started: boolean;
+  readonly holders: readonly string[];
+  readonly failReason: string | null;
+  readonly createdAt: number;
+  readonly rowVersion: number;
+}
+export interface FiledWorkItemPage {
+  readonly items: readonly WorkItemSummary[];
+  readonly oldestCursor: string | null;
+  readonly hasOlder: boolean;
+}
+
 export type ToolCallIndex = RecordIndex<RecordIndex<ToolCallRecord>>;
 
 export interface ToolCallRange {
@@ -397,6 +414,9 @@ export interface ChatTransport {
   readTurnEvents?(sessionKey: string, turnSeqs: readonly number[], signal: AbortSignal): Promise<readonly TurnEventRecord[]>;
   /** Newest page by default; older pages use the opaque R1 cursor. */
   readRecordEvents?(sessionKey: string, before: string | undefined, signal: AbortSignal): Promise<RecordEventPage>;
+  /** Newest items this session filed, in one bounded list read; older pages use the opaque cursor. */
+  readFiledWorkItems?(sessionKey: string, page: { readonly limit: number; readonly before?: string },
+    signal: AbortSignal): Promise<FiledWorkItemPage>;
   readTail(sessionKey: string, signal: AbortSignal): Promise<ConversationPage>;
   readOlder(sessionKey: string, before: string, signal: AbortSignal): Promise<ConversationPage>;
   /** Read only rows newer than a held Gateway transcript cursor. */
@@ -478,6 +498,8 @@ export interface RuntimeState {
   readonly recordEventsHasOlder?: boolean;
   readonly recordEventsLoading?: boolean;
   readonly recordEventsError?: string;
+  /** Known summaries of filed items, by work item id. Absence means unknown. */
+  readonly workItems?: ReadonlyMap<string, WorkItemSummary>;
   readonly toolCallsEnabled?: boolean;
   /** Optional array for custom hosts; the live runtime uses the persistent index. */
   readonly toolCalls?: readonly ToolCallRecord[];
@@ -548,6 +570,8 @@ export interface ChatRuntime {
   retryToolCalls?(): void;
   retryTurnEvents?(): void;
   retryRecordEvents?(): void;
+  /** Re-read the newest loaded filed items once. */
+  refreshWorkItems?(): Promise<void>;
   send(content: string, clientMessageId?: string, hostSend?: HostSendContext): string | null;
   /** Prepare the whole selection before enabling Send; preview and submit the exact returned list. */
   prepareAttachmentInputs?(inputs: readonly AttachmentInput[], signal: AbortSignal): Promise<readonly AttachmentInput[]>;
