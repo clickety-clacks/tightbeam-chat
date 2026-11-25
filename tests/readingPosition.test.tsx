@@ -2640,7 +2640,7 @@ describe('conversation reading position', () => {
     expect(own.textContent).toContain('Long line 30');
     expect(agent.querySelector('.tb-chat-prompt-expand, .tb-chat-prompt-clamp')).toBeNull();
     expect(short.querySelector('.tb-chat-prompt-expand')).toBeNull();
-    fireEvent.click(own.querySelector('button.tb-chat-prompt-expand')!);
+    fireEvent.click(own.querySelector('button.tb-chat-prompt-expand')!, { clientX: 5000, clientY: 5000 });
     expect(own.querySelector('.tb-chat-prompt-expand')).toBeNull();
     expect(own.querySelector('.tb-chat-prompt-clamp')!.getAttribute('data-expanded')).toBe('true');
     // A live update re-renders the transcript; the prompt stays expanded.
@@ -2659,7 +2659,8 @@ describe('conversation reading position', () => {
     expect(slot.querySelector('.tb-chat-pinned-full .tb-chat-prompt-clamp')!.getAttribute('data-clamped')).toBe('true');
     // The pinned card keeps its own three-line summary of the full text.
     expect(slot.querySelector('.tb-chat-pinned-summary')!.textContent).toContain('Long line 30');
-    fireEvent.click(original.querySelector('button.tb-chat-prompt-expand')!);
+    // Click the stream's own button, away from any pinned copy (a tap on a copy jumps to its original).
+    fireEvent.click(original.querySelector('button.tb-chat-prompt-expand')!, { clientX: 5000, clientY: 5000 });
     expect(original.querySelector('.tb-chat-prompt-clamp')!.getAttribute('data-expanded')).toBe('true');
     await act(async () => { await Promise.resolve(); });
     const current = document.querySelector<HTMLElement>(`.tb-chat-pinned-slot[data-prompt-identity="${slot.dataset.promptIdentity}"]`)!;
