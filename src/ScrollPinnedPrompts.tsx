@@ -1,6 +1,6 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react';
 import {
-  pinnedPromptBreakpoints, pinnedPromptFrameAt, pinnedPromptKeyframes,
+  effectiveSummaryHeight, pinnedPromptBreakpoints, pinnedPromptFrameAt, pinnedPromptKeyframes,
   type PinnedPromptGeometry, type PinnedPromptOptions,
 } from './pinnedPromptLayout';
 
@@ -30,6 +30,12 @@ export interface ScrollPinnedPrompt {
 export interface ScrollPinnedPromptsHandle {
   /** Measure again after something outside the transcript moved the pin line. */
   readonly remeasure: () => void;
+  /**
+   * Where, in scrollport coordinates, this prompt's natural bottom sits when it has just
+   * shrunk to its summary height: everything after it starts below the pinned copy there.
+   * Undefined when the prompt is not laid out.
+   */
+  readonly settledBottom: (scrollKey: string) => number | undefined;
 }
 
 interface Props {
@@ -49,6 +55,7 @@ const SUMMARY_LINES = 3;
 
 interface Measured extends PinnedPromptGeometry {
   readonly identity: string;
+  readonly scrollKey: string;
   readonly left: number;
   readonly width: number;
 }
@@ -103,6 +110,7 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
   const timeline = useRef<AnimationTimeline | null | undefined>(undefined);
   const [mounted, setMounted] = useState<readonly string[]>([]);
   const mountedKey = useRef('');
+  const scheduleRefresh = useRef<() => void>(() => {});
   const promptsByIdentity = useRef(new Map<string, ScrollPinnedPrompt>());
   promptsByIdentity.current = new Map(prompts.map(prompt => [prompt.identity, prompt]));
 
@@ -136,6 +144,7 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
     const pinLine = pinFromRoot - (portTop - rootBounds.top);
     const scrollTop = box.scrollTop;
     const measured: Measured[] = [];
+    const ownAnimations = new Set([...slots.current.values()].flatMap(slot => slot.animations ?? []));
     const cacheFor = (row: HTMLElement) => {
       let cache = summaryCache.get(row);
       if (!cache) summaryCache.set(row, cache = new Map());
@@ -155,17 +164,25 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
       if (!summary && probe) {
         probe.style.width = `${bounds.width}px`;
         probe.style.padding = padding;
-        probe.textContent = prompt.text;
+        const probeText = probe.firstElementChild as HTMLElement;
+        probeText.textContent = prompt.text;
         const height = probe.getBoundingClientRect().height;
         // The summary is the prompt's text clamped to three lines. When nothing is cut,
         // the summary says everything the prompt says: it is already at pinned size.
-        const truncated = probe.scrollHeight > probe.clientHeight + 1;
+        const truncated = probeText.scrollHeight > probeText.clientHeight + 1;
         summary = { height, truncated };
         cache.clear();
         cache.set(cacheKey, summary);
       }
+      for (const animation of row.getAnimations?.() ?? []) {
+        // An arrival slide moves the row while it plays; measure again once it settles.
+        if (animation.playState === 'running' && !ownAnimations.has(animation)) {
+          void animation.finished.then(() => scheduleRefresh.current(), () => {});
+        }
+      }
       measured.push({
         identity: prompt.identity,
+        scrollKey: prompt.scrollKey,
         top: bounds.top - portTop + scrollTop,
         height: bounds.height,
         summaryHeight: summary?.truncated ? summary.height : bounds.height,
@@ -356,7 +373,15 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
     onScroll();
   }, [measureLayout, onScroll, render]);
 
-  useImperativeHandle(ref, () => ({ remeasure: refresh }), [refresh]);
+  useImperativeHandle(ref, () => ({
+    remeasure: refresh,
+    settledBottom: (scrollKey: string) => {
+      if (!layout.current.prompts.some(prompt => prompt.scrollKey === scrollKey)) measureLayout();
+      const { prompts: measured, options } = layout.current;
+      const prompt = measured.find(candidate => candidate.scrollKey === scrollKey);
+      return prompt ? Math.min(options.pinLine, prompt.top) + effectiveSummaryHeight(prompt) : undefined;
+    },
+  }), [measureLayout, refresh]);
 
   useLayoutEffect(() => {
     refresh();
@@ -377,6 +402,7 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
       if (frame) return;
       frame = requestAnimationFrame(() => { frame = 0; refresh(); });
     };
+    scheduleRefresh.current = schedule;
     const observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(schedule);
     observer?.observe(box);
     if (box.firstElementChild) observer?.observe(box.firstElementChild);
@@ -387,6 +413,7 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
       observer?.disconnect();
       window.removeEventListener('resize', schedule);
       if (frame) cancelAnimationFrame(frame);
+      scheduleRefresh.current = () => {};
     };
   }, [onScroll, refresh, viewport]);
 
@@ -429,8 +456,9 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
   };
 
   return <div ref={layer} className="tb-chat-pinned-layer">
-    <div ref={measure} className="tb-chat-pinned-summary tb-chat-pinned-summary-measure" aria-hidden="true"
-      style={{ WebkitLineClamp: SUMMARY_LINES }} />
+    <div ref={measure} className="tb-chat-pinned-summary tb-chat-pinned-summary-measure" aria-hidden="true">
+      <div className="tb-chat-pinned-summary-text" style={{ WebkitLineClamp: SUMMARY_LINES }} />
+    </div>
     {mounted.map(identity => {
       const prompt = promptsByIdentity.current.get(identity);
       if (!prompt) return null;
@@ -439,8 +467,9 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
         <div className="tb-chat-pinned-window">
           <div ref={slotRef(identity, 'body')} className="tb-chat-pinned-body">
             <div ref={slotRef(identity, 'full')} className="tb-chat-pinned-full" aria-hidden="true" />
-            <div ref={slotRef(identity, 'summary')} className="tb-chat-pinned-summary" aria-hidden="true"
-              style={{ WebkitLineClamp: SUMMARY_LINES }}>{prompt.text}</div>
+            <div ref={slotRef(identity, 'summary')} className="tb-chat-pinned-summary" aria-hidden="true">
+              <div className="tb-chat-pinned-summary-text" style={{ WebkitLineClamp: SUMMARY_LINES }}>{prompt.text}</div>
+            </div>
             <button type="button" className="tb-chat-pinned-jump" aria-label="Jump to user prompt"
               aria-controls={prompt.targetId} onClick={() => onJump(prompt)} />
           </div>

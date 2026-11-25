@@ -2455,9 +2455,13 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   const arrivalEligible = state.status === 'ready' && priorArrivalContext?.ready === true &&
     priorArrivalContext.sessionKey === state.sessionKey && priorArrivalContext.generation === state.generation &&
     priorArrivalContext.recoveryRevision === recoveryRevision;
+  const scrollPinnedPromptsHandle = useRef<ScrollPinnedPromptsHandle>(null);
+  const pinnedPromptBottom = useCallback((scrollKey: string) =>
+    scrollPinnedPromptsHandle.current?.settledBottom(scrollKey), []);
   const reading = useReadingPosition(state.status === 'ready', readingRevision, box =>
     Boolean(state.loadingOlder || state.recordEventsLoading || (!state.historyError && (state.hasOlder || state.recordEventsHasOlder) && box.scrollTop < olderHistoryPrefetchDistance(box))),
-    arrivalEligible, state.sessionKey, markReadPosition, state.activeTurn?.turn.status === 'running');
+    arrivalEligible, state.sessionKey, markReadPosition, state.activeTurn?.turn.status === 'running',
+    scrollPinnedPrompts ? pinnedPromptBottom : undefined);
   const { viewport } = reading;
   const rememberReadingPosition = useCallback(() => {
     const box = viewport.current;
@@ -2513,7 +2517,6 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   const toolHistoryStatus = useRef<HTMLDivElement>(null);
   const stickyPromptOverlay = useRef<HTMLDivElement>(null);
   const stickyPromptMeasurement = useRef<HTMLDivElement>(null);
-  const scrollPinnedPromptsHandle = useRef<ScrollPinnedPromptsHandle>(null);
   const promptHandoffAnimation = useRef<Animation | null>(null);
   const promptHandoffAnimationKey = useRef<string | null>(null);
   const promptHandoffSource = useRef<{ identity: string; row: HTMLElement; visibility: string } | null>(null);
