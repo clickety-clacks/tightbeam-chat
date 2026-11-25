@@ -1,4 +1,5 @@
 import { newUuid } from './uuid';
+import { FiledWorkItems } from './filedWorkItems';
 import { SessionRecordEvents } from './sessionRecordEvents';
 import {
   AuthorizationError,
@@ -279,6 +280,7 @@ export function createTightbeamAdapter(transport: ChatTransport, profile: Target
 class SessionRuntime implements ChatRuntime {
   private state: RuntimeState;
   private recordEventHistory?: SessionRecordEvents;
+  private filedWorkItems?: FiledWorkItems;
   private recoveryRevision = 0;
   private readonly turns = new Map<number, CanonicalTurn>();
   private readonly listeners = new Set<() => void>();
@@ -372,7 +374,14 @@ class SessionRuntime implements ChatRuntime {
     });
     if (transport.readRecordEvents) this.recordEventHistory = new SessionRecordEvents(sessionKey,
       transport.readRecordEvents.bind(transport), patch => {
-        if (!this.disposed && this.checkIdentity() && this.state.status !== 'unauthorized') this.publish(patch);
+        if (!this.disposed && this.checkIdentity() && this.state.status !== 'unauthorized') {
+          this.publish(patch);
+          if (patch.recordEvents) this.filedWorkItems?.sync(patch.recordEvents, patch.recordEventsLoading === false);
+        }
+      });
+    if (transport.readFiledWorkItems) this.filedWorkItems = new FiledWorkItems(sessionKey,
+      transport.readFiledWorkItems.bind(transport), workItems => {
+        if (!this.disposed && this.checkIdentity() && this.state.status !== 'unauthorized') this.publish({ workItems });
       });
     if (typeof document !== 'undefined') document.addEventListener('visibilitychange', this.onVisibilityChange);
     if (typeof window !== 'undefined') {
@@ -429,6 +438,10 @@ class SessionRuntime implements ChatRuntime {
     if (!this.disposed && this.checkIdentity() && this.state.status !== 'unauthorized') {
       void this.recordEventHistory?.refresh(this.recordEventFloor());
     }
+  };
+
+  refreshWorkItems = async (): Promise<void> => {
+    if (!this.disposed && this.checkIdentity() && this.state.status !== 'unauthorized') await this.filedWorkItems?.refresh();
   };
 
   markReadPosition = async (): Promise<void> => {
@@ -959,6 +972,7 @@ class SessionRuntime implements ChatRuntime {
     this.stopTurnEvents();
     this.clearTurnEvents();
     this.recordEventHistory?.stop();
+    this.filedWorkItems?.stop();
     this.controller?.abort();
     this.connectionController?.abort();
     this.connectionController = undefined;
@@ -993,6 +1007,7 @@ class SessionRuntime implements ChatRuntime {
       toolCalls: Object.freeze([]), toolCallIndex: undefined, toolCallsLoading: false, toolCallsError: undefined,
       turnEvents: Object.freeze([]), turnEventsLoading: false, turnEventsError: undefined,
       recordEvents: Object.freeze([]), recordEventsHasOlder: false, recordEventsLoading: false, recordEventsError: undefined,
+      workItems: undefined,
       records: Object.freeze([]), sends: Object.freeze([]), hasOlder: false,
       session: undefined, agentDisplayName: undefined, provenance: Object.freeze([]),
       activitySenderDisplayNames: new Map(),
@@ -1422,6 +1437,7 @@ class SessionRuntime implements ChatRuntime {
     this.stopTurnEvents();
     this.clearTurnEvents();
     this.recordEventHistory?.stop();
+    this.filedWorkItems?.stop();
     this.controller?.abort();
     this.connectionController?.abort();
     this.connectionController = undefined;
@@ -1449,6 +1465,7 @@ class SessionRuntime implements ChatRuntime {
       toolCalls: Object.freeze([]), toolCallIndex: undefined, toolCallsLoading: false, toolCallsError: undefined,
       turnEvents: Object.freeze([]), turnEventsLoading: false, turnEventsError: undefined,
       recordEvents: Object.freeze([]), recordEventsHasOlder: false, recordEventsLoading: false, recordEventsError: undefined,
+      workItems: undefined,
       records: Object.freeze([]), sends: Object.freeze([]), session: undefined,
       agentDisplayName: undefined, provenance: noProvenance, provenanceAvailable: false, activeTurn: undefined,
       hasOlder: false, loadingOlder: false, historyError: undefined,
@@ -2585,6 +2602,7 @@ class SessionRuntime implements ChatRuntime {
     this.stopTools();
     this.stopTurnEvents();
     this.recordEventHistory?.stop();
+    this.filedWorkItems?.stop();
     this.controller?.abort();
     this.connectionController?.abort();
     this.connectionController = undefined;

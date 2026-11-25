@@ -143,3 +143,9 @@ releases. An older conversation without those earlier pills is expected; Chat
 does not backfill them from message text, tool output, or storage. Work-item filed
 and assignment opened are the first stage. Later kinds are retained in the wire
 model but are not displayed by this stage.
+
+Titles for filed items come from one bounded read per loaded page
+(`/api/work-items`, always narrowed to the selected session's own filings, at
+most 50 rows). Chat's server returns only the few fields it uses. The read
+never delays events. Until a title is known, or if the read fails, the fixed
+wording stays.
