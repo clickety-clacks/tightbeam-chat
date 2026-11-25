@@ -149,3 +149,5 @@ Titles for filed items come from one bounded read per loaded page
 most 50 rows). Chat's server returns only the few fields it uses. The read
 never delays events. Until a title is known, or if the read fails, the fixed
 wording stays.
+
+`CHAT_WORK_ITEM_PILLS=1` turns on work item pills, their read-only `/__chat/api/pills/` routes and the `/__chat/ws/work-changes` connection, all as the configured Chat user with the provisioned Gateway CLI credential. When unset or any other value, none of them exist.

@@ -730,8 +730,7 @@ function writeGatewayReply(response, reply) {
 function filedWorkItemsReply(reply) {
   if (reply.status !== 200) return reply;
   const value = JSON.parse(reply.body.toString('utf8'));
-  const items = value.items.map(({ id, title, state, started, holders, failReason, createdAt, rowVersion }) =>
-    ({ id, title, state, started, holders, failReason, createdAt, rowVersion }));
+  const items = value.items.map(pillWorkItem).filter(Boolean);
   return { ...reply, body: Buffer.from(JSON.stringify({ items,
     oldestCursor: value.page?.oldestCursor ?? null, hasOlder: value.page?.hasMoreBefore === true })) };
 }
