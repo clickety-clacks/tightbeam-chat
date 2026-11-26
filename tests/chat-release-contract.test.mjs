@@ -2,7 +2,6 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   checkReleaseStatement,
@@ -12,7 +11,7 @@ import {
   releaseStatement,
 } from '../scripts/chat-release-contract.mjs';
 
-const root = fileURLToPath(new URL('..', import.meta.url));
+const root = process.cwd();
 const read = file => fs.existsSync(path.join(root, file)) ? fs.readFileSync(path.join(root, file), 'utf8') : '';
 const sources = () => fs.readdirSync(path.join(root, 'src'), { recursive: true }).map(file => `src/${file}`)
   .filter(file => /\.tsx?$/.test(file));
