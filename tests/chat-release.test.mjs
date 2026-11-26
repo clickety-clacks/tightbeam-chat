@@ -468,6 +468,8 @@ describe('Chat release packaging and updater', () => {
     ['statements only inside a fenced block', 'Example:\n```\nCompatible with Tightbeam: 0.1.16\n\nBreaking changes: none\n```\n'],
     ['statements only inside an unclosed fence', '~~~text\nCompatible with Tightbeam: 0.1.16\nBreaking changes: none\n'],
     ['statements only inside a comment', '<!--\nCompatible with Tightbeam: 0.1.16\nBreaking changes: none\n-->\n'],
+    ['statements in a fence a mixed run cannot close', '```\n```~\nCompatible with Tightbeam: 0.1.16\nBreaking changes: none\n'],
+    ['statements after a shorter closing run', '````\n```\nCompatible with Tightbeam: 0.1.16\nBreaking changes: none\n````\n'],
   ])('refuses a newer published release with %s, whatever lineage its tag has', async (_label, body) => {
     const fixture = await createBundleFixture('v1.2.3', SOURCE_COMMIT);
     const fetchImpl = fixtureFetch('v1.2.3', SOURCE_COMMIT, { ...fixture, release: { ...fixture.release, body } });
@@ -479,6 +481,7 @@ describe('Chat release packaging and updater', () => {
     ['v0.1.115', 'Compatible with Tightbeam: 0.1.16, 0.1.17\n\nBreaking changes: none\n'],
     ['v0.1.114', 'Tightbeam Chat v0.1.114\n'],
     ['v1.2.4', '```\nan example\n```\nCompatible with Tightbeam: 0.1.16\n\nBreaking changes: none\n'],
+    ['v1.2.5', '```\n<!-- never closed\n```\nWrite `<!--` for a comment.\nCompatible with Tightbeam: 0.1.16\n\nBreaking changes: none\n'],
   ])('accepts %s when it is stated, or predates the rule', async (tag, body) => {
     const fixture = await createBundleFixture(tag, SOURCE_COMMIT);
     const fetchImpl = fixtureFetch(tag, SOURCE_COMMIT, { ...fixture, release: { ...fixture.release, body } });
