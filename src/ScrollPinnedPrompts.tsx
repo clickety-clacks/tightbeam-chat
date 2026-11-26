@@ -79,6 +79,22 @@ function clampScroll(scrollTop: number, maxScroll: number): number {
 }
 
 /**
+ * How far a row's own running animation (Chat's arrival slide) has moved it, so its place in
+ * the flow can be measured mid-slide. Rows that are not animating cost one cheap check.
+ */
+function ownSlide(row: HTMLElement): number {
+  const animations = row.getAnimations?.() ?? [];
+  if (!animations.some(animation => animation.playState === 'running')) return 0;
+  const transform = getComputedStyle(row).transform;
+  if (!transform || transform === 'none') return 0;
+  try {
+    return new DOMMatrixReadOnly(transform).m42;
+  } catch {
+    return 0;
+  }
+}
+
+/**
  * Where an element inside the scroller starts, in scroll-content coordinates, read from
  * layout. The element's position relative to the transcript content is the difference of
  * two on-screen rects, so scrolling, rubber-band overscroll, a keyboard's page scroll and
@@ -212,8 +228,8 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
       // Prompts are in transcript order; a row that is not laid out yet must not break it.
       // Read from layout so the moment of measuring (a stretch past the end, the keyboard
       // moving the page, an arrival slide) cannot shift a prompt's recorded place.
-      const top = content && content.contains(row) ? contentTop(row, content, contentOffset)
-        : bounds.top - portTop + scrollTop;
+      const top = (content && content.contains(row) ? contentTop(row, content, contentOffset)
+        : bounds.top - portTop + scrollTop) - ownSlide(row);
       if (measured.length && top < measured[measured.length - 1].top) break;
       rowsByIndex.push(row);
       measured.push({ identity: prompt.identity, scrollKey: prompt.scrollKey, top, height: bounds.height,

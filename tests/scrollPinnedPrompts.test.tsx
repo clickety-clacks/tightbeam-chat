@@ -372,6 +372,32 @@ describe('scroll-pinned prompts without scroll timelines', () => {
     expect(translate(slotFor('A'))).toBe(1000 - 950 - 8 - 80);
   });
 
+  it('measures a row in its place in the flow while its arrival slide is running', () => {
+    observeResizes();
+    mount();
+    scrollTo(950);
+    expect(translate(slotFor('A'))).toBe(1000 - 950 - 8 - 80);
+    // B is mid-slide: drawn 18px below its place, with a running animation.
+    const b = rows.get('B')!;
+    const spy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect');
+    const drawn = spy.getMockImplementation()!;
+    spy.mockImplementation(function (this: HTMLElement) {
+      const r = drawn.call(this);
+      return this === b ? rect(r.top + 18, r.height, r.left, r.width) : r;
+    });
+    b.style.transform = 'translateY(18px)';
+    (b as HTMLElement & { getAnimations: () => Animation[] }).getAnimations = () =>
+      [{ playState: 'running', finished: new Promise(() => {}) } as unknown as Animation];
+    if (typeof (globalThis as { DOMMatrixReadOnly?: unknown }).DOMMatrixReadOnly !== 'function') {
+      vi.stubGlobal('DOMMatrixReadOnly', class { m42: number; constructor(value: string) {
+        this.m42 = Number.parseFloat(value.match(/translateY\((-?[\d.]+)px\)/)?.[1] ?? value.split(',')[5] ?? '0'); } });
+    }
+    measureNow();
+    act(() => { fireEvent.scroll(viewport); });
+    // A is pushed by B's place in the flow, not where the slide currently draws it.
+    expect(translate(slotFor('A'))).toBe(1000 - 950 - 8 - 80);
+  });
+
   it('treats a position past either end as the end itself', () => {
     observeResizes();
     mount();
