@@ -1,7 +1,12 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 import { hasUserFacingNotesForTag } from './chat-release-notes.mjs';
-import { checkReleaseStatement, previousReleaseTag, readChatContract } from './chat-release-contract.mjs';
+import {
+  checkBreakingChangesReview,
+  checkReleaseStatement,
+  previousReleaseTag,
+  readChatContract,
+} from './chat-release-contract.mjs';
 
 const tag = process.env.GITHUB_REF_NAME ?? '';
 const sourceCommit = process.env.GITHUB_SHA ?? '';
@@ -49,6 +54,13 @@ try {
   const previous = previousReleaseTag(git('tag', '--list', 'v*').split('\n'), tag);
   if (!previous) throw new Error('No previous release tag to compare with.');
   checkReleaseStatement(releaseNotes, tag, contractAt(previous), contractAt(sourceCommit));
+  checkBreakingChangesReview(releaseNotes, tag, {
+    isAncestor: commit => {
+      try { git('merge-base', '--is-ancestor', commit, sourceCommit); return true; } catch { return false; }
+    },
+    changedFiles: commit => git('diff', '--name-only', commit, sourceCommit).split('\n').filter(Boolean),
+    entriesAt: commit => JSON.parse(git('show', `${commit}:src/release-notes.json`)),
+  });
   process.stdout.write(`Checked compatibility and breaking-change statements against ${previous}.\n`);
 } catch (error) {
   process.stderr.write(`${error instanceof Error ? error.message : 'Release statement check failed.'}\n`);

@@ -19,7 +19,15 @@ Each tagged version states two fields in `src/release-notes.json`, and the relea
 - `compatibleTightbeam`: the Tightbeam versions actually verified with this build, for example `["0.1.16"]`. A version inside the window that has not been verified is not listed.
 - `breakingChanges`: `"none"`, or a list of sentences.
 
-The tag job fails when either is missing. Compared with the previous release tag, it also refuses `"none"` when the oldest supported Tightbeam rises, a `CHAT_` setting or a `/__chat/` route is removed or renamed, or a browser storage key or the value written under one changes. The comparison reads source text, so it can flag a harmless rename and cannot see a change of meaning under unchanged names.
+The reviewer of the release notes then confirms the breaking-changes section in a commit of their own on the same pull request, adding to that version's entry:
+
+```json
+"breakingChangesReview": { "reviewer": "<role>", "commit": "<full SHA of the reviewed head>", "result": "confirmed" }
+```
+
+The tag job refuses to stage a draft unless that commit is part of the tag and the tag differs from it by nothing but this field, so any later change needs a new confirmation. It records who confirmed; the repository's single account cannot prove it.
+
+The tag job also fails when either field is missing. Compared with the previous release tag, it also refuses `"none"` when the oldest supported Tightbeam rises, a `CHAT_` setting or a `/__chat/` route is removed or renamed, or a browser storage key or the value written under one changes. The comparison reads source text, so it can flag a harmless rename and cannot see a change of meaning under unchanged names.
 
 The tag workflow creates a draft and uploads the complete asset set, then stops. Its summary and the draft notes show the exact source commit, package name and SHA-256. Check the package against that checksum, then publish the draft. Releases need no human approval; see [AGENTS.md](../AGENTS.md). The updater accepts only published releases, so the draft is retained for review without becoming available for automatic installation. No npm package is published.
 

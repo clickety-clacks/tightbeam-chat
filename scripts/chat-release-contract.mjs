@@ -5,6 +5,10 @@
 //   "breakingChanges": "none"           or a list of sentences
 // The tag job compares the tagged source with the previous release tag. A change that can break an
 // installation or lose a reader's browser state refuses "none".
+//
+// The reviewer then confirms the section in a commit of their own, adding to the same entry:
+//   "breakingChangesReview": {"reviewer": "...", "commit": "<full sha reviewed>", "result": "confirmed"}
+// The confirmation covers exactly that commit: the tag may differ from it only by this field.
 
 const VERSION = /^\d+\.\d+\.\d+$/;
 const TAG = /^v\d+\.\d+\.\d+$/;
@@ -90,6 +94,31 @@ export function releaseStatement(entries, tag) {
       ...(none ? ['Breaking changes: none'] : ['Breaking changes:', ...breaking.map(item => `- ${item.trim()}`)]),
     ],
   };
+}
+
+const NOTES = 'src/release-notes.json';
+
+/**
+ * Throws unless the reviewer confirmed the section for exactly what `tag` releases. `history` answers
+ * for the repository: isAncestor(commit), changedFiles(commit) and entriesAt(commit).
+ */
+export function checkBreakingChangesReview(entries, tag, history) {
+  const entry = entries.find(candidate => candidate?.version === tag);
+  const { breakingChangesReview: review, ...released } = entry ?? {};
+  if (typeof review?.reviewer !== 'string' || !review.reviewer.trim() ||
+      !/^[a-f0-9]{40}$/.test(review.commit ?? '') || review.result !== 'confirmed') {
+    throw new Error(`${tag} needs "breakingChangesReview" in ${NOTES}: reviewer, the full reviewed commit, result "confirmed".`);
+  }
+  if (!history.isAncestor(review.commit)) {
+    throw new Error(`The reviewed commit ${review.commit} is not part of ${tag}.`);
+  }
+  const others = history.changedFiles(review.commit).filter(file => file !== NOTES);
+  const reviewedEntries = history.entriesAt(review.commit);
+  const expected = entries.map(candidate => candidate === entry ? released : candidate);
+  if (others.length || JSON.stringify(reviewedEntries) !== JSON.stringify(expected)) {
+    throw new Error(`${tag} changed after the review of ${review.commit} (${[...others, ...(others.length ? [] : [NOTES])]
+      .join(', ')}); the Breaking changes section needs a new confirmation.`);
+  }
 }
 
 /** Throws unless `tag` states both fields and declares what the comparison found. */

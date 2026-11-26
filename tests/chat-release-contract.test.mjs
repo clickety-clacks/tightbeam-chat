@@ -92,7 +92,7 @@ describe('release contract', () => {
     expect(previousReleaseTag(['v1.0.0'], 'v1.0.0')).toBeUndefined();
   });
 
-  it('fails the tag job for a missing statement or a wrong "none", and passes a true one', () => {
+  it('fails the tag job without a true statement confirmed for exactly what is released', () => {
     const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'chat-release-contract-'));
     temporary.push(repo);
     const write = (file, text) => {
@@ -107,10 +107,21 @@ describe('release contract', () => {
     write('scripts/package-chat-release.mjs', "const c = { supportedVersions: ['0.1.16'] };\n");
     write('server/chat-server.mjs', "environment.CHAT_PUBLIC_ORIGIN; '/__chat/version'; '/__chat/upload';\n");
     write('src/store.ts', "const SEEN_KEY = 'seen'; localStorage.setItem(SEEN_KEY, value);\n");
-    const release = (tag, fields) => {
-      write('src/release-notes.json', JSON.stringify([{ version: tag, items: [{ title: 'T', description: 'D' }], ...fields }]));
+    const commit = message => {
       git('add', '-A');
-      git('commit', '-qm', tag, '--allow-empty');
+      git('commit', '-qm', message, '--allow-empty');
+      return git('rev-parse', 'HEAD');
+    };
+    // The notes are committed, then the reviewer's confirmation of that commit, then whatever `after` adds.
+    const release = (tag, fields, { review = reviewed => ({ reviewer: 'reviewer', commit: reviewed, result: 'confirmed' }),
+      after } = {}) => {
+      const entry = { version: tag, items: [{ title: 'T', description: 'D' }], ...fields };
+      write('src/release-notes.json', JSON.stringify([entry]));
+      const reviewed = commit(`${tag} notes`);
+      const confirmation = review?.(reviewed);
+      if (confirmation) write('src/release-notes.json', JSON.stringify([{ ...entry, breakingChangesReview: confirmation }]));
+      commit(`${tag} confirmation`);
+      after?.(entry, confirmation);
       git('tag', '-f', tag);
       return spawnSync(process.execPath, ['scripts/assert-chat-release-ref.mjs'], { cwd: repo, encoding: 'utf8', env: {
         ...process.env, GITHUB_REPOSITORY: 'clickety-clacks/tightbeam-chat', GITHUB_REF_TYPE: 'tag',
@@ -122,6 +133,23 @@ describe('release contract', () => {
     release('v1.0.0', good);
     expect(release('v1.0.1', good).status).toBe(0);
     expect(release('v1.0.2', {}).stderr).toContain('compatibleTightbeam');
+    expect(release('v1.0.2', good, { review: null }).stderr).toContain('needs "breakingChangesReview"');
+    expect(release('v1.0.2', good, { review: sha => ({ reviewer: 'reviewer', commit: sha, result: 'changes' }) }).stderr)
+      .toContain('needs "breakingChangesReview"');
+    expect(release('v1.0.2', good, { review: () => ({ reviewer: 'reviewer', commit: 'f'.repeat(40), result: 'confirmed' }) })
+      .stderr).toContain('is not part of v1.0.2');
+    const laterCode = release('v1.0.2', good, { after: () => {
+      write('src/store.ts', "const SEEN_KEY = 'seen'; localStorage.setItem(SEEN_KEY, value); // later\n");
+      commit('later code');
+    } });
+    expect(laterCode.stderr).toContain('changed after the review');
+    expect(laterCode.stderr).toContain('src/store.ts');
+    const laterNotes = release('v1.0.2', good, { after: (entry, confirmation) => {
+      write('src/release-notes.json', JSON.stringify([{ ...entry, compatibleTightbeam: ['0.1.15'],
+        breakingChangesReview: confirmation }]));
+      commit('later notes');
+    } });
+    expect(laterNotes.stderr).toContain('changed after the review');
     write('server/chat-server.mjs', "environment.CHAT_PUBLIC_ORIGIN; '/__chat/version';\n");
     const wrong = release('v1.0.3', good);
     expect(wrong.status).toBe(1);
