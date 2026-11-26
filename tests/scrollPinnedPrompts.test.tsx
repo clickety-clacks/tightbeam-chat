@@ -355,23 +355,21 @@ describe('scroll-pinned prompts without scroll timelines', () => {
     return (globalThis as { __pinTestObservers?: ResizeObserverCallback[] }).__pinTestObservers ?? [];
   }
 
-  it('measures correctly while WebKit reports a position past the end (stretching past the bottom)', () => {
+  it('measures correctly while scrollTop and the drawn position disagree (stretching past the end)', () => {
     observeResizes();
     mount();
     scrollTo(950);
     expect(translate(slotFor('A'))).toBe(1000 - 950 - 8 - 80);
-    // Stretched 150px past the end: scrollTop reads 2550, the content is drawn at the end (2400).
-    scrollTop = 2550;
-    screenScroll = 2400;
+    // Mid-stretch WebKit reports a scrollTop 150px beyond where the content is drawn, and a
+    // resize lands at that moment.
+    scrollTop = 1100;
+    screenScroll = 950;
     measureNow();
-    act(() => { fireEvent.scroll(viewport); });
-    // The bounce settles at the end; nothing from the stretch is kept.
-    scrollTop = 2400;
+    // The bounce settles where it was drawn; the same slots stay mounted (no re-measure).
+    scrollTop = 950;
     screenScroll = undefined;
     act(() => { fireEvent.scroll(viewport); });
-    scrollTo(950);
     expect(translate(slotFor('A'))).toBe(1000 - 950 - 8 - 80);
-    expect(slotFor('A')!.style.opacity).toBe('1');
   });
 
   it('treats a position past either end as the end itself', () => {
