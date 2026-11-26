@@ -85,6 +85,23 @@ function parseChecksum(checksumBytes, tag, assetName, expectedHash) {
   }
 }
 
+// The tag job writes these two statements. A tag cut from before that job existed runs the old one, so
+// the installed updater refuses a newer release without them. Releases through v0.1.114 predate this.
+const LAST_UNSTATED_RELEASE = [0, 1, 114];
+
+function requireReleaseStatements(tag, body) {
+  const parts = tag.slice(1).split('.').map(Number);
+  const newer = parts.findIndex((part, index) => part !== LAST_UNSTATED_RELEASE[index]);
+  if (newer === -1 || parts[newer] < LAST_UNSTATED_RELEASE[newer]) return;
+  const text = typeof body === 'string' ? body.replace(/\r\n/g, '\n') : '';
+  const compatibility = /^Compatible with Tightbeam: \d+\.\d+\.\d+/m.test(text);
+  const breaking = /^Breaking changes:(?: none\.?[ \t]*$|[ \t]*\n(?:\n)?- \S)/m.test(text);
+  if (!compatibility || !breaking) {
+    throw new Error(`Published release ${tag} lacks its ${[!compatibility && '"Compatible with Tightbeam:" line',
+      !breaking && '"Breaking changes:" section'].filter(Boolean).join(' and ')}; not installing it.`);
+  }
+}
+
 export async function fetchVerifiedChatRelease(tag, { fetchImpl = globalThis.fetch } = {}) {
   validateTag(tag);
   if (typeof fetchImpl !== 'function') throw new Error('A release transport is required.');
@@ -92,6 +109,7 @@ export async function fetchVerifiedChatRelease(tag, { fetchImpl = globalThis.fet
   if (release.tag_name !== tag || release.draft !== false || typeof release.published_at !== 'string' || !release.published_at) {
     throw new Error(`Chat tag ${tag} has no published release.`);
   }
+  requireReleaseStatements(tag, release.body);
 
   const names = [assetNameFor(tag), 'SHA256SUMS', 'release-provenance.json'];
   const assets = names.map((name) => findPublishedAsset(release, name, tag));

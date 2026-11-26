@@ -11,6 +11,7 @@ import { stageChatRelease } from '../scripts/stage-chat-release.mjs';
 import {
   CHAT_RELEASE_REPOSITORY,
   CHAT_SERVICE_NAME,
+  fetchVerifiedChatRelease,
   installChatRelease,
   rollbackChatRelease,
 } from '../scripts/chat-release-updater.mjs';
@@ -320,6 +321,7 @@ async function createBundleFixture(tag, sourceCommit, { noticeContent, includeEx
     draft: false,
     prerelease: false,
     published_at: '2026-01-01T00:00:00Z',
+    body: 'Compatible with Tightbeam: 0.1.16\n\nBreaking changes: none\n',
     assets: [...assets.entries()].map(([name, bytes]) => ({
       name,
       size: bytes.length,
@@ -457,6 +459,27 @@ async function setupExistingChat(homeDir, { tag = 'v0.1.0' } = {}) {
 }
 
 describe('Chat release packaging and updater', () => {
+  it.each([
+    ['no statements', 'Tightbeam Chat v1.2.3\n'],
+    ['no compatibility line', 'Breaking changes: none\n'],
+    ['no breaking-changes section', 'Compatible with Tightbeam: 0.1.16\n'],
+    ['an empty breaking-changes section', 'Compatible with Tightbeam: 0.1.16\n\nBreaking changes:\n'],
+  ])('refuses a newer published release with %s, whatever lineage its tag has', async (_label, body) => {
+    const fixture = await createBundleFixture('v1.2.3', SOURCE_COMMIT);
+    const fetchImpl = fixtureFetch('v1.2.3', SOURCE_COMMIT, { ...fixture, release: { ...fixture.release, body } });
+    await expect(fetchVerifiedChatRelease('v1.2.3', { fetchImpl })).rejects.toThrow(/lacks its .*not installing it/);
+  });
+
+  it.each([
+    ['v1.2.3', 'Compatible with Tightbeam: 0.1.16\r\n\r\nBreaking changes:\r\n- The route /__chat/x is gone.\r\n'],
+    ['v0.1.115', 'Compatible with Tightbeam: 0.1.16, 0.1.17\n\nBreaking changes: none\n'],
+    ['v0.1.114', 'Tightbeam Chat v0.1.114\n'],
+  ])('accepts %s when it is stated, or predates the rule', async (tag, body) => {
+    const fixture = await createBundleFixture(tag, SOURCE_COMMIT);
+    const fetchImpl = fixtureFetch(tag, SOURCE_COMMIT, { ...fixture, release: { ...fixture.release, body } });
+    await expect(fetchVerifiedChatRelease(tag, { fetchImpl })).resolves.toMatchObject({ provenance: { tag } });
+  });
+
   it('packages a tagged server with a checksum and exact source provenance', async () => {
     const rootDir = await temporaryDirectory('chat-package-source-');
     const notices = await fs.readFile(path.resolve('THIRD_PARTY_NOTICES.md'));
@@ -547,6 +570,7 @@ describe('Chat release packaging and updater', () => {
       draft: false,
       prerelease: false,
       published_at: '2026-10-30T00:00:00Z',
+      body: 'Compatible with Tightbeam: 0.1.16\n\nBreaking changes: none\n',
       assets: [...assets.entries()].map(([name, bytes]) => ({
         name,
         size: bytes.length,
