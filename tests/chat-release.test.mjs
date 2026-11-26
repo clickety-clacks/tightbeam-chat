@@ -459,30 +459,28 @@ async function setupExistingChat(homeDir, { tag = 'v0.1.0' } = {}) {
 }
 
 describe('Chat release packaging and updater', () => {
+  const trailer = 'Compatible with Tightbeam: 0.1.16\n\nBreaking changes: none\n';
   it.each([
     ['no statements', 'Tightbeam Chat v1.2.3\n'],
-    ['no compatibility line', 'Breaking changes: none\n'],
-    ['no breaking-changes section', 'Compatible with Tightbeam: 0.1.16\n'],
-    ['an empty breaking-changes section', 'Compatible with Tightbeam: 0.1.16\n\nBreaking changes:\n'],
+    ['no compatibility line', 'Notes\n\nBreaking changes: none\n'],
+    ['no breaking-changes line', 'Notes\n\nCompatible with Tightbeam: 0.1.16\n'],
+    ['an empty breaking-changes line', 'Compatible with Tightbeam: 0.1.16\n\nBreaking changes:\n'],
     ['a version with trailing text', 'Compatible with Tightbeam: 0.1.16oops\n\nBreaking changes: none\n'],
-    ['statements only inside a fenced block', 'Example:\n```\nCompatible with Tightbeam: 0.1.16\n\nBreaking changes: none\n```\n'],
-    ['statements only inside an unclosed fence', '~~~text\nCompatible with Tightbeam: 0.1.16\nBreaking changes: none\n'],
-    ['statements only inside a comment', '<!--\nCompatible with Tightbeam: 0.1.16\nBreaking changes: none\n-->\n'],
-    ['statements in a fence a mixed run cannot close', '```\n```~\nCompatible with Tightbeam: 0.1.16\nBreaking changes: none\n'],
-    ['statements after a shorter closing run', '````\n```\nCompatible with Tightbeam: 0.1.16\nBreaking changes: none\n````\n'],
+    ['anything after the two lines', `${trailer}\nOne more thing.\n`],
+    ['the two lines closed inside a fence', `\`\`\`\n${trailer}\`\`\`\n`],
+    ['the lines in the other order', 'Breaking changes: none\nCompatible with Tightbeam: 0.1.16\n'],
+    ['indented lines', '    Compatible with Tightbeam: 0.1.16\n    Breaking changes: none\n'],
   ])('refuses a newer published release with %s, whatever lineage its tag has', async (_label, body) => {
     const fixture = await createBundleFixture('v1.2.3', SOURCE_COMMIT);
     const fetchImpl = fixtureFetch('v1.2.3', SOURCE_COMMIT, { ...fixture, release: { ...fixture.release, body } });
-    await expect(fetchVerifiedChatRelease('v1.2.3', { fetchImpl })).rejects.toThrow(/lacks its .*not installing it/);
+    await expect(fetchVerifiedChatRelease('v1.2.3', { fetchImpl })).rejects.toThrow(/does not end with its .*not installing it/);
   });
 
   it.each([
-    ['v1.2.3', 'Compatible with Tightbeam: 0.1.16\r\n\r\nBreaking changes:\r\n- The route /__chat/x is gone.\r\n'],
-    ['v0.1.115', 'Compatible with Tightbeam: 0.1.16, 0.1.17\n\nBreaking changes: none\n'],
+    ['v1.2.3', `Notes\r\n\r\nCompatible with Tightbeam: 0.1.16\r\n\r\nBreaking changes: The route /__chat/x is gone.\r\n`],
+    ['v0.1.115', 'Compatible with Tightbeam: 0.1.15, 0.1.16\n\nBreaking changes: none\n\n\n'],
     ['v0.1.114', 'Tightbeam Chat v0.1.114\n'],
-    ['v1.2.4', '```\nan example\n```\nCompatible with Tightbeam: 0.1.16\n\nBreaking changes: none\n'],
-    ['v1.2.5', '```\n<!-- never closed\n```\nWrite `<!--` for a comment.\nCompatible with Tightbeam: 0.1.16\n\nBreaking changes: none\n'],
-  ])('accepts %s when it is stated, or predates the rule', async (tag, body) => {
+  ])('accepts %s when it ends with both lines, or predates the rule', async (tag, body) => {
     const fixture = await createBundleFixture(tag, SOURCE_COMMIT);
     const fetchImpl = fixtureFetch(tag, SOURCE_COMMIT, { ...fixture, release: { ...fixture.release, body } });
     await expect(fetchVerifiedChatRelease(tag, { fetchImpl })).resolves.toMatchObject({ provenance: { tag } });

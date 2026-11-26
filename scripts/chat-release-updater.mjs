@@ -89,48 +89,21 @@ function parseChecksum(checksumBytes, tag, assetName, expectedHash) {
 // the installed updater refuses a newer release without them. Releases through v0.1.114 predate this.
 const LAST_UNSTATED_RELEASE = [0, 1, 114];
 
-// The notes' own lines: not those inside a fenced block, an indented block or an HTML comment, read in
-// one pass so that neither opens inside the other. A skipped line is kept as a placeholder, so lines on
-// either side of it never join.
-function topLevelLines(body) {
-  const kept = [];
-  let fence;
-  let comment = false;
-  for (const line of body.replace(/\r\n?/g, '\n').split('\n')) {
-    let own = '\0';
-    if (fence) {
-      // Only a long enough run of the same character, alone on its line, closes a fence.
-      const close = /^ {0,3}(`+|~+)[ \t]*$/.exec(line)?.[1];
-      if (close && close[0] === fence[0] && close.length >= fence.length) fence = undefined;
-    } else if (comment) {
-      comment = !line.includes('-->');
-    } else if (!/^(?: {4}|\t)/.test(line)) {
-      const open = /^ {0,3}(?:(`{3,})[^`]*|(~{3,}).*)$/.exec(line);
-      if (open) {
-        fence = open[1] ?? open[2];
-      } else {
-        // A comment marker quoted in inline code is text, not a comment.
-        const rest = line.replace(/(`+)[\s\S]*?\1/g, '\0').replace(/<!--[\s\S]*?-->/g, '\0');
-        const start = rest.indexOf('<!--');
-        comment = start !== -1;
-        own = start === -1 ? (rest === line ? line : '\0') : '\0';
-      }
-    }
-    kept.push(own);
-  }
-  return kept.join('\n');
-}
+// The packaging script ends the release body with exactly these two lines, so only the last two lines
+// with anything on them count, and nothing may follow them. No Markdown is read.
+const TRAILER = [
+  ['"Compatible with Tightbeam:" line', /^Compatible with Tightbeam: \d+\.\d+\.\d+(?:, \d+\.\d+\.\d+)*$/],
+  ['"Breaking changes:" line', /^Breaking changes: \S.*$/],
+];
 
 function requireReleaseStatements(tag, body) {
   const parts = tag.slice(1).split('.').map(Number);
   const newer = parts.findIndex((part, index) => part !== LAST_UNSTATED_RELEASE[index]);
   if (newer === -1 || parts[newer] < LAST_UNSTATED_RELEASE[newer]) return;
-  const text = topLevelLines(typeof body === 'string' ? body : '');
-  const compatibility = /^Compatible with Tightbeam: \d+\.\d+\.\d+(?:, \d+\.\d+\.\d+)*\.?[ \t]*$/m.test(text);
-  const breaking = /^Breaking changes:(?: none\.?[ \t]*$|[ \t]*\n(?:\n)?- \S)/m.test(text);
-  if (!compatibility || !breaking) {
-    throw new Error(`Published release ${tag} lacks its ${[!compatibility && '"Compatible with Tightbeam:" line',
-      !breaking && '"Breaking changes:" section'].filter(Boolean).join(' and ')}; not installing it.`);
+  const lines = (typeof body === 'string' ? body : '').split(/\r?\n/).filter(line => line.trim()).slice(-2);
+  const missing = TRAILER.filter(([, pattern], index) => !pattern.test(lines[index] ?? '')).map(([name]) => name);
+  if (missing.length) {
+    throw new Error(`Published release ${tag} does not end with its ${missing.join(' and ')}; not installing it.`);
   }
 }
 

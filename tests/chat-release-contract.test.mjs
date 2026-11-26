@@ -110,7 +110,7 @@ describe('release contract', () => {
     }
     const sentence = `Update your setup: ${subject} no longer applies.`;
     expect(checkReleaseStatement(notes([sentence]), 'v1.0.1', contract, current).lines)
-      .toEqual([`Compatible with Tightbeam: ${claim.join(', ')}`, '', 'Breaking changes:', `- ${sentence}`]);
+      .toEqual([`Compatible with Tightbeam: ${claim.join(', ')}`, '', `Breaking changes: ${sentence}`]);
   });
 
   it.each([[['9.9.9']], [['0.1.16', '9.9.9']]])('refuses a compatibility claim the package does not declare (%j)', claim => {
