@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { createRef } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { pinnedPromptKeyframes } from '../src/pinnedPromptLayout';
+import { pinnedPromptFrameAt } from '../src/pinnedPromptLayout';
 import { ScrollPinnedPrompts, type ScrollPinnedPrompt, type ScrollPinnedPromptsHandle } from '../src/ScrollPinnedPrompts';
 
 // A transcript laid out by hand: the viewport is 600px tall at the top of the page and
@@ -468,14 +468,38 @@ describe('scroll-pinned prompts with scroll timelines', () => {
     scrollTo(500);
     const slot = slotFor('A')!;
     const slotCall = lastCall(call => call.element === slot)!;
-    const expected = pinnedPromptKeyframes(geometry, 0, options);
-    expect(slotCall.options.timeline).toBeInstanceOf(FakeScrollTimeline);
-    expect(slotCall.options).toMatchObject({ rangeStart: `${expected[0].scrollTop}px`,
-      rangeEnd: `${expected.at(-1)!.scrollTop}px`, fill: 'none' });
-    expect(slotCall.keyframes.map((frame: Keyframe) => frame.transform))
-      .toEqual(expected.map(stop => `translateY(${stop.frame.top}px)`));
     const rowCall = lastCall(call => call.element === rows.get('A'))!;
-    expect(rowCall.keyframes.every((frame: Keyframe) => frame.opacity === 0)).toBe(true);
+    expect(slotCall.options.timeline).toBeInstanceOf(FakeScrollTimeline);
+    // One range for every animation, far beyond the conversation, so the timeline never
+    // reaches an animation's end (WebKit shows the last keyframe there).
+    expect(slotCall.options).toMatchObject({ rangeStart: '0px', rangeEnd: '10000000px' });
+    expect(slotCall.options.fill).toBeUndefined();
+    // Evaluate the keyframes as a browser would at a scroll position (linear between stops,
+    // the later stop winning where two share an offset).
+    const sample = (keyframes: Keyframe[], property: 'transform' | 'opacity' | 'filter', scrollTop: number) => {
+      const at = scrollTop / 1e7;
+      let index = keyframes.length - 1;
+      for (let i = 0; i < keyframes.length; i++) if ((keyframes[i].offset as number) > at) { index = i; break; }
+      const to = keyframes[index];
+      const from = keyframes[Math.max(0, index - 1)];
+      const value = (frame: Keyframe) => property === 'opacity' ? Number(frame.opacity)
+        : property === 'filter' ? Number.parseFloat(String(frame.filter).match(/opacity\(([\d.]+)\)/)![1])
+        : Number.parseFloat(String(frame.transform).match(/translateY\((-?[\d.e-]+)px\)/)![1]);
+      if ((to.offset as number) <= at || from === to) return value(to);
+      const t = (at - (from.offset as number)) / ((to.offset as number) - (from.offset as number));
+      return value(from) + (value(to) - value(from)) * t;
+    };
+    // 90 is exactly A's pin point, where the model still has it in its natural place.
+    for (const scrollTop of [0, 89, 90, 90.5, 150, 330, 600, 950, 991, 1500, 2400]) {
+      const frame = pinnedPromptFrameAt(scrollTop, geometry, 0, options);
+      expect(sample(slotCall.keyframes, 'opacity', scrollTop)).toBeCloseTo(frame ? 1 : 0, 6);
+      expect(sample(rowCall.keyframes, 'filter', scrollTop)).toBeCloseTo(frame ? 0 : 1, 6);
+      if (frame) expect(sample(slotCall.keyframes, 'transform', scrollTop)).toBeCloseTo(frame.top, 4);
+    }
+    // Hiding the original never touches its opacity, which Chat animates for its arrival fade.
+    expect(rowCall.keyframes.every((frame: Keyframe) => frame.opacity === undefined)).toBe(true);
+    // At the very end of the scroll range the earlier prompt shows nothing, not its last state.
+    expect(sample(slotCall.keyframes, 'opacity', 1e7)).toBe(0);
     // No style is written on scroll; the browser applies the animations.
     expect(slot.style.transform).toBe('');
     const before = calls.length;
@@ -483,7 +507,9 @@ describe('scroll-pinned prompts with scroll timelines', () => {
     expect(calls.length).toBe(before);
     // The latest prompt holds its pinned state from its last keyframe on.
     scrollTo(1400);
+    // The latest prompt holds its pinned state to the end of the range.
     const latest = lastCall(call => call.element === slotFor('C'))!;
-    expect(latest.options.fill).toBe('forwards');
+    expect(latest.keyframes.at(-1)!.opacity).toBe(1);
+    expect(latest.keyframes.at(-1)!.offset).toBe(1);
   });
 });
