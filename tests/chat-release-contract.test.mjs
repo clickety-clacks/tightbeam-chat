@@ -71,7 +71,8 @@ describe('release contract', () => {
   });
 
   it('compares the first gated release with the values v0.1.114 left in browsers', () => {
-    const adopted = readChatContract(read, sources());
+    // A tree that stores what v0.1.114 stored; independent of later, declared changes to the contract file.
+    const adopted = { ...readChatContract(read, sources()), storedValues: STORED_VALUES_THROUGH_V0_1_114 };
     const before = readChatContract(file => file === 'scripts/chat-storage-contract.json' ? '' : read(file), sources());
     expect(before.storedValues).toBeUndefined();
     expect(detectBreakingChanges(before, adopted)).toEqual([]);
