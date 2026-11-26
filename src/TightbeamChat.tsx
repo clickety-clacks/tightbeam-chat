@@ -158,6 +158,13 @@ export function storeDismissedPrompt(sessionKey: string, dismissed: boolean): vo
   } catch { /* Storage may be unavailable. */ }
 }
 
+/** An element's top in the page from layout (its offset chain); scrolling of any kind leaves it alone. */
+function pageOffsetTop(element: HTMLElement): number {
+  let top = 0;
+  for (let node: HTMLElement | null = element; node; node = node.offsetParent as HTMLElement | null) top += node.offsetTop;
+  return top;
+}
+
 function nearestPromptAboveLine(prompts: readonly UserPrompt[], viewport: HTMLElement,
   getRow: (key: string) => HTMLElement | undefined, thresholdTop?: number): UserPrompt | undefined {
   const viewportRect = viewport.getBoundingClientRect();
@@ -2902,7 +2909,11 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     if (element) {
       const rootTop = element.getBoundingClientRect().top;
       const safeAreaTop = Number.parseFloat(getComputedStyle(element).getPropertyValue('--tb-chat-safe-area-top')) || 0;
-      const safeTop = Math.max(10, safeAreaTop - rootTop + 10);
+      // The safe area is measured from the top of the page. On iOS the viewport moves while the
+      // keyboard opens, which moves the root on screen; with scroll-pinned prompts use the root's
+      // layout place in the page (its offset chain), which no viewport movement changes.
+      const rootPageTop = scrollPinnedPrompts ? pageOffsetTop(element) : rootTop;
+      const safeTop = Math.max(10, safeAreaTop - rootPageTop + 10);
       const noticeBottom = notice?.getBoundingClientRect().bottom;
       const toolStatusBottom = toolHistoryStatus.current?.getBoundingClientRect().bottom;
       const blockingBottom = Math.max(noticeBottom ?? Number.NEGATIVE_INFINITY,

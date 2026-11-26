@@ -23,6 +23,14 @@ const geometry = (['A', 'B', 'C'] as const).map(key => ({
 }));
 
 let scrollTop = 0;
+// The scroller's content is 2400px longer than its 600px viewport.
+const SCROLL_HEIGHT = 3000;
+// Where things are drawn on screen. Normally the reported scrollTop; WebKit can report a
+// scrollTop past the end while drawing the clamped position (rubber-band).
+let screenScroll: number | undefined;
+const drawnScroll = () => screenScroll ?? scrollTop;
+// Extra bottom padding, as the scroll-to-latest control adds at the end of the chat.
+let extraHeight = 0;
 let root: HTMLElement;
 let viewport: HTMLElement;
 const rows = new Map<string, HTMLElement>();
@@ -34,6 +42,8 @@ function rect(top: number, height: number, left = 0, width = 400): DOMRect {
 
 beforeEach(() => {
   scrollTop = 0;
+  screenScroll = undefined;
+  extraHeight = 0;
   root = document.createElement('section');
   root.className = 'tb-chat';
   root.style.setProperty('--tb-chat-floating-prompt-top', '10px');
@@ -57,10 +67,11 @@ beforeEach(() => {
   Object.defineProperty(viewport, 'clientWidth', { configurable: true, value: 400 });
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
     if (this === viewport || this === root) return rect(0, 600);
+    if (this === viewport.firstElementChild) return rect(-drawnScroll(), SCROLL_HEIGHT);
     const key = this.dataset.scrollKey as keyof typeof layout | undefined;
     if (key && rows.get(key) === this) {
       const box = layout[key];
-      return rect(box.top - scrollTop, box.height, box.left, box.width);
+      return rect(box.top - drawnScroll(), box.height, box.left, box.width);
     }
     if (this.classList.contains('tb-chat-pinned-summary-measure')) return rect(0, summaryHeight);
     return rect(0, 0);
@@ -69,6 +80,7 @@ beforeEach(() => {
   const isProbeText = (element: HTMLElement) => element.classList.contains('tb-chat-pinned-summary-text') &&
     !!element.parentElement?.classList.contains('tb-chat-pinned-summary-measure');
   vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(function (this: HTMLElement) {
+    if (this === viewport) return SCROLL_HEIGHT + extraHeight;
     if (!isProbeText(this)) return 0;
     return (this.textContent ?? '').length > 40 ? 400 : summaryHeight;
   });
@@ -82,6 +94,7 @@ const originalAnimate = Element.prototype.animate;
 
 afterEach(() => {
   cleanup();
+  vi.unstubAllGlobals();
   Element.prototype.animate = originalAnimate;
   root.remove();
   rows.clear();
@@ -96,6 +109,13 @@ function mount(handlers: { onJump?: (prompt: ScrollPinnedPrompt) => void; onDism
     getRow={key => rows.get(key)} onJump={handlers.onJump ?? (() => {})} onDismiss={handlers.onDismiss ?? (() => {})} />,
   { container: root });
   return result;
+}
+
+function observeResizes() {
+  const callbacks: ResizeObserverCallback[] = [];
+  (globalThis as { __pinTestObservers?: ResizeObserverCallback[] }).__pinTestObservers = callbacks;
+  vi.stubGlobal('ResizeObserver', class { constructor(callback: ResizeObserverCallback) { callbacks.push(callback); }
+    observe() {} unobserve() {} disconnect() {} });
 }
 
 function scrollTo(position: number) {
@@ -325,6 +345,79 @@ describe('scroll-pinned prompts without scroll timelines', () => {
       moved.A = original;
       vi.unstubAllGlobals();
     }
+  });
+
+  function measureNow() {
+    // A resize anywhere in the transcript makes the layer measure again within the callback.
+    act(() => { for (const callback of resizeObserverCallbacks()) callback([], {} as ResizeObserver); });
+  }
+  function resizeObserverCallbacks(): ResizeObserverCallback[] {
+    return (globalThis as { __pinTestObservers?: ResizeObserverCallback[] }).__pinTestObservers ?? [];
+  }
+
+  it('measures correctly while WebKit reports a position past the end (stretching past the bottom)', () => {
+    observeResizes();
+    mount();
+    scrollTo(950);
+    expect(translate(slotFor('A'))).toBe(1000 - 950 - 8 - 80);
+    // Stretched 150px past the end: scrollTop reads 2550, the content is drawn at the end (2400).
+    scrollTop = 2550;
+    screenScroll = 2400;
+    measureNow();
+    act(() => { fireEvent.scroll(viewport); });
+    // The bounce settles at the end; nothing from the stretch is kept.
+    scrollTop = 2400;
+    screenScroll = undefined;
+    act(() => { fireEvent.scroll(viewport); });
+    scrollTo(950);
+    expect(translate(slotFor('A'))).toBe(1000 - 950 - 8 - 80);
+    expect(slotFor('A')!.style.opacity).toBe('1');
+  });
+
+  it('treats a position past either end as the end itself', () => {
+    observeResizes();
+    mount();
+    scrollTo(2550);
+    // C, the latest prompt, is pinned at its summary exactly as at the end (2400).
+    const atEnd = translate(slotFor('C'));
+    scrollTo(2400);
+    expect(translate(slotFor('C'))).toBe(atEnd);
+    scrollTo(-80);
+    expect(slotFor('A')?.style.opacity ?? '0').toBe('0');
+  });
+
+  it('keeps every prompt in place when the end-of-chat padding toggles while scrolled to the end', () => {
+    observeResizes();
+    mount();
+    scrollTo(950);
+    for (const extra of [24, 0, 24, 0]) {
+      // The scroll-to-latest control adds and removes bottom padding: the end moves, the prompts do not.
+      extraHeight = extra;
+      screenScroll = 950 + extra / 2;
+      scrollTop = 950 + extra;
+      measureNow();
+      scrollTo(950);
+      screenScroll = undefined;
+      act(() => { fireEvent.scroll(viewport); });
+      expect(translate(slotFor('A'))).toBe(1000 - 950 - 8 - 80);
+    }
+  });
+
+  it('does not drift over a long streamed reply, however positions read while it streams', () => {
+    observeResizes();
+    mount();
+    for (let update = 0; update < 60; update++) {
+      // Each update resizes the transcript; the reader is mid-scroll, sometimes past the end.
+      scrollTop = 900 + (update % 7) * 13 + (update % 5 === 0 ? 1800 : 0);
+      screenScroll = Math.min(scrollTop, 2400) - (update % 3) * 4;
+      measureNow();
+    }
+    screenScroll = undefined;
+    scrollTo(950);
+    expect(translate(slotFor('A'))).toBe(1000 - 950 - 8 - 80);
+    scrollTo(991);
+    expect(slotFor('B')!.style.opacity).toBe('1');
+    expect(translate(slotFor('B'))).toBe(10);
   });
 
   it('gives the original back when it unmounts', () => {
