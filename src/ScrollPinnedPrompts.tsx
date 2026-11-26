@@ -101,8 +101,8 @@ function ownSlide(row: HTMLElement): number {
  * the like cancel out; the content's own place in the scroller is its offset from the
  * scroller's padding edge (offsetTop), which scrolling never changes.
  */
-function contentTop(element: HTMLElement, content: HTMLElement, contentOffset: number): number {
-  return element.getBoundingClientRect().top - content.getBoundingClientRect().top + contentOffset;
+function contentTop(elementTop: number, contentScreenTop: number, contentOffset: number): number {
+  return elementTop - contentScreenTop + contentOffset;
 }
 
 interface SlotElements {
@@ -218,6 +218,8 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
     const scrollTop = clampScroll(box.scrollTop, maxScroll);
     const content = box.firstElementChild as HTMLElement | null;
     const contentOffset = content && content.offsetParent === box ? content.offsetTop : 0;
+    // Read once per measure: every row's position is taken against this same snapshot.
+    const contentScreenTop = content?.getBoundingClientRect().top ?? 0;
     const measured: Measured[] = [];
     const rowsByIndex: HTMLElement[] = [];
     for (const prompt of promptsRef.current) {
@@ -228,7 +230,7 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
       // Prompts are in transcript order; a row that is not laid out yet must not break it.
       // Read from layout so the moment of measuring (a stretch past the end, the keyboard
       // moving the page, an arrival slide) cannot shift a prompt's recorded place.
-      const top = (content && content.contains(row) ? contentTop(row, content, contentOffset)
+      const top = (content && content.contains(row) ? contentTop(bounds.top, contentScreenTop, contentOffset)
         : bounds.top - portTop + scrollTop) - ownSlide(row);
       if (measured.length && top < measured[measured.length - 1].top) break;
       rowsByIndex.push(row);
