@@ -1136,7 +1136,6 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, re
     className={`tb-chat-bubble tb-chat-bubble-${bubble.side}`} data-record-key={bubble.key} data-scroll-key={scrollKey}
     data-message-state={failureReason ? 'failed' : undefined}
     aria-label={`Message from ${formatVisibleIds(bubble.sender || sourceLabel(bubble.side, agentName))}${failureReason ? `. Failed. Reason: ${failureReason}` : ''}`}>
-    {bubble.side === 'human' && <span className="tb-chat-bubble-sender" aria-hidden="true">{formatVisibleIds(bubble.sender)}</span>}
     <div className="tb-chat-bubble-body">
       <TranscriptRenderBoundary resetKey={record.rowVersion} onRecovered={reconcileLayout}
         onRetry={onRetryRender} fallback={retry => <TranscriptRenderFailure scope="message"
@@ -1154,7 +1153,11 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, re
       {bubble.side === 'human' && bubble.ownerScoped && canEditResend && <button type="button" className="tb-chat-send-retry"
         onClick={() => onRestoreFailedMessage(bubble)}>Edit and resend</button>}
     </div>}
-    <time className="tb-chat-time" dateTime={time.dateTime}>{time.text}</time>
+    {/* A person's message carries its sender on the same line as the time, sender first. */}
+    {bubble.side === 'human' ? <div className="tb-chat-bubble-meta">
+      <span className="tb-chat-bubble-sender" aria-hidden="true">{formatVisibleIds(bubble.sender)}</span>
+      <time className="tb-chat-time" dateTime={time.dateTime}>{time.text}</time>
+    </div> : <time className="tb-chat-time" dateTime={time.dateTime}>{time.text}</time>}
   </article>;
 }, (previous, next) => {
   const before = previous.bubble;

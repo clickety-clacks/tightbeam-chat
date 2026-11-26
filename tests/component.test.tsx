@@ -824,6 +824,33 @@ describe('conversation surface', () => {
     expect(prompt?.querySelector('.tb-chat-bubble-sender')?.textContent).toBe('You');
   });
 
+  it('puts the sender on the same line as the time, after the message, for a person\'s message only', () => {
+    const sessionKey = 'sender-with-time';
+    const prompt = decodePublic019Message({
+      id: 'prompt-with-time', seq: 10, rowVersion: 10, sessionKey, role: 'user', sender: 'user:person',
+      messageType: 'chat', content: 'A prompt with a time.', at: Date.parse('2026-10-30T00:00:00Z'), attachments: [],
+    }, sessionKey);
+    const reply = decodePublic019Message({
+      id: 'reply-with-time', seq: 11, rowVersion: 11, sessionKey, role: 'assistant', sender: 'agent:helper',
+      messageType: 'chat', content: 'A reply with a time.', at: Date.parse('2026-10-30T00:01:00Z'), attachments: [],
+    }, sessionKey);
+    const runtime = new FakeRuntime(sessionKey, { records: [prompt, reply].filter(Boolean) as never[] });
+    render(<TightbeamChat sessionKey={sessionKey} adapter={adapterFor(runtime)} />);
+    const log = screen.getByRole('log');
+    const own = within(log).getByText('A prompt with a time.').closest<HTMLElement>('.tb-chat-bubble')!;
+    const meta = own.querySelector<HTMLElement>(':scope > .tb-chat-bubble-meta')!;
+    expect(meta).not.toBeNull();
+    expect([...meta.children].map(child => child.className)).toEqual(['tb-chat-bubble-sender', 'tb-chat-time']);
+    expect(own.lastElementChild).toBe(meta);
+    // Nothing above the message text any more.
+    expect(own.firstElementChild?.classList.contains('tb-chat-bubble-body')).toBe(true);
+    const agent = within(log).queryByText('A reply with a time.')?.closest<HTMLElement>('.tb-chat-bubble');
+    if (agent) {
+      expect(agent.querySelector('.tb-chat-bubble-meta, .tb-chat-bubble-sender')).toBeNull();
+      expect(agent.lastElementChild?.classList.contains('tb-chat-time')).toBe(true);
+    }
+  });
+
   it('preserves the agent label when an agent reply carries assignment context', () => {
     const sessionKey = 'assignment-agent-reply';
     const humanMessage = decodePublic019Message({
