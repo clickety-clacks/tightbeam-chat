@@ -52,6 +52,8 @@ const FADE_DISTANCE = 48;
 const PUSH_GAP = 8;
 /** Marks an original bubble hidden while its copy is pinned (scroll-listener path only). */
 const HIDDEN_ORIGINAL = 'data-pinned-original';
+/** The scroll range every pinned-prompt animation spans, far beyond any real conversation. */
+const ANIMATION_RANGE = 1e7;
 /** Lines in a summary. */
 const SUMMARY_LINES = 3;
 
@@ -342,24 +344,34 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
     }
     const keyframes = pinnedPromptKeyframes(measured, index, options);
     const latest = !Number.isFinite(pinnedPromptBreakpoints(measured, index, options).gone);
-    const start = keyframes[0].scrollTop;
-    const end = Math.max(keyframes.at(-1)!.scrollTop, start + 1);
-    const stops = keyframes.length > 1 ? keyframes : [keyframes[0], { ...keyframes[0], scrollTop: end }];
-    const key = JSON.stringify([stops, latest, measured[index].left, measured[index].width]);
+    const key = JSON.stringify([keyframes, latest, measured[index].left, measured[index].width]);
     if (slot.animationKey === key && slot.hiddenRow === row && slot.animations?.length) return;
     cancelAnimations(slot);
-    const offset = (scrollTop: number) => (scrollTop - start) / (end - start);
-    const timing = { timeline: source, rangeStart: `${start}px`, rangeEnd: `${end}px`,
-      fill: latest ? 'forwards' : 'none' } as KeyframeAnimationOptions;
+    // Every animation spans the same range, from the top of the scroll range to far beyond any
+    // real scroll position, with explicit holds before the prompt pins and after it has gone.
+    // WebKit applies a scroll-driven animation's last keyframe whenever the timeline is at its
+    // end (the reader at the very bottom), even after the animation's own range and with no
+    // fill; with this range the timeline never reaches any animation's end.
+    const offset = (scrollTop: number) => Math.min(1, Math.max(0, scrollTop / ANIMATION_RANGE));
+    const first = keyframes[0];
+    const last = keyframes.at(-1)!;
+    type Values = { top: number; innerOffset: number; fade: number; shown: boolean };
+    const stops: Array<{ at: number; values: Values }> = [];
+    const away = (frame: typeof first.frame): Values => ({ top: frame.top, innerOffset: 0, fade: 0, shown: false });
+    if (first.scrollTop > 0) stops.push({ at: 0, values: away(first.frame) }, { at: first.scrollTop, values: away(first.frame) });
+    for (const stop of keyframes) stops.push({ at: stop.scrollTop, values: { ...stop.frame, shown: true } });
+    if (!latest) stops.push({ at: last.scrollTop, values: away(last.frame) });
+    stops.push({ at: ANIMATION_RANGE, values: latest ? { ...last.frame, shown: true } : away(last.frame) });
+    const timing = { timeline: source, rangeStart: '0px', rangeEnd: `${ANIMATION_RANGE}px` } as KeyframeAnimationOptions;
+    const frames = <T extends Keyframe>(make: (values: Values) => T) =>
+      stops.map(stop => ({ offset: offset(stop.at), ...make(stop.values) }));
     slot.animations = [
-      slot.slot.animate(stops.map(stop => ({ offset: offset(stop.scrollTop), opacity: 1,
-        transform: `translateY(${stop.frame.top}px)` })), timing),
-      slot.body.animate(stops.map(stop => ({ offset: offset(stop.scrollTop),
-        transform: `translateY(${stop.frame.innerOffset}px)` })), timing),
-      slot.full.animate(stops.map(stop => ({ offset: offset(stop.scrollTop), opacity: 1 - stop.frame.fade })), timing),
-      slot.summary.animate(stops.map(stop => ({ offset: offset(stop.scrollTop), opacity: stop.frame.fade })), timing),
-      // The original stays in the transcript for layout and screen readers, unseen while its copy is pinned.
-      row.animate([{ offset: 0, opacity: 0 }, { offset: 1, opacity: 0 }], timing),
+      slot.slot.animate(frames(values => ({ opacity: values.shown ? 1 : 0, transform: `translateY(${values.top}px)` })), timing),
+      slot.body.animate(frames(values => ({ transform: `translateY(${values.innerOffset}px)` })), timing),
+      slot.full.animate(frames(values => ({ opacity: 1 - values.fade })), timing),
+      slot.summary.animate(frames(values => ({ opacity: values.fade })), timing),
+      // The original stays in the transcript for layout and screen readers, unseen while its copy is shown.
+      row.animate(frames(values => ({ opacity: values.shown ? 0 : 1 })), timing),
     ];
     slot.animationKey = key;
     slot.hiddenRow = row;
