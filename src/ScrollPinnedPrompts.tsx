@@ -52,6 +52,8 @@ const FADE_DISTANCE = 48;
 const PUSH_GAP = 8;
 /** Marks an original bubble hidden while its copy is pinned (scroll-listener path only). */
 const HIDDEN_ORIGINAL = 'data-pinned-original';
+/** How far past the pin point the copy takes over from the original. */
+const PIN_HANDOVER = 0.01;
 /** The scroll range every pinned-prompt animation spans, far beyond any real conversation. */
 const ANIMATION_RANGE = 1e7;
 /** Lines in a summary. */
@@ -359,7 +361,12 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
     const stops: Array<{ at: number; values: Values }> = [];
     const away = (frame: typeof first.frame): Values => ({ top: frame.top, innerOffset: 0, fade: 0, shown: false });
     if (first.scrollTop > 0) stops.push({ at: 0, values: away(first.frame) }, { at: first.scrollTop, values: away(first.frame) });
-    for (const stop of keyframes) stops.push({ at: stop.scrollTop, values: { ...stop.frame, shown: true } });
+    // At exactly the pin point the prompt is still in its natural place (as the model says),
+    // so the copy takes over a hair after it.
+    for (const [i, stop] of keyframes.entries()) {
+      const handover = Math.min(stop.scrollTop + PIN_HANDOVER, keyframes[1]?.scrollTop ?? Infinity);
+      stops.push({ at: i === 0 ? handover : stop.scrollTop, values: { ...stop.frame, shown: true } });
+    }
     if (!latest) stops.push({ at: last.scrollTop, values: away(last.frame) });
     stops.push({ at: ANIMATION_RANGE, values: latest ? { ...last.frame, shown: true } : away(last.frame) });
     const timing = { timeline: source, rangeStart: '0px', rangeEnd: `${ANIMATION_RANGE}px` } as KeyframeAnimationOptions;
@@ -370,8 +377,10 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
       slot.body.animate(frames(values => ({ transform: `translateY(${values.innerOffset}px)` })), timing),
       slot.full.animate(frames(values => ({ opacity: 1 - values.fade })), timing),
       slot.summary.animate(frames(values => ({ opacity: values.fade })), timing),
-      // The original stays in the transcript for layout and screen readers, unseen while its copy is shown.
-      row.animate(frames(values => ({ opacity: values.shown ? 0 : 1 })), timing),
+      // The original stays in the transcript for layout and screen readers, unseen while its copy
+      // is shown. A filter, not opacity: Chat animates the row's own opacity (its arrival fade),
+      // and the two must not replace each other; filter opacity multiplies with it instead.
+      row.animate(frames(values => ({ filter: values.shown ? 'opacity(0)' : 'opacity(1)' })), timing),
     ];
     slot.animationKey = key;
     slot.hiddenRow = row;

@@ -235,7 +235,8 @@ body {
 .tb-chat-pinned-full { position: absolute; inset: 0 auto auto 0; will-change: opacity; }
 /* The original bubble while its pinned copy stands in for it (no scroll timelines). It
    stays in the transcript for layout and screen readers. */
-.tb-chat-bubble[data-pinned-original] { opacity: 0 !important; }
+/* A filter, not opacity, so the row's own opacity (its arrival fade, a sending state) is left alone. */
+.tb-chat-bubble[data-pinned-original] { filter: opacity(0); }
 .tb-chat-pinned-copy {
   margin: 0 !important;
   max-width: none !important;
