@@ -10,6 +10,17 @@ A `vMAJOR.MINOR.PATCH` tag runs the Chat checks, builds the browser application 
 
 The packaged `release.json` records supported Gateway versions. `GET /__chat/version` returns that compatibility list alongside the Chat tag and source commit, plus whether `CHAT_REST_HUMAN_SEND` is enabled in the running service.
 
+## Support window and release statements
+
+Chat supports the current Tightbeam release and the one before it. Outside that window Chat relies on its runtime capability checks to degrade gracefully: a missing route or field is treated as unavailable.
+
+Each tagged version states two fields in `src/release-notes.json`, and the release body carries them:
+
+- `compatibleTightbeam`: the Tightbeam versions actually verified with this build, for example `["0.1.16"]`. A version inside the window that has not been verified is not listed.
+- `breakingChanges`: `"none"`, or a list of sentences.
+
+The tag job fails when either is missing. Compared with the previous release tag, it also refuses `"none"` when the oldest supported Tightbeam rises, a `CHAT_` setting or a `/__chat/` route is removed or renamed, or a browser storage key or the value written under one changes. The comparison reads source text, so it can flag a harmless rename and cannot see a change of meaning under unchanged names.
+
 The tag workflow creates a draft and uploads the complete asset set, then stops. Its summary and the draft notes show the exact source commit, package name and SHA-256. Check the package against that checksum, then publish the draft. Releases need no human approval; see [AGENTS.md](../AGENTS.md). The updater accepts only published releases, so the draft is retained for review without becoming available for automatic installation. No npm package is published.
 
 Before publishing each draft, run the existing one-app, one-page Tuner-hosted XCUITest against the exact Chat candidate. Confirm that Chat loads the selected conversation transcript, emits one host-lifetime ready event, and reaches the connected state. Record the Chat source/build identity, Tuner source/build identity, Gateway compatibility version, and test evidence with the release review. Do not send a message or open another page as part of this check. A synthetic browser result or a result from a different candidate is not a pass; keep the draft unpublished if the exact-candidate check has not completed successfully.
