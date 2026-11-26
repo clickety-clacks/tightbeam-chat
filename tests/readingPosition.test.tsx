@@ -2717,6 +2717,19 @@ describe('conversation reading position', () => {
     expect(current.querySelector('.tb-chat-pinned-full .tb-chat-prompt-expand')).toBeNull();
   });
 
+  it.each([false, true])('ends a person\'s message with one sender-and-time line (pinned prompts=%s)', pinned => {
+    const { box } = setup(initialRows, undefined, pinned);
+    const prompt = box.querySelector<HTMLElement>('[data-scroll-key="message-3"]')!;
+    expect(prompt.lastElementChild?.className).toBe('tb-chat-bubble-meta');
+    expect(prompt.querySelector(':scope > .tb-chat-bubble-sender')).toBeNull();
+    if (pinned) {
+      const slot = pinSomePrompt(box);
+      const copy = slot.querySelector<HTMLElement>('.tb-chat-pinned-full > .tb-chat-pinned-copy')!;
+      expect(copy.lastElementChild?.className).toBe('tb-chat-bubble-meta');
+      expect([...copy.lastElementChild!.children].map(child => child.className)).toEqual(['tb-chat-bubble-sender', 'tb-chat-time']);
+    }
+  });
+
   it('moves the prompt instantly with reduced motion enabled', () => {
     reducedMotion = true;
     latestPromptOverlayHeight = 60;
