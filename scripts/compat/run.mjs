@@ -2,12 +2,16 @@
 // stand-in model and headless Chrome: sign in and load, send and receive, reconnect across a Gateway
 // restart, and page back through older history. No secrets and no network model.
 // Usage: node scripts/compat/run.mjs <tightbeam package dir> <chat app dir> <out dir> <version>
-import { execFileSync, spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
+import { promisify } from 'node:util';
+
+// Never synchronous: the stand-in model is served by this process, and the Gateway calls it during these.
+const run = promisify(execFile);
 
 const [packageDir, chatDir, outDir, version] = process.argv.slice(2).map((value, index) =>
   index < 3 ? path.resolve(value) : value);
@@ -64,9 +68,9 @@ const startGateway = async () => {
   start(gatewayBin, ['start'], { env: gatewayEnv, detached: true }, 'gateway.log');
   return until(async () => (await fetch(`${GATEWAY}/version`)).json(), 90_000, 'Gateway start');
 };
-const stopGateway = () => execFileSync(gatewayBin, ['stop'], { env: gatewayEnv, stdio: 'ignore', timeout: 60_000 });
-const cli = (...args) => execFileSync(path.join(packageDir, 'tightbeam/bin/tightbeam'), [...args, '--as-user', USER],
-  { env: gatewayEnv, encoding: 'utf8', timeout: 60_000 });
+const stopGateway = () => run(gatewayBin, ['stop'], { env: gatewayEnv, timeout: 60_000 });
+const cli = async (...args) => (await run(path.join(packageDir, 'tightbeam/bin/tightbeam'), [...args, '--as-user', USER],
+  { env: gatewayEnv, encoding: 'utf8', timeout: 120_000 })).stdout;
 
 // The first device of an empty scratch org becomes its admin user.
 async function pair() {
@@ -163,16 +167,16 @@ try {
     const reported = await startGateway();
     if (reported.version !== version) throw new Error(`package reports ${reported.version}, expected ${version}`);
     await pair();
-    cli('onboard', 'local-openai', '--name', 'compat-local', '--endpoint', 'http://127.0.0.1:25502/v1');
+    await cli('onboard', 'local-openai', '--name', 'compat-local', '--endpoint', 'http://127.0.0.1:25502/v1');
     // The model catalog takes a moment, and the first session installs the adapters.
-    sessionKey = await until(() => JSON.parse(cli('spawn', '--display', 'Compat agent', '--name', 'test:compat',
+    sessionKey = await until(async () => JSON.parse(await cli('spawn', '--display', 'Compat agent', '--name', 'test:compat',
       '--archetype', 'default', '--host', os.hostname(), '--harness', 'pi', '--model', `compat-local/${MODEL}`,
       '--effort', 'off', '--key', 'compat-spawn')).sessionKey, 300_000, 'session');
   });
   // More than one history page (50 rows) before Chat first loads.
   await step('seed', async () => {
     for (let i = 1; i <= 30; i++) {
-      cli('wake', '--session', sessionKey, '--prompt', `history seed ${i} end`, '--key', `compat-seed-${i}`);
+      await cli('wake', '--session', sessionKey, '--prompt', `history seed ${i} end`, '--key', `compat-seed-${i}`);
       await delay(700);
     }
     await delay(20_000);
@@ -187,7 +191,7 @@ try {
   await step('sign-in-and-load', load);
   await step('send-and-receive', () => sendAndReceive('compatibility send one'));
   await step('reconnect', async () => {
-    stopGateway();
+    await stopGateway();
     await until(async () => !(await connected()), 90_000, 'Chat notices the outage');
     await startGateway();
     await until(connected, 120_000, 'Chat connects again');
@@ -209,7 +213,7 @@ try {
   process.stderr.write(`${error?.message ?? error}\n`);
 } finally {
   fs.writeFileSync(path.join(outDir, 'result.json'), `${JSON.stringify({ version, passed, steps }, null, 2)}\n`);
-  try { stopGateway(); } catch { /* already stopped */ }
+  try { await stopGateway(); } catch { /* already stopped */ }
   for (const child of children) child.kill('SIGKILL');
   provider.close();
   process.exit(passed ? 0 : 1);
