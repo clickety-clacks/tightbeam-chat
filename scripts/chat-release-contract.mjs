@@ -10,6 +10,8 @@
 //   "breakingChangesReview": {"reviewer": "...", "commit": "<full sha reviewed>", "result": "confirmed"}
 // The confirmation covers exactly that commit: the tag may differ from it only by this field.
 
+import ts from 'typescript';
+
 const VERSION = /^\d+\.\d+\.\d+$/;
 const TAG = /^v\d+\.\d+\.\d+$/;
 
@@ -18,19 +20,29 @@ const ROUTE_SOURCE = 'server/chat-server.mjs';
 const VERSION_SOURCE = 'scripts/package-chat-release.mjs';
 
 const STORAGE_CONTRACT = 'scripts/chat-storage-contract.json';
+// What readers' browsers hold from v0.1.114, the last release without a storage contract of its own. A
+// release compared with such a tag is compared with this, so a format cannot change unseen on adoption.
+// Frozen: it records a past release and never follows the contract file.
+export const STORED_VALUES_THROUGH_V0_1_114 = Object.freeze([
+  { key: 'tightbeam-chat.submitter.display-name', value: 'Ada Lovelace' },
+  { key: 'tightbeam-chat.release-notes.seen-version', value: 'v0.1.114' },
+  { key: 'tb-chat-work-items-hidden', value: '1' },
+  { key: 'tb-chat:dismissed-prompt:agent%3Aexample%3Amain', value: 'true' },
+]);
 
 const unique = values => [...new Set(values)].sort();
 const matches = (text, pattern) => [...text.matchAll(pattern)].map(match => match[1]);
-// Commented-out code must not count. Only comment markers after a line start or space are taken, so
-// URLs and MIME ranges inside strings stay.
-const uncommented = text => text.replace(/(^|[\s{])\/\*[\s\S]*?\*\//g, '$1').replace(/(^|\s)\/\/.*$/gm, '$1');
+// Commented-out code must not count. The TypeScript printer drops every comment and leaves strings alone.
+const printer = ts.createPrinter({ removeComments: true });
+const uncommented = (file, text) => printer.printFile(ts.createSourceFile(file, text, ts.ScriptTarget.Latest, false,
+  file.endsWith('.tsx') ? ts.ScriptKind.TSX : file.endsWith('.ts') ? ts.ScriptKind.TS : ts.ScriptKind.JS));
 
 /**
  * Read the contract of one source tree. `read(path)` returns a file's text, or '' when the tree lacks it;
  * `sourceFiles` lists the tree's browser sources under src/.
  */
 export function readChatContract(read, sourceFiles) {
-  const code = file => uncommented(read(file));
+  const code = file => uncommented(file, read(file));
   const versionList = /supportedVersions:\s*\[([^\]]*)\]/.exec(code(VERSION_SOURCE))?.[1];
   const supportedVersions = unique(matches(versionList ?? '', /['"](\d+\.\d+\.\d+)['"]/g));
   const envKeys = unique(ENV_SOURCES.flatMap(file =>
@@ -43,9 +55,9 @@ export function readChatContract(read, sourceFiles) {
   for (const [name, values] of Object.entries(contract)) {
     if (!values.length) throw new Error(`The release contract check found no ${name}; the extractor needs updating.`);
   }
-  // Stored values the build must still read and write, held true by a test. Trees from before it have none.
+  // Stored values the build must still read and write, held true by a test. Undefined when the tree has none.
   const stored = read(STORAGE_CONTRACT);
-  return { ...contract, storedValues: stored ? JSON.parse(stored) : [] };
+  return { ...contract, storedValues: stored ? JSON.parse(stored) : undefined };
 }
 
 function compareVersions(left, right) {
@@ -74,8 +86,9 @@ export function detectBreakingChanges(previous, current) {
   for (const key of gone('envKeys')) add(key, `the setting ${key} is removed or renamed`);
   for (const route of gone('routes')) add(route, `the route ${route} is removed or renamed`);
   for (const key of gone('storageKeys')) add(key, `the browser storage key ${key} is removed or renamed`);
-  for (const { key, value } of previous.storedValues) {
-    if (!current.storedValues.some(item => item.key === key && item.value === value)) {
+  for (const { key, value } of previous.storedValues ?? STORED_VALUES_THROUGH_V0_1_114) {
+    // A tree being released without the contract file has dropped every promise, not kept them all.
+    if (!(current.storedValues ?? []).some(item => item.key === key && item.value === value)) {
       add(key, `the stored browser value under ${key} changed format`);
     }
   }

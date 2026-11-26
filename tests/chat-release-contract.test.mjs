@@ -9,6 +9,7 @@ import {
   previousReleaseTag,
   readChatContract,
   releaseStatement,
+  STORED_VALUES_THROUGH_V0_1_114,
 } from '../scripts/chat-release-contract.mjs';
 
 const root = process.cwd();
@@ -63,9 +64,25 @@ describe('release contract', () => {
         "// environment.CHAT_GONE; '/__chat/gone'\n/* '/__chat/also-gone' */\n",
       'src/a.ts': "const A_KEY = 'kept';\n  // const B_KEY = 'gone';\n",
     };
+    files['server/chat-server.mjs'] += "run();/* environment.CHAT_INLINE; '/__chat/inline' */";
     expect(readChatContract(file => files[file] ?? '', ['src/a.ts'])).toMatchObject({
       envKeys: ['CHAT_KEPT'], routes: ['/__chat/kept'], storageKeys: ['kept'],
     });
+  });
+
+  it('compares the first gated release with the values v0.1.114 left in browsers', () => {
+    const adopted = readChatContract(read, sources());
+    const before = readChatContract(file => file === 'scripts/chat-storage-contract.json' ? '' : read(file), sources());
+    expect(before.storedValues).toBeUndefined();
+    expect(detectBreakingChanges(before, adopted)).toEqual([]);
+    // Same key, new encoding, contract file updated to match: still a change for readers who have the old value.
+    const reencoded = { ...adopted, storedValues: STORED_VALUES_THROUGH_V0_1_114.map(item =>
+      item.key === 'tb-chat-work-items-hidden' ? { ...item, value: 'true' } : item) };
+    const notes = entry({ compatibleTightbeam: ['0.1.16'], breakingChanges: 'none' });
+    expect(() => checkReleaseStatement(notes, 'v1.0.1', before, reencoded))
+      .toThrow('stored browser value under tb-chat-work-items-hidden changed format');
+    expect(detectBreakingChanges(before, { ...adopted, storedValues: undefined }))
+      .toHaveLength(STORED_VALUES_THROUGH_V0_1_114.length);
   });
 
   it('finds nothing in an unchanged or merely extended contract', () => {
@@ -152,6 +169,9 @@ describe('release contract', () => {
         GITHUB_REF_NAME: tag, GITHUB_REF: `refs/tags/${tag}`, GITHUB_SHA: git('rev-parse', 'HEAD'),
       } });
     };
+    fs.symlinkSync(path.join(root, 'node_modules'), path.join(repo, 'node_modules'));
+    write('.gitignore', 'node_modules\n');
+    write('scripts/chat-storage-contract.json', read('scripts/chat-storage-contract.json'));
     git('init', '-q');
     const good = { compatibleTightbeam: ['0.1.16'], breakingChanges: 'none' };
     release('v1.0.0', good);
