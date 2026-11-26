@@ -346,7 +346,7 @@ async function createPackageSourceFixture(rootDir) {
   ];
   await fs.mkdir(path.join(rootDir, 'src'), { recursive: true });
   await fs.writeFile(path.join(rootDir, 'src/release-notes.json'), JSON.stringify(['v1.2.3', 'v1.2.4'].map(version =>
-    ({ version, items: [], compatibleTightbeam: ['0.1.16'], breakingChanges: 'none' }))));
+    ({ version, items: [], compatibleTightbeam: ['0.1.15', '0.1.16'], breakingChanges: 'none' }))));
   for (const relative of files) {
     const filename = path.join(rootDir, relative);
     await fs.mkdir(path.dirname(filename), { recursive: true });
@@ -479,7 +479,7 @@ describe('Chat release packaging and updater', () => {
     }
     await fs.mkdir(path.join(rootDir, 'src'), { recursive: true });
     await fs.writeFile(path.join(rootDir, 'src/release-notes.json'), JSON.stringify(
-      [{ version: 'v1.2.3', items: [], compatibleTightbeam: ['0.1.16'], breakingChanges: 'none' }]));
+      [{ version: 'v1.2.3', items: [], compatibleTightbeam: ['0.1.15', '0.1.16'], breakingChanges: 'none' }]));
     const outputDir = path.join(rootDir, 'release-output');
     const builtAt = '2026-10-16T00:00:00.000Z';
     const result = await packageChatRelease({
@@ -495,11 +495,11 @@ describe('Chat release packaging and updater', () => {
     const releaseNotes = await fs.readFile(path.join(outputDir, 'release-notes.md'), 'utf8');
     expect(releaseNotes).toContain(`Package: tightbeam-chat-v1.2.3.tar.gz`);
     expect(releaseNotes).toContain(`SHA-256: ${actualHash}`);
-    expect(releaseNotes).toContain('\nCompatible with Tightbeam: 0.1.16\n\nBreaking changes: none\n');
+    expect(releaseNotes).toContain('\nCompatible with Tightbeam: 0.1.15, 0.1.16\n\nBreaking changes: none\n');
     expect(JSON.parse(await fs.readFile(path.join(outputDir, 'release-provenance.json'), 'utf8')))
       .toMatchObject({ tag: 'v1.2.3', sourceCommit: SOURCE_COMMIT, sha256: actualHash, nodeVersion: 'v24.7.0' });
     expect(JSON.parse(execFileSync('tar', ['-xOzf', result.assetPath, './release.json'], { encoding: 'utf8' })))
-      .toMatchObject({ gatewayCompatibility: { supportedVersions: ['0.1.16'] } });
+      .toMatchObject({ gatewayCompatibility: { supportedVersions: ['0.1.15', '0.1.16'] } });
     const members = execFileSync('tar', ['-tzf', result.assetPath], { encoding: 'utf8' });
     expect(members).toContain('./public/index.html');
     expect(members).toContain('./server/chat-server.mjs');

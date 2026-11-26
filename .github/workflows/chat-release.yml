@@ -9,11 +9,9 @@ permissions:
   contents: read
 
 jobs:
-  stage:
-    name: Build and stage draft release
+  build:
+    name: Build and package
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -46,6 +44,47 @@ jobs:
           [[ "$asset_sha256" =~ ^[a-f0-9]{64}$ ]]
           test "$(cat dist/chat-release/SHA256SUMS)" = "$asset_sha256  $asset_name"
           printf '%s  %s\n' "$asset_sha256" "dist/chat-release/$asset_name" | sha256sum --check --strict
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: chat-release
+          path: dist/chat-release
+          if-no-files-found: error
+
+  compat:
+    needs: build
+    uses: ./.github/workflows/chat-compat.yml
+    with:
+      artifact: chat-release
+
+  stage:
+    name: Check compatibility and stage draft release
+    needs: [build, compat]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - run: npm ci
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: chat-release
+          path: dist/chat-release
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: compat-*
+          path: compat-results
+      - name: Require what passed to be what the release claims
+        run: |
+          tar -xzf "dist/chat-release/tightbeam-chat-${GITHUB_REF_NAME}.tar.gz" -C dist/chat-release ./release.json
+          node scripts/compat/verify.mjs compat-results dist/chat-release "$GITHUB_REF_NAME"
+        env:
+          SUPPORT_WINDOW: ${{ needs.compat.outputs.window }}
       - run: npm run release:stage
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
