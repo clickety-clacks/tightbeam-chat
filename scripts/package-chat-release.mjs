@@ -49,8 +49,10 @@ export async function packageChatRelease({
     if (!(await exists(filename))) throw new Error(`Required release input is missing: ${path.relative(rootDir, filename)}`);
   }
 
+  const gatewayCompatibility = { supportedVersions: ['0.1.16'] };
   const statement = releaseStatement(
-    JSON.parse(await fs.readFile(path.resolve(rootDir, 'src/release-notes.json'), 'utf8')), tag);
+    JSON.parse(await fs.readFile(path.resolve(rootDir, 'src/release-notes.json'), 'utf8')), tag,
+    gatewayCompatibility.supportedVersions);
 
   await fs.rm(outputDir, { recursive: true, force: true });
   await fs.mkdir(outputDir, { recursive: true });
@@ -83,7 +85,7 @@ export async function packageChatRelease({
       tag,
       sourceCommit,
       nodeVersion,
-      gatewayCompatibility: { supportedVersions: ['0.1.16'] },
+      gatewayCompatibility,
     }, null, 2)}\n`);
 
     const assetName = `tightbeam-chat-${tag}.tar.gz`;

@@ -21,7 +21,7 @@ const contract = {
   envKeys: ['CHAT_PUBLIC_ORIGIN'],
   routes: ['/__chat/version'],
   storageKeys: ['tb-chat.key'],
-  storageWrites: ["KEY, '1'"],
+  storedValues: [{ key: 'tb-chat.key', value: '1' }],
 };
 const entry = fields => [{ version: 'v1.0.1', items: [], ...fields }];
 const stated = entry({ compatibleTightbeam: ['0.1.16'], breakingChanges: 'none' });
@@ -46,11 +46,26 @@ describe('release contract', () => {
       'tb-chat-work-items-hidden', 'tb-chat:dismissed-prompt:',
       'tightbeam-chat.release-notes.seen-version', 'tightbeam-chat.submitter.display-name',
     ]);
-    expect(current.storageWrites.length).toBeGreaterThanOrEqual(4);
+    // Every key the source declares has a stored value held true by the browser storage test.
+    for (const key of current.storageKeys) {
+      expect(current.storedValues.some(item => item.key.startsWith(key))).toBe(true);
+    }
   });
 
   it('refuses to compare when it can no longer find something', () => {
     expect(() => readChatContract(() => '', [])).toThrow('found no supportedVersions');
+  });
+
+  it('ignores names that survive only in comments', () => {
+    const files = {
+      'scripts/package-chat-release.mjs': "const c = { supportedVersions: ['0.1.16'] };",
+      'server/chat-server.mjs': "environment.CHAT_KEPT; '/__chat/kept'; accept: '*/*';\n" +
+        "// environment.CHAT_GONE; '/__chat/gone'\n/* '/__chat/also-gone' */\n",
+      'src/a.ts': "const A_KEY = 'kept';\n  // const B_KEY = 'gone';\n",
+    };
+    expect(readChatContract(file => files[file] ?? '', ['src/a.ts'])).toMatchObject({
+      envKeys: ['CHAT_KEPT'], routes: ['/__chat/kept'], storageKeys: ['kept'],
+    });
   });
 
   it('finds nothing in an unchanged or merely extended contract', () => {
@@ -63,17 +78,26 @@ describe('release contract', () => {
   });
 
   it.each([
-    ['supportedVersions', ['0.1.17'], 'oldest supported Tightbeam rises from 0.1.16 to 0.1.17'],
-    ['envKeys', ['CHAT_RENAMED'], 'CHAT_PUBLIC_ORIGIN is removed or renamed'],
-    ['routes', ['/__chat/renamed'], '/__chat/version is removed or renamed'],
-    ['storageKeys', ['tb-chat.renamed'], 'tb-chat.key is removed or renamed'],
-    ['storageWrites', ["KEY, JSON.stringify({ hidden: true })"], 'stored browser value'],
-  ])('refuses "none" when %s changes incompatibly', (name, values, finding) => {
+    ['supportedVersions', ['0.1.17'], '0.1.16', 'oldest supported Tightbeam rises from 0.1.16 to 0.1.17'],
+    ['envKeys', ['CHAT_RENAMED'], 'CHAT_PUBLIC_ORIGIN', 'setting CHAT_PUBLIC_ORIGIN is removed or renamed'],
+    ['routes', ['/__chat/version/more'], '/__chat/version', 'route /__chat/version is removed or renamed'],
+    ['storageKeys', ['tb-chat.renamed'], 'tb-chat.key', 'storage key tb-chat.key is removed or renamed'],
+    ['storedValues', [{ key: 'tb-chat.key', value: '{"hidden":true}' }], 'tb-chat.key', 'changed format'],
+  ])('requires the notes to name what changed in %s', (name, values, subject, finding) => {
     const current = { ...contract, [name]: values };
-    expect(() => checkReleaseStatement(stated, 'v1.0.1', contract, current)).toThrow(finding);
-    const declared = entry({ compatibleTightbeam: ['0.1.16'], breakingChanges: ['Reinstall the setting.'] });
-    expect(checkReleaseStatement(declared, 'v1.0.1', contract, current).lines)
-      .toEqual(['Compatible with Tightbeam: 0.1.16', '', 'Breaking changes:', '- Reinstall the setting.']);
+    const claim = current.supportedVersions;
+    const notes = breakingChanges => entry({ compatibleTightbeam: claim, breakingChanges });
+    for (const wrong of ['none', ['Something unrelated changed.'], [`${subject}-other changed.`]]) {
+      expect(() => checkReleaseStatement(notes(wrong), 'v1.0.1', contract, current)).toThrow(finding);
+    }
+    const sentence = `Update your setup: ${subject} no longer applies.`;
+    expect(checkReleaseStatement(notes([sentence]), 'v1.0.1', contract, current).lines)
+      .toEqual([`Compatible with Tightbeam: ${claim.join(', ')}`, '', 'Breaking changes:', `- ${sentence}`]);
+  });
+
+  it.each([[['9.9.9']], [['0.1.16', '9.9.9']]])('refuses a compatibility claim the package does not declare (%j)', claim => {
+    expect(() => releaseStatement(entry({ compatibleTightbeam: claim, breakingChanges: 'none' }), 'v1.0.1', ['0.1.16']))
+      .toThrow('they must match');
   });
 
   it.each([
@@ -84,7 +108,7 @@ describe('release contract', () => {
     [{ compatibleTightbeam: ['0.1.16'], breakingChanges: [] }, 'breakingChanges'],
     [{ compatibleTightbeam: ['0.1.16'], breakingChanges: ['None'] }, 'breakingChanges'],
   ])('requires both statements (%j)', (fields, missing) => {
-    expect(() => releaseStatement(entry(fields), 'v1.0.1')).toThrow(missing);
+    expect(() => releaseStatement(entry(fields), 'v1.0.1', ['0.1.16'])).toThrow(missing);
   });
 
   it('compares with the newest older release tag', () => {
@@ -145,7 +169,7 @@ describe('release contract', () => {
     expect(laterCode.stderr).toContain('changed after the review');
     expect(laterCode.stderr).toContain('src/store.ts');
     const laterNotes = release('v1.0.2', good, { after: (entry, confirmation) => {
-      write('src/release-notes.json', JSON.stringify([{ ...entry, compatibleTightbeam: ['0.1.15'],
+      write('src/release-notes.json', JSON.stringify([{ ...entry, items: [{ title: 'T', description: 'Changed' }],
         breakingChangesReview: confirmation }]));
       commit('later notes');
     } });
@@ -154,5 +178,6 @@ describe('release contract', () => {
     const wrong = release('v1.0.3', good);
     expect(wrong.status).toBe(1);
     expect(wrong.stderr).toContain('/__chat/upload is removed or renamed');
+    expect(release('v1.0.3', { ...good, breakingChanges: ['The route /__chat/upload is gone.'] }).status).toBe(0);
   });
 });

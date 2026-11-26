@@ -16,7 +16,7 @@ Chat supports the current Tightbeam release and the one before it. Outside that 
 
 Each tagged version states two fields in `src/release-notes.json`, and the release body carries them:
 
-- `compatibleTightbeam`: the Tightbeam versions actually verified with this build, for example `["0.1.16"]`. A version inside the window that has not been verified is not listed.
+- `compatibleTightbeam`: the Tightbeam versions actually verified with this build, for example `["0.1.16"]`. It must match the versions the package declares as supported, so a version is added to both only once verified. The check cannot tell whether the verification happened; the reviewer confirms that evidence.
 - `breakingChanges`: `"none"`, or a list of sentences.
 
 The reviewer of the release notes then confirms the breaking-changes section in a commit of their own on the same pull request, adding to that version's entry:
@@ -25,9 +25,9 @@ The reviewer of the release notes then confirms the breaking-changes section in 
 "breakingChangesReview": { "reviewer": "<role>", "commit": "<full SHA of the reviewed head>", "result": "confirmed" }
 ```
 
-The tag job refuses to stage a draft unless that commit is part of the tag and the tag differs from it by nothing but this field, so any later change needs a new confirmation. It records who confirmed; the repository's single account cannot prove it.
+The tag job refuses to stage a draft unless that commit is part of the tag and the tag differs from it by nothing but this field, so any later change needs a new confirmation. It records who confirmed; the repository's single account cannot prove it. Merge the pull request with a merge commit while nothing else has landed: a squash or rebase merge drops the reviewed commit, and other changes on `main` void the confirmation. In either case confirm the landed commit in a follow-up pull request that changes only this field.
 
-The tag job also fails when either field is missing. Compared with the previous release tag, it also refuses `"none"` when the oldest supported Tightbeam rises, a `CHAT_` setting or a `/__chat/` route is removed or renamed, or a browser storage key or the value written under one changes. The comparison reads source text, so it can flag a harmless rename and cannot see a change of meaning under unchanged names.
+The tag job also fails when either field is missing. Compared with the previous release tag, it also requires `breakingChanges` to name each of these: the oldest supported Tightbeam rising (name the version dropped), a `CHAT_` setting or `/__chat/` route removed or renamed, a browser storage key removed or renamed, or a stored value changing format. Stored values are held in `scripts/chat-storage-contract.json`; a test checks that the build still reads and writes each one. Settings, routes and keys are read from source text with comments removed, so the comparison cannot see a handler that stops working while its name remains, or a change of meaning under unchanged names.
 
 The tag workflow creates a draft and uploads the complete asset set, then stops. Its summary and the draft notes show the exact source commit, package name and SHA-256. Check the package against that checksum, then publish the draft. Releases need no human approval; see [AGENTS.md](../AGENTS.md). The updater accepts only published releases, so the draft is retained for review without becoming available for automatic installation. No npm package is published.
 

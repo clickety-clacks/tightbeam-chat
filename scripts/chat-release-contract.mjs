@@ -17,31 +17,35 @@ const ENV_SOURCES = ['server/chat-server.mjs', 'bin/activity-summaries.mjs', 'sc
 const ROUTE_SOURCE = 'server/chat-server.mjs';
 const VERSION_SOURCE = 'scripts/package-chat-release.mjs';
 
+const STORAGE_CONTRACT = 'scripts/chat-storage-contract.json';
+
 const unique = values => [...new Set(values)].sort();
 const matches = (text, pattern) => [...text.matchAll(pattern)].map(match => match[1]);
+// Commented-out code must not count. Only comment markers after a line start or space are taken, so
+// URLs and MIME ranges inside strings stay.
+const uncommented = text => text.replace(/(^|[\s{])\/\*[\s\S]*?\*\//g, '$1').replace(/(^|\s)\/\/.*$/gm, '$1');
 
 /**
  * Read the contract of one source tree. `read(path)` returns a file's text, or '' when the tree lacks it;
  * `sourceFiles` lists the tree's browser sources under src/.
  */
 export function readChatContract(read, sourceFiles) {
-  const versionList = /supportedVersions:\s*\[([^\]]*)\]/.exec(read(VERSION_SOURCE))?.[1];
+  const code = file => uncommented(read(file));
+  const versionList = /supportedVersions:\s*\[([^\]]*)\]/.exec(code(VERSION_SOURCE))?.[1];
   const supportedVersions = unique(matches(versionList ?? '', /['"](\d+\.\d+\.\d+)['"]/g));
   const envKeys = unique(ENV_SOURCES.flatMap(file =>
-    matches(read(file), /\b(?:environment|process\.env)(?:\.|\[['"])(CHAT_[A-Z0-9_]+)/g)));
-  const routes = unique(matches(read(ROUTE_SOURCE), /['"`](\/__chat\/[a-z0-9/_-]*[a-z0-9])/g));
-  const browser = sourceFiles.filter(file => /\.tsx?$/.test(file)).map(read);
-  const storageKeys = unique(browser.flatMap(text =>
-    matches(text, /\bconst\s+\w*(?:_KEY|StorageKey|StoragePrefix)\s*=\s*['"]([^'"]+)['"]/g)));
-  // What is written under a key is its stored format, so a changed write counts as a changed format.
-  const storageWrites = unique(browser.flatMap(text =>
-    matches(text, /\.setItem\(([^;]*)\);/g).map(args => args.replace(/\s+/g, ' ').trim())));
-  const contract = { supportedVersions, envKeys, routes, storageKeys, storageWrites };
+    matches(code(file), /\b(?:environment|process\.env)(?:\.|\[['"])(CHAT_[A-Z0-9_]+)/g)));
+  const routes = unique(matches(code(ROUTE_SOURCE), /['"`](\/__chat\/[a-z0-9/_-]*[a-z0-9])/g));
+  const storageKeys = unique(sourceFiles.filter(file => /\.tsx?$/.test(file)).flatMap(file =>
+    matches(code(file), /\bconst\s+\w*(?:_KEY|StorageKey|StoragePrefix)\s*=\s*['"]([^'"]+)['"]/g)));
+  const contract = { supportedVersions, envKeys, routes, storageKeys };
   // An extractor that finds nothing would pass every comparison, so that is an error.
   for (const [name, values] of Object.entries(contract)) {
     if (!values.length) throw new Error(`The release contract check found no ${name}; the extractor needs updating.`);
   }
-  return contract;
+  // Stored values the build must still read and write, held true by a test. Trees from before it have none.
+  const stored = read(STORAGE_CONTRACT);
+  return { ...contract, storedValues: stored ? JSON.parse(stored) : [] };
 }
 
 function compareVersions(left, right) {
@@ -57,28 +61,46 @@ export function previousReleaseTag(tags, tag) {
     .sort(compareVersions).at(-1);
 }
 
-/** Changes from the previous release that must be declared as breaking. */
+/** Changes from the previous release that must be declared, each with the name the notes must use. */
 export function detectBreakingChanges(previous, current) {
   const gone = name => previous[name].filter(value => !current[name].includes(value));
   const found = [];
   const [oldMinimum] = [...previous.supportedVersions].sort(compareVersions);
   const [newMinimum] = [...current.supportedVersions].sort(compareVersions);
+  const add = (subject, text) => found.push({ subject, text });
   if (compareVersions(newMinimum, oldMinimum) > 0) {
-    found.push(`the oldest supported Tightbeam rises from ${oldMinimum} to ${newMinimum}`);
+    add(oldMinimum, `the oldest supported Tightbeam rises from ${oldMinimum} to ${newMinimum}`);
   }
-  for (const key of gone('envKeys')) found.push(`the setting ${key} is removed or renamed`);
-  for (const route of gone('routes')) found.push(`the route ${route} is removed or renamed`);
-  for (const key of gone('storageKeys')) found.push(`the browser storage key ${key} is removed or renamed`);
-  for (const write of gone('storageWrites')) found.push(`the stored browser value written as (${write}) changed`);
+  for (const key of gone('envKeys')) add(key, `the setting ${key} is removed or renamed`);
+  for (const route of gone('routes')) add(route, `the route ${route} is removed or renamed`);
+  for (const key of gone('storageKeys')) add(key, `the browser storage key ${key} is removed or renamed`);
+  for (const { key, value } of previous.storedValues) {
+    if (!current.storedValues.some(item => item.key === key && item.value === value)) {
+      add(key, `the stored browser value under ${key} changed format`);
+    }
+  }
   return found;
 }
 
-/** The two release-body lines for `tag`; throws when the version does not state them. */
-export function releaseStatement(entries, tag) {
+/** Whether a sentence names `subject` itself, not merely a longer name that starts with it. */
+function names(sentence, subject) {
+  const escaped = subject.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(?<![A-Za-z0-9_/-])${escaped}(?![A-Za-z0-9_/-]|\\.[0-9])`).test(sentence);
+}
+
+/**
+ * The two release-body lines for `tag`; throws when the version does not state them, or claims other
+ * Tightbeam versions than the package declares it supports.
+ */
+export function releaseStatement(entries, tag, supportedVersions) {
   const entry = Array.isArray(entries) ? entries.find(candidate => candidate?.version === tag) : undefined;
   const compatible = entry?.compatibleTightbeam;
   if (!Array.isArray(compatible) || !compatible.length || !compatible.every(version => VERSION.test(version))) {
     throw new Error(`src/release-notes.json needs "compatibleTightbeam" for ${tag}: the verified Tightbeam versions.`);
+  }
+  if (unique(compatible).join() !== unique(supportedVersions).join()) {
+    throw new Error(`"compatibleTightbeam" for ${tag} is ${compatible.join(', ')}, but the package declares ` +
+      `${supportedVersions.join(', ')}; they must match.`);
   }
   const breaking = entry.breakingChanges;
   const none = breaking === 'none';
@@ -87,13 +109,25 @@ export function releaseStatement(entries, tag) {
     throw new Error(`src/release-notes.json needs "breakingChanges" for ${tag}: "none" or a list of sentences.`);
   }
   return {
-    declaresNoBreakingChange: none,
+    sentences: none ? [] : breaking.map(item => item.trim()),
     lines: [
       `Compatible with Tightbeam: ${compatible.join(', ')}`,
       '',
       ...(none ? ['Breaking changes: none'] : ['Breaking changes:', ...breaking.map(item => `- ${item.trim()}`)]),
     ],
   };
+}
+
+/** Throws unless `tag` states both fields and names everything the comparison found. */
+export function checkReleaseStatement(entries, tag, previousContract, currentContract) {
+  const statement = releaseStatement(entries, tag, currentContract.supportedVersions);
+  const missing = detectBreakingChanges(previousContract, currentContract)
+    .filter(({ subject }) => !statement.sentences.some(sentence => names(sentence, subject)));
+  if (missing.length) {
+    throw new Error(`"breakingChanges" for ${tag} does not name what changed since the previous release: ` +
+      `${missing.map(({ subject, text }) => `${text} (name ${subject})`).join('; ')}.`);
+  }
+  return statement;
 }
 
 const NOTES = 'src/release-notes.json';
@@ -119,14 +153,4 @@ export function checkBreakingChangesReview(entries, tag, history) {
     throw new Error(`${tag} changed after the review of ${review.commit} (${[...others, ...(others.length ? [] : [NOTES])]
       .join(', ')}); the Breaking changes section needs a new confirmation.`);
   }
-}
-
-/** Throws unless `tag` states both fields and declares what the comparison found. */
-export function checkReleaseStatement(entries, tag, previousContract, currentContract) {
-  const statement = releaseStatement(entries, tag);
-  const found = detectBreakingChanges(previousContract, currentContract);
-  if (statement.declaresNoBreakingChange && found.length) {
-    throw new Error(`${tag} says "breakingChanges": "none", but compared with the previous release ${found.join('; ')}.`);
-  }
-  return statement;
 }
