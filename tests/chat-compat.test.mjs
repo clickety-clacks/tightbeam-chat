@@ -5,21 +5,23 @@ import { supportWindow } from '../scripts/compat/window.mjs';
 const release = (tag_name, extra = {}) => ({ tag_name, draft: false, prerelease: false, ...extra });
 
 describe('support window', () => {
-  it('takes the newest build of the current published version and the one before it', () => {
+  it('takes the release marked latest and the newest build of the version before it', () => {
     expect(supportWindow([
       release('v0.1.16+4304'), release('v0.1.16+4283', { prerelease: true }), release('v0.1.14+3724'),
       release('v0.1.15+4029', { prerelease: true }), release('v0.1.15+4082'), release('v0.1.15+4046'),
-      release('v0.1.17+5501', { prerelease: true }), release('v0.2.0+1', { draft: true }), release('nightly'),
-    ])).toEqual([{ version: '0.1.15', tag: 'v0.1.15+4082' }, { version: '0.1.16', tag: 'v0.1.16+4304' }]);
+      // An older line that published a higher number is not the current release.
+      release('v0.2.0+1373'), release('v0.1.17+5501', { prerelease: true }), release('nightly'),
+    ], 'v0.1.16+4304')).toEqual([{ version: '0.1.15', tag: 'v0.1.15+4082' }, { version: '0.1.16', tag: 'v0.1.16+4304' }]);
   });
 
   it('orders versions as numbers', () => {
-    expect(supportWindow([release('v0.1.10+2'), release('v0.1.9+9'), release('v0.1.2+99')]).map(item => item.version))
-      .toEqual(['0.1.9', '0.1.10']);
+    expect(supportWindow([release('v0.1.10+2'), release('v0.1.9+9'), release('v0.1.2+99')], 'v0.1.10+2')
+      .map(item => item.version)).toEqual(['0.1.9', '0.1.10']);
   });
 
-  it('refuses a window of fewer than two versions', () => {
-    expect(() => supportWindow([release('v0.1.16+4304')])).toThrow('Fewer than two');
+  it('refuses when there is no latest or earlier release to test', () => {
+    expect(() => supportWindow([release('v0.1.16+4304')], 'v0.1.16+4304')).toThrow('precedes');
+    expect(() => supportWindow([release('v0.1.16+4304')], 'v0.1.17+1')).toThrow('not among');
   });
 });
 
