@@ -844,11 +844,9 @@ describe('conversation surface', () => {
     expect(own.lastElementChild).toBe(meta);
     // Nothing above the message text any more.
     expect(own.firstElementChild?.classList.contains('tb-chat-bubble-body')).toBe(true);
-    const agent = within(log).queryByText('A reply with a time.')?.closest<HTMLElement>('.tb-chat-bubble');
-    if (agent) {
-      expect(agent.querySelector('.tb-chat-bubble-meta, .tb-chat-bubble-sender')).toBeNull();
-      expect(agent.lastElementChild?.classList.contains('tb-chat-time')).toBe(true);
-    }
+    const agent = within(log).getByText('A reply with a time.').closest<HTMLElement>('.tb-chat-bubble')!;
+    expect(agent.querySelector('.tb-chat-bubble-meta, .tb-chat-bubble-sender')).toBeNull();
+    expect(agent.lastElementChild?.classList.contains('tb-chat-time')).toBe(true);
   });
 
   it('preserves the agent label when an agent reply carries assignment context', () => {
@@ -4300,6 +4298,13 @@ describe('conversation surface', () => {
     const refusalAnnouncement = failed?.querySelector('[role="alert"]');
     expect(refusalAnnouncement?.textContent).toContain('Your message was not sent. Reason: private target detail');
     expect(refusalAnnouncement?.classList.contains('tb-chat-sr-only')).toBe(true);
+    // Refused and still-sending bubbles end with the same sender-and-time line, under their status.
+    for (const bubble of [failed, screen.getByText('Accepted text').closest('article')]) {
+      const meta = bubble?.lastElementChild;
+      expect(meta?.className).toBe('tb-chat-bubble-meta');
+      expect([...meta!.children].map(child => child.className)).toEqual(['tb-chat-bubble-sender', 'tb-chat-time']);
+      expect(meta!.firstElementChild?.textContent).toBe('You');
+    }
     const acceptedInitially = screen.getByText('Accepted text').closest('article');
     expect(acceptedInitially?.getAttribute('data-send-state')).toBe('ghosted');
     expect(acceptedInitially?.getAttribute('aria-label')).toBe('Your message is sending.');

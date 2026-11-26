@@ -3634,7 +3634,11 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
             {retryAvailable && state.status === 'unauthorized' && <span>Access to this conversation is unavailable.</span>}
             {restoreAvailable && <button type="button" onClick={() => composer.current?.restore(send.content, attachmentItems)}>{restoreLabel}</button>}
           </div>}
-          <time className="tb-chat-time" dateTime={time.dateTime}>{time.text}</time>
+          {/* The same sender-and-time line as a delivered message, under any status or actions. */}
+          <div className="tb-chat-bubble-meta">
+            <span className="tb-chat-bubble-sender" aria-hidden="true">You</span>
+            <time className="tb-chat-time" dateTime={time.dateTime}>{time.text}</time>
+          </div>
         </article>;
   }, [state.workItems, activityPlan.toolItems, expandedActivityRuns, expandedToolCalls, toggleActivityRun, setToolCallExpanded,
     revealingActivityItems, finishActivityReveal, reading.registerRow, reading.preserveVisiblePosition,
