@@ -91,7 +91,7 @@ jobs:
             node scripts/compat/run.mjs tightbeam chat-app "compat-result/attempt-$attempt" "${{ matrix.version }}" && break
           done
           cp "compat-result/attempt-$attempt/result.json" compat-result/result.json
-          grep -q '"passed": true' compat-result/result.json
+          jq -e '.passed == true' compat-result/result.json
         env:
           COMPAT_TOOLS_BIN: ${{ github.workspace }}/tools/node_modules/.bin
       - if: always()

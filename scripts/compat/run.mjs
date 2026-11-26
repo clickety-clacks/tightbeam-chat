@@ -83,6 +83,28 @@ async function pair() {
   });
   socket.close();
   if (!result.success) throw new Error(`pairing failed: ${result.reason}`);
+  return result.token;
+}
+
+// History as the reader's own prompts, which Chat always shows, sent the way a client sends them.
+async function seedHistory(token, sessionKey) {
+  const socket = new WebSocket(`${GATEWAY.replace('http', 'ws')}/ws`);
+  await new Promise((resolve, reject) => {
+    socket.onopen = () => socket.send(JSON.stringify({ type: 'auth', protocolVersion: 1, deviceId: DEVICE, token,
+      subscriptions: ['chat'] }));
+    socket.onmessage = event => {
+      const frame = JSON.parse(event.data);
+      if (frame.type === 'auth_result') { if (frame.success) resolve(); else reject(new Error('seed sign-in failed')); }
+    };
+    setTimeout(() => reject(new Error('seed sign-in timed out')), 20_000).unref();
+  });
+  for (let i = 1; i <= 30; i++) {
+    socket.send(JSON.stringify({ type: 'message', id: `c_${crypto.randomUUID()}`, sessionKey,
+      content: `history seed ${i} end` }));
+    await delay(1200);
+  }
+  await delay(20_000);
+  socket.close();
 }
 
 // Headless Chrome over the DevTools protocol.
@@ -163,10 +185,11 @@ let passed = false;
 try {
   await new Promise(resolve => provider.listen(25502, '127.0.0.1', resolve));
   let sessionKey;
+  let token;
   await step('start', async () => {
     const reported = await startGateway();
     if (reported.version !== version) throw new Error(`package reports ${reported.version}, expected ${version}`);
-    await pair();
+    token = await pair();
     await cli('onboard', 'local-openai', '--name', 'compat-local', '--endpoint', 'http://127.0.0.1:25502/v1');
     // The model catalog takes a moment, and the first session installs the adapters.
     sessionKey = await until(async () => JSON.parse(await cli('spawn', '--display', 'Compat agent', '--name', 'test:compat',
@@ -174,13 +197,7 @@ try {
       '--effort', 'off', '--key', 'compat-spawn')).sessionKey, 300_000, 'session');
   });
   // More than one history page (50 rows) before Chat first loads.
-  await step('seed', async () => {
-    for (let i = 1; i <= 30; i++) {
-      await cli('wake', '--session', sessionKey, '--prompt', `history seed ${i} end`, '--key', `compat-seed-${i}`);
-      await delay(700);
-    }
-    await delay(20_000);
-  });
+  await step('seed', () => seedHistory(token, sessionKey));
   fs.writeFileSync(path.join(root, 'map.json'),
     JSON.stringify({ version: 1, gateways: [{ origin: GATEWAY, baseDir: base }] }));
   start(process.execPath, ['server/chat-server.mjs'], { cwd: chatDir, env: { HOME: chatHome, PATH: gatewayEnv.PATH,
