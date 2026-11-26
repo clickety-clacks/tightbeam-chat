@@ -1,5 +1,25 @@
 [
   {
+    "version": "v0.1.115",
+    "items": [
+      {
+        "title": "Sender and time on one line",
+        "description": "Messages from people now show the sender on the same line as the time, below the message."
+      },
+      {
+        "title": "Pinned prompt fixes",
+        "description": "Where pinned prompts are switched on, this fixes them jumping when the keyboard opens and stretching or sitting out of place near the end of the conversation."
+      },
+      {
+        "title": "Gateway compatibility",
+        "description": "Chat supports Gateway 0.1.15 and 0.1.16. Human prompts use the authenticated WebSocket connection by default."
+      }
+    ],
+    "compatibleTightbeam": ["0.1.15", "0.1.16"],
+    "breakingChanges": "none",
+    "breakingChangesReview": { "reviewer": "independent-chat-reviewer", "commit": "8cd9d1325145416b5adfb4e4e2c3587a34747d30", "result": "confirmed" }
+  },
+  {
     "version": "v0.1.114",
     "items": [
       {
