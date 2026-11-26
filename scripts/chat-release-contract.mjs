@@ -123,10 +123,11 @@ export function releaseStatement(entries, tag, supportedVersions) {
   }
   return {
     sentences: none ? [] : breaking.map(item => item.trim()),
+    // The updater requires the body to end with these two lines exactly, so each stays on one line.
     lines: [
       `Compatible with Tightbeam: ${compatible.join(', ')}`,
       '',
-      ...(none ? ['Breaking changes: none'] : ['Breaking changes:', ...breaking.map(item => `- ${item.trim()}`)]),
+      `Breaking changes: ${none ? 'none' : breaking.map(item => item.replace(/\s+/g, ' ').trim()).join(' ')}`,
     ],
   };
 }
