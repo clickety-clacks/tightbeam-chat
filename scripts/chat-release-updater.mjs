@@ -93,8 +93,11 @@ function requireReleaseStatements(tag, body) {
   const parts = tag.slice(1).split('.').map(Number);
   const newer = parts.findIndex((part, index) => part !== LAST_UNSTATED_RELEASE[index]);
   if (newer === -1 || parts[newer] < LAST_UNSTATED_RELEASE[newer]) return;
-  const text = typeof body === 'string' ? body.replace(/\r\n/g, '\n') : '';
-  const compatibility = /^Compatible with Tightbeam: \d+\.\d+\.\d+/m.test(text);
+  // Only whole statement lines count: not text inside a fenced block or an HTML comment, even unclosed.
+  const text = (typeof body === 'string' ? body : '').replace(/\r\n/g, '\n')
+    .replace(/<!--[\s\S]*?(?:-->|$)/g, '')
+    .replace(/^ {0,3}(`{3,}|~{3,})[\s\S]*?(?:^ {0,3}\1[`~]*[ \t]*$|(?![\s\S]))/gm, '');
+  const compatibility = /^Compatible with Tightbeam: \d+\.\d+\.\d+(?:, \d+\.\d+\.\d+)*\.?[ \t]*$/m.test(text);
   const breaking = /^Breaking changes:(?: none\.?[ \t]*$|[ \t]*\n(?:\n)?- \S)/m.test(text);
   if (!compatibility || !breaking) {
     throw new Error(`Published release ${tag} lacks its ${[!compatibility && '"Compatible with Tightbeam:" line',
