@@ -66,6 +66,43 @@ interface Layout {
   readonly prompts: readonly Measured[];
   readonly byIdentity: ReadonlyMap<string, number>;
   readonly options: PinnedPromptOptions;
+  /** The scroller's largest scrollTop when measured. */
+  readonly maxScroll: number;
+}
+
+/**
+ * The scroll position the rules use: within 0..max. WebKit reports positions past either
+ * end while the surface rubber-bands; the content is not further along than its end.
+ */
+function clampScroll(scrollTop: number, maxScroll: number): number {
+  return Math.min(Math.max(0, scrollTop), Math.max(0, maxScroll));
+}
+
+/**
+ * How far a row's own running animation (Chat's arrival slide) has moved it, so its place in
+ * the flow can be measured mid-slide. Rows that are not animating cost one cheap check.
+ */
+function ownSlide(row: HTMLElement): number {
+  const animations = row.getAnimations?.() ?? [];
+  if (!animations.some(animation => animation.playState === 'running')) return 0;
+  const transform = getComputedStyle(row).transform;
+  if (!transform || transform === 'none') return 0;
+  try {
+    return new DOMMatrixReadOnly(transform).m42;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Where an element inside the scroller starts, in scroll-content coordinates, read from
+ * layout. The element's position relative to the transcript content is the difference of
+ * two on-screen rects, so scrolling, rubber-band overscroll, a keyboard's page scroll and
+ * the like cancel out; the content's own place in the scroller is its offset from the
+ * scroller's padding edge (offsetTop), which scrolling never changes.
+ */
+function contentTop(element: HTMLElement, content: HTMLElement, contentOffset: number): number {
+  return element.getBoundingClientRect().top - content.getBoundingClientRect().top + contentOffset;
 }
 
 interface SlotElements {
@@ -105,7 +142,7 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
   { prompts, viewport, getRow, onJump, onDismiss }, ref) {
   const layer = useRef<HTMLDivElement>(null);
   const measure = useRef<HTMLDivElement>(null);
-  const layout = useRef<Layout>({ prompts: [], byIdentity: new Map(), options: { pinLine: 0, fadeDistance: FADE_DISTANCE, pushGap: PUSH_GAP } });
+  const layout = useRef<Layout>({ prompts: [], byIdentity: new Map(), options: { pinLine: 0, fadeDistance: FADE_DISTANCE, pushGap: PUSH_GAP }, maxScroll: 0 });
   const slots = useRef(new Map<string, SlotElements>());
   const timeline = useRef<AnimationTimeline | null | undefined>(undefined);
   const [mounted, setMounted] = useState<readonly string[]>([]);
@@ -175,8 +212,12 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
     overlay.style.width = `${box.clientWidth}px`;
     overlay.style.height = `${box.clientHeight}px`;
     const pinFromRoot = Number.parseFloat(root.style.getPropertyValue('--tb-chat-floating-prompt-top')) || 10;
+    // The scrollport's top relative to the root does not change with scrolling.
     const pinLine = pinFromRoot - (portTop - rootBounds.top);
-    const scrollTop = box.scrollTop;
+    const maxScroll = Math.max(0, box.scrollHeight - box.clientHeight);
+    const scrollTop = clampScroll(box.scrollTop, maxScroll);
+    const content = box.firstElementChild as HTMLElement | null;
+    const contentOffset = content && content.offsetParent === box ? content.offsetTop : 0;
     const measured: Measured[] = [];
     const rowsByIndex: HTMLElement[] = [];
     for (const prompt of promptsRef.current) {
@@ -185,7 +226,10 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
       const bounds = row.getBoundingClientRect();
       if (!Number.isFinite(bounds.top) || bounds.height <= 0) continue;
       // Prompts are in transcript order; a row that is not laid out yet must not break it.
-      const top = bounds.top - portTop + scrollTop;
+      // Read from layout so the moment of measuring (a stretch past the end, the keyboard
+      // moving the page, an arrival slide) cannot shift a prompt's recorded place.
+      const top = (content && content.contains(row) ? contentTop(row, content, contentOffset)
+        : bounds.top - portTop + scrollTop) - ownSlide(row);
       if (measured.length && top < measured[measured.length - 1].top) break;
       rowsByIndex.push(row);
       measured.push({ identity: prompt.identity, scrollKey: prompt.scrollKey, top, height: bounds.height,
@@ -197,7 +241,7 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
     const previousOptions = layout.current.options;
     layout.current = { prompts: measured, byIdentity: new Map(measured.map((prompt, index) => [prompt.identity, index])),
       options: { pinLine, fadeDistance: FADE_DISTANCE, pushGap: PUSH_GAP,
-        minSummaryHeight: previousOptions.minSummaryHeight ?? 0 } };
+        minSummaryHeight: previousOptions.minSummaryHeight ?? 0 }, maxScroll };
     const near = new Set(wantedSlots(scrollTop, 1));
     const ownAnimations = new Set([...slots.current.values()].flatMap(slot => slot.animations ?? []));
     let minSummaryHeight = previousOptions.minSummaryHeight ?? 0;
@@ -372,7 +416,7 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
     const box = viewport.current;
     if (!box) return;
     const source = scrollTimeline();
-    const scrollTop = box.scrollTop;
+    const scrollTop = clampScroll(box.scrollTop, layout.current.maxScroll);
     for (const [identity, slot] of slots.current) {
       syncCopy(identity, slot);
       if (source) animate(identity, slot, source);
@@ -384,7 +428,7 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
   const onScroll = useCallback(() => {
     const box = viewport.current;
     if (!box) return;
-    const scrollTop = box.scrollTop;
+    const scrollTop = clampScroll(box.scrollTop, layout.current.maxScroll);
     const wanted = wantedSlots(scrollTop);
     const key = wanted.join('\u0000');
     if (key !== mountedKey.current) {
@@ -444,7 +488,7 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
     const { prompts: measured, options } = layout.current;
     for (const identity of mountedKey.current ? mountedKey.current.split('\u0000') : []) {
       const index = layout.current.byIdentity.get(identity);
-      const frame = index === undefined ? undefined : pinnedPromptFrameAt(box.scrollTop, measured, index, options);
+      const frame = index === undefined ? undefined : pinnedPromptFrameAt(clampScroll(box.scrollTop, layout.current.maxScroll), measured, index, options);
       const prompt = promptsByIdentity.current.get(identity);
       if (!frame || !prompt || index === undefined) continue;
       const { left, width } = measured[index];

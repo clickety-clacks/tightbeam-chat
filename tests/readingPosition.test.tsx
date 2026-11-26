@@ -105,6 +105,8 @@ let scrollHeightRowCountOverride: number | undefined;
 // Model the stylesheet's tail padding (composer 60px, 16px/rem, no safe-area inset).
 let extraBottomSpace = 0;
 const rowHeightOverrides = new Map<string, number>();
+// How far iOS has moved the page on screen (for example while the keyboard opens).
+let rootScreenShift = 0;
 const messageBodyTailSpace = 29;
 const expectedReplyTopInset = 57;
 const expectedVisibleMessageTail = 16;
@@ -189,7 +191,7 @@ beforeEach(() => {
       if (clampScrollTopOnRead) scrollTop = Math.max(0, Math.min(scrollTop, scrollHeight() - renderedViewportHeight()));
       return scrollTop;
     };
-    if (this.classList.contains('tb-chat')) return rect(0, keyboardViewportSimulation ? viewportHeight : 50);
+    if (this.classList.contains('tb-chat')) return rect(-rootScreenShift, keyboardViewportSimulation ? viewportHeight : 50);
     if (this.classList.contains('tb-chat-viewport')) return rect(0, renderedViewportHeight());
     if (this.classList.contains('tb-chat-runtime-notice')) return rect(0, 50);
     if (this.classList.contains('tb-chat-latest-user-prompt') ||
@@ -256,6 +258,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   resetExpandedPromptsForTests();
+  rootScreenShift = 0;
   vi.useRealTimers();
   cleanup();
   window.localStorage.removeItem('tb-chat:dismissed-prompt:reading');
@@ -2728,6 +2731,19 @@ describe('conversation reading position', () => {
       expect(copy.lastElementChild?.className).toBe('tb-chat-bubble-meta');
       expect([...copy.lastElementChild!.children].map(child => child.className)).toEqual(['tb-chat-bubble-sender', 'tb-chat-time']);
     }
+  });
+
+  it.each([false, true])('keeps the pin line when iOS moves the page for the keyboard (pinned prompts=%s)', pinned => {
+    const { box } = setup(initialRows, undefined, pinned);
+    const chat = box.closest<HTMLElement>('.tb-chat')!;
+    const pinLine = () => chat.style.getPropertyValue('--tb-chat-floating-prompt-top');
+    const before = pinLine();
+    rootScreenShift = 396;
+    act(() => { window.dispatchEvent(new Event('resize')); });
+    // With scroll-pinned prompts the line comes from the page layout and stays; without, the
+    // latest-prompt card keeps its existing behaviour.
+    if (pinned) expect(pinLine()).toBe(before);
+    else expect(pinLine()).not.toBe(before);
   });
 
   it('moves the prompt instantly with reduced motion enabled', () => {
