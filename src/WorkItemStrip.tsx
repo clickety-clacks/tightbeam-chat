@@ -65,10 +65,10 @@ const Pill = memo(function Pill({ pill, onOpen, register }: {
 });
 
 const HIDDEN_KEY = 'tb-chat-work-items-hidden';
-function readHidden(): boolean {
+export function readHidden(): boolean {
   try { return window.localStorage.getItem(HIDDEN_KEY) === '1'; } catch { return false; }
 }
-function writeHidden(hidden: boolean): void {
+export function writeHidden(hidden: boolean): void {
   try {
     if (hidden) window.localStorage.setItem(HIDDEN_KEY, '1');
     else window.localStorage.removeItem(HIDDEN_KEY);

@@ -143,13 +143,13 @@ function dismissedPromptStorageKey(sessionKey: string): string {
   return `${dismissedPromptStoragePrefix}${encodeURIComponent(sessionKey)}`;
 }
 
-function readDismissedPrompt(sessionKey: string): boolean {
+export function readDismissedPrompt(sessionKey: string): boolean {
   if (typeof window === 'undefined') return false;
   try { return window.localStorage.getItem(dismissedPromptStorageKey(sessionKey)) === 'true'; }
   catch { return false; }
 }
 
-function storeDismissedPrompt(sessionKey: string, dismissed: boolean): void {
+export function storeDismissedPrompt(sessionKey: string, dismissed: boolean): void {
   if (typeof window === 'undefined') return;
   try {
     const key = dismissedPromptStorageKey(sessionKey);

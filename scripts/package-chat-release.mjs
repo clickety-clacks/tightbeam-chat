@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { releaseStatement } from './chat-release-contract.mjs';
 
 const TAG_PATTERN = /^v\d+\.\d+\.\d+$/;
 const SOURCE_PATTERN = /^[a-f0-9]{40}$/;
@@ -48,6 +49,11 @@ export async function packageChatRelease({
     if (!(await exists(filename))) throw new Error(`Required release input is missing: ${path.relative(rootDir, filename)}`);
   }
 
+  const gatewayCompatibility = { supportedVersions: ['0.1.16'] };
+  const statement = releaseStatement(
+    JSON.parse(await fs.readFile(path.resolve(rootDir, 'src/release-notes.json'), 'utf8')), tag,
+    gatewayCompatibility.supportedVersions);
+
   await fs.rm(outputDir, { recursive: true, force: true });
   await fs.mkdir(outputDir, { recursive: true });
   const temporaryDir = await fs.mkdtemp(path.join(os.tmpdir(), 'tightbeam-chat-release-'));
@@ -79,7 +85,7 @@ export async function packageChatRelease({
       tag,
       sourceCommit,
       nodeVersion,
-      gatewayCompatibility: { supportedVersions: ['0.1.16'] },
+      gatewayCompatibility,
     }, null, 2)}\n`);
 
     const assetName = `tightbeam-chat-${tag}.tar.gz`;
@@ -108,6 +114,8 @@ export async function packageChatRelease({
       `SHA-256: ${assetSha256}`,
       '',
       'Use the included updater to verify the published asset checksum before staging it.',
+      '',
+      ...statement.lines,
       '',
     ].join('\n'));
 
