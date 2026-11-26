@@ -831,7 +831,7 @@ describe('conversation surface', () => {
       messageType: 'chat', content: 'A prompt with a time.', at: Date.parse('2026-10-30T00:00:00Z'), attachments: [],
     }, sessionKey);
     const reply = decodePublic019Message({
-      id: 'reply-with-time', seq: 11, rowVersion: 11, sessionKey, role: 'assistant', sender: 'agent:helper',
+      id: 'reply-with-time', seq: 11, rowVersion: 11, sessionKey, role: 'assistant', sender: 'assistant',
       messageType: 'chat', content: 'A reply with a time.', at: Date.parse('2026-10-30T00:01:00Z'), attachments: [],
     }, sessionKey);
     const runtime = new FakeRuntime(sessionKey, { records: [prompt, reply].filter(Boolean) as never[] });
