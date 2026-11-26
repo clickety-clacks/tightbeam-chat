@@ -1,0 +1,101 @@
+name: Chat compatibility
+
+# Runs the built Chat against each Tightbeam release in the support window. The release workflow calls
+# this with the packaged Chat; pull requests that change the check run it against a source build.
+on:
+  workflow_call:
+    inputs:
+      artifact:
+        description: Name of the artifact holding the packaged Chat release.
+        required: true
+        type: string
+    outputs:
+      window:
+        description: The support window that was tested.
+        value: ${{ jobs.window.outputs.window }}
+  pull_request:
+    paths:
+      - scripts/compat/**
+      - .github/workflows/chat-compat.yml
+
+permissions:
+  contents: read
+
+jobs:
+  window:
+    runs-on: ubuntu-latest
+    outputs:
+      window: ${{ steps.window.outputs.window }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - id: window
+        run: echo "window=$(node scripts/compat/window.mjs)" >> "$GITHUB_OUTPUT"
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+  compat:
+    name: Tightbeam ${{ matrix.version }}
+    needs: window
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.window.outputs.window) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - if: inputs.artifact != ''
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ inputs.artifact }}
+          path: dist/chat-release
+      - name: Unpack the packaged Chat
+        if: inputs.artifact != ''
+        run: |
+          mkdir -p chat-app
+          tar -xzf dist/chat-release/tightbeam-chat-*.tar.gz -C chat-app
+      - name: Build Chat from source
+        if: inputs.artifact == ''
+        run: |
+          npm ci
+          npm run build:chat-server
+          mkdir -p chat-app/server chat-app/bin chat-app/public
+          cp server/chat-server.mjs chat-app/server/
+          cp bin/activity-summaries.mjs chat-app/bin/
+          cp -R dist/chat-server/public/. chat-app/public/
+          printf '{"product":"tightbeam-chat","tag":"v0.0.0","sourceCommit":"%s","gatewayCompatibility":{"supportedVersions":[]}}\n' "$GITHUB_SHA" > chat-app/release.json
+      - name: Fetch the published Tightbeam package and the model tool
+        run: |
+          mkdir -p tightbeam tools
+          gh release download "${{ matrix.tag }}" -R clickety-clacks/tightbeam -p '*linux-x86_64*.tgz' -p SHA256SUMS -D tightbeam
+          (cd tightbeam && sha256sum --check --strict --ignore-missing SHA256SUMS && tar -xzf ./*.tgz)
+          npm install --prefix tools --no-audit --no-fund @earendil-works/pi-coding-agent@1.6.0
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Run Chat against it
+        # One retry, so a passing build is not blocked by a single flaky run.
+        run: |
+          for attempt in 1 2; do
+            node scripts/compat/run.mjs tightbeam chat-app "compat-result/attempt-$attempt" "${{ matrix.version }}" && break
+          done
+          cp "compat-result/attempt-$attempt/result.json" compat-result/result.json
+          jq -e '.passed == true' compat-result/result.json
+        env:
+          COMPAT_TOOLS_BIN: ${{ github.workspace }}/tools/node_modules/.bin
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: compat-${{ matrix.version }}
+          path: compat-result

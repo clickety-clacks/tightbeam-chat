@@ -16,7 +16,7 @@ Chat supports the current Tightbeam release and the one before it. Outside that 
 
 Each tagged version states two fields in `src/release-notes.json`, and the release body carries them:
 
-- `compatibleTightbeam`: the Tightbeam versions actually verified with this build, for example `["0.1.16"]`. It must match the versions the package declares as supported, so a version is added to both only once verified. The check cannot tell whether the verification happened; the reviewer confirms that evidence.
+- `compatibleTightbeam`: the Tightbeam versions verified with this build, for example `["0.1.15", "0.1.16"]`. It must match the versions the package declares as supported, and the tag workflow proves it: it finds the support window in the public Tightbeam releases (the release marked latest, and the newest published build of the version numbered below it), downloads each Linux package, and runs the packaged Chat against it in headless Chrome with a stand-in model: sign-in and load, send and receive, reconnect across a Gateway restart, and paging to older history. No draft is staged unless every version passes and the notes and package claim exactly those versions. Each version gets one retry. Attachments, REST send mode, upgrading an existing installation, macOS and embedded hosts are not covered.
 - `breakingChanges`: `"none"`, or a list of sentences.
 
 The reviewer of the release notes then confirms the breaking-changes section in a commit of their own on the same pull request, adding to that version's entry:

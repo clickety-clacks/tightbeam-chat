@@ -49,7 +49,8 @@ export async function packageChatRelease({
     if (!(await exists(filename))) throw new Error(`Required release input is missing: ${path.relative(rootDir, filename)}`);
   }
 
-  const gatewayCompatibility = { supportedVersions: ['0.1.16'] };
+  // The release workflow proves each of these against the published Tightbeam package.
+  const gatewayCompatibility = { supportedVersions: ['0.1.15', '0.1.16'] };
   const statement = releaseStatement(
     JSON.parse(await fs.readFile(path.resolve(rootDir, 'src/release-notes.json'), 'utf8')), tag,
     gatewayCompatibility.supportedVersions);

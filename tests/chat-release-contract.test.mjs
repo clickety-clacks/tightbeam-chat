@@ -34,7 +34,7 @@ describe('release contract', () => {
   // Pinned so that a removed route or key shows up here, and an extractor that stops seeing them does too.
   it('reads the current source', () => {
     const current = readChatContract(read, sources());
-    expect(current.supportedVersions).toEqual(['0.1.16']);
+    expect(current.supportedVersions).toEqual(['0.1.15', '0.1.16']);
     expect(current.routes).toEqual([
       '/__chat/agent/dispatch', '/__chat/gateway/version', '/__chat/summaries', '/__chat/upload',
       '/__chat/version', '/__chat/ws', '/__chat/ws/changes', '/__chat/ws/work-changes',
@@ -79,7 +79,7 @@ describe('release contract', () => {
     // Same key, new encoding, contract file updated to match: still a change for readers who have the old value.
     const reencoded = { ...adopted, storedValues: STORED_VALUES_THROUGH_V0_1_114.map(item =>
       item.key === 'tb-chat-work-items-hidden' ? { ...item, value: 'true' } : item) };
-    const notes = entry({ compatibleTightbeam: ['0.1.16'], breakingChanges: 'none' });
+    const notes = entry({ compatibleTightbeam: ['0.1.15', '0.1.16'], breakingChanges: 'none' });
     expect(() => checkReleaseStatement(notes, 'v1.0.1', before, reencoded))
       .toThrow('stored browser value under tb-chat-work-items-hidden changed format');
     expect(detectBreakingChanges(before, { ...adopted, storedValues: undefined }))
