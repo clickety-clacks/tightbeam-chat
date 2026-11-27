@@ -23,8 +23,9 @@ export class FiledWorkItems {
   private tailRequested = false;
   private olderFailed = false;
   private readonly failedPages = new Map<string | undefined, Set<string>>();
-  // Each pair is the exclusive start and inclusive end of an incomplete scan.
-  private readonly partialPages = new Map<string | undefined, Set<string | null>>();
+  // An incomplete scan's start and end are opaque. A row returned by a
+  // continuation from its end gives us a position known to be below that end.
+  private readonly partialPages = new Map<string | undefined, Map<string | null, Position | undefined>>();
   private readonly controller = new AbortController();
   private failedAt = -Infinity;
   private queue: Promise<void> = Promise.resolve();
@@ -143,33 +144,33 @@ export class FiledWorkItems {
       throw error;
     });
     if (signal.aborted) return;
-    this.updateCoverage(page, rows, before);
     const previousFloor = this.floor;
-    let floorAdvanced = false;
+    let newest: Position | undefined;
+    let oldest: Position | undefined;
     const items = new Map(this.items);
     for (const item of page.items) {
       const known = items.get(item.id);
       if (!known || known.rowVersion <= item.rowVersion) items.set(item.id, item);
       const position = { at: item.createdAt, id: item.id };
-      if (!this.floor || newer(this.floor, position)) {
-        this.floor = position;
-        floorAdvanced = true;
-      }
+      if (!newest || newer(position, newest)) newest = position;
+      if (!oldest || newer(oldest, position)) oldest = position;
     }
+    this.updateCoverage(page, rows, before, newest, oldest);
+    const floorAdvanced = oldest !== undefined && (!previousFloor || newer(previousFloor, oldest));
+    if (floorAdvanced) this.floor = oldest;
     const followsCursor = before === this.cursor;
     const completeTail = before === undefined && !page.partial && !page.hasOlder;
     const nextCursor = page.hasOlder ? page.oldestCursor : null;
-    // A partial refresh can scan beyond the failed request without decoding a
-    // new oldest row. With a cursor at the decoded floor, seeing that row again
-    // and a different end proves the scan passed it.
-    const replacesFailedCursor = page.partial && before === undefined && this.olderFailed &&
+    // A fresh scan overlapping the loaded floor can replace a failed cursor
+    // even if omitted rows leave the oldest decoded row unchanged.
+    const replacesFailedCursor = before === undefined && this.olderFailed &&
       nextCursor !== null && nextCursor !== this.cursor &&
-      (floorAdvanced || !this.cursorPastFloor && page.items.some(item => item.id === previousFloor?.id));
+      (floorAdvanced || page.items.some(item => item.id === previousFloor?.id));
     // Advance even when every row in the scanned window was omitted. A newer
     // cursor-free refresh cannot rewind a cursor already past the decoded floor.
     if (replacesFailedCursor || (this.cursorPastFloor ? followsCursor || completeTail : floorAdvanced || (page.partial && followsCursor))) {
       // The server advanced past a failed older request while preserving its warning.
-      if (page.partial && nextCursor !== this.cursor) this.olderFailed = false;
+      if (nextCursor !== this.cursor) this.olderFailed = false;
       this.cursor = nextCursor;
       this.cursorPastFloor = page.hasOlder && (page.partial === true || !floorAdvanced && this.cursorPastFloor);
     }
@@ -184,12 +185,20 @@ export class FiledWorkItems {
     return this.failedPages.size > 0 || this.partialPages.size > 0;
   }
 
-  private updateCoverage(page: FiledWorkItemPage, rows: readonly Position[], before?: string): void {
+  private updateCoverage(page: FiledWorkItemPage, rows: readonly Position[], before: string | undefined,
+    newest: Position | undefined, oldest: Position | undefined): void {
     const wasFailed = this.hasFailedCoverage;
+    if (before !== undefined && newest) {
+      for (const ends of this.partialPages.values()) {
+        if (!ends.has(before)) continue;
+        const below = ends.get(before);
+        if (!below || newer(newest, below)) ends.set(before, newest);
+      }
+    }
     if (page.partial) {
       this.failedAt = Date.now();
-      const ends = this.partialPages.get(before) ?? new Set<string | null>();
-      ends.add(page.oldestCursor);
+      const ends = this.partialPages.get(before) ?? new Map<string | null, Position | undefined>();
+      if (!ends.has(page.oldestCursor)) ends.set(page.oldestCursor, undefined);
       this.partialPages.set(before, ends);
     } else if (wasFailed) {
       if (before === undefined && !page.hasOlder) {
@@ -199,12 +208,17 @@ export class FiledWorkItems {
         const returned = new Set(page.items.map(item => item.id));
         const requested = new Set(rows.map(row => row.id));
         // Limits and the client's event window do not prove what the server
-        // scanned. A complete tail includes every newer start, and a matching
-        // end proves it reached the actual boundary of an incomplete scan.
+        // scanned. A complete tail includes every newer start. It covers an
+        // incomplete scan if its end matches or it returns a row past that end.
         for (const [start, ends] of this.partialPages) {
           if (before !== undefined && before !== start) continue;
           if (!page.hasOlder) ends.clear();
-          else if (page.oldestCursor !== null) ends.delete(page.oldestCursor);
+          else {
+            if (page.oldestCursor !== null) ends.delete(page.oldestCursor);
+            for (const [end, below] of ends) {
+              if (oldest && below && !newer(oldest, below)) ends.delete(end);
+            }
+          }
           if (!ends.size) this.partialPages.delete(start);
         }
         for (const [cursor, failed] of this.failedPages) {
