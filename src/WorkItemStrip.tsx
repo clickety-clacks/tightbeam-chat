@@ -5,6 +5,7 @@ import {
   AgentNames, foundState, readWorkItemSheet, type ChainStep, type WorkItemSheetData, type WorkItemSheetTransport,
 } from './workItemChain';
 import { workItemBaseState, type WorkItemPill, type WorkItemPills, type WorkItemPillState } from './workItemPills';
+import { isWorkItemId } from './workItemId';
 import type { WorkItemCloseReason, WorkItemSummary } from './types';
 import { agoText, clockText, untilText } from './workItemTime';
 import './workItemPills.css';
@@ -55,7 +56,7 @@ function stateText(state: ShownState, stale: boolean, item?: WorkItemSummary): s
 
 const Pill = memo(function Pill({ pill, onOpen, register }: {
   readonly pill: WorkItemPill;
-  readonly onOpen: (id: string) => void;
+  readonly onOpen: (id: string, trigger: HTMLElement) => void;
   readonly register: (id: string, element: HTMLElement | null) => void;
 }) {
   const ref = useCallback((element: HTMLButtonElement | null) => { register(pill.id, element); }, [pill.id, register]);
@@ -63,7 +64,7 @@ const Pill = memo(function Pill({ pill, onOpen, register }: {
   const full = plain(pill.title);
   return <button type="button" ref={ref} className={`tb-chat-work-pill${pill.stale ? ' tb-chat-work-pill-stale' : ''}`}
     data-state={pill.state} data-work-item={pill.id} title={full}
-    aria-label={`${full}. ${text}${pill.stale ? '. Changed, not read again yet' : ''}`} onClick={() => onOpen(pill.id)}>
+    aria-label={`${full}. ${text}${pill.stale ? '. Changed, not read again yet' : ''}`} onClick={(event) => onOpen(pill.id, event.currentTarget)}>
     <span className={`tb-chat-work-disc${pill.state === 'working' ? ' tb-chat-work-ring' : ''}`}><Icon name={pill.state} /></span>
     <span className="tb-chat-work-pill-text">
       <span className="tb-chat-work-pill-title">{pillTitle(pill.title)}</span>
@@ -89,7 +90,7 @@ export function WorkItemStrip({ pills, folded, fetchFailed, onOpen, onShown }: {
   readonly fetchFailed?: boolean;
   /** Too little conversation is left to spend a row on pills. */
   readonly folded: boolean;
-  readonly onOpen: (id: string) => void;
+  readonly onOpen: (id: string, trigger: HTMLElement) => void;
   readonly onShown: (shown: boolean) => void;
 }) {
   const snapshot = useSyncExternalStore(pills.subscribe, pills.getSnapshot, pills.getSnapshot);
@@ -225,12 +226,13 @@ type SheetState = { readonly status: 'looking' } | { readonly status: 'failed' }
   | { readonly status: 'ready'; readonly data: WorkItemSheetData } | { readonly status: 'updated' };
 
 /** Everything here is read only because the reader tapped this one pill. */
-export function WorkItemSheet({ id, pills, transport, names, onClose }: {
+export function WorkItemSheet({ id, pills, transport, names, onClose, onInsert }: {
   readonly id: string;
   readonly pills: WorkItemPills;
   readonly transport: WorkItemSheetTransport;
   readonly names: AgentNames;
   readonly onClose: () => void;
+  readonly onInsert?: (id: string) => boolean;
 }) {
   const snapshot = useSyncExternalStore(pills.subscribe, pills.getSnapshot, pills.getSnapshot);
   const pill = snapshot.find((row) => row.id === id);
@@ -239,6 +241,7 @@ export function WorkItemSheet({ id, pills, transport, names, onClose }: {
   const settled = pill && !pill.stale && pill.summary.state !== 'open';
   const [state, setState] = useState<SheetState>({ status: 'looking' });
   const [attempt, setAttempt] = useState(0);
+  const [copyStatus, setCopyStatus] = useState<'copied' | 'unavailable'>();
   const [now, setNow] = useState(() => Date.now());
   const sheet = useRef<HTMLElement>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
@@ -278,6 +281,18 @@ export function WorkItemSheet({ id, pills, transport, names, onClose }: {
     return () => document.removeEventListener('keydown', onKey);
   }, [onClose]);
 
+  const insertOrCopy = async () => {
+    if (onInsert) {
+      if (!onInsert(id)) setCopyStatus('unavailable');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(id);
+      setCopyStatus('copied');
+    } catch {
+      setCopyStatus('unavailable');
+    }
+  };
   const tap = state.status === 'ready' ? state.data : undefined;
   const summary = pill?.summary;
   const item = tap && (!summary || tap.item.rowVersion > summary.rowVersion) ? tap.item : summary;
@@ -291,6 +306,7 @@ export function WorkItemSheet({ id, pills, transport, names, onClose }: {
   const base = item && item !== summary ? workItemBaseState(item) : pill?.state ?? 'held';
   const shown: ShownState = (data && foundState(data)) ?? base;
   const ended = base === 'done' ? `${stateText(base, false, item)}.` : item && endings[base];
+  const canUseId = state.status !== 'gone' && item && isWorkItemId(id);
   const lead = shown === 'you' ? 'The next move is yours.' : shown === 'waiting' ? 'This is what it waits on, step by step.' : undefined;
   return <div className="tb-chat-work-items tb-chat-work-layer">
     <button type="button" className="tb-chat-work-scrim" aria-label="Close work item" tabIndex={-1} onClick={onClose} />
@@ -303,8 +319,13 @@ export function WorkItemSheet({ id, pills, transport, names, onClose }: {
               {stateText(shown, pill?.stale === true && !data, item)}</span>
             <h2 id={titleId}>{item ? plain(item.title) : 'Work item'}</h2>
           </div>
+          {canUseId && <button type="button" className="tb-chat-work-id-action" onClick={() => { void insertOrCopy(); }}>
+            {onInsert ? 'Insert work item ID' : 'Copy work item ID'}
+          </button>}
         </header>
         <div className="tb-chat-work-sheet-body" aria-live="polite" aria-busy={state.status === 'looking' && readNow.current}>
+          {canUseId && copyStatus === 'copied' && <p role="status">Work item ID copied.</p>}
+          {canUseId && copyStatus === 'unavailable' && <p role="status">Select the work item ID to copy it. <code>{id}</code></p>}
           {(settled || state.status === 'updated') && !data && ended && <p className="tb-chat-work-box">{ended}{item?.failReason && ` ${plain(item.failReason)}`}</p>}
           {readNow.current && state.status === 'looking' && <p className="tb-chat-work-note" role="status">Looking…</p>}
           {readNow.current && state.status === 'gone' && <p className="tb-chat-work-box">This work item is no longer available.</p>}
@@ -334,31 +355,21 @@ export function WorkItemSheet({ id, pills, transport, names, onClose }: {
 }
 
 /** Strip and sheet together, for one opened conversation. */
-export function WorkItems({ pills, transport, folded, fetchFailed, onShown, onSheetOpen, sheetSlot }: {
+export function WorkItems({ pills, transport, folded, fetchFailed, onShown, openId, onOpen, onClose, onInsert }: {
   readonly pills: WorkItemPills;
   readonly transport: WorkItemSheetTransport;
   readonly folded: boolean;
   readonly onShown: (shown: boolean) => void;
-  readonly onSheetOpen: (open: boolean) => void;
   readonly fetchFailed?: boolean;
-  /** False while another dialog is open. */
-  readonly sheetSlot: boolean;
+  readonly openId?: string;
+  readonly onOpen: (id: string, trigger: HTMLElement) => void;
+  readonly onClose: () => void;
+  readonly onInsert?: (id: string) => boolean;
 }) {
-  const [open, setOpen] = useState<string>();
   const names = useMemo(() => new AgentNames(), [pills]);
-  const opener = useRef<HTMLElement | null>(null);
-  const show = useCallback((id: string) => {
-    opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    setOpen(id);
-  }, []);
-  const close = useCallback(() => {
-    setOpen(undefined);
-    opener.current?.focus({ preventScroll: true });
-  }, []);
-  useEffect(() => { if (!sheetSlot) setOpen(undefined); }, [sheetSlot]);
-  useLayoutEffect(() => { onSheetOpen(open !== undefined); }, [onSheetOpen, open]);
   return <>
-    <WorkItemStrip pills={pills} folded={folded} fetchFailed={fetchFailed} onOpen={show} onShown={onShown} />
-    {open !== undefined && sheetSlot && <WorkItemSheet key={open} id={open} pills={pills} transport={transport} names={names} onClose={close} />}
+    <WorkItemStrip pills={pills} folded={folded} fetchFailed={fetchFailed} onOpen={onOpen} onShown={onShown} />
+    {openId !== undefined && <WorkItemSheet key={openId} id={openId} pills={pills} transport={transport}
+      names={names} onClose={onClose} onInsert={onInsert} />}
   </>;
 }

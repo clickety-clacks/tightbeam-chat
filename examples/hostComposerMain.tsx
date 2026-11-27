@@ -2,6 +2,7 @@ import { createRoot } from 'react-dom/client';
 import { HOST_COMMAND_NAME, HOST_DECLARATION_NAME, type HostComposerCommand, type HostComposerEvent } from '../src/hostComposer';
 import type { HostComposerCommandEntry } from '../src/hostComposer';
 import { RuntimeEntry } from './RuntimeEntry';
+import { appendWorkItemId } from '../src/workItemId';
 import './site.css';
 import './hostComposer.css';
 
@@ -152,13 +153,19 @@ function handleEvent(event: HostComposerEvent): void {
         : 'This message may not have been posted.';
       updateRetryButton();
       return;
+    case 'draft-insert-requested':
+      if (!sendReady || ready?.lifetimeId !== event.lifetimeId || ready.sessionKey !== event.sessionKey) return;
+      input.value = appendWorkItemId(input.value, event.text);
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+      return;
     case 'rejected':
       status.textContent = `Not sent: ${event.reason}. Your draft remains here.`;
       return;
   }
 }
 
-const declaration = { versions: [1], onEvent: handleEvent };
+const declaration = { versions: [1], events: { 'draft-insert-requested': [1] }, onEvent: handleEvent };
 page[HOST_DECLARATION_NAME] = declaration;
 
 form.addEventListener('submit', (event) => {
