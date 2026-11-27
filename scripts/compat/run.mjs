@@ -3,6 +3,7 @@
 // restart, and page back through older history. No secrets and no network model.
 // Usage: node scripts/compat/run.mjs <tightbeam package dir> <chat app dir> <out dir> <version>
 import { execFile, spawn } from 'node:child_process';
+import { once } from 'node:events';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
@@ -64,8 +65,9 @@ const gatewayEnv = { HOME: home, LANG: 'C.UTF-8', TIGHTBEAM_BASE_DIR: base, TIGH
   PATH: [process.env.COMPAT_TOOLS_BIN, path.dirname(process.execPath), '/usr/local/bin', '/usr/bin', '/bin']
     .filter(Boolean).join(':') };
 const gatewayBin = path.join(packageDir, 'tightbeam/bin/tightbeam-gateway');
+let gateway;
 const startGateway = async () => {
-  start(gatewayBin, ['start'], { env: gatewayEnv, detached: true }, 'gateway.log');
+  gateway = start(gatewayBin, ['start'], { env: gatewayEnv, detached: true }, 'gateway.log');
   return until(async () => (await fetch(`${GATEWAY}/version`)).json(), 90_000, 'Gateway start');
 };
 const stopGateway = () => run(gatewayBin, ['stop'], { env: gatewayEnv, timeout: 60_000 });
@@ -209,6 +211,10 @@ try {
   await step('send-and-receive', () => sendAndReceive('compatibility send one'));
   await step('reconnect', async () => {
     await stopGateway();
+    // The stop command can return after SIGTERM while the Erlang node is still registered.
+    if (gateway.exitCode === null && gateway.signalCode === null) {
+      await once(gateway, 'exit', { signal: AbortSignal.timeout(90_000) });
+    }
     await until(async () => !(await connected()), 90_000, 'Chat notices the outage');
     await startGateway();
     await until(connected, 120_000, 'Chat connects again');

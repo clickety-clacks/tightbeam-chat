@@ -4,6 +4,24 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { releaseStatement } from '../chat-release-contract.mjs';
 
+export function readLatestCompatibilityResults(resultsDir) {
+  const latest = new Map();
+  for (const entry of fs.readdirSync(resultsDir, { withFileTypes: true })) {
+    const match = /^compat-(\d+\.\d+\.\d+)-run-attempt-([1-9]\d*)$/.exec(entry.name);
+    if (!entry.isDirectory() || !match) continue;
+    const [, version, attemptText] = match;
+    const attempt = Number(attemptText);
+    if (attempt > (latest.get(version)?.attempt ?? 0)) {
+      latest.set(version, { attempt, directory: entry.name });
+    }
+  }
+  return [...latest].map(([version, { directory }]) => {
+    const result = JSON.parse(fs.readFileSync(path.join(resultsDir, directory, 'result.json'), 'utf8'));
+    if (result.version !== version) throw new Error(`Compatibility artifact version mismatch: ${directory}.`);
+    return result;
+  });
+}
+
 export function verifyCompatibility({ window, results, entries, tag, supportedVersions }) {
   const passed = window.filter(({ version }) => results.some(result => result.version === version && result.passed))
     .map(({ version }) => version);
@@ -19,8 +37,7 @@ export function verifyCompatibility({ window, results, entries, tag, supportedVe
 
 if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split('/').at(-1))) {
   const [resultsDir, releaseDir, tag] = process.argv.slice(2);
-  const results = fs.readdirSync(resultsDir, { recursive: true }).filter(file => file.endsWith('result.json'))
-    .map(file => JSON.parse(fs.readFileSync(path.join(resultsDir, file), 'utf8')));
+  const results = readLatestCompatibilityResults(resultsDir);
   const supportedVersions = JSON.parse(fs.readFileSync(path.join(releaseDir, 'release.json'), 'utf8'))
     .gatewayCompatibility.supportedVersions;
   const line = verifyCompatibility({ window: JSON.parse(process.env.SUPPORT_WINDOW), results, tag, supportedVersions,

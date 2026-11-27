@@ -1,6 +1,6 @@
 [
   {
-    "version": "v0.1.116",
+    "version": "v0.1.117",
     "items": [
       {
         "title": "Work item pills",
@@ -12,8 +12,10 @@
       }
     ],
     "compatibleTightbeam": ["0.1.15", "0.1.16"],
-    "breakingChanges": "none",
-    "breakingChangesReview": { "reviewer": "independent-chat-reviewer", "commit": "6f125ec4dc6c18b0edc07c2ca82df9e24177d97f", "result": "confirmed" }
+    "breakingChanges": [
+      "Only CHAT_WORK_ITEM_PILLS=0 disables work item pills. If you explicitly set another off value such as false, change it to 0 to keep pills off."
+    ],
+    "breakingChangesReview": {"reviewer": "reviewer:harklight-pack-release-hook", "commit": "c99a626fdd7dbfaa2ddf65647963f9323dc8167f", "result": "confirmed"}
   },
   {
     "version": "v0.1.115",

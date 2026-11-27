@@ -1,5 +1,8 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { verifyCompatibility } from '../scripts/compat/verify.mjs';
+import { readLatestCompatibilityResults, verifyCompatibility } from '../scripts/compat/verify.mjs';
 import { supportWindow } from '../scripts/compat/window.mjs';
 
 const release = (tag_name, extra = {}) => ({ tag_name, draft: false, prerelease: false, ...extra });
@@ -34,6 +37,27 @@ describe('computed compatibility', () => {
 
   it('writes the line from what passed', () => {
     expect(check({})).toBe('Compatible with Tightbeam: 0.1.15, 0.1.16');
+  });
+
+  it('uses the latest job attempt for each version and keeps untouched rows', () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'chat-compat-results-'));
+    const write = (version, attempt, passed) => {
+      const artifact = path.join(directory, `compat-${version}-run-attempt-${attempt}`);
+      fs.mkdirSync(artifact);
+      fs.writeFileSync(path.join(artifact, 'result.json'), JSON.stringify({ version, passed }));
+    };
+    try {
+      write('0.1.15', 1, true);
+      write('0.1.16', 2, false);
+      write('0.1.16', 10, true);
+      expect(check({ results: readLatestCompatibilityResults(directory) }))
+        .toBe('Compatible with Tightbeam: 0.1.15, 0.1.16');
+      write('0.1.16', 11, false);
+      expect(() => check({ results: readLatestCompatibilityResults(directory) }))
+        .toThrow('did not pass against Tightbeam 0.1.16');
+    } finally {
+      fs.rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it.each([
