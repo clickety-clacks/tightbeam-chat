@@ -613,7 +613,35 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
     const box = viewport.current;
     if (!box) return;
     box.addEventListener('scroll', onScroll, { passive: true });
-    box.addEventListener('click', onTranscriptClick, { capture: true });
+    const document = box.ownerDocument;
+    // WebKit can emit a click after selecting text. Only a primary press that
+    // stayed within tap slop may be routed to the pinned overlay.
+    let press: { id: number; x: number; y: number; slop: number; dragged: boolean } | undefined;
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.isPrimary === false) return;
+      press = event.button === 0 && event.target instanceof Node && box.contains(event.target)
+        ? { id: event.pointerId, x: event.clientX, y: event.clientY,
+          slop: event.pointerType === 'touch' ? 8 : 4, dragged: false }
+        : undefined;
+    };
+    const onPointerMove = (event: PointerEvent) => {
+      if (press && press.id === event.pointerId &&
+        Math.hypot(event.clientX - press.x, event.clientY - press.y) > press.slop) press.dragged = true;
+    };
+    const onPointerCancel = (event: PointerEvent) => {
+      if (press?.id === event.pointerId) press = undefined;
+    };
+    const onClick = (event: MouseEvent) => {
+      const gesture = press;
+      press = undefined;
+      if (event.detail === 0 || !gesture || gesture.dragged ||
+        Math.hypot(event.clientX - gesture.x, event.clientY - gesture.y) > gesture.slop) return;
+      onTranscriptClick(event);
+    };
+    document.addEventListener('pointerdown', onPointerDown, true);
+    document.addEventListener('pointermove', onPointerMove, true);
+    document.addEventListener('pointercancel', onPointerCancel, true);
+    box.addEventListener('click', onClick, true);
     let frame = 0;
     const schedule = () => {
       if (frame) return;
@@ -633,7 +661,10 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
     void document.fonts?.ready.then(schedule);
     return () => {
       box.removeEventListener('scroll', onScroll);
-      box.removeEventListener('click', onTranscriptClick, { capture: true });
+      box.removeEventListener('click', onClick, true);
+      document.removeEventListener('pointerdown', onPointerDown, true);
+      document.removeEventListener('pointermove', onPointerMove, true);
+      document.removeEventListener('pointercancel', onPointerCancel, true);
       observer?.disconnect();
       window.removeEventListener('resize', schedule);
       if (frame) cancelAnimationFrame(frame);
