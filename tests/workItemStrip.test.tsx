@@ -26,7 +26,7 @@ class Visible {
   }
 }
 
-function chat(items: readonly WorkItemSummary[], options: { pills?: boolean; failList?: boolean } = {}) {
+function chat(items: readonly WorkItemSummary[], options: { pills?: boolean; failList?: boolean | 'network'; emptyList?: boolean } = {}) {
   const counts: Record<string, number> = {};
   const count = (name: string) => { counts[name] = (counts[name] ?? 0) + 1; };
   let emit: (change: WorkItemChange) => void = () => {};
@@ -51,18 +51,38 @@ function chat(items: readonly WorkItemSummary[], options: { pills?: boolean; fai
     readAgentQuestions: async () => { count('agent questions'); return []; },
     readAgentName: async () => { count('name'); return 'Coder'; },
   };
+  const { openChanges, readTail, readOlder } = fixture;
+  const forSession = async (sessionKey: string, result: ReturnType<typeof readTail>) => {
+    const page = await result;
+    return { ...page, records: page.records.map(record => ({ ...record, sessionKey })) };
+  };
   const transport = Object.assign(fixture, { targetGateway: 'https://gateway.example',
-    openChanges: ((open) => (key: string, callbacks: ChangeCallbacks, signal: AbortSignal) => { notices = callbacks; return open(key, callbacks, signal); })(fixture.openChanges),
+    openChanges: (_key: string, callbacks: ChangeCallbacks, signal: AbortSignal) => {
+      notices = callbacks;
+      return openChanges('fixture-session', callbacks, signal);
+    },
+    readTail: (key: string) => forSession(key, readTail()),
+    readOlder: (key: string, before: string) => forSession(key, readOlder(key, before)),
     readRecordEvents: async (sessionKey: string) => ({ items: items.map((item) => filed(item, sessionKey)), oldestCursor: null, hasOlder: false }),
-    readFiledWorkItems: async () => { count('page'); order.push('page'); if (options.failList) throw new Error('HTTP 500'); return { items: [...items], oldestCursor: null, hasOlder: false }; },
+    readFiledWorkItems: async (sessionKey: string) => {
+      count('page');
+      order.push('page');
+      if (sessionKey === 'fixture-session') {
+        if (options.failList === 'network') throw new TypeError('Failed to fetch');
+        if (options.failList) throw new Error('HTTP 500');
+      }
+      return { items: options.emptyList ? [] : [...items], oldestCursor: null, hasOlder: false };
+    },
     ...(options.pills === false ? {} : { workItemPills: pills }),
   });
-  const view = render(<TightbeamChat sessionKey="fixture-session" adapter={createTightbeamAdapter(transport, { ...fixtureTarget, label: 'fixture' })} />);
+  const adapter = createTightbeamAdapter(transport, { ...fixtureTarget, label: 'fixture' });
+  const view = render(<TightbeamChat sessionKey="fixture-session" adapter={adapter} />);
+  const switchSession = () => view.rerender(<TightbeamChat sessionKey="next-session" adapter={adapter} />);
   const file = (item: WorkItemSummary) => act(async () => {
     (items as WorkItemSummary[]).push(item);
     notices!.onNotice({ operation: 'record-event', event: filed(item, 'fixture-session') });
   });
-  return { view, counts, order, file, emit: (change: WorkItemChange) => act(async () => { emit(change); }) };
+  return { view, counts, order, file, switchSession, emit: (change: WorkItemChange) => act(async () => { emit(change); }) };
 }
 const strip = () => screen.findByRole('group', { name: 'Work items, newest first' });
 const pills = async () => within(await strip()).getAllByRole('button');
@@ -278,16 +298,24 @@ describe('the sheet', () => {
       expect(dialog.textContent).toContain('Waiting on you');
     });
 
-  it('hides the strip and asks once when the list read fails, without touching another page', async () => {
-    const broken = chat([summary(1)], { failList: true });
-    await waitFor(() => expect(broken.counts.page).toBe(1));
-    const healthy = chat([summary(2)]);
-    await waitFor(() => expect(healthy.view.container.querySelectorAll('.tb-chat-work-pill')).toHaveLength(1));
-    await new Promise((resolve) => setTimeout(resolve, 2_000));
-    expect(broken.view.container.querySelector('.tb-chat-work-strip')).toBeNull();
-    expect(broken.view.container.querySelector('.tb-chat-has-work-items')).toBeNull();
-    expect(broken.counts).toEqual({ page: 1 });
-    expect(healthy.counts).toEqual({ page: 1 });
+  it.each([true, 'network'] as const)('shows a failed list (%s) and isolates it from the next session', async failList => {
+    const run = chat([summary(1)], { failList });
+    const failure = await screen.findByText('Couldn’t load work items');
+    expect(failure.getAttribute('role')).toBe('status');
+    expect(failure.closest('.tb-chat-work-strip')).not.toBeNull();
+    expect(screen.queryByRole('group', { name: 'Work items, newest first' })).toBeNull();
+    expect(run.counts).toEqual({ page: 1 });
+    run.switchSession();
+    expect(await pills()).toHaveLength(1);
+    expect(screen.queryByText('Couldn’t load work items')).toBeNull();
+    expect(run.counts).toEqual({ page: 2 });
+  });
+
+  it('leaves the strip absent after a successful empty list', async () => {
+    const run = chat([summary(1)], { emptyList: true });
+    await waitFor(() => expect(run.counts).toEqual({ page: 1 }));
+    expect(run.view.container.querySelector('.tb-chat-work-strip')).toBeNull();
+    expect(screen.queryByText('Couldn’t load work items')).toBeNull();
   });
 
   it('keeps focus inside and returns it to the pill', async () => {

@@ -84,8 +84,9 @@ export function writeHidden(hidden: boolean): void {
 }
 
 /** The strip above the message box. It is absent while there is nothing to show. */
-export function WorkItemStrip({ pills, folded, onOpen, onShown }: {
+export function WorkItemStrip({ pills, folded, fetchFailed, onOpen, onShown }: {
   readonly pills: WorkItemPills;
+  readonly fetchFailed?: boolean;
   /** Too little conversation is left to spend a row on pills. */
   readonly folded: boolean;
   readonly onOpen: (id: string) => void;
@@ -112,7 +113,8 @@ export function WorkItemStrip({ pills, folded, onOpen, onShown }: {
     } else if (elements.current.delete(id) && inView.current.delete(id)) report();
   }, [report]);
 
-  useLayoutEffect(() => { onShown(shown); return () => onShown(false); }, [onShown, shown]);
+  const stripShown = shown || fetchFailed === true;
+  useLayoutEffect(() => { onShown(stripShown); return () => onShown(false); }, [onShown, stripShown]);
   useEffect(() => {
     if (closed || !scroller.current || typeof IntersectionObserver === 'undefined') return;
     observer.current = new IntersectionObserver((entries) => {
@@ -136,17 +138,18 @@ export function WorkItemStrip({ pills, folded, onOpen, onShown }: {
     return () => document.removeEventListener('visibilitychange', report);
   }, [report]);
 
-  if (!shown) return null;
+  if (!stripShown) return null;
   const running = snapshot.some((pill) => pill.state === 'working');
   const label = `${closed ? 'Show' : 'Hide'} ${snapshot.length} work ${snapshot.length === 1 ? 'item' : 'items'}`;
   return <div className={`tb-chat-work-items tb-chat-work-strip${closed ? ' tb-chat-work-strip-closed' : ''}`}>
-    <button type="button" className="tb-chat-work-toggle" aria-expanded={!closed} aria-label={label} title={label}
+    {fetchFailed && <span className="tb-chat-work-fetch-failed" role="status">Couldn’t load work items</span>}
+    {shown && <button type="button" className="tb-chat-work-toggle" aria-expanded={!closed} aria-label={label} title={label}
       disabled={folded} onClick={() => { setHidden(!hidden); writeHidden(!hidden); }}>
       <Icon name="layers" />
       {closed && <span>{snapshot.length}</span>}
       {closed && running && <span className="tb-chat-work-toggle-running" aria-hidden="true" />}
-    </button>
-    {!closed && <div ref={scroller} className="tb-chat-work-scroller" role="group" aria-label="Work items, newest first">
+    </button>}
+    {shown && !closed && <div ref={scroller} className="tb-chat-work-scroller" role="group" aria-label="Work items, newest first">
       {snapshot.map((pill) => <Pill key={pill.id} pill={pill} onOpen={onOpen} register={register} />)}
     </div>}
   </div>;
@@ -329,12 +332,13 @@ export function WorkItemSheet({ id, pills, transport, names, onClose }: {
 }
 
 /** Strip and sheet together, for one opened conversation. */
-export function WorkItems({ pills, transport, folded, onShown, onSheetOpen, sheetSlot }: {
+export function WorkItems({ pills, transport, folded, fetchFailed, onShown, onSheetOpen, sheetSlot }: {
   readonly pills: WorkItemPills;
   readonly transport: WorkItemSheetTransport;
   readonly folded: boolean;
   readonly onShown: (shown: boolean) => void;
   readonly onSheetOpen: (open: boolean) => void;
+  readonly fetchFailed?: boolean;
   /** False while another dialog is open. */
   readonly sheetSlot: boolean;
 }) {
@@ -352,7 +356,7 @@ export function WorkItems({ pills, transport, folded, onShown, onSheetOpen, shee
   useEffect(() => { if (!sheetSlot) setOpen(undefined); }, [sheetSlot]);
   useLayoutEffect(() => { onSheetOpen(open !== undefined); }, [onSheetOpen, open]);
   return <>
-    <WorkItemStrip pills={pills} folded={folded} onOpen={show} onShown={onShown} />
+    <WorkItemStrip pills={pills} folded={folded} fetchFailed={fetchFailed} onOpen={show} onShown={onShown} />
     {open !== undefined && sheetSlot && <WorkItemSheet key={open} id={open} pills={pills} transport={transport} names={names} onClose={close} />}
   </>;
 }
