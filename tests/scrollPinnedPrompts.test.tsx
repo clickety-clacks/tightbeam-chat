@@ -275,23 +275,40 @@ describe('scroll-pinned prompts without scroll timelines', () => {
     expect(handle.current!.settledBottom('missing')).toBeUndefined();
   });
 
-  it('lets touches through to the transcript and treats a tap on the visible copy as a jump', () => {
+  it('routes a tap through the pinned copy and leaves drags and keyboard clicks to the transcript', () => {
     const onJump = vi.fn();
     mount({ onJump });
+    root.append(viewport);
     scrollTo(500);
-    const reply = document.createElement('a');
-    reply.href = '#reply';
+    const reply = document.createElement('button');
     viewport.firstElementChild!.append(reply);
     const replyClicked = vi.fn();
     reply.addEventListener('click', replyClicked);
-    // Inside the pinned copy (x 120-360, y 10-90 at summary height): the jump wins.
-    fireEvent.click(reply, { clientX: 200, clientY: 50, button: 0 });
+    const pointer = (type: string, x: number, y: number) => {
+      fireEvent(reply, new MouseEvent(type, { bubbles: true, button: 0, clientX: x, clientY: y }));
+    };
+    const click = (x: number, y: number, detail = 1) => fireEvent.click(reply, { clientX: x, clientY: y, button: 0, detail });
+
+    // The summary spans x 120–360 and y 10–90. Preserve a drag that enters it,
+    // including one that crosses it and comes back to the press position.
+    pointer('pointerdown', 200, 120);
+    pointer('pointermove', 200, 50);
+    click(200, 50);
+    pointer('pointerdown', 200, 50);
+    pointer('pointermove', 243, 50);
+    pointer('pointermove', 200, 50);
+    click(200, 50);
+    pointer('pointerdown', 200, 50);
+    pointer('pointercancel', 200, 50);
+    click(200, 50);
+    click(200, 50, 0);
+    expect(onJump).not.toHaveBeenCalled();
+    expect(replyClicked).toHaveBeenCalledTimes(4);
+
+    pointer('pointerdown', 200, 50);
+    click(200, 50);
     expect(onJump).toHaveBeenCalledWith(prompts[0]);
-    expect(replyClicked).not.toHaveBeenCalled();
-    // Below the copy, the tap belongs to the transcript.
-    fireEvent.click(reply, { clientX: 200, clientY: 120, button: 0 });
-    expect(onJump).toHaveBeenCalledTimes(1);
-    expect(replyClicked).toHaveBeenCalledTimes(1);
+    expect(replyClicked).toHaveBeenCalledTimes(4);
   });
 
   it('keeps the copied bubble and summary text out of reach of focus and screen readers while pinned', () => {
