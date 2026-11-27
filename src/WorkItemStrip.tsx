@@ -276,37 +276,39 @@ export function WorkItemSheet({ id, pills, transport, names, onClose }: {
   return <div className="tb-chat-work-items tb-chat-work-layer">
     <button type="button" className="tb-chat-work-scrim" aria-label="Close work item" tabIndex={-1} onClick={onClose} />
     <section ref={sheet} className="tb-chat-work-sheet" role="dialog" aria-modal="true" aria-labelledby={titleId}>
-      <header>
-        <div>
-          <span className="tb-chat-work-chip" data-state={shown}><Icon name={shown} />
-            {found ? words[found] : stateText(pill?.state ?? 'held', pill?.stale === true && !data)}</span>
-          <h2 id={titleId}>{item ? plain(item.title) : 'Work item'}</h2>
+      <button ref={closeButton} type="button" className="tb-chat-modal-close" aria-label="Close work item" onClick={onClose}>×</button>
+      <div className="tb-chat-work-sheet-scroll" tabIndex={0}>
+        <header>
+          <div>
+            <span className="tb-chat-work-chip" data-state={shown}><Icon name={shown} />
+              {found ? words[found] : stateText(pill?.state ?? 'held', pill?.stale === true && !data)}</span>
+            <h2 id={titleId}>{item ? plain(item.title) : 'Work item'}</h2>
+          </div>
+        </header>
+        <div className="tb-chat-work-sheet-body" aria-live="polite" aria-busy={state.status === 'looking' && readNow.current}>
+          {settled && !data && <p className="tb-chat-work-box">{ended}{item?.failReason && ` ${plain(item.failReason)}`}</p>}
+          {readNow.current && state.status === 'looking' && <p className="tb-chat-work-note" role="status">Looking…</p>}
+          {readNow.current && state.status === 'gone' && <p className="tb-chat-work-box">This work item is no longer available.</p>}
+          {readNow.current && state.status === 'failed' && <p className="tb-chat-work-box">This could not be read. <button type="button"
+            onClick={() => setAttempt((value) => value + 1)}>Try again</button></p>}
+          {data && <>
+            {lead && <p>{lead}</p>}
+            {data.questions === undefined && <p className="tb-chat-work-note">Your open questions could not be read, so this may also be waiting on you.</p>}
+            {data.questions?.map((question) => <div className="tb-chat-work-question" key={question.id}>
+              <h3>Waiting on you</h3>
+              <p className="tb-chat-work-question-text">{formatVisibleIds(stripProvenanceMarkup(question.question))}</p>
+              {question.options.length > 0 && <ul>{question.options.map((option) => <li key={option}>{plain(option)}</li>)}</ul>}
+              <When since={question.raisedAt} until={question.deadlineAt} untilLabel="Answer by" now={now} />
+              <p className="tb-chat-work-note">Asked by {plain(question.asker)}</p>
+            </div>)}
+            {data.groups.map((group, index) => <div key={index}>
+              {data.groups.length > 1 && <p className="tb-chat-work-group">{plain(group.agent)}</p>}
+              <ol className="tb-chat-work-chain">{group.steps.map((step, at) => <Step key={at} step={step} now={now} />)}</ol>
+            </div>)}
+            {data.moreHolders > 0 && <p className="tb-chat-work-note">{data.moreHolders} more {data.moreHolders === 1 ? 'agent has' : 'agents have'} this work.</p>}
+            {data.groups.length === 0 && ended && <p className="tb-chat-work-box">{ended}{item?.failReason && ` ${plain(item.failReason)}`}</p>}
+          </>}
         </div>
-        <button ref={closeButton} type="button" className="tb-chat-modal-close" aria-label="Close work item" onClick={onClose}>×</button>
-      </header>
-      <div className="tb-chat-work-sheet-body" tabIndex={0} aria-live="polite" aria-busy={state.status === 'looking' && readNow.current}>
-        {settled && !data && <p className="tb-chat-work-box">{ended}{item?.failReason && ` ${plain(item.failReason)}`}</p>}
-        {readNow.current && state.status === 'looking' && <p className="tb-chat-work-note" role="status">Looking…</p>}
-        {readNow.current && state.status === 'gone' && <p className="tb-chat-work-box">This work item is no longer available.</p>}
-        {readNow.current && state.status === 'failed' && <p className="tb-chat-work-box">This could not be read. <button type="button"
-          onClick={() => setAttempt((value) => value + 1)}>Try again</button></p>}
-        {data && <>
-          {lead && <p>{lead}</p>}
-          {data.questions === undefined && <p className="tb-chat-work-note">Your open questions could not be read, so this may also be waiting on you.</p>}
-          {data.questions?.map((question) => <div className="tb-chat-work-question" key={question.id}>
-            <h3>Waiting on you</h3>
-            <p className="tb-chat-work-question-text">{formatVisibleIds(stripProvenanceMarkup(question.question))}</p>
-            {question.options.length > 0 && <ul>{question.options.map((option) => <li key={option}>{plain(option)}</li>)}</ul>}
-            <When since={question.raisedAt} until={question.deadlineAt} untilLabel="Answer by" now={now} />
-            <p className="tb-chat-work-note">Asked by {plain(question.asker)}</p>
-          </div>)}
-          {data.groups.map((group, index) => <div key={index}>
-            {data.groups.length > 1 && <p className="tb-chat-work-group">{plain(group.agent)}</p>}
-            <ol className="tb-chat-work-chain">{group.steps.map((step, at) => <Step key={at} step={step} now={now} />)}</ol>
-          </div>)}
-          {data.moreHolders > 0 && <p className="tb-chat-work-note">{data.moreHolders} more {data.moreHolders === 1 ? 'agent has' : 'agents have'} this work.</p>}
-          {data.groups.length === 0 && ended && <p className="tb-chat-work-box">{ended}{item?.failReason && ` ${plain(item.failReason)}`}</p>}
-        </>}
       </div>
     </section>
   </div>;

@@ -192,17 +192,26 @@ describe('the sheet', () => {
     expect(healthy.counts).toEqual({ page: 1 });
   });
 
-  it('keeps focus inside and returns it to the pill', async () => {
-    chat([summary(1)]);
+  it('tabs from Close to the scroll region around both the title and details', async () => {
+    const run = chat([summary(1)]);
     const pill = (await pills())[0];
     pill.focus();
     fireEvent.click(pill);
     const dialog = await screen.findByRole('dialog');
-    await within(dialog).findByText('No reason given');
-    fireEvent.keyDown(document.activeElement!, { key: 'Tab' });
-    expect(dialog.contains(document.activeElement)).toBe(true);
+    const detail = await within(dialog).findByText('No reason given');
+    const close = within(dialog).getByRole('button', { name: 'Close work item' });
+    const scroll = dialog.querySelector<HTMLElement>('.tb-chat-work-sheet-scroll')!;
+    const counts = { ...run.counts };
+    expect(document.activeElement).toBe(close);
+    fireEvent.keyDown(close, { key: 'Tab' });
+    expect(document.activeElement).toBe(scroll);
+    expect(scroll.contains(within(dialog).getByRole('heading', { level: 2 }))).toBe(true);
+    expect(scroll.contains(detail)).toBe(true);
+    fireEvent.keyDown(scroll, { key: 'Tab' });
+    expect(document.activeElement).toBe(close);
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(document.activeElement).toBe(pill);
+    expect(run.counts).toEqual(counts);
   });
 
   it('tells a host when the sheet opens and closes', async () => {
