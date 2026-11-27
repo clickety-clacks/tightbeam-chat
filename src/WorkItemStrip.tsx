@@ -277,7 +277,7 @@ export function WorkItemSheet({ id, pills, transport, names, onClose }: {
     <button type="button" className="tb-chat-work-scrim" aria-label="Close work item" tabIndex={-1} onClick={onClose} />
     <section ref={sheet} className="tb-chat-work-sheet" role="dialog" aria-modal="true" aria-labelledby={titleId}>
       <button ref={closeButton} type="button" className="tb-chat-modal-close" aria-label="Close work item" onClick={onClose}>×</button>
-      <div className="tb-chat-work-sheet-scroll">
+      <div className="tb-chat-work-sheet-scroll" tabIndex={0}>
         <header>
           <div>
             <span className="tb-chat-work-chip" data-state={shown}><Icon name={shown} />
@@ -285,7 +285,7 @@ export function WorkItemSheet({ id, pills, transport, names, onClose }: {
             <h2 id={titleId}>{item ? plain(item.title) : 'Work item'}</h2>
           </div>
         </header>
-        <div className="tb-chat-work-sheet-body" tabIndex={0} aria-live="polite" aria-busy={state.status === 'looking' && readNow.current}>
+        <div className="tb-chat-work-sheet-body" aria-live="polite" aria-busy={state.status === 'looking' && readNow.current}>
           {settled && !data && <p className="tb-chat-work-box">{ended}{item?.failReason && ` ${plain(item.failReason)}`}</p>}
           {readNow.current && state.status === 'looking' && <p className="tb-chat-work-note" role="status">Looking…</p>}
           {readNow.current && state.status === 'gone' && <p className="tb-chat-work-box">This work item is no longer available.</p>}

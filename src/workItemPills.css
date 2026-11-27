@@ -184,6 +184,7 @@
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
 }
+.tb-chat-work-sheet-scroll:focus-visible { outline: 2px solid var(--tb-chat-accent); outline-offset: -3px; }
 .tb-chat-work-sheet-scroll > header {
   padding-block: 1.1rem .4rem;
   padding-inline: 1.1rem 4.5rem;
@@ -207,7 +208,6 @@
   gap: 1rem;
   padding: .6rem 1.1rem calc(1.3rem + var(--tb-chat-bottom-safe-area));
 }
-.tb-chat-work-sheet-body:focus-visible { outline: 2px solid var(--tb-chat-accent); outline-offset: -3px; }
 .tb-chat-work-sheet p, .tb-chat-work-sheet dl, .tb-chat-work-sheet ol { margin: 0; overflow-wrap: anywhere; }
 .tb-chat-work-group { color: var(--tb-chat-muted); font-size: .8rem; font-weight: 600; }
 .tb-chat-work-group + .tb-chat-work-chain { margin-top: .5rem !important; }
