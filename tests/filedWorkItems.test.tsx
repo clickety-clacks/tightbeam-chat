@@ -145,7 +145,7 @@ describe('filed work item reads', () => {
   });
 
   it('clears a failed list on a successful empty response using the existing retry', async () => {
-    const { gateway, reader, failures, items } = setup(0);
+    const { gateway, reader, failures, items } = setup(1);
     gateway.unreadable = 1;
     reader.sync(range(1, 1), 'newest');
     await flush();
@@ -154,6 +154,7 @@ describe('filed work item reads', () => {
     expect(failures).toEqual([true]);
     expect(gateway.calls).toHaveLength(1);
     gateway.unreadable = 0;
+    gateway.total = 0;
     await vi.advanceTimersByTimeAsync(30_000);
     reader.sync(range(1, 1), 'newest');
     await flush();
