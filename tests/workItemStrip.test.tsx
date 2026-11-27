@@ -187,7 +187,7 @@ describe('the sheet', () => {
     items[0] = reopening ? summary(1, { rowVersion: 3 })
       : summary(1, { state: 'closed', closeReason: 'completed', holders: [], rowVersion: 3 });
     await run.emit({ kind: 'item', workItemId: uuid(1) });
-    const label = reopening ? 'Held' : 'Completed';
+    const label = reopening ? 'Assigned' : 'Completed';
     await waitFor(() => expect(pill.getAttribute('aria-label')).toBe(`Product: Item 1. ${label}`), { timeout: 8_000 });
     expect(within(dialog).getByText(label, { exact: true })).toBeTruthy();
     expect(within(dialog).queryByText(oldLabel, { exact: true })).toBeNull();
@@ -223,7 +223,7 @@ describe('the sheet', () => {
         await refresh({ state: 'closed', closeReason: 'completed', holders: [] });
         expect(within(dialog).getByText('Completed', { exact: true })).toBeTruthy();
         await refresh({ state: 'open', closeReason: undefined, holders: ['agent:a'] });
-        expect(within(dialog).getByText('Held', { exact: true })).toBeTruthy();
+        expect(within(dialog).getByText('Assigned', { exact: true })).toBeTruthy();
       } else {
         await refresh({ holders: [] });
         expect(within(dialog).getByText('Between hands', { exact: true })).toBeTruthy();
