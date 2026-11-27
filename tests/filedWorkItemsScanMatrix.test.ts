@@ -25,10 +25,11 @@ const range = (first: number, last: number) => Array.from({ length: Math.max(0, 
 
 const cases: Case[] = [
   ...[false, true].map((partialFirst): Case => ({
-    name: 'keeps a failed cursor on an unprovable partial refresh, partial first page ' + partialFirst, newest: 6,
+    name: 'advancing past a failed cursor depends on knowing the original boundary, partial first page ' + partialFirst, newest: 6,
     steps: [{ omit: partialFirst ? [5] : [] }, load(5, 6, 'newest'),
       { failBefore: 5 }, load(3, 6), { failBefore: null, omit: partialFirst ? [5, 4] : [4, 3] }, refresh, load(1, 6)],
-    calls: [[2], [2, 5], [4]], shown: partialFirst ? [3, 6] : [5, 6], warnings: [true],
+    calls: partialFirst ? [[2], [2, 5], [4]] : [[2], [2, 5], [4], [2, 3]],
+    shown: partialFirst ? [3, 6] : [1, 2, 5, 6], warnings: [true],
   })),
   {
     name: 'complete nonexhaustive tail reaches the incomplete boundary', newest: 8,
@@ -94,6 +95,12 @@ const cases: Case[] = [
     steps: [load(7, 8, 'newest'), load(3, 8, 'live'), { omit: [3, 4, 5, 6] }, refresh,
       load(7, 8, 'live'), { omit: [] }, refresh, load(1, 8)],
     calls: [[2], [6], [2], [6, 7]], shown: range(1, 8), warnings: [true, false],
+  },
+  {
+    name: 'a full complete refresh identifies an existing partial cursor and enables later progress', newest: 8,
+    steps: [{ omit: [7] }, load(7, 8, 'newest'), { omit: [] }, refresh, { failBefore: 7 }, load(5, 8),
+      { failBefore: null }, refresh, load(3, 8)],
+    calls: [[2], [2], [2, 7], [4], [2, 5]], shown: range(3, 8), warnings: [true, false, true, false],
   },
 ];
 

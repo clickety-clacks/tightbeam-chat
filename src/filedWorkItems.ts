@@ -20,6 +20,7 @@ export class FiledWorkItems {
   private floor?: Position; // Oldest decoded row. A partial page may scan past it.
   private cursor: string | null | undefined;
   private cursorPastFloor = false;
+  private cursorAnchor?: Position; // The position confirmed for this exact cursor.
   private tailRequested = false;
   private olderFailed = false;
   private readonly failedPages = new Map<string | undefined, Set<string>>();
@@ -73,7 +74,7 @@ export class FiledWorkItems {
   }
 
   private below(rows: readonly Position[]): readonly Position[] {
-    const floor = this.floor;
+    const floor = this.cursorAnchor ?? this.floor;
     if (floor) return this.missing(rows).filter(row => newer(floor, row));
     return this.cursor ? this.missing(rows) : [];
   }
@@ -118,7 +119,7 @@ export class FiledWorkItems {
     });
     this.olderFailed = false;
     if (!page || page.partial || !canCheckAbsence) return;
-    const floor = this.floor;
+    const floor = this.cursorAnchor ?? this.floor;
     for (const row of this.missing(rows)) if (floor && newer(row, floor)) this.absent.add(row.id);
   }
 
@@ -164,13 +165,25 @@ export class FiledWorkItems {
     const followsCursor = before === this.cursor;
     const completeTail = before === undefined && !page.partial && !page.hasOlder;
     const nextCursor = page.hasOlder ? page.oldestCursor : null;
+    const confirmedEnd = !page.partial && page.items.length === limit ? oldest : undefined;
+    // A full complete page identifies the row at its cursor. When a later
+    // partial scan includes that row, a different stable end must be older.
+    const anchor = this.cursorAnchor;
+    const advancesAnchor = nextCursor !== null && nextCursor !== this.cursor && anchor && oldest &&
+      (newer(anchor, oldest) || (page.partial && oldest.id === anchor.id && oldest.at === anchor.at));
     // A continuation establishes its own ordering, even if it decodes no rows.
     // Independent tail scans cannot order two opaque ends when a partial page
     // may have scanned beyond the oldest decoded row.
-    if (this.cursorPastFloor ? followsCursor || completeTail : floorAdvanced || (page.partial && followsCursor)) {
-      if (nextCursor !== this.cursor) this.olderFailed = false;
+    const canMove = this.cursorPastFloor ? followsCursor || completeTail : floorAdvanced || (page.partial && followsCursor);
+    if (nextCursor !== this.cursor && (canMove || advancesAnchor)) {
       this.cursor = nextCursor;
+      this.cursorAnchor = undefined;
       this.cursorPastFloor = page.hasOlder && (page.partial === true || !floorAdvanced && this.cursorPastFloor);
+      this.olderFailed = false;
+    }
+    if (this.cursor && this.cursor === page.oldestCursor && confirmedEnd) {
+      this.cursorAnchor = confirmedEnd;
+      this.cursorPastFloor = false;
     }
     if (page.items.length) {
       this.items = items;
