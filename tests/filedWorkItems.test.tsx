@@ -339,8 +339,10 @@ describe('filed work item reads', () => {
     expect(gateway.calls).toHaveLength(4);
   });
 
-  it('continues below an older failure when a partial refresh advances the cursor', async () => {
+  it.each(['cached rows only', 'new oldest row', 'previous partial cursor'])(
+    'continues below an older failure when a partial refresh advances the cursor (%s)', async scenario => {
     const { gateway, reader, failures, items } = setup(6);
+    if (scenario === 'previous partial cursor') gateway.omitted.add(5);
     reader.sync(range(5, 6), 'newest');
     await flush();
     gateway.unreadable = 4;
@@ -348,6 +350,7 @@ describe('filed work item reads', () => {
     await flush();
     gateway.unreadable = 0;
     gateway.omitted.add(4);
+    if (scenario === 'cached rows only') gateway.omitted.add(3);
     await reader.refresh();
     reader.sync(range(1, 6), 'older');
     await flush();
@@ -355,7 +358,40 @@ describe('filed work item reads', () => {
       { limit: 2, before: undefined }, { limit: 2, before: '5' },
       { limit: 4, before: undefined }, { limit: 2, before: '3' },
     ]);
-    expect(items().size).toBe(5);
+    expect(items().size).toBe(scenario === 'new oldest row' ? 5 : 4);
+    expect(items().has('wi_4')).toBe(false);
+    expect(items().has('wi_1')).toBe(true);
+    expect(items().has('wi_2')).toBe(true);
+    expect(failures).toEqual([true]);
+  });
+
+  it('clears an older partial warning when a nonexhaustive complete tail reaches the same scanned boundary', async () => {
+    const { gateway, reader, failures, items } = setup(8);
+    reader.sync(range(7, 8), 'newest');
+    await flush();
+    gateway.omitted.add(5);
+    reader.sync(range(5, 8), 'older');
+    await flush();
+    expect(failures).toEqual([true]);
+    expect(items().has('wi_5')).toBe(false);
+    gateway.omitted.clear();
+    await reader.refresh();
+    expect(gateway.calls).toEqual([
+      { limit: 2, before: undefined }, { limit: 2, before: '7' }, { limit: 4, before: undefined },
+    ]);
+    expect(items().has('wi_5')).toBe(true);
+    expect(failures).toEqual([true, false]);
+  });
+
+  it('keeps the warning when a new server filing shifts an equal-size refresh away from the incomplete range', async () => {
+    const { gateway, reader, failures, items } = setup(6);
+    gateway.omitted.add(4);
+    reader.sync(range(4, 6), 'newest');
+    await flush();
+    gateway.total = 7;
+    await reader.refresh();
+    expect(gateway.calls).toEqual([{ limit: 3, before: undefined }, { limit: 3, before: undefined }]);
+    expect(items().has('wi_7')).toBe(true);
     expect(items().has('wi_4')).toBe(false);
     expect(failures).toEqual([true]);
   });
