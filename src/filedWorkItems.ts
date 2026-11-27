@@ -156,7 +156,10 @@ export class FiledWorkItems {
     // Advance even when every row in the scanned window was omitted. A newer
     // cursor-free refresh cannot rewind a cursor already past the decoded floor.
     if (this.cursorPastFloor ? followsCursor || completeTail : floorAdvanced || (page.partial && followsCursor)) {
-      this.cursor = page.hasOlder ? page.oldestCursor : null;
+      const nextCursor = page.hasOlder ? page.oldestCursor : null;
+      // The server advanced past a failed older request while preserving its warning.
+      if (page.partial && nextCursor !== this.cursor) this.olderFailed = false;
+      this.cursor = nextCursor;
       this.cursorPastFloor = page.hasOlder && (page.partial === true || !floorAdvanced && this.cursorPastFloor);
     }
     if (page.items.length) {

@@ -339,6 +339,27 @@ describe('filed work item reads', () => {
     expect(gateway.calls).toHaveLength(4);
   });
 
+  it('continues below an older failure when a partial refresh advances the cursor', async () => {
+    const { gateway, reader, failures, items } = setup(6);
+    reader.sync(range(5, 6), 'newest');
+    await flush();
+    gateway.unreadable = 4;
+    reader.sync(range(3, 6), 'older');
+    await flush();
+    gateway.unreadable = 0;
+    gateway.omitted.add(4);
+    await reader.refresh();
+    reader.sync(range(1, 6), 'older');
+    await flush();
+    expect(gateway.calls).toEqual([
+      { limit: 2, before: undefined }, { limit: 2, before: '5' },
+      { limit: 4, before: undefined }, { limit: 2, before: '3' },
+    ]);
+    expect(items().size).toBe(5);
+    expect(items().has('wi_4')).toBe(false);
+    expect(failures).toEqual([true]);
+  });
+
   it('refreshes known rows with one read and stops cleanly', async () => {
     const { gateway, reader, items } = setup(5);
     reader.sync(range(1, 5), 'newest');
