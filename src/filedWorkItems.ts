@@ -19,6 +19,7 @@ export class FiledWorkItems {
   private readonly absent = new Set<string>(); // Listed range held no such row for this reader.
   private floor?: Position; // Oldest row listed so far; `cursor` continues below it.
   private cursor: string | null = null;
+  private tailRequested = false;
   private olderFailed = false;
   private readonly controller = new AbortController();
   private failedAt = -Infinity;
@@ -70,9 +71,9 @@ export class FiledWorkItems {
 
   private async load(load: RecordEventLoad, filed: readonly Position[], added: readonly Position[]): Promise<void> {
     if (this.controller.signal.aborted) return;
-    if (load === 'older') {
-      // Only this page's own rows, below what is listed. A failed range above
-      // them has no cursor past it, so they keep the fixed wording until it reads.
+    if (load === 'older' && this.tailRequested) {
+      // Once the tail has been requested, older loads only follow its cursor.
+      // A failed tail has no cursor, so it still recovers on a newest load.
       const own = this.below(added).length;
       if (own && !this.olderFailed) await this.continueBelow(own);
       return;
@@ -114,6 +115,7 @@ export class FiledWorkItems {
 
   private async page(limit: number, before?: string): Promise<void> {
     if (this.controller.signal.aborted) return;
+    if (before === undefined) this.tailRequested = true;
     const page = await this.read(this.sessionKey, { limit, before }, this.controller.signal);
     if (this.controller.signal.aborted || !page.items.length) return;
     const items = new Map(this.items);
