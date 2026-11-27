@@ -306,6 +306,12 @@ export function WorkItemSheet({ id, pills, transport, names, onClose, onInsert }
   // Discard those details so a later return to the same state cannot revive them.
   const data = tap && item && tap.item.state === item.state && tap.item.holders.length === item.holders.length
     && tap.item.holders.every(holder => item.holders.includes(holder)) ? tap : undefined;
+  const groups = data?.groups.flatMap(group => {
+    const steps = group.steps.filter(step =>
+      !(step.kind === 'wait' && step.target.kind === 'time' && !step.tied) &&
+      !(step.kind === 'unreadable' && step.what === 'time'));
+    return steps.length ? [{ ...group, steps }] : [];
+  }) ?? [];
   useLayoutEffect(() => {
     if (tap && !data) setState({ status: 'updated' });
   }, [tap, data]);
@@ -347,12 +353,12 @@ export function WorkItemSheet({ id, pills, transport, names, onClose, onInsert }
               <When since={question.raisedAt} until={question.deadlineAt} untilLabel="Answer by" now={now} />
               <p className="tb-chat-work-note">Asked by {plain(question.asker)}</p>
             </div>)}
-            {data.groups.map((group, index) => <div key={index}>
-              {data.groups.length > 1 && <p className="tb-chat-work-group">{plain(group.agent)}</p>}
+            {groups.map((group, index) => <div key={index}>
+              {groups.length > 1 && <p className="tb-chat-work-group">{plain(group.agent)}</p>}
               <ol className="tb-chat-work-chain">{group.steps.map((step, at) => <Step key={at} step={step} now={now} />)}</ol>
             </div>)}
             {data.moreHolders > 0 && <p className="tb-chat-work-note">{data.moreHolders} more {data.moreHolders === 1 ? 'agent has' : 'agents have'} this work.</p>}
-            {data.groups.length === 0 && ended && <p className="tb-chat-work-box">{ended}{item?.failReason && ` ${plain(item.failReason)}`}</p>}
+            {groups.length === 0 && ended && <p className="tb-chat-work-box">{ended}{item?.failReason && ` ${plain(item.failReason)}`}</p>}
           </>}
         </div>
       </div>

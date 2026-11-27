@@ -29,6 +29,7 @@ class Visible {
 
 function chat(items: readonly WorkItemSummary[], options: {
   pills?: boolean; failList?: boolean | 'network'; message?: string; emptyList?: boolean; missingOnTap?: boolean; waitReason?: string;
+  waitOnItem?: string;
 } = {}) {
   const counts: Record<string, number> = {};
   const count = (name: string) => { counts[name] = (counts[name] ?? 0) + 1; };
@@ -50,10 +51,23 @@ function chat(items: readonly WorkItemSummary[], options: {
       const item = items.find((row) => row.id === id);
       if (!item || options.missingOnTap) return undefined;
       return { item, cards: [{ id: 'asg_1', open: item.holders.length > 0, holderKey: 'agent:a' }] }; },
-    readBreathing: async () => { count('breathing'); return { reason: 'pending_wake', holders: [],
-      wake: { wakeId: 'w1', sessionKey: 'agent:a', dueAt: wakeDueAt, createdAt: 1 } }; },
-    readWait: async (id) => { count('wait'); return { id, sessionKey: 'agent:a', creatorSessionKey: 'agent:a', state: 'pending', recurring: false,
-      conditionKind: null, conditionScope: null, dueAt: wakeDueAt, createdAt: Date.now() - 60_000, reason: options.waitReason ?? null }; },
+    readBreathing: async (kind) => {
+      count('breathing');
+      if (options.waitOnItem && kind === 'work-item') return { reason: 'idle', holders: ['agent:b'] };
+      if (options.waitOnItem && kind === 'session') return { reason: 'pending_wake', holders: [],
+        wake: { wakeId: 'packaging', sessionKey: 'agent:b', dueAt: wakeDueAt, createdAt: 1 } };
+      return { reason: 'pending_wake', holders: [],
+        wake: { wakeId: 'w1', sessionKey: 'agent:a', dueAt: wakeDueAt, createdAt: 1 } };
+    },
+    readWait: async (id) => {
+      count('wait');
+      const agent = id === 'packaging' ? 'agent:b' : 'agent:a';
+      const target = id === 'w1' ? options.waitOnItem : undefined;
+      return { id, sessionKey: agent, creatorSessionKey: agent, state: 'pending', recurring: false,
+        conditionKind: target ? 'work_item.closed' : null, conditionScope: target ?? null,
+        dueAt: wakeDueAt, createdAt: Date.now() - 60_000,
+        reason: id === 'packaging' ? 'Packaging reminder for other work.' : options.waitReason ?? null };
+    },
     readMyQuestions: async () => { count('questions'); return items.some((row) => !row.holders.length) ? [{ id: 'dr_1', question: 'Go ahead?', options: ['Yes'],
       assignmentId: 'asg_1', raiserId: null, raisedAt: 1, deadlineAt: null }] : []; },
     readAgentQuestions: async () => { count('agent questions'); return []; },
@@ -291,6 +305,22 @@ describe('the sheet', () => {
       expect(run.counts).toEqual({ page: 1, cards: 1, questions: 1, 'agent questions': 1, breathing: 1, wait: 1, name: 1 });
       expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: 'Close work item' }));
     });
+
+  it('shows the linked item without presenting its holder’s session reminder as a dependency', async () => {
+    const dependency = summary(2, { title: 'Product: Dependency item', holders: ['agent:b'] });
+    const run = chat([summary(1), dependency], { waitOnItem: dependency.id });
+    const [pill] = await pills();
+    expect(run.counts).toEqual({ page: 1 });
+    fireEvent.click(pill);
+    const dialog = await screen.findByRole('dialog', { name: 'Product: Item 1' });
+    expect(await within(dialog).findByText(dependency.title)).toBeTruthy();
+    expect(within(dialog).getByText('Waiting', { exact: true })).toBeTruthy();
+    expect(within(dialog).queryByText('Packaging reminder for other work.')).toBeNull();
+    expect(within(dialog).queryByText('Next check')).toBeNull();
+    expect(within(dialog).queryByRole('link')).toBeNull();
+    expect(dialog.querySelectorAll('.tb-chat-work-chain > li')).toHaveLength(1);
+    expect(run.counts).toEqual({ page: 1, cards: 1, questions: 1, 'agent questions': 1, breathing: 3, wait: 2, name: 2, item: 1 });
+  });
 
   it('opens finished work without a read, and reads it once it has changed', async () => {
     const run = chat([summary(1, { state: 'failed', holders: [], failReason: 'A duplicate.' })]);
