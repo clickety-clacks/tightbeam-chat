@@ -50,8 +50,18 @@ function chat(items: readonly WorkItemSummary[], options: { pills?: boolean; fai
     readAgentQuestions: async () => { count('agent questions'); return []; },
     readAgentName: async () => { count('name'); return 'Coder'; },
   };
+  const { openChanges, readTail, readOlder } = fixture;
+  const forSession = async (sessionKey: string, result: ReturnType<typeof readTail>) => {
+    const page = await result;
+    return { ...page, records: page.records.map(record => ({ ...record, sessionKey })) };
+  };
   const transport = Object.assign(fixture, { targetGateway: 'https://gateway.example',
-    openChanges: ((open) => (key: string, callbacks: ChangeCallbacks, signal: AbortSignal) => { notices = callbacks; return open(key, callbacks, signal); })(fixture.openChanges),
+    openChanges: (_key: string, callbacks: ChangeCallbacks, signal: AbortSignal) => {
+      notices = callbacks;
+      return openChanges('fixture-session', callbacks, signal);
+    },
+    readTail: (key: string) => forSession(key, readTail()),
+    readOlder: (key: string, before: string) => forSession(key, readOlder(key, before)),
     readRecordEvents: async (sessionKey: string) => ({ items: items.map((item) => filed(item, sessionKey)), oldestCursor: null, hasOlder: false }),
     readFiledWorkItems: async (sessionKey: string) => {
       count('page');
