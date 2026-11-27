@@ -1,5 +1,14 @@
 [
   {
+    "version": "v0.1.116",
+    "items": [
+      {
+        "title": "Work item pills",
+        "description": "Work item pills are on by default. On Tightbeam before 0.1.17, a chat containing a work item with a recorded merge shows no pills."
+      }
+    ]
+  },
+  {
     "version": "v0.1.115",
     "items": [
       {

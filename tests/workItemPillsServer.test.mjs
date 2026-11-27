@@ -50,7 +50,7 @@ const projected = { id: 'wi_1', title: 'Title', state: 'open', started: true, ho
   createdAt: 5, rowVersion: 9 };
 
 describe('work item pill routes', () => {
-  it('has no routes, connection or configuration unless the flag is exactly 1', async () => {
+  it('has no routes, connection or configuration when the flag is exactly 0', async () => {
     const paths = ['work-item/wi_1', 'cards/wi_1', 'breathing/session/a', 'wake/w_1', 'turn/4', 'open-questions', 'agent-questions?raiser=a'];
     for (const suffix of paths) {
       expect(parseServiceHttpTarget(`/__chat/api/pills/${suffix}`, { ...on, workItemPillsEnabled: false })).toBeUndefined();
@@ -59,7 +59,7 @@ describe('work item pill routes', () => {
     const socket = '/__chat/ws/work-changes?protocolVersion=2';
     expect(parseServiceWebSocketTarget(socket, { ...on, workItemPillsEnabled: false })).toBeUndefined();
     expect(parseServiceWebSocketTarget(socket, on)).toEqual({ path: '/ws/changes?protocolVersion=2', kind: 'work-changes', gatewayOrigin });
-    for (const [value, expected] of [[undefined, undefined], ['true', undefined], ['1', true]]) {
+    for (const [value, expected] of [[undefined, true], ['1', true], ['0', undefined]]) {
       const chat = await service(() => ({ body: {} }), value ? { CHAT_WORK_ITEM_PILLS: value } : {});
       const { body } = await chat.get('/chat-config.json');
       expect(body.workItemPillsEnabled).toBe(expected);
