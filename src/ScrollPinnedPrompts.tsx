@@ -64,8 +64,8 @@ const HIDDEN_ORIGINAL = 'data-pinned-original';
 const PIN_HANDOVER = 0.01;
 /** The scroll range every pinned-prompt animation spans, far beyond any real conversation. */
 const ANIMATION_RANGE = 1e7;
-/** Lines in a summary. */
-const SUMMARY_LINES = 3;
+// Match Chat's compact layout cutoff, but use the transcript's usable pane width.
+const NARROW_SUMMARY_WIDTH = 540;
 
 interface Measured extends PinnedPromptGeometry {
   readonly identity: string;
@@ -274,7 +274,10 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
     const portLeft = boxBounds.left + box.clientLeft;
     overlay.style.top = `${portTop - rootBounds.top}px`;
     overlay.style.left = `${portLeft - rootBounds.left}px`;
-    overlay.style.width = `${box.clientWidth}px`;
+    const paneWidth = box.clientWidth;
+    const summaryLines = paneWidth <= NARROW_SUMMARY_WIDTH ? 1 : 2;
+    overlay.style.width = `${paneWidth}px`;
+    overlay.style.setProperty('--tb-chat-pinned-summary-lines', String(summaryLines));
     overlay.style.height = `${box.clientHeight}px`;
     const pinFromRoot = Number.parseFloat(root.style.getPropertyValue('--tb-chat-floating-prompt-top')) || 10;
     // The scrollport's top relative to the root does not change with scrolling.
@@ -311,12 +314,12 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
         minSummaryHeight: previousOptions.minSummaryHeight ?? 0 }, maxScroll };
     const near = new Set(wantedSlots(scrollTop, 1));
     const ownAnimations = new Set([...slots.current.values()].flatMap(slot => slot.animations ?? []));
-    let minSummaryHeight = previousOptions.minSummaryHeight ?? 0;
+    let minSummaryHeight = 0;
     measured.forEach((prompt, index) => {
       if (!near.has(prompt.identity)) return;
       const row = rowsByIndex[index];
       const text = promptsByIdentity.current.get(prompt.identity)?.text ?? '';
-      const summary = summaryFor(row, prompt.width, text);
+      const summary = summaryFor(row, prompt.width, text, summaryLines);
       if (summary) {
         if (!minSummaryHeight) minSummaryHeight = summary.minimum;
         measured[index] = { ...prompt, summaryHeight: summary.summaryHeight };
@@ -331,18 +334,13 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
     layout.current = { ...layout.current, options: { ...layout.current.options, minSummaryHeight } };
   }, [getRow, viewport]);
 
-  /**
-   * A prompt's summary: its text clamped to three lines. A prompt whose text fits and
-   * that holds nothing but text is already at pinned size; one with images, code or a
-   * table is taller than its text, so it shrinks to a summary with a thumbnail strip for photos.
-   * Cached per row, width and text.
-   */
-  const summaryFor = useCallback((row: HTMLElement, width: number, text: string) => {
+  /** Measure the smaller, clamped text and any photo strip at the bubble's own width. */
+  const summaryFor = useCallback((row: HTMLElement, width: number, text: string, lines: number) => {
     const probe = measure.current;
     const style = getComputedStyle(row);
     const padding = `${style.paddingTop} ${style.paddingRight} ${style.paddingBottom} ${style.paddingLeft}`;
     const photos = promptPhotos(row).length;
-    const key = `${photos}\u0000${width}\u0000${padding}\u0000${style.fontSize}\u0000${text}`;
+    const key = `${lines}\u0000${photos}\u0000${width}\u0000${padding}\u0000${style.fontSize}\u0000${text}`;
     const cached = summaries.current.get(row);
     if (cached?.key === key) return cached;
     if (!probe) return undefined;
@@ -351,13 +349,10 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
     const probeText = probe.firstElementChild as HTMLElement;
     probeText.textContent = text;
     (probe.lastElementChild as HTMLElement).hidden = photos === 0;
-    const height = probe.getBoundingClientRect().height;
-    const truncated = probeText.scrollHeight > probeText.clientHeight + 1;
-    const hasMedia = !!row.querySelector('img, video, pre, table, .tb-chat-attachments, .tb-chat-image-attachments');
-    const fontSize = Number.parseFloat(style.fontSize) || 0;
-    const lineHeight = Number.parseFloat(style.lineHeight) || fontSize * 1.5;
-    const entry = { key, summaryHeight: truncated || hasMedia ? height : row.getBoundingClientRect().height,
-      // Rule 4's floor: one line of prompt text plus the bubble's vertical padding.
+    const summaryStyle = getComputedStyle(probeText);
+    const lineHeight = Number.parseFloat(summaryStyle.lineHeight) ||
+      (Number.parseFloat(summaryStyle.fontSize) || 0) * 1.5;
+    const entry = { key, summaryHeight: probe.getBoundingClientRect().height,
       minimum: lineHeight + (Number.parseFloat(style.paddingTop) || 0) + (Number.parseFloat(style.paddingBottom) || 0) };
     summaries.current.set(row, entry);
     return entry;
@@ -718,7 +713,7 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
 
   return <div ref={layer} className="tb-chat-pinned-layer">
     <div ref={measure} className="tb-chat-pinned-summary tb-chat-pinned-summary-measure" aria-hidden="true">
-      <div className="tb-chat-pinned-summary-text" style={{ WebkitLineClamp: SUMMARY_LINES }} />
+      <div className="tb-chat-pinned-summary-text" />
       <div className="tb-chat-pinned-photos" hidden />
     </div>
     {mounted.map(identity => {
@@ -730,8 +725,7 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
           <div ref={slotRef(identity, 'body')} className="tb-chat-pinned-body">
             <div ref={slotRef(identity, 'full')} className="tb-chat-pinned-full" aria-hidden="true" inert />
             <div ref={slotRef(identity, 'summary')} className="tb-chat-pinned-summary">
-              <div className="tb-chat-pinned-summary-text" aria-hidden="true" inert
-                style={{ WebkitLineClamp: SUMMARY_LINES }}>{prompt.text}</div>
+              <div className="tb-chat-pinned-summary-text" aria-hidden="true" inert>{prompt.text}</div>
               <div ref={slotRef(identity, 'photos')} className="tb-chat-pinned-photos" hidden inert />
             </div>
             <button type="button" className="tb-chat-pinned-jump" aria-label="Jump to user prompt"

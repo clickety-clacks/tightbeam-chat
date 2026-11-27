@@ -26,6 +26,8 @@ const geometry = (['A', 'B', 'C'] as const).map(key => ({
 }));
 
 let scrollTop = 0;
+let paneWidth = 800;
+let responsiveSummary = false;
 // The scroller's content is 2400px longer than its 600px viewport.
 const SCROLL_HEIGHT = 3000;
 // Where things are drawn on screen. Normally the reported scrollTop; WebKit can report a
@@ -45,6 +47,8 @@ function rect(top: number, height: number, left = 0, width = 400): DOMRect {
 
 beforeEach(() => {
   scrollTop = 0;
+  paneWidth = 800;
+  responsiveSummary = false;
   screenScroll = undefined;
   extraHeight = 0;
   root = document.createElement('section');
@@ -67,7 +71,7 @@ beforeEach(() => {
   document.body.append(root);
   Object.defineProperty(viewport, 'scrollTop', { configurable: true, get: () => scrollTop, set: value => { scrollTop = value; } });
   Object.defineProperty(viewport, 'clientHeight', { configurable: true, value: 600 });
-  Object.defineProperty(viewport, 'clientWidth', { configurable: true, value: 400 });
+  Object.defineProperty(viewport, 'clientWidth', { configurable: true, get: () => paneWidth });
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
     if (this === viewport || this === root) return rect(0, 600);
     if (this === viewport.firstElementChild) return rect(-drawnScroll(), SCROLL_HEIGHT);
@@ -76,7 +80,10 @@ beforeEach(() => {
       const box = layout[key];
       return rect(box.top - drawnScroll(), box.height, box.left, box.width);
     }
-    if (this.classList.contains('tb-chat-pinned-summary-measure')) return rect(0, summaryHeight);
+    if (this.classList.contains('tb-chat-pinned-summary-measure')) {
+      const narrow = this.parentElement?.style.getPropertyValue('--tb-chat-pinned-summary-lines') === '1';
+      return rect(0, responsiveSummary && narrow ? 60 : summaryHeight);
+    }
     return rect(0, 0);
   });
   // The summary probe reports three clamped lines; long text is cut, the short prompt is not.
@@ -177,6 +184,30 @@ describe('scroll-pinned prompts without scroll timelines', () => {
     expect(strip.querySelector('button')).toBe(readyThumbnail);
     expect(document.activeElement).toBe(readyThumbnail);
     expect(handle.current?.settledBottom('A')).toBe(settled);
+  });
+
+  it('remeasures compressed text when the pane crosses the line-cap breakpoint', () => {
+    responsiveSummary = true;
+    observeResizes();
+    const handle = createRef<ScrollPinnedPromptsHandle>();
+    render(<ScrollPinnedPrompts ref={handle} prompts={prompts} viewport={{ current: viewport }}
+      getRow={key => rows.get(key)} onJump={() => {}} onDismiss={() => {}} />, { container: root });
+    const layer = root.querySelector<HTMLElement>('.tb-chat-pinned-layer')!;
+    scrollTo(500);
+    const scrollBody = slotFor('A')!.querySelector<HTMLElement>('.tb-chat-pinned-body');
+    const check = (lines: string, height: number) => {
+      expect(layer.style.getPropertyValue('--tb-chat-pinned-summary-lines')).toBe(lines);
+      expect(handle.current!.settledBottom('A')).toBe(10 + height);
+      expect(translate(scrollBody)).toBe(-(layout.A.height - height));
+      expect(slotFor('A')!.style.width).toBe('240px');
+    };
+    check('2', 80);
+    for (const [width, lines, height] of [[540, '1', 60], [541, '2', 80]] as const) {
+      paneWidth = width;
+      const observers = (globalThis as { __pinTestObservers?: ResizeObserverCallback[] }).__pinTestObservers;
+      act(() => observers?.forEach(observer => observer([], {} as ResizeObserver)));
+      check(lines, height);
+    }
   });
 
   it('leaves prompts in their natural place until the top reaches the pin line', () => {
