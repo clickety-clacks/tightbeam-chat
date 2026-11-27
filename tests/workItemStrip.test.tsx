@@ -99,8 +99,8 @@ describe('the strip', () => {
   it('shows each state in words, drops the product from the pill and keeps it in the label', async () => {
     const run = chat([summary(1), summary(2, { holders: [] }), summary(3, { holders: [], started: false }), summary(4, { state: 'closed', holders: [] })]);
     const shown = await pills();
-    expect(shown.map((pill) => pill.textContent)).toEqual(['Item 1Held', 'Item 2Between hands', 'Item 3Not started', 'Item 4Closed']);
-    expect(shown[0].getAttribute('aria-label')).toBe('Product: Item 1. Held');
+    expect(shown.map((pill) => pill.textContent)).toEqual(['Item 1Assigned', 'Item 2Between hands', 'Item 3Not started', 'Item 4Closed']);
+    expect(shown[0].getAttribute('aria-label')).toBe('Product: Item 1. Assigned');
     expect(shown[3].getAttribute('aria-label')).toBe('Product: Item 4. Closed');
     fireEvent.click(shown[3]);
     const dialog = await screen.findByRole('dialog', { name: 'Product: Item 4' });
@@ -112,8 +112,8 @@ describe('the strip', () => {
     const run = chat([summary(1)]);
     await pills();
     await run.emit({ kind: 'item', workItemId: uuid(1) });
-    expect((await pills())[0].textContent).toBe('Item 1Was held');
-    expect((await pills())[0].getAttribute('aria-label')).toContain('not read again yet');
+    expect((await pills())[0].textContent).toBe('Item 1Was assigned');
+    expect((await pills())[0].getAttribute('aria-label')).toBe('Product: Item 1. Was assigned. Changed, not read again yet');
     await act(async () => { Visible.all.at(-1)!.show(uuid(1)); });
     await run.emit({ kind: 'turn', workItemId: uuid(1), turnSeq: 4, ended: false });
     await waitFor(async () => expect((await pills())[0].textContent).toBe('Item 1Working now'));
@@ -126,7 +126,7 @@ describe('the strip', () => {
     await pills();
     await act(async () => { Visible.all.at(-1)!.show(uuid(1)); });
     await run.file(summary(2, { title: 'Product: Filed now', createdAt: Date.now() + 1000 }));
-    await waitFor(async () => expect((await pills())[0].textContent).toBe('Filed nowHeld'), { timeout: 7_000 });
+    await waitFor(async () => expect((await pills())[0].textContent).toBe('Filed nowAssigned'), { timeout: 7_000 });
     expect(run.counts).toEqual({ page: 1, item: 1 });
     // The same read names its message; titles make none of their own for it.
     expect(run.view.container.textContent).toContain('Filed · Product: Filed now');
@@ -244,7 +244,8 @@ describe('the sheet', () => {
   it('reads nothing until a tap, then shows the wait, its time and that no reason was given', async () => {
     const run = chat([summary(1)]);
     fireEvent.click((await pills())[0]);
-    const dialog = await screen.findByRole('dialog');
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByText('Assigned', { exact: true })).toBeTruthy();
     expect(await within(dialog).findByText('This is what it waits on, step by step.')).toBeTruthy();
     expect(dialog.textContent).toContain('Waiting');
     expect(dialog.textContent).toContain('Coder');

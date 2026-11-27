@@ -1,5 +1,25 @@
 [
   {
+    "version": "v0.1.119",
+    "items": [
+      {
+        "title": "Closed work items",
+        "description": "Closed work items now show Closed on their pill and in the details dialog. Screen readers announce the same status."
+      },
+      {
+        "title": "Work items in older history",
+        "description": "If no work item was filed in the initially loaded messages, its pill can now appear when you scroll back to the first filing."
+      },
+      {
+        "title": "Assigned work items",
+        "description": "Work items with an open assignment now show Assigned where Chat previously showed Held. Waiting remains a separate status."
+      }
+    ],
+    "compatibleTightbeam": ["0.1.15", "0.1.16"],
+    "breakingChanges": "none",
+    "breakingChangesReview": {"reviewer": "review:chat-pinned-algorithm", "commit": "3d0f48e3377d41874abe0a27bb58d5fbf5a8af44", "result": "confirmed"}
+  },
+  {
     "version": "v0.1.118",
     "items": [
       {
