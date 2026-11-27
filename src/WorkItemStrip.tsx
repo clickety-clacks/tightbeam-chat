@@ -4,7 +4,8 @@ import { stripProvenanceMarkup } from './displayText';
 import {
   AgentNames, foundState, readWorkItemSheet, type ChainStep, type WorkItemSheetData, type WorkItemSheetTransport,
 } from './workItemChain';
-import type { WorkItemPill, WorkItemPills, WorkItemPillState } from './workItemPills';
+import { workItemBaseState, type WorkItemPill, type WorkItemPills, type WorkItemPillState } from './workItemPills';
+import type { WorkItemCloseReason, WorkItemSummary } from './types';
 import { agoText, clockText, untilText } from './workItemTime';
 import './workItemPills.css';
 
@@ -42,8 +43,15 @@ export function pillTitle(title: string): string {
   return rest ?? text;
 }
 
-const stateText = (state: WorkItemPillState, stale: boolean): string =>
-  stale ? `Was ${words[state].toLowerCase()}` : words[state];
+const closeWords: Readonly<Record<WorkItemCloseReason, string>> = {
+  completed: 'Completed', canceled: 'Canceled', superseded: 'Superseded',
+};
+
+function stateText(state: ShownState, stale: boolean, item?: WorkItemSummary): string {
+  const reason = state === 'done' && item?.state === 'closed' ? item.closeReason : undefined;
+  const word = (reason && closeWords[reason]) || words[state];
+  return stale ? `Was ${word.toLowerCase()}` : word;
+}
 
 const Pill = memo(function Pill({ pill, onOpen, register }: {
   readonly pill: WorkItemPill;
@@ -51,7 +59,7 @@ const Pill = memo(function Pill({ pill, onOpen, register }: {
   readonly register: (id: string, element: HTMLElement | null) => void;
 }) {
   const ref = useCallback((element: HTMLButtonElement | null) => { register(pill.id, element); }, [pill.id, register]);
-  const text = stateText(pill.state, pill.stale);
+  const text = stateText(pill.state, pill.stale, pill.summary);
   const full = plain(pill.title);
   return <button type="button" ref={ref} className={`tb-chat-work-pill${pill.stale ? ' tb-chat-work-pill-stale' : ''}`}
     data-state={pill.state} data-work-item={pill.id} title={full}
@@ -207,11 +215,11 @@ function Step({ step, now }: { readonly step: ChainStep; readonly now: number })
 const endings: Readonly<Partial<Record<WorkItemPillState, string>>> = {
   'not-started': 'No agent has been given this yet.',
   'between-hands': 'It was started and no agent has it now.',
-  done: 'Closed.', failed: 'Ended without being done.', shelved: 'Put aside on purpose.',
+  failed: 'Ended without being done.', shelved: 'Put aside on purpose.',
 };
 
 type SheetState = { readonly status: 'looking' } | { readonly status: 'failed' } | { readonly status: 'gone' }
-  | { readonly status: 'ready'; readonly data: WorkItemSheetData };
+  | { readonly status: 'ready'; readonly data: WorkItemSheetData } | { readonly status: 'updated' };
 
 /** Everything here is read only because the reader tapped this one pill. */
 export function WorkItemSheet({ id, pills, transport, names, onClose }: {
@@ -267,11 +275,19 @@ export function WorkItemSheet({ id, pills, transport, names, onClose }: {
     return () => document.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  const data = state.status === 'ready' ? state.data : undefined;
-  const item = data?.item ?? pill?.summary;
-  const found: ShownState | undefined = data ? foundState(data) : undefined;
-  const shown: ShownState = found ?? pill?.state ?? 'held';
-  const ended = item && pill ? endings[pill.state] : undefined;
+  const tap = state.status === 'ready' ? state.data : undefined;
+  const summary = pill?.summary;
+  const item = tap && (!summary || tap.item.rowVersion > summary.rowVersion) ? tap.item : summary;
+  // A state or holder change can invalidate the tap's wait chain and questions.
+  // Discard those details so a later return to the same state cannot revive them.
+  const data = tap && item && tap.item.state === item.state && tap.item.holders.length === item.holders.length
+    && tap.item.holders.every(holder => item.holders.includes(holder)) ? tap : undefined;
+  useLayoutEffect(() => {
+    if (tap && !data) setState({ status: 'updated' });
+  }, [tap, data]);
+  const base = item && item !== summary ? workItemBaseState(item) : pill?.state ?? 'held';
+  const shown: ShownState = (data && foundState(data)) ?? base;
+  const ended = base === 'done' ? `${stateText(base, false, item)}.` : item && endings[base];
   const lead = shown === 'you' ? 'The next move is yours.' : shown === 'waiting' ? 'This is what it waits on, step by step.' : undefined;
   return <div className="tb-chat-work-items tb-chat-work-layer">
     <button type="button" className="tb-chat-work-scrim" aria-label="Close work item" tabIndex={-1} onClick={onClose} />
@@ -281,12 +297,12 @@ export function WorkItemSheet({ id, pills, transport, names, onClose }: {
         <header>
           <div>
             <span className="tb-chat-work-chip" data-state={shown}><Icon name={shown} />
-              {found ? words[found] : stateText(pill?.state ?? 'held', pill?.stale === true && !data)}</span>
+              {stateText(shown, pill?.stale === true && !data, item)}</span>
             <h2 id={titleId}>{item ? plain(item.title) : 'Work item'}</h2>
           </div>
         </header>
         <div className="tb-chat-work-sheet-body" aria-live="polite" aria-busy={state.status === 'looking' && readNow.current}>
-          {settled && !data && <p className="tb-chat-work-box">{ended}{item?.failReason && ` ${plain(item.failReason)}`}</p>}
+          {(settled || state.status === 'updated') && !data && ended && <p className="tb-chat-work-box">{ended}{item?.failReason && ` ${plain(item.failReason)}`}</p>}
           {readNow.current && state.status === 'looking' && <p className="tb-chat-work-note" role="status">Looking…</p>}
           {readNow.current && state.status === 'gone' && <p className="tb-chat-work-box">This work item is no longer available.</p>}
           {readNow.current && state.status === 'failed' && <p className="tb-chat-work-box">This could not be read. <button type="button"

@@ -268,6 +268,7 @@ function pillWorkItem(value) {
   return {
     id: value.id, title: value.title, state: textOrNull(value.state), started: value.started === true,
     holders: textList(value.holders), failReason: textOrNull(value.failReason),
+    ...('closeReason' in value ? { closeReason: textOrNull(value.closeReason) } : {}),
     createdAt: numberOrNull(value.createdAt), rowVersion: numberOrNull(value.rowVersion),
   };
 }
