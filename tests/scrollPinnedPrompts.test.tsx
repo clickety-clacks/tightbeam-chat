@@ -572,14 +572,14 @@ describe('scroll-pinned prompts with scroll timelines', () => {
     expect(slotCall.options.fill).toBeUndefined();
     // Evaluate the keyframes as a browser would at a scroll position (linear between stops,
     // the later stop winning where two share an offset).
-    const sample = (keyframes: Keyframe[], property: 'transform' | 'filter', scrollTop: number) => {
+    const sample = (keyframes: Keyframe[], property: 'top' | 'filter', scrollTop: number) => {
       const at = scrollTop / 1e7;
       let index = keyframes.length - 1;
       for (let i = 0; i < keyframes.length; i++) if ((keyframes[i].offset as number) > at) { index = i; break; }
       const to = keyframes[index];
       const from = keyframes[Math.max(0, index - 1)];
       const value = (frame: Keyframe) => property === 'filter' ? Number.parseFloat(String(frame.filter).match(/opacity\(([\d.]+)\)/)![1])
-        : Number.parseFloat(String(frame.transform).match(/translateY\((-?[\d.e-]+)px\)/)![1]);
+        : Number.parseFloat(String(frame.top));
       if ((to.offset as number) <= at || from === to) return value(to);
       const t = (at - (from.offset as number)) / ((to.offset as number) - (from.offset as number));
       return value(from) + (value(to) - value(from)) * t;
@@ -588,7 +588,7 @@ describe('scroll-pinned prompts with scroll timelines', () => {
     for (const scrollTop of [0, 89, 90, 90.5, 150, 330, 600, 950, 991, 1500, 2400]) {
       const frame = pinnedPromptFrameAt(scrollTop, geometry, 0, options);
       expect(sample(rowCall.keyframes, 'filter', scrollTop)).toBeCloseTo(frame ? 0 : 1, 6);
-      if (frame) expect(sample(slotCall.keyframes, 'transform', scrollTop)).toBeCloseTo(frame.top, 4);
+      if (frame) expect(sample(slotCall.keyframes, 'top', scrollTop)).toBeCloseTo(frame.top, 4);
     }
     // Whether the copy is seen is never animated. WebKit can leave a scroll-driven opacity
     // unpainted during wheel scrolling (the prompt vanished), and a discrete property could
@@ -601,7 +601,10 @@ describe('scroll-pinned prompts with scroll timelines', () => {
     expect(rowCall.keyframes.every((frame: Keyframe) => frame.opacity === undefined)).toBe(true);
     // At the very end of the scroll range the earlier prompt's original is back in view.
     expect(sample(rowCall.keyframes, 'filter', 1e7)).toBe(1);
-    // No style is written on scroll; the browser applies the animations.
+    // The absolute position is animated by the browser. A scroll-driven compositor
+    // transform can be painted behind the incoming prompt's actual scroll position.
+    expect(slotCall.keyframes.every(frame => frame.transform === undefined)).toBe(true);
+    expect(slot.style.top).toBe('');
     expect(slot.style.transform).toBe('');
     const before = calls.length;
     scrollTo(520);
