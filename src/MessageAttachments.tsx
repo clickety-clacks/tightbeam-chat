@@ -119,6 +119,18 @@ function attachmentName(value: unknown, index: number): string {
   return formatVisibleIds(name);
 }
 
+// A pinned thumbnail opens the original attachment's preview and owns return focus.
+const previewReturnFocus = new WeakMap<HTMLButtonElement, HTMLButtonElement>();
+
+export function openAttachmentPreview(trigger: HTMLButtonElement, returnFocus: HTMLButtonElement) {
+  previewReturnFocus.set(trigger, returnFocus);
+  try {
+    trigger.click();
+  } finally {
+    previewReturnFocus.delete(trigger);
+  }
+}
+
 function InlineImagePreview({ src, alt, onImageError }: {
   readonly src: string;
   readonly alt: string;
@@ -127,11 +139,14 @@ function InlineImagePreview({ src, alt, onImageError }: {
   const [open, setOpen] = useState(false);
   const trigger = useRef<HTMLButtonElement>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
+  const returnFocus = useRef<HTMLButtonElement | undefined>(undefined);
   const titleId = useId();
 
   const close = useCallback(() => {
     setOpen(false);
-    trigger.current?.focus({ preventScroll: true });
+    const thumbnail = returnFocus.current;
+    const target = thumbnail?.isConnected && !thumbnail.closest('[inert]') ? thumbnail : trigger.current;
+    target?.focus({ preventScroll: true });
   }, []);
 
   const fail = useCallback(() => {
@@ -161,7 +176,10 @@ function InlineImagePreview({ src, alt, onImageError }: {
 
   return <>
     <button ref={trigger} type="button" className="tb-chat-image-preview-trigger tb-chat-image-frame"
-      aria-label={'Enlarge ' + alt} aria-haspopup="dialog" onClick={() => setOpen(true)}>
+      aria-label={'Enlarge ' + alt} aria-haspopup="dialog" onClick={event => {
+        returnFocus.current = previewReturnFocus.get(event.currentTarget);
+        setOpen(true);
+      }}>
       <img className="tb-chat-image-preview" src={src} alt={alt} loading="lazy" decoding="async"
         onError={fail} />
     </button>
