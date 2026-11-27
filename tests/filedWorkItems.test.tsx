@@ -339,10 +339,8 @@ describe('filed work item reads', () => {
     expect(gateway.calls).toHaveLength(4);
   });
 
-  it.each(['cached rows only', 'new oldest row', 'previous partial cursor'])(
-    'continues below an older failure when a partial refresh advances the cursor (%s)', async scenario => {
+  it('resumes paging when a partial refresh returns a row older than a complete scan boundary', async () => {
     const { gateway, reader, failures, items } = setup(6);
-    if (scenario === 'previous partial cursor') gateway.omitted.add(5);
     reader.sync(range(5, 6), 'newest');
     await flush();
     gateway.unreadable = 4;
@@ -350,7 +348,6 @@ describe('filed work item reads', () => {
     await flush();
     gateway.unreadable = 0;
     gateway.omitted.add(4);
-    if (scenario === 'cached rows only') gateway.omitted.add(3);
     await reader.refresh();
     reader.sync(range(1, 6), 'older');
     await flush();
@@ -358,7 +355,7 @@ describe('filed work item reads', () => {
       { limit: 2, before: undefined }, { limit: 2, before: '5' },
       { limit: 4, before: undefined }, { limit: 2, before: '3' },
     ]);
-    expect(items().size).toBe(scenario === 'new oldest row' ? 5 : 4);
+    expect(items().size).toBe(5);
     expect(items().has('wi_4')).toBe(false);
     expect(items().has('wi_1')).toBe(true);
     expect(items().has('wi_2')).toBe(true);
@@ -393,56 +390,6 @@ describe('filed work item reads', () => {
     expect(gateway.calls).toEqual([{ limit: 3, before: undefined }, { limit: 3, before: undefined }]);
     expect(items().has('wi_7')).toBe(true);
     expect(items().has('wi_4')).toBe(false);
-    expect(failures).toEqual([true]);
-  });
-
-  it('resumes older paging when a second partial tail advances and returns the same good rows', async () => {
-    const { gateway, reader, failures, items } = setup(8);
-    gateway.omitted.add(7);
-    reader.sync(range(6, 8), 'newest');
-    await flush();
-    gateway.unreadable = 5;
-    reader.sync(range(4, 8), 'older');
-    await flush();
-    gateway.unreadable = 0;
-    gateway.omitted.add(5);
-    gateway.omitted.add(4);
-    await reader.refresh();
-    expect([...items().keys()].sort()).toEqual(['wi_6', 'wi_8']);
-    reader.sync(range(2, 8), 'older');
-    await flush();
-    expect(gateway.calls).toEqual([
-      { limit: 3, before: undefined }, { limit: 2, before: '6' },
-      { limit: 5, before: undefined }, { limit: 2, before: '4' },
-    ]);
-    expect([...items().keys()].sort()).toEqual(['wi_2', 'wi_3', 'wi_6', 'wi_8']);
-    expect(failures).toEqual([true]);
-  });
-
-  it('resumes older paging when a complete refresh advances through a failed cursor', async () => {
-    const { gateway, reader, failures, items } = setup(8);
-    reader.sync(range(7, 8), 'newest');
-    await flush();
-    gateway.unreadable = 6;
-    reader.sync(range(5, 8), 'older');
-    await flush();
-    gateway.unreadable = 0;
-    gateway.omitted.add(6);
-    await reader.refresh();
-    gateway.unreadable = 4;
-    reader.sync(range(3, 8), 'older');
-    await flush();
-    gateway.unreadable = 0;
-    gateway.omitted.clear();
-    await reader.refresh();
-    reader.sync(range(1, 8), 'older');
-    await flush();
-    expect(gateway.calls).toEqual([
-      { limit: 2, before: undefined }, { limit: 2, before: '7' },
-      { limit: 4, before: undefined }, { limit: 2, before: '5' },
-      { limit: 6, before: undefined }, { limit: 2, before: '3' },
-    ]);
-    expect(items().size).toBe(8);
     expect(failures).toEqual([true]);
   });
 

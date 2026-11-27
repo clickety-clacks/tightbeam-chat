@@ -26,6 +26,8 @@ export class FiledWorkItems {
   // An incomplete scan's start and end are opaque. A row returned by a
   // continuation from its end gives us a position known to be below that end.
   private readonly partialPages = new Map<string | undefined, Map<string | null, Position | undefined>>();
+  private readonly emptyPartialParents = new Map<string, Set<string>>();
+  private readonly completeStartsByEnd = new Map<string, Set<string | undefined>>();
   private readonly controller = new AbortController();
   private failedAt = -Infinity;
   private queue: Promise<void> = Promise.resolve();
@@ -135,6 +137,7 @@ export class FiledWorkItems {
     const signal = this.controller.signal;
     const page = await this.read(this.sessionKey, { limit, before }, signal).catch(error => {
       if (!signal.aborted) {
+        this.completeStartsByEnd.clear();
         const alreadyFailed = this.hasFailedCoverage;
         const failed = this.failedPages.get(before) ?? new Set<string>();
         for (const row of rows) failed.add(row.id);
@@ -161,15 +164,10 @@ export class FiledWorkItems {
     const followsCursor = before === this.cursor;
     const completeTail = before === undefined && !page.partial && !page.hasOlder;
     const nextCursor = page.hasOlder ? page.oldestCursor : null;
-    // A fresh scan overlapping the loaded floor can replace a failed cursor
-    // even if omitted rows leave the oldest decoded row unchanged.
-    const replacesFailedCursor = before === undefined && this.olderFailed &&
-      nextCursor !== null && nextCursor !== this.cursor &&
-      (floorAdvanced || page.items.some(item => item.id === previousFloor?.id));
-    // Advance even when every row in the scanned window was omitted. A newer
-    // cursor-free refresh cannot rewind a cursor already past the decoded floor.
-    if (replacesFailedCursor || (this.cursorPastFloor ? followsCursor || completeTail : floorAdvanced || (page.partial && followsCursor))) {
-      // The server advanced past a failed older request while preserving its warning.
+    // A continuation establishes its own ordering, even if it decodes no rows.
+    // Independent tail scans cannot order two opaque ends when a partial page
+    // may have scanned beyond the oldest decoded row.
+    if (this.cursorPastFloor ? followsCursor || completeTail : floorAdvanced || (page.partial && followsCursor)) {
       if (nextCursor !== this.cursor) this.olderFailed = false;
       this.cursor = nextCursor;
       this.cursorPastFloor = page.hasOlder && (page.partial === true || !floorAdvanced && this.cursorPastFloor);
@@ -188,20 +186,25 @@ export class FiledWorkItems {
   private updateCoverage(page: FiledWorkItemPage, rows: readonly Position[], before: string | undefined,
     newest: Position | undefined, oldest: Position | undefined): void {
     const wasFailed = this.hasFailedCoverage;
-    if (before !== undefined && newest) {
-      for (const ends of this.partialPages.values()) {
-        if (!ends.has(before)) continue;
-        const below = ends.get(before);
-        if (!below || newer(newest, below)) ends.set(before, newest);
-      }
-    }
+    if (before !== undefined) this.observeContinuation(page, before, newest);
     if (page.partial) {
       this.failedAt = Date.now();
+      this.completeStartsByEnd.clear();
       const ends = this.partialPages.get(before) ?? new Map<string | null, Position | undefined>();
       if (!ends.has(page.oldestCursor)) ends.set(page.oldestCursor, undefined);
       this.partialPages.set(before, ends);
     } else if (wasFailed) {
-      if (before === undefined && !page.hasOlder) {
+      const completeStarts = new Set<string | undefined>([before]);
+      if (before !== undefined) {
+        for (const start of this.completeStartsByEnd.get(before) ?? []) completeStarts.add(start);
+      }
+      if (page.hasOlder && page.oldestCursor !== null) {
+        const starts = this.completeStartsByEnd.get(page.oldestCursor) ?? new Set<string | undefined>();
+        for (const start of completeStarts) starts.add(start);
+        this.completeStartsByEnd.set(page.oldestCursor, starts);
+      }
+      const coversTail = completeStarts.has(undefined);
+      if (coversTail && !page.hasOlder) {
         this.failedPages.clear();
         this.partialPages.clear();
       } else {
@@ -211,7 +214,7 @@ export class FiledWorkItems {
         // scanned. A complete tail includes every newer start. It covers an
         // incomplete scan if its end matches or it returns a row past that end.
         for (const [start, ends] of this.partialPages) {
-          if (before !== undefined && before !== start) continue;
+          if (!coversTail && !completeStarts.has(start)) continue;
           if (!page.hasOlder) ends.clear();
           else {
             if (page.oldestCursor !== null) ends.delete(page.oldestCursor);
@@ -229,7 +232,33 @@ export class FiledWorkItems {
         }
       }
     }
+    if (!this.partialPages.size) this.emptyPartialParents.clear();
+    if (!this.hasFailedCoverage) this.completeStartsByEnd.clear();
     if (wasFailed !== this.hasFailedCoverage) this.onFailureChange?.(this.hasFailedCoverage);
+  }
+
+  private observeContinuation(page: FiledWorkItemPage, before: string, newest: Position | undefined): void {
+    if (!newest) {
+      if (page.partial && page.oldestCursor !== null && page.oldestCursor !== before) {
+        const parents = this.emptyPartialParents.get(page.oldestCursor) ?? new Set<string>();
+        parents.add(before);
+        this.emptyPartialParents.set(page.oldestCursor, parents);
+      }
+      return;
+    }
+    // The first decoded row can witness several earlier scan ends connected
+    // by successful empty partial continuations.
+    const boundaries = new Set([before]);
+    for (const boundary of boundaries) {
+      for (const parent of this.emptyPartialParents.get(boundary) ?? []) boundaries.add(parent);
+    }
+    for (const ends of this.partialPages.values()) {
+      for (const boundary of boundaries) {
+        if (!ends.has(boundary)) continue;
+        const below = ends.get(boundary);
+        if (!below || newer(newest, below)) ends.set(boundary, newest);
+      }
+    }
   }
 
   stop(): void {
