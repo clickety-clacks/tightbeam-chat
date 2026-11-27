@@ -269,6 +269,44 @@ body {
   height: auto;
   visibility: hidden;
 }
+/* A fixed strip reserves the same space before and after a photo finishes loading. */
+.tb-chat-pinned-photos:not([hidden]) {
+  display: flex;
+  gap: .25rem;
+  height: 3rem;
+  margin-top: .375rem;
+}
+.tb-chat-pinned-summary-text:empty + .tb-chat-pinned-photos { margin-top: 0; }
+.tb-chat-pinned-photos > * {
+  flex: 1 1 3rem;
+  min-width: 0;
+  max-width: 3rem;
+  height: 100%;
+  overflow: hidden;
+  border: 1px solid var(--tb-chat-border);
+  border-radius: .5rem;
+  background: var(--tb-chat-code);
+}
+.tb-chat-pinned-photos > span {
+  display: grid;
+  place-items: center;
+  color: var(--tb-chat-muted);
+  font-size: .7rem;
+}
+.tb-chat-pinned-slot[data-pinned] .tb-chat-pinned-photos:not([inert]) > button {
+  position: relative;
+  z-index: 1;
+  pointer-events: auto;
+  touch-action: pan-y;
+  cursor: zoom-in;
+  padding: 0;
+}
+.tb-chat-pinned-photos img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
 .tb-chat-pinned-jump {
   position: absolute;
   inset: 0;

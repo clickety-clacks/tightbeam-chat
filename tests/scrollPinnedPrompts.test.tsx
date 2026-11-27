@@ -1,4 +1,5 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { MessageAttachments } from '../src/MessageAttachments';
 import { createRef } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { pinnedPromptFrameAt } from '../src/pinnedPromptLayout';
@@ -128,6 +129,46 @@ const translate = (element: HTMLElement | null | undefined) =>
   Number.parseFloat(element?.style.transform.match(/translateY\((-?[\d.e-]+)px\)/)?.[1] ?? 'NaN');
 
 describe('scroll-pinned prompts without scroll timelines', () => {
+  it.each(['', 'Text alongside the photo'])('keeps a prompt photo available in the settled summary (%j)', text => {
+    const photo = { filename: 'sample.png', mimeType: 'image/png', data: 'YQ==' };
+    render(<MessageAttachments attachments={[photo]} />, { container: rows.get('A')! });
+    mount({}, prompts.map(prompt => prompt.scrollKey === 'A' ? { ...prompt, text } : prompt));
+    scrollTo(500);
+    const strip = slotFor('A')!.querySelector<HTMLElement>('.tb-chat-pinned-photos')!;
+    const thumbnail = strip.querySelector('button')!;
+    expect(thumbnail.getAttribute('aria-label')).toBe('Enlarge Image: sample.png');
+    expect(thumbnail.querySelector('img')?.getAttribute('src')).toBe('data:image/png;base64,YQ==');
+    expect(strip.hasAttribute('inert')).toBe(false);
+    fireEvent.click(thumbnail);
+    expect(screen.getByRole('dialog', { name: 'Image: sample.png' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Close image preview' }));
+    expect(document.activeElement).toBe(thumbnail);
+    scrollTo(90);
+    expect(strip.hasAttribute('inert')).toBe(true);
+  });
+
+  it('reuses a delayed authorized photo without changing the measured summary', async () => {
+    let resolve!: (blob: Blob) => void;
+    const read = vi.fn(() => new Promise<Blob>(done => { resolve = done; }));
+    vi.stubGlobal('URL', Object.assign(class extends URL {}, {
+      createObjectURL: () => 'blob:pinned-photo', revokeObjectURL: vi.fn(),
+    }));
+    render(<MessageAttachments attachments={[{ assetId: 'photo', filename: 'sample.png', mimeType: 'image/png', size: 1 }]}
+      readAttachment={read} />, { container: rows.get('A')! });
+    const handle = createRef<ScrollPinnedPromptsHandle>();
+    render(<ScrollPinnedPrompts ref={handle} prompts={prompts} viewport={{ current: viewport }}
+      getRow={key => rows.get(key)} onJump={() => {}} onDismiss={() => {}} />, { container: root });
+    scrollTo(500);
+    const strip = slotFor('A')!.querySelector<HTMLElement>('.tb-chat-pinned-photos')!;
+    expect(strip.hidden).toBe(false);
+    expect(strip.querySelector('button')).toBeNull();
+    const settled = handle.current?.settledBottom('A');
+    await act(async () => { await Promise.resolve(); resolve(new Blob(['x'], { type: 'image/png' })); });
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(strip.querySelector('img')?.getAttribute('src')).toBe('blob:pinned-photo');
+    expect(handle.current?.settledBottom('A')).toBe(settled);
+  });
+
   it('leaves prompts in their natural place until the top reaches the pin line', () => {
     mount();
     scrollTo(90);
@@ -246,14 +287,14 @@ describe('scroll-pinned prompts without scroll timelines', () => {
     expect(replyClicked).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps the copied bubble and summary out of reach of focus and screen readers while pinned', () => {
+  it('keeps the copied bubble and summary text out of reach of focus and screen readers while pinned', () => {
     rows.get('A')!.innerHTML = 'See <a href="#x">this link</a> <button type="button">Retry</button>';
     mount();
     scrollTo(200);
     const slot = slotFor('A')!;
     expect(slot.hasAttribute('data-pinned')).toBe(true);
     expect(slot.hasAttribute('inert')).toBe(false);
-    for (const layer of ['.tb-chat-pinned-full', '.tb-chat-pinned-summary']) {
+    for (const layer of ['.tb-chat-pinned-full', '.tb-chat-pinned-summary-text']) {
       const element = slot.querySelector<HTMLElement>(layer)!;
       expect(element.hasAttribute('inert')).toBe(true);
       expect(element.getAttribute('aria-hidden')).toBe('true');

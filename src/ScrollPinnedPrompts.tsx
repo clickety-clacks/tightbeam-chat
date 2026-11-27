@@ -1,3 +1,4 @@
+import { openAttachmentPreview } from './MessageAttachments';
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react';
 import {
   effectiveSummaryHeight, pinnedPromptBreakpoints, pinnedPromptFrameAt, pinnedPromptKeyframes,
@@ -114,6 +115,7 @@ interface SlotElements {
   body?: HTMLDivElement;
   full?: HTMLDivElement;
   summary?: HTMLDivElement;
+  photos?: HTMLDivElement;
   /** The original row the full layer was copied from. */
   copiedFrom?: HTMLElement;
   copyObserver?: MutationObserver;
@@ -129,6 +131,50 @@ function scrollTimelineConstructor(): TimelineConstructor | undefined {
   const candidate = (globalThis as { ScrollTimeline?: TimelineConstructor }).ScrollTimeline;
   return typeof candidate === 'function' && typeof Element !== 'undefined' &&
     typeof Element.prototype.animate === 'function' ? candidate : undefined;
+}
+
+function promptPhotos(row: HTMLElement) {
+  return Array.from(row.querySelectorAll<HTMLElement>('.tb-chat-image-attachment'));
+}
+
+function photoTrigger(photo: HTMLElement | undefined) {
+  return photo?.querySelector<HTMLButtonElement>('.tb-chat-image-preview-trigger');
+}
+
+function syncPhotoStrip(row: HTMLElement, strip: HTMLElement) {
+  const photos = promptPhotos(row);
+  strip.hidden = photos.length === 0;
+  const thumbnails = photos.map(photo => {
+    const trigger = photoTrigger(photo);
+    const image = trigger?.querySelector('img');
+    return { trigger, image, label: trigger?.getAttribute('aria-label') ??
+      photo.querySelector('[aria-label]')?.getAttribute('aria-label') ?? 'Photo' };
+  });
+  if (strip.children.length === thumbnails.length && thumbnails.every(({ image, label }, index) => {
+    const child = strip.children[index];
+    return child.getAttribute('aria-label') === label &&
+      child.querySelector('img')?.getAttribute('src') === image?.getAttribute('src');
+  })) return false;
+  strip.replaceChildren(...thumbnails.map(({ trigger, image, label }, index) => {
+    if (!trigger || !image) {
+      const placeholder = document.createElement('span');
+      placeholder.setAttribute('role', 'img');
+      placeholder.setAttribute('aria-label', label);
+      placeholder.textContent = 'Photo';
+      return placeholder;
+    }
+    const thumbnail = document.createElement('button');
+    thumbnail.type = 'button';
+    thumbnail.setAttribute('aria-label', label);
+    thumbnail.setAttribute('aria-haspopup', 'dialog');
+    thumbnail.append(image.cloneNode(false));
+    thumbnail.addEventListener('click', () => {
+      const original = photoTrigger(promptPhotos(row)[index]);
+      if (original) openAttachmentPreview(original, thumbnail);
+    });
+    return thumbnail;
+  }));
+  return true;
 }
 
 function copyBubble(row: HTMLElement): HTMLElement {
@@ -273,14 +319,15 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
   /**
    * A prompt's summary: its text clamped to three lines. A prompt whose text fits and
    * that holds nothing but text is already at pinned size; one with images, code or a
-   * table is taller than its text, so it shrinks to the text summary like a long prompt.
+   * table is taller than its text, so it shrinks to a summary with a thumbnail strip for photos.
    * Cached per row, width and text.
    */
   const summaryFor = useCallback((row: HTMLElement, width: number, text: string) => {
     const probe = measure.current;
     const style = getComputedStyle(row);
     const padding = `${style.paddingTop} ${style.paddingRight} ${style.paddingBottom} ${style.paddingLeft}`;
-    const key = `${width}\u0000${padding}\u0000${style.fontSize}\u0000${text}`;
+    const photos = promptPhotos(row).length;
+    const key = `${photos}\u0000${width}\u0000${padding}\u0000${style.fontSize}\u0000${text}`;
     const cached = summaries.current.get(row);
     if (cached?.key === key) return cached;
     if (!probe) return undefined;
@@ -288,6 +335,7 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
     probe.style.padding = padding;
     const probeText = probe.firstElementChild as HTMLElement;
     probeText.textContent = text;
+    (probe.lastElementChild as HTMLElement).hidden = photos === 0;
     const height = probe.getBoundingClientRect().height;
     const truncated = probeText.scrollHeight > probeText.clientHeight + 1;
     const hasMedia = !!row.querySelector('img, video, pre, table, .tb-chat-attachments, .tb-chat-image-attachments');
@@ -423,6 +471,7 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
       const bubble = copyBubble(row);
       bubble.style.width = `${current()?.width ?? row.getBoundingClientRect().width}px`;
       slot.full!.replaceChildren(bubble);
+      if (slot.photos && syncPhotoStrip(row, slot.photos)) scheduleRefresh.current();
     };
     copy();
     slot.copiedFrom = row;
@@ -462,7 +511,12 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
     const source = timeline.current;
     for (const [identity, slot] of slots.current) {
       const index = byIdentity.get(identity);
-      const pinned = index !== undefined && !!pinnedPromptFrameAt(scrollTop, measured, index, options);
+      const frame = index === undefined ? undefined : pinnedPromptFrameAt(scrollTop, measured, index, options);
+      const pinned = frame !== undefined;
+      const photoStripInactive = !frame || frame.fade < .5;
+      if (slot.photos && !slot.photos.hidden && slot.photos.hasAttribute('inert') !== photoStripInactive) {
+        slot.photos.toggleAttribute('inert', photoStripInactive);
+      }
       if (!source) writeFrame(identity, slot, scrollTop);
       if (slot.pinned === pinned || !slot.slot) continue;
       slot.pinned = pinned;
@@ -518,6 +572,26 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
       if (x < left || x > left + width || y < frame.top || y > frame.top + frame.height) continue;
       event.preventDefault();
       event.stopPropagation();
+      // The shrinking copy lets touches reach the transcript for scrolling. A tap
+      // on one of its visible photos still opens the original attachment preview.
+      if (frame.fade < .5) {
+        const slot = slots.current.get(identity);
+        const row = slot?.copiedFrom;
+        const copy = slot?.full;
+        if (row && copy) {
+          const photoIndex = promptPhotos(copy).findIndex(photo => {
+            const rect = photoTrigger(photo)?.getBoundingClientRect();
+            return rect && event.clientX >= rect.left && event.clientX <= rect.right &&
+              event.clientY >= rect.top && event.clientY <= rect.bottom;
+          });
+          const original = photoTrigger(promptPhotos(row)[photoIndex]);
+          const jump = slot.slot?.querySelector<HTMLButtonElement>('.tb-chat-pinned-jump');
+          if (original && jump) {
+            openAttachmentPreview(original, jump);
+            return;
+          }
+        }
+      }
       onJumpRef.current(prompt);
       return;
     }
@@ -566,13 +640,13 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
 
   // Ref callbacks are kept per slot part so React does not detach and reattach them on every render.
   const slotRefs = useRef(new Map<string, (element: HTMLDivElement | null) => void>());
-  const slotRef = (identity: string, part: 'slot' | 'body' | 'full' | 'summary') => {
+  const slotRef = (identity: string, part: 'slot' | 'body' | 'full' | 'summary' | 'photos') => {
     const cacheKey = `${part}\u0000${identity}`;
     let callback = slotRefs.current.get(cacheKey);
     if (!callback) slotRefs.current.set(cacheKey, callback = attachSlotPart(identity, part));
     return callback;
   };
-  const attachSlotPart = (identity: string, part: 'slot' | 'body' | 'full' | 'summary') => (element: HTMLDivElement | null) => {
+  const attachSlotPart = (identity: string, part: 'slot' | 'body' | 'full' | 'summary' | 'photos') => (element: HTMLDivElement | null) => {
     let slot = slots.current.get(identity);
     if (!slot) {
       if (!element) return;
@@ -587,7 +661,7 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
       releaseRow(slot);
       slot.copyObserver?.disconnect();
       slots.current.delete(identity);
-      for (const name of ['slot', 'body', 'full', 'summary']) slotRefs.current.delete(`${name}\u0000${identity}`);
+      for (const name of ['slot', 'body', 'full', 'summary', 'photos']) slotRefs.current.delete(`${name}\u0000${identity}`);
     } else {
       slot[part] = undefined;
     }
@@ -596,6 +670,7 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
   return <div ref={layer} className="tb-chat-pinned-layer">
     <div ref={measure} className="tb-chat-pinned-summary tb-chat-pinned-summary-measure" aria-hidden="true">
       <div className="tb-chat-pinned-summary-text" style={{ WebkitLineClamp: SUMMARY_LINES }} />
+      <div className="tb-chat-pinned-photos" hidden />
     </div>
     {mounted.map(identity => {
       const prompt = promptsByIdentity.current.get(identity);
@@ -605,8 +680,10 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
         <div className="tb-chat-pinned-window">
           <div ref={slotRef(identity, 'body')} className="tb-chat-pinned-body">
             <div ref={slotRef(identity, 'full')} className="tb-chat-pinned-full" aria-hidden="true" inert />
-            <div ref={slotRef(identity, 'summary')} className="tb-chat-pinned-summary" aria-hidden="true" inert>
-              <div className="tb-chat-pinned-summary-text" style={{ WebkitLineClamp: SUMMARY_LINES }}>{prompt.text}</div>
+            <div ref={slotRef(identity, 'summary')} className="tb-chat-pinned-summary">
+              <div className="tb-chat-pinned-summary-text" aria-hidden="true" inert
+                style={{ WebkitLineClamp: SUMMARY_LINES }}>{prompt.text}</div>
+              <div ref={slotRef(identity, 'photos')} className="tb-chat-pinned-photos" hidden inert />
             </div>
             <button type="button" className="tb-chat-pinned-jump" aria-label="Jump to user prompt"
               aria-controls={prompt.targetId} onClick={() => onJump(prompt)} />
