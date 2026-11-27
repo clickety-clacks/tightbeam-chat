@@ -596,6 +596,76 @@ describe('conversation reading position', () => {
     }
   });
 
+  it.each([true, false])('keeps a streaming height change continuous with scroll-pinned prompts=%s', pinned => {
+    extraBottomSpace = 94;
+    rowHeightOverrides.set('message-20', 30);
+    const { runtime, box } = setup(initialRows, undefined, pinned);
+    const prompt = initialRows.at(-1)!;
+    const activeTurn = createTurnProvenance({
+      seq: 20, sessionKey: 'reading', messageId: prompt.id, origin: 'user:person',
+      status: 'running', triggerSource: 'human', raw: { seq: 20, origin: 'user:person' },
+    }, [prompt], 'person', 'person');
+    const reply = { ...message(20), role: 'assistant' as const, sender: 'assistant', replyToMessageId: prompt.id };
+    act(() => runtime.publish({ activityTurnStateAvailable: true, activeTurn, records: [...initialRows, reply] }));
+    for (let frame = 0; frame < 8 && animationFrames.size > 0; frame++) {
+      advanceNextFrame(performance.now() + 300 + frame * 300);
+    }
+    const beforeGrowth = box.scrollTop;
+    rowHeightOverrides.set('message-20', 65);
+    act(() => runtime.publish({ records: [...initialRows, { ...reply, content: 'More streamed text' }] }));
+
+    const bottom = box.scrollHeight - box.clientHeight;
+    expect(bottom).toBeGreaterThan(beforeGrowth);
+    expect(box.scrollTop).toBe(pinned ? beforeGrowth : bottom);
+    if (pinned) {
+      const intermediateFrame = performance.now() + 60;
+      for (let frame = 0; frame < 8 && box.scrollTop === beforeGrowth && animationFrames.size > 0; frame++) {
+        advanceNextFrame(intermediateFrame);
+      }
+      expect(box.scrollTop).toBeGreaterThan(beforeGrowth);
+      expect(box.scrollTop).toBeLessThan(bottom);
+      for (let frame = 0; frame < 8 && animationFrames.size > 0; frame++) {
+        advanceNextFrame(performance.now() + 300 + frame * 300);
+      }
+      expect(box.scrollTop).toBe(bottom);
+    }
+  });
+
+  it.each([false, true])('reconciles keyboard resize during streaming with a glide in flight=%s', inFlight => {
+    viewportHeight = 874;
+    const visualViewport = installVisualViewport(874);
+    rowHeightOverrides.set('message-20', 30);
+    const { runtime, box } = setup(initialRows, undefined, true);
+    const prompt = initialRows.at(-1)!;
+    const activeTurn = createTurnProvenance({
+      seq: 20, sessionKey: 'reading', messageId: prompt.id, origin: 'user:person',
+      status: 'running', triggerSource: 'human', raw: { seq: 20, origin: 'user:person' },
+    }, [prompt], 'person', 'person');
+    const reply = { ...message(20), role: 'assistant' as const, sender: 'assistant', replyToMessageId: prompt.id };
+    act(() => runtime.publish({ activityTurnStateAvailable: true, activeTurn, records: [...initialRows, reply] }));
+    for (let frame = 0; frame < 8 && animationFrames.size > 0; frame++) {
+      advanceNextFrame(performance.now() + 300 + frame * 300);
+    }
+    const oldBottom = box.scrollTop;
+    if (inFlight) {
+      rowHeightOverrides.set('message-20', 65);
+      act(() => runtime.publish({ records: [...initialRows, { ...reply, content: 'More streamed text' }] }));
+      expect(box.scrollTop).toBe(oldBottom);
+      expect(box.scrollHeight - box.clientHeight).toBeGreaterThan(oldBottom);
+    }
+
+    act(() => visualViewport.resizeTo(529));
+    const keyboardBottom = box.scrollHeight - box.clientHeight;
+    expect(keyboardBottom).toBeGreaterThan(oldBottom);
+    expect(box.scrollTop).toBe(keyboardBottom);
+    for (let frame = 0; frame < 8 && animationFrames.size > 0; frame++) {
+      advanceNextFrame(performance.now() + 300 + frame * 300);
+    }
+    expect(box.scrollTop).toBe(keyboardBottom);
+    act(() => visualViewport.resizeTo(874));
+    expect(box.scrollTop).toBe(box.scrollHeight - box.clientHeight);
+  });
+
   it('follows a streaming reply until it fills the unobscured area, then holds its top', () => {
     extraBottomSpace = 178;
     const { runtime, box } = setup();

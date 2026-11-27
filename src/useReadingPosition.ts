@@ -18,6 +18,7 @@ type IncomingMessageArrival = {
   locked: boolean;
   mode?: 'bottom' | 'top';
   lockedTarget?: number;
+  measuredHeight?: number;
   awaitingReducedMotionTopCommit?: boolean;
 };
 
@@ -260,6 +261,7 @@ export function useReadingPosition(
     const rowBounds = row.getBoundingClientRect();
     const groupEndBounds = groupEndRow.getBoundingClientRect();
     const arrivalHeight = Math.max(rowBounds.height, groupEndBounds.bottom - rowBounds.top);
+    arrival.measuredHeight = arrivalHeight;
     const visibleHeight = Math.max(0, bounds.bottom - bounds.top);
     if (arrival.mode === undefined && arrivalHeight > visibleHeight) {
       arrival.mode = 'top';
@@ -703,8 +705,27 @@ export function useReadingPosition(
     if (incoming) {
       if (!incoming.locked && canAnimateArrival && appendedRows.length) animateArrivalRows(appendedRows);
       if (incoming.streaming && !incoming.locked) {
+        const previousHeight = incoming.measuredHeight;
         const destination = incomingMessageTarget(box, incoming);
+        const followsPinnedPrompt = pinnedPromptBottomRef.current !== undefined &&
+          incoming.answeredPromptScrollKey !== undefined;
+        if (followsPinnedPrompt && viewportResized(box)) {
+          // Reconcile the viewport before paint, even when reply growth started a glide.
+          recordLayoutRestoreOffsets(box);
+          cancelArrivalAnimations();
+          box.scrollTop = destination;
+          updateLatestControl(box);
+          capture();
+          return;
+        }
+        const glidePastPrompt = canAnimateArrival && followsPinnedPrompt && previousHeight !== undefined &&
+          (incoming.measuredHeight ?? previousHeight) > previousHeight + .5;
         if (arrivalStartTime.current !== undefined) {
+          // Start from the position already on screen if a chunk changes the destination.
+          if (glidePastPrompt && target.current !== undefined && Math.abs(target.current - destination) > .5) {
+            arrivalStartTop.current = box.scrollTop;
+            arrivalStartTime.current = performance.now();
+          }
           target.current = destination;
           updateLatestControl(box);
           capture();
@@ -714,7 +735,8 @@ export function useReadingPosition(
           const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
           startArrivalScroll([], reduceMotion);
         } else if (Math.abs(box.scrollTop - destination) > .5) {
-          box.scrollTop = destination;
+          if (glidePastPrompt) startArrivalScroll([], false);
+          else box.scrollTop = destination;
         }
         updateLatestControl(box);
         capture();
@@ -875,6 +897,11 @@ export function useReadingPosition(
     }
     if (arrivalStartTime.current !== undefined && !readerInitiated) {
       const incoming = incomingMessageArrival.current;
+      if (resized && incoming?.streaming && !incoming.locked && incoming.answeredPromptScrollKey !== undefined &&
+        pinnedPromptBottomRef.current !== undefined) {
+        updateLayout();
+        return;
+      }
       target.current = incoming ? incomingMessageTarget(box, incoming) : bottom;
       updateLatestControl(box);
       capture();
