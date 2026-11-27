@@ -26,7 +26,9 @@ class Visible {
   }
 }
 
-function chat(items: readonly WorkItemSummary[], options: { pills?: boolean; failList?: boolean; message?: string; omitFromList?: boolean } = {}) {
+function chat(items: readonly WorkItemSummary[], options: {
+  pills?: boolean; failList?: boolean; message?: string; omitFromList?: boolean; missingOnTap?: boolean;
+} = {}) {
   const counts: Record<string, number> = {};
   const count = (name: string) => { counts[name] = (counts[name] ?? 0) + 1; };
   let emit: (change: WorkItemChange) => void = () => {};
@@ -45,7 +47,7 @@ function chat(items: readonly WorkItemSummary[], options: { pills?: boolean; fai
     readCards: async (id) => {
       count('cards');
       const item = items.find((row) => row.id === id);
-      if (!item) return undefined;
+      if (!item || options.missingOnTap) return undefined;
       return { item, cards: [{ id: 'asg_1', open: item.holders.length > 0, holderKey: 'agent:a' }] }; },
     readBreathing: async () => { count('breathing'); return { reason: 'pending_wake', holders: [],
       wake: { wakeId: 'w1', sessionKey: 'agent:a', dueAt: Date.now() + 3_600_000, createdAt: 1 } }; },
@@ -203,17 +205,29 @@ describe('the sheet', () => {
     expect(healthy.counts).toEqual({ page: 1 });
   });
 
-  it('keeps focus inside and returns it to the pill', async () => {
-    chat([summary(1)]);
+  it('tabs from Close to the scroll region around both the title and details', async () => {
+    const run = chat([summary(1)]);
     const pill = (await pills())[0];
     pill.focus();
     fireEvent.click(pill);
     const dialog = await screen.findByRole('dialog');
-    await within(dialog).findByText('No reason given');
-    fireEvent.keyDown(document.activeElement!, { key: 'Tab' });
-    expect(dialog.contains(document.activeElement)).toBe(true);
+    const detail = await within(dialog).findByText('No reason given');
+    const close = within(dialog).getByRole('button', { name: 'Close work item' });
+    const scroll = dialog.querySelector<HTMLElement>('.tb-chat-work-sheet-scroll')!;
+    const counts = { ...run.counts };
+    expect(document.activeElement).toBe(close);
+    fireEvent.keyDown(close, { key: 'Tab' });
+    expect(document.activeElement).toBe(scroll);
+    expect(scroll.contains(within(dialog).getByRole('heading', { level: 2 }))).toBe(true);
+    expect(scroll.contains(detail)).toBe(true);
+    fireEvent.keyDown(scroll, { key: 'Tab' });
+    const insert = within(dialog).getByRole('button', { name: 'Insert work item ID' });
+    expect(document.activeElement).toBe(insert);
+    fireEvent.keyDown(insert, { key: 'Tab' });
+    expect(document.activeElement).toBe(close);
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(document.activeElement).toBe(pill);
+    expect(run.counts).toEqual(counts);
   });
 
   it('tells a host when the sheet opens and closes', async () => {
@@ -238,13 +252,15 @@ describe('work item IDs in messages and the composer', () => {
 
   it('links only full IDs in ordinary message text and opens the same scoped dialog on activation', async () => {
     const run = chat([summary(1, { state: 'closed', holders: [] })], { omitFromList: true,
-      message: `Review (${id}). Leave \`${id}\` in code, [reference](${external}), wi_1234 and pre-${id}.` });
+      message: `Review (${id}), provider-auth:abcdef0123456789. Leave \`${id}\` in code, [reference](${external}), wi_1234 and pre-${id}.` });
     const link = await reference();
     expect(link.getAttribute('href')).toBe(`#${id}`);
     expect(link.getAttribute('aria-haspopup')).toBe('dialog');
     expect(screen.getAllByRole('link', { name: 'wi_0000' })).toHaveLength(1);
     expect(run.view.container.querySelector('.tb-chat-markdown code')?.textContent).toBe('wi_0000');
     expect(screen.getByRole('link', { name: 'reference' }).getAttribute('href')).toBe(external);
+    const markdown = link.closest('.tb-chat-markdown');
+    expect(markdown?.textContent).toContain('Review (wi_0000), provider-auth:abcd.');
     await waitFor(() => expect(run.counts).toEqual({ page: 1 }));
     link.focus();
     fireEvent.click(link);
@@ -262,6 +278,19 @@ describe('work item IDs in messages and the composer', () => {
     expect(await within(dialog).findByText('This work item is no longer available.')).toBeTruthy();
     expect(within(dialog).queryByRole('button', { name: 'Insert work item ID' })).toBeNull();
     expect(run.counts).toEqual({ cards: 1 });
+  });
+
+  it.each([false, true])('hides the ID action after a cached open item is confirmed gone (legacy host: %s)', async legacyHost => {
+    if (legacyHost) vi.stubGlobal('__TIGHTBEAM_CHAT_HOST__', { versions: [1], onEvent: vi.fn() });
+    const run = chat([summary(1)], { message: `Check ${id}.`, missingOnTap: true });
+    expect(await pills()).toHaveLength(1);
+    expect(run.counts).toEqual({ page: 1 });
+    fireEvent.click(await reference());
+    const dialog = await screen.findByRole('dialog');
+    await within(dialog).findByText('This work item is no longer available.');
+    expect(within(dialog).queryByRole('button', { name: /(?:Insert|Copy) work item ID/ })).toBeNull();
+    expect(run.counts).toEqual({ page: 1, cards: 1 });
+    expect(run.send).not.toHaveBeenCalled();
   });
 
   it('keeps references as plain text when pills are disabled', async () => {

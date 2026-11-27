@@ -626,11 +626,19 @@ function formatVisibleMarkdownIds(linkItems = false) {
       node.children = node.children.flatMap(child => {
         const value: string | undefined = child?.type === 'text' && typeof child.value === 'string' ? child.value : undefined;
         if (linkChildren && value?.includes('wi_')) {
-          return value.split(/([A-Za-z0-9_-]+)/).filter(Boolean).map(token =>
-            isWorkItemId(token)
-              ? { type: 'element', tagName: 'a', properties: { href: `#${token}`, dataWorkItemId: token },
-                  children: [{ type: 'text', value: formatVisibleIds(token) }] }
-              : { type: 'text', value: formatVisibleIds(token) });
+          const parts: Record<string, unknown>[] = [];
+          let offset = 0;
+          for (const match of value.matchAll(/[A-Za-z0-9_-]+/g)) {
+            const token = match[0];
+            if (!isWorkItemId(token)) continue;
+            const index = match.index!;
+            if (index > offset) parts.push({ type: 'text', value: formatVisibleIds(value.slice(offset, index)) });
+            parts.push({ type: 'element', tagName: 'a', properties: { href: `#${token}`, dataWorkItemId: token },
+              children: [{ type: 'text', value: formatVisibleIds(token) }] });
+            offset = index + token.length;
+          }
+          if (offset < value.length) parts.push({ type: 'text', value: formatVisibleIds(value.slice(offset)) });
+          return parts;
         }
         visit(child, linkChildren);
         return [child];
