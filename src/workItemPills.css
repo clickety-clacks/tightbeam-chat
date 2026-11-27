@@ -145,7 +145,7 @@
 .tb-chat-work-layer {
   position: absolute;
   z-index: 10;
-  inset: 0;
+  inset: var(--tb-chat-visible-top-inset, 0px) 0 var(--tb-chat-keyboard-inset, 0px);
   display: flex;
   align-items: flex-end;
   justify-content: center;

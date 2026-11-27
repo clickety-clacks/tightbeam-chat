@@ -3349,9 +3349,11 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
       }
       element.style.setProperty('--tb-chat-full-height', `${fullHeight}px`);
       const visibleBottom = visual ? visual.offsetTop + visual.height : window.innerHeight;
-      const bottom = element.getBoundingClientRect().bottom;
-      const keyboardInset = Math.max(0, bottom - visibleBottom);
+      const rootBounds = element.getBoundingClientRect();
+      const keyboardInset = Math.max(0, rootBounds.bottom - visibleBottom);
+      const visibleTopInset = Math.max(0, (visual?.offsetTop ?? 0) - rootBounds.top);
       element.style.setProperty('--tb-chat-keyboard-inset', `${keyboardInset}px`);
+      element.style.setProperty('--tb-chat-visible-top-inset', `${visibleTopInset}px`);
       const viewportGeometryChanged = currentHeight !== lastRootHeight || keyboardInset !== lastKeyboardInset;
       lastRootHeight = currentHeight;
       lastKeyboardInset = keyboardInset;
