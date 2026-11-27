@@ -97,6 +97,18 @@ const cases: Case[] = [
     calls: [[2], [6], [2], [6, 7]], shown: range(1, 8), warnings: [true, false],
   },
   {
+    name: 'a mixed partial refresh includes cached intervening rows in the next scoped read', newest: 8,
+    steps: [load(7, 8, 'newest'), { newest: 9 }, load(3, 9, 'newest'), { omit: [3] }, refresh,
+      { omit: [] }, load(1, 9)],
+    calls: [[2], [1], [7], [6, 7]], shown: range(1, 9), warnings: [true],
+  },
+  {
+    name: 'intervening rows use one capped read with no automatic continuation', newest: 70,
+    steps: [load(69, 70, 'newest'), load(21, 70, 'live'), { omit: [21] }, refresh,
+      { omit: [] }, load(1, 70), load(1, 70)],
+    calls: [[2], [50], [50, 69]], shown: range(19, 70), warnings: [true],
+  },
+  {
     name: 'a shorter complete refresh does not rewind a partial cursor advanced after failure',
     newest: 8,
     steps: [load(7, 8, 'newest'), { failBefore: 7 }, load(3, 8),
@@ -112,10 +124,8 @@ const cases: Case[] = [
   },
 ];
 
-const ids = new Map(range(1, 10).map(number => [number, 'wi_' + number]));
-const cursors = new Map(range(1, 10).map(number => [
-  number, ['dawn', 'elm', 'frost', 'grove', 'harbor', 'iris', 'jade', 'kite', 'linen', 'mist'][number - 1],
-]));
+const ids = new Map(range(1, 70).map(number => [number, 'wi_' + number]));
+const cursors = new Map(range(1, 70).map(number => [number, 'scope-' + ((number * 37) % 83).toString(36)]));
 const item = (number: number): WorkItemSummary => ({
   id: ids.get(number)!, createdAt: number, rowVersion: 1, title: 'Item ' + number,
   state: 'open', started: false, holders: [], failReason: null,

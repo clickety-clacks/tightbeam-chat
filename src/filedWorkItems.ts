@@ -21,6 +21,7 @@ export class FiledWorkItems {
   private cursor: string | null | undefined;
   private cursorPastFloor = false;
   private cursorAnchor?: Position; // The position confirmed for this exact cursor.
+  private repairableGap = false;
   private tailRequested = false;
   private olderFailed = false;
   private readonly failedPages = new Map<string | undefined, Set<string>>();
@@ -111,8 +112,14 @@ export class FiledWorkItems {
     if (!before) return;
     const rows = this.below(this.filed);
     const canCheckAbsence = !this.cursorPastFloor;
-    const limit = Math.min(PAGE_LIMIT, added.length);
-    const page = await this.page(limit, (canCheckAbsence ? rows : added).slice(0, limit), before).catch(error => {
+    const anchor = this.cursorAnchor;
+    const oldestDemand = added.at(-1);
+    // Cached intervening rows still occupy slots in the server's ordered scan.
+    const span = this.repairableGap && anchor && oldestDemand
+      ? this.filed.filter(row => newer(anchor, row) && !newer(oldestDemand, row) && !this.absent.has(row.id))
+      : undefined;
+    const limit = Math.min(PAGE_LIMIT, Math.max(added.length, span?.length ?? 0));
+    const page = await this.page(limit, (span ?? (canCheckAbsence ? rows : added)).slice(0, limit), before).catch(error => {
       // A concurrent refresh may already have replaced the failed cursor.
       if (this.cursor === before) this.olderFailed = true;
       throw error;
@@ -172,8 +179,11 @@ export class FiledWorkItems {
     // A full complete page identifies the row at its cursor. When a later
     // partial scan includes that row, a different stable end must be older.
     const anchor = this.cursorAnchor;
-    const advancesAnchor = nextCursor !== null && nextCursor !== this.cursor && anchor && oldest &&
-      (newer(anchor, oldest) || (page.partial && oldest.id === anchor.id && oldest.at === anchor.at));
+    const scansPastAnchor = anchor && oldest && (newer(anchor, oldest) ||
+      (page.partial && page.oldestCursor !== null && page.oldestCursor !== this.cursor &&
+        oldest.id === anchor.id && oldest.at === anchor.at));
+    const advancesAnchor = nextCursor !== null && nextCursor !== this.cursor && scansPastAnchor;
+    if (keepsHealthyCursor && scansPastAnchor) this.repairableGap = true;
     // A continuation establishes its own ordering, even if it decodes no rows.
     // Independent tail scans cannot order two opaque ends when a partial page
     // may have scanned beyond the oldest decoded row.
@@ -248,7 +258,10 @@ export class FiledWorkItems {
         }
       }
     }
-    if (!this.partialPages.size) this.emptyPartialParents.clear();
+    if (!this.partialPages.size) {
+      this.emptyPartialParents.clear();
+      this.repairableGap = false;
+    }
     if (!this.hasFailedCoverage) this.completeStartsByEnd.clear();
     if (wasFailed !== this.hasFailedCoverage) this.onFailureChange?.(this.hasFailedCoverage);
   }
