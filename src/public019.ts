@@ -377,8 +377,12 @@ export function decodeRecordEvent(value: unknown, sessionKey: string): SessionRe
 
 export function decodeWorkItemSummary(value: unknown): WorkItemSummary {
   const row = record(value);
+  const state = requiredString(row, 'state');
+  const closeReason = row.closeReason;
   return Object.freeze({ id: requiredString(row, 'id'), title: requiredString(row, 'title'),
-    state: requiredString(row, 'state'), started: row.started === true,
+    state, started: row.started === true,
+    ...(state === 'closed' && (closeReason === 'completed' || closeReason === 'canceled' || closeReason === 'superseded')
+      ? { closeReason } : {}),
     holders: stringList(row.holders ?? [], 'work item holders'),
     failReason: readableOptionalString(row, 'failReason', 'work item') ?? null,
     createdAt: nonnegativeInteger(row, 'createdAt'), rowVersion: nonnegativeInteger(row, 'rowVersion') });

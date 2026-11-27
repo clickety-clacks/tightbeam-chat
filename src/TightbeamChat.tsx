@@ -3820,7 +3820,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
       recoverySnapshot={recoverySnapshot} agentName={agentName}
       suppressStatus={host.optedIn} onSettings={openSettings} onSubmitted={reading.scrollToLatest} />}
     {runtime.workItemPills && <WorkItems pills={runtime.workItemPills.pills} transport={runtime.workItemPills.transport}
-      folded={workItemsFolded} onShown={setWorkItemsShown}
+      folded={workItemsFolded} fetchFailed={state.workItemPillsFetchFailed} onShown={setWorkItemsShown}
       openId={workItemOpen ? openedWorkItem.id : undefined} onOpen={openWorkItem} onClose={closeWorkItem}
       onInsert={!host.composerHidden || (host.draftInsertRequested && host.ready) ? insertWorkItemId : undefined} />}
     {overlay && <ReleaseNotesDialog overlay={overlay} entries={bundledNotes} onClose={closeOverlay}
