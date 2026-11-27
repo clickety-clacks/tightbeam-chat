@@ -132,15 +132,18 @@ export class FiledWorkItems {
     });
     if (signal.aborted) return;
     if (this.failedPages.size) {
-      // A different request can recover rows it returns. Only the same cursor
-      // can also resolve a requested row that the server legitimately omitted.
-      const returned = new Set(page.items.map(item => item.id));
-      const requested = new Set(rows.map(row => row.id));
-      for (const [cursor, failed] of this.failedPages) {
-        for (const id of failed) {
-          if (returned.has(id) || (cursor === before && requested.has(id))) failed.delete(id);
+      // A complete tail covers every older range, including rows legitimately
+      // absent for this reader. A partial page only resolves its own coverage.
+      if (before === undefined && !page.hasOlder) this.failedPages.clear();
+      else {
+        const returned = new Set(page.items.map(item => item.id));
+        const requested = new Set(rows.map(row => row.id));
+        for (const [cursor, failed] of this.failedPages) {
+          for (const id of failed) {
+            if (returned.has(id) || (cursor === before && requested.has(id))) failed.delete(id);
+          }
+          if (!failed.size) this.failedPages.delete(cursor);
         }
-        if (!failed.size) this.failedPages.delete(cursor);
       }
       if (!this.failedPages.size) this.onFailureChange?.(false);
     }
