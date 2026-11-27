@@ -504,6 +504,7 @@ export interface RuntimeState {
   readonly recordEventsError?: string;
   /** Known summaries of filed items, by work item id. Absence means unknown. */
   readonly workItems?: ReadonlyMap<string, WorkItemSummary>;
+  readonly workItemPillsFetchFailed?: boolean;
   readonly toolCallsEnabled?: boolean;
   /** Optional array for custom hosts; the live runtime uses the persistent index. */
   readonly toolCalls?: readonly ToolCallRecord[];

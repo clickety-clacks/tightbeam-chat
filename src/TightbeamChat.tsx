@@ -3755,7 +3755,8 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
       recoverySnapshot={recoverySnapshot} agentName={agentName}
       suppressStatus={host.optedIn} onSettings={openSettings} onSubmitted={reading.scrollToLatest} />}
     {runtime.workItemPills && <WorkItems pills={runtime.workItemPills.pills} transport={runtime.workItemPills.transport}
-      folded={workItemsFolded} sheetSlot={overlay === null} onShown={setWorkItemsShown} onSheetOpen={setWorkItemOpen} />}
+      folded={workItemsFolded} fetchFailed={state.workItemPillsFetchFailed} sheetSlot={overlay === null}
+      onShown={setWorkItemsShown} onSheetOpen={setWorkItemOpen} />}
     {overlay && <ReleaseNotesDialog overlay={overlay} entries={bundledNotes} onClose={closeOverlay}
       onOpenReleaseNotes={openReleaseNotes} onBack={backToSettings}
       submitterAttributionEnabled={submitterAttributionEnabled === true} />}

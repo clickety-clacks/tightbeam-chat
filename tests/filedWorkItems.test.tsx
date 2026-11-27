@@ -17,6 +17,7 @@ const flush = () => vi.advanceTimersByTimeAsync(0);
 function setup(total: number) {
   const gateway = { total, unreadable: 0, version: 1, calls: [] as Array<{ limit: number; before?: string }> };
   let items: ReadonlyMap<string, WorkItemSummary> = new Map();
+  const failures: boolean[] = [];
   const reader = new FiledWorkItems('selected', async (_key, { limit, before }): Promise<FiledWorkItemPage> => {
     gateway.calls.push({ limit, before });
     const end = before ? Number(before) - 1 : gateway.total;
@@ -24,8 +25,8 @@ function setup(total: number) {
     // One bad row fails every page that includes it.
     if (gateway.unreadable >= start && gateway.unreadable <= end) throw new Error('unavailable');
     return { items: range(start, end).map(row => item(row.at, gateway.version)), oldestCursor: String(start), hasOlder: start > 1 };
-  }, next => { items = next; });
-  return { gateway, reader, items: () => items };
+  }, next => { items = next; }, undefined, failed => failures.push(failed));
+  return { gateway, reader, failures, items: () => items };
 }
 
 describe('filed work item reads', () => {
@@ -141,6 +142,41 @@ describe('filed work item reads', () => {
     }
     expect(gateway.calls).toHaveLength(1);
     expect(items().size).toBe(2);
+  });
+
+  it('clears a failed list on a successful empty response using the existing retry', async () => {
+    const { gateway, reader, failures, items } = setup(0);
+    gateway.unreadable = 1;
+    reader.sync(range(1, 1), 'newest');
+    await flush();
+    reader.sync(range(1, 1), 'newest');
+    await flush();
+    expect(failures).toEqual([true]);
+    expect(gateway.calls).toHaveLength(1);
+    gateway.unreadable = 0;
+    await vi.advanceTimersByTimeAsync(30_000);
+    reader.sync(range(1, 1), 'newest');
+    await flush();
+    expect(failures).toEqual([true, false]);
+    expect(gateway.calls).toHaveLength(2);
+    expect(items().size).toBe(0);
+  });
+
+  it('retains good rows during a failed refresh and publishes recovery on the next refresh', async () => {
+    const { gateway, reader, failures, items } = setup(2);
+    reader.sync(range(1, 2), 'newest');
+    await flush();
+    const cached = items();
+    gateway.unreadable = 1;
+    await reader.refresh();
+    expect(failures).toEqual([true]);
+    expect(items()).toBe(cached);
+    gateway.unreadable = 0;
+    gateway.version = 2;
+    await reader.refresh();
+    expect(failures).toEqual([true, false]);
+    expect(items().get('wi_1')?.rowVersion).toBe(2);
+    expect(gateway.calls).toHaveLength(3);
   });
 
   it('refreshes known rows with one read and stops cleanly', async () => {

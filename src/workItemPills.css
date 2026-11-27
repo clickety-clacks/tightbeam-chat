@@ -67,6 +67,18 @@
   font-size: .8rem !important;
   font-weight: 600 !important;
 }
+.tb-chat-work-fetch-failed {
+  flex: none;
+  max-width: 100%;
+  padding: .35rem .65rem;
+  border: 1px solid var(--tb-chat-border);
+  border-radius: 999px;
+  color: var(--tb-chat-danger);
+  background: var(--tb-chat-agent-surface-start);
+  font-size: .75rem;
+  font-weight: 600;
+  line-height: 1.2;
+}
 .tb-chat-work-toggle[aria-expanded="true"] { color: var(--tb-chat-accent) !important; }
 .tb-chat-work-toggle-running { width: .5rem; height: .5rem; border-radius: 50%; background: var(--tb-chat-fjord); }
 .tb-chat-work-scroller {

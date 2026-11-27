@@ -20,6 +20,7 @@ export class FiledWorkItems {
   private floor?: Position; // Oldest row listed so far; `cursor` continues below it.
   private cursor: string | null = null;
   private olderFailed = false;
+  private readonly failedPages = new Set<string | undefined>();
   private readonly controller = new AbortController();
   private failedAt = -Infinity;
   private queue: Promise<void> = Promise.resolve();
@@ -28,7 +29,8 @@ export class FiledWorkItems {
     private readonly read: NonNullable<ChatTransport['readFiledWorkItems']>,
     private readonly publish: (items: ReadonlyMap<string, WorkItemSummary>) => void,
     /** Watch the loaded items first, so a change cannot fall between the read and the watch. */
-    private readonly beforeRead?: (ids: readonly string[]) => Promise<unknown>) {}
+    private readonly beforeRead?: (ids: readonly string[]) => Promise<unknown>,
+    private readonly onFailureChange?: (failed: boolean) => void) {}
 
   /** A live event makes no read; its title waits for the next newest-history load. */
   sync(events: readonly SessionRecordEvent[], load: RecordEventLoad): void {
@@ -114,8 +116,18 @@ export class FiledWorkItems {
 
   private async page(limit: number, before?: string): Promise<void> {
     if (this.controller.signal.aborted) return;
-    const page = await this.read(this.sessionKey, { limit, before }, this.controller.signal);
-    if (this.controller.signal.aborted || !page.items.length) return;
+    const signal = this.controller.signal;
+    const page = await this.read(this.sessionKey, { limit, before }, signal).catch(error => {
+      if (!signal.aborted) {
+        const alreadyFailed = this.failedPages.size > 0;
+        this.failedPages.add(before);
+        if (!alreadyFailed) this.onFailureChange?.(true);
+      }
+      throw error;
+    });
+    if (signal.aborted) return;
+    if (this.failedPages.delete(before) && !this.failedPages.size) this.onFailureChange?.(false);
+    if (!page.items.length) return;
     const items = new Map(this.items);
     for (const item of page.items) {
       const known = items.get(item.id);
