@@ -11,7 +11,7 @@ import './workItemPills.css';
 type ShownState = WorkItemPillState | 'waiting' | 'you';
 
 const words: Readonly<Record<ShownState, string>> = {
-  'not-started': 'Not started', held: 'Held', working: 'Working now', 'between-hands': 'Between hands', done: 'Done',
+  'not-started': 'Not started', held: 'Held', working: 'Working now', 'between-hands': 'Between hands', done: 'Closed',
   failed: 'Failed', shelved: 'Shelved', waiting: 'Waiting', you: 'Waiting on you',
 };
 
