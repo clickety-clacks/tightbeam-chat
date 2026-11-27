@@ -29,11 +29,14 @@ export type HostComposerEvent =
   | { readonly event: 'uncertain'; readonly lifetimeId: string; readonly correlationId: string; readonly attempt: number;
       readonly reason: 'ack-lost' | 'accepted-unreconciled' | 'lifetime-ended' | 'retry-unavailable' }
   | HostRestoreRequestedEvent
+  | { readonly event: 'draft-insert-requested'; readonly version: 1; readonly lifetimeId: string;
+      readonly sessionKey: string; readonly text: string }
   | HostAgentModelEvent;
 
 /** Optional host events a declaration can opt into; each lists the event versions the host handles. */
 export const HOST_RESTORE_REQUESTED_EVENT = 'restore-requested';
 export const HOST_AGENT_MODEL_EVENT = 'agent-model';
+const HOST_DRAFT_INSERT_REQUESTED_EVENT = 'draft-insert-requested';
 
 /**
  * The model text Chat's own composer would show after the agent name, or null when
@@ -84,7 +87,8 @@ export interface HostComposerDeclaration {
   readonly versions: readonly number[];
   readonly onEvent: (event: HostComposerEvent) => void;
   /** Optional events the host handles, by name, each with the event versions it accepts. */
-  readonly events?: { readonly 'restore-requested'?: readonly number[]; readonly 'agent-model'?: readonly number[] };
+  readonly events?: { readonly 'restore-requested'?: readonly number[]; readonly 'agent-model'?: readonly number[];
+    readonly 'draft-insert-requested'?: readonly number[] };
 }
 
 /** JSON-safe native photo input; bytes follow the web attachment preparation path. */
@@ -120,6 +124,7 @@ export interface HostComposerSnapshot {
   readonly settingsRequestRevision: number;
   /** The declaration lists restore-requested version 1. */
   readonly restoreRequested: boolean;
+  readonly draftInsertRequested: boolean;
 }
 
 interface Attempt {
@@ -146,7 +151,7 @@ interface Lifetime {
 }
 
 const emptySnapshot: HostComposerSnapshot = Object.freeze({
-  optedIn: false, composerHidden: false, ready: false, settingsRequestRevision: 0, restoreRequested: false,
+  optedIn: false, composerHidden: false, ready: false, settingsRequestRevision: 0, restoreRequested: false, draftInsertRequested: false,
 });
 const correlationPattern = /^c_[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const declinedDeclarations = new WeakSet<object>();
@@ -221,7 +226,7 @@ export class HostComposerBridge {
       return null;
     }
     return new HostComposerBridge(target, handler, declaresEvent(raw, HOST_RESTORE_REQUESTED_EVENT),
-      declaresEvent(raw, HOST_AGENT_MODEL_EVENT));
+      declaresEvent(raw, HOST_AGENT_MODEL_EVENT), declaresEvent(raw, HOST_DRAFT_INSERT_REQUESTED_EVENT));
   }
 
   private readonly listeners = new Set<() => void>();
@@ -238,8 +243,9 @@ export class HostComposerBridge {
   private reportedOverlayOpen = false;
 
   private constructor(private readonly target: Window, private readonly onEvent: (event: HostComposerEvent) => void,
-    private readonly restoreRequested: boolean, private readonly agentModel: boolean) {
-    this.snapshot = Object.freeze({ ...emptySnapshot, optedIn: true, restoreRequested });
+    private readonly restoreRequested: boolean, private readonly agentModel: boolean,
+    private readonly draftInsertRequested: boolean) {
+    this.snapshot = Object.freeze({ ...emptySnapshot, optedIn: true, restoreRequested, draftInsertRequested });
     this.priorCommand = Object.getOwnPropertyDescriptor(target, HOST_COMMAND_NAME);
     this.command = (command) => this.receive(command);
     Object.defineProperty(target, HOST_COMMAND_NAME, { configurable: true, writable: true, value: this.command });
@@ -262,6 +268,7 @@ export class HostComposerBridge {
       ready: Boolean(this.current?.ready),
       settingsRequestRevision: this.settingsRequestRevision,
       restoreRequested: this.restoreRequested,
+      draftInsertRequested: this.draftInsertRequested,
     });
     for (const listener of this.listeners) listener();
   }
@@ -602,6 +609,14 @@ export class HostComposerBridge {
     if (lifetime.attempts.get(attempt.correlationId) === attempt) lifetime.attempts.delete(attempt.correlationId);
     this.emit(event);
     this.publish();
+  }
+
+  requestDraftInsert(sessionKey: string, text: string): boolean {
+    const lifetime = this.current;
+    if (this.disposed || !this.draftInsertRequested || !this.snapshot.composerHidden || !lifetime?.ready ||
+        sessionKey !== lifetime.sessionKey) return false;
+    this.emit({ event: 'draft-insert-requested', version: 1, lifetimeId: lifetime.lifetimeId, sessionKey, text });
+    return true;
   }
 
   /**

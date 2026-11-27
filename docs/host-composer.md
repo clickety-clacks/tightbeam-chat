@@ -62,6 +62,13 @@ Chat sends these lifetime events:
   reason: 'target-changed' | 'identity-changed' | 'disposed' | 'unloading' }
 ```
 
+A native composer can opt into `events: { 'draft-insert-requested': [1] }`. Chat emits
+`{ event: 'draft-insert-requested', version: 1, lifetimeId, sessionKey, text }` when the reader
+chooses **Insert work item ID** in the dialog. Check both IDs against the current ready
+lifetime before appending the plain text to the existing draft with a space if needed.
+Preserve the draft and its attachments and leave sending to the reader. For older hosts, Chat offers
+a copy action in the dialog instead.
+
 The HTML composer stays visible until the page's first `ready`. After Chat hides it, it stays hidden for every later lifetime in that page load. `unavailable` disables host Send only when Chat has an actual reason that a send cannot be accepted; a later `ready` re-enables it for the same lifetime when sending can be attempted again. A target or identity change ends the lifetime, and the next `ready` uses a new lifetime ID. A page reload needs a new declaration and a new `ready` before Chat hides the HTML composer again.
 
 `ready` means Chat can accept a host send command for the selected lifetime; it does not promise that the Gateway will accept every message. A live-change-feed disconnect or reconnect by itself does not make host sending unavailable: Chat keeps the same lifetime ready, emits no `unavailable` event for that feed change, and accepts sends while authorized. A missing selected session, loss of authorization, or an actual send-endpoint refusal does make sending unavailable. For a refused send, Chat reports the attempt as `failed/refused` with its endpoint detail, then emits `unavailable` with reason `send-refused`. If that refusal is specific to the message and the selected session remains ready and authorized, Chat emits `ready` again immediately for the same lifetime so another message can be sent without an unrelated runtime update. A command received before sending is ready is rejected as `not-ready` and posts nothing. Once Chat can accept commands again, it emits `ready` for that lifetime; feed-only reconnects do not create an unavailable/ready cycle.

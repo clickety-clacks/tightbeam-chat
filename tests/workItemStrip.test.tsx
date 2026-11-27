@@ -7,6 +7,7 @@ import { agoText, clockText, durationText, untilText } from '../src/workItemTime
 import type { ChangeCallbacks, SessionRecordEvent, WorkItemSummary } from '../src/types';
 import type { WorkItemChange } from '../src/workItemPills';
 import type { WorkItemPillsTransport } from '../src/workItemPillsTransport';
+import type { HostComposerEvent } from '../src/hostComposer';
 
 const uuid = (n: number) => `wi_00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const summary = (n: number, patch: Partial<WorkItemSummary> = {}): WorkItemSummary => ({ id: uuid(n), title: `Product: Item ${n}`,
@@ -25,13 +26,15 @@ class Visible {
   }
 }
 
-function chat(items: readonly WorkItemSummary[], options: { pills?: boolean; failList?: boolean } = {}) {
+function chat(items: readonly WorkItemSummary[], options: { pills?: boolean; failList?: boolean; message?: string; omitFromList?: boolean } = {}) {
   const counts: Record<string, number> = {};
   const count = (name: string) => { counts[name] = (counts[name] ?? 0) + 1; };
   let emit: (change: WorkItemChange) => void = () => {};
   const order: string[] = [];
   let notices: ChangeCallbacks | undefined;
   const fixture = new LocalFixtureTransport();
+  const send = vi.spyOn(fixture, 'sendHuman');
+  const readTail = fixture.readTail;
   const filed = (item: WorkItemSummary, sessionKey: string): SessionRecordEvent => ({ eventId: `work_item.filed:${item.id}`, sessionKey,
     kind: 'work_item.filed', at: item.createdAt, record: { type: 'work-item', id: item.id, workItemId: item.id, detail: '' },
     actorSessionKey: sessionKey, tiedAs: ['creator'], cause: null, noticeMessageIds: [] });
@@ -39,7 +42,10 @@ function chat(items: readonly WorkItemSummary[], options: { pills?: boolean; fai
     openChanges: async (onChange) => { emit = onChange; return { watch: async () => { order.push('watch'); }, unwatch() {}, close() {} }; },
     readItem: async (id) => { count('item'); return items.find((item) => item.id === id); },
     readTurn: async (seq) => { count('turn'); return { seq, workItemId: uuid(1), status: 'running' }; },
-    readCards: async (id) => { count('cards'); const item = items.find((row) => row.id === id)!;
+    readCards: async (id) => {
+      count('cards');
+      const item = items.find((row) => row.id === id);
+      if (!item) return undefined;
       return { item, cards: [{ id: 'asg_1', open: item.holders.length > 0, holderKey: 'agent:a' }] }; },
     readBreathing: async () => { count('breathing'); return { reason: 'pending_wake', holders: [],
       wake: { wakeId: 'w1', sessionKey: 'agent:a', dueAt: Date.now() + 3_600_000, createdAt: 1 } }; },
@@ -51,9 +57,14 @@ function chat(items: readonly WorkItemSummary[], options: { pills?: boolean; fai
     readAgentName: async () => { count('name'); return 'Coder'; },
   };
   const transport = Object.assign(fixture, { targetGateway: 'https://gateway.example',
+    readTail: async () => {
+      const page = await readTail();
+      return { ...page, records: page.records.map(row =>
+        row.kind === 'message' && row.seq === 124 && options.message ? { ...row, content: options.message } : row) };
+    },
     openChanges: ((open) => (key: string, callbacks: ChangeCallbacks, signal: AbortSignal) => { notices = callbacks; return open(key, callbacks, signal); })(fixture.openChanges),
     readRecordEvents: async (sessionKey: string) => ({ items: items.map((item) => filed(item, sessionKey)), oldestCursor: null, hasOlder: false }),
-    readFiledWorkItems: async () => { count('page'); order.push('page'); if (options.failList) throw new Error('HTTP 500'); return { items: [...items], oldestCursor: null, hasOlder: false }; },
+    readFiledWorkItems: async () => { count('page'); order.push('page'); if (options.failList) throw new Error('HTTP 500'); return { items: options.omitFromList ? [] : [...items], oldestCursor: null, hasOlder: false }; },
     ...(options.pills === false ? {} : { workItemPills: pills }),
   });
   const view = render(<TightbeamChat sessionKey="fixture-session" adapter={createTightbeamAdapter(transport, { ...fixtureTarget, label: 'fixture' })} />);
@@ -61,7 +72,7 @@ function chat(items: readonly WorkItemSummary[], options: { pills?: boolean; fai
     (items as WorkItemSummary[]).push(item);
     notices!.onNotice({ operation: 'record-event', event: filed(item, 'fixture-session') });
   });
-  return { view, counts, order, file, emit: (change: WorkItemChange) => act(async () => { emit(change); }) };
+  return { view, counts, order, file, send, emit: (change: WorkItemChange) => act(async () => { emit(change); }) };
 }
 const strip = () => screen.findByRole('group', { name: 'Work items, newest first' });
 const pills = async () => within(await strip()).getAllByRole('button');
@@ -217,6 +228,89 @@ describe('the sheet', () => {
       await waitFor(() => expect(events.filter((event) => event.event === 'overlay').map((event) => event.open)).toEqual([true, false]));
       run.view.unmount();
     } finally { delete (window as unknown as Record<string, unknown>).__TIGHTBEAM_CHAT_HOST__; }
+  });
+});
+
+describe('work item IDs in messages and the composer', () => {
+  const id = uuid(1);
+  const external = 'https://example.test/work';
+  const reference = () => screen.findByRole('link', { name: 'wi_0000' });
+
+  it('links only full IDs in ordinary message text and opens the same scoped dialog on activation', async () => {
+    const run = chat([summary(1, { state: 'closed', holders: [] })], { omitFromList: true,
+      message: `Review (${id}). Leave \`${id}\` in code, [reference](${external}), wi_1234 and pre-${id}.` });
+    const link = await reference();
+    expect(link.getAttribute('href')).toBe(`#${id}`);
+    expect(link.getAttribute('aria-haspopup')).toBe('dialog');
+    expect(screen.getAllByRole('link', { name: 'wi_0000' })).toHaveLength(1);
+    expect(run.view.container.querySelector('.tb-chat-markdown code')?.textContent).toBe('wi_0000');
+    expect(screen.getByRole('link', { name: 'reference' }).getAttribute('href')).toBe(external);
+    await waitFor(() => expect(run.counts).toEqual({ page: 1 }));
+    link.focus();
+    fireEvent.click(link);
+    const dialog = await screen.findByRole('dialog', { name: 'Product: Item 1' });
+    expect(within(dialog).getByText('Closed', { exact: true })).toBeTruthy();
+    expect(run.counts).toEqual({ page: 1, cards: 1 });
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    expect(document.activeElement).toBe(link);
+  });
+
+  it('shows the unavailable message for an unknown item with one scoped lookup', async () => {
+    const run = chat([], { message: `Check ${id} and wi_1234.` });
+    fireEvent.click(await reference());
+    const dialog = await screen.findByRole('dialog');
+    expect(await within(dialog).findByText('This work item is no longer available.')).toBeTruthy();
+    expect(within(dialog).queryByRole('button', { name: 'Insert work item ID' })).toBeNull();
+    expect(run.counts).toEqual({ cards: 1 });
+  });
+
+  it('keeps references as plain text when pills are disabled', async () => {
+    const run = chat([], { message: `Check ${id}.`, pills: false });
+    await screen.findByText('Check wi_0000.');
+    expect(screen.queryByRole('link', { name: 'wi_0000' })).toBeNull();
+    expect(run.counts).toEqual({});
+  });
+
+  it('appends the plain ID to the web draft without replacing selected text or sending', async () => {
+    const run = chat([summary(1, { state: 'closed', holders: [] })]);
+    const composer = await screen.findByRole<HTMLTextAreaElement>('textbox', { name: /Message to/ });
+    fireEvent.change(composer, { target: { value: 'Keep my draft' } });
+    composer.setSelectionRange(0, composer.value.length);
+    fireEvent.click((await pills())[0]);
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Insert work item ID' }));
+    expect(composer.value).toBe(`Keep my draft ${id}`);
+    expect(document.activeElement).toBe(composer);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(run.send).not.toHaveBeenCalled();
+    expect(run.counts).toEqual({ page: 1 });
+  });
+
+  it.each([true, false])('respects native draft-insert capability (%s)', async supportsInsert => {
+    const events: HostComposerEvent[] = [];
+    vi.stubGlobal('__TIGHTBEAM_CHAT_HOST__', {
+      versions: [1], ...(supportsInsert ? { events: { 'draft-insert-requested': [1] } } : {}),
+      onEvent: (event: HostComposerEvent) => events.push(event),
+    });
+    const run = chat([summary(1, { state: 'closed', holders: [] })]);
+    await waitFor(() => expect(events.some(event => event.event === 'ready')).toBe(true));
+    expect(screen.queryByRole('textbox', { name: /Message to/ })).toBeNull();
+    fireEvent.click((await pills())[0]);
+    const dialog = await screen.findByRole('dialog');
+    if (supportsInsert) {
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Insert work item ID' }));
+      const ready = events.find(event => event.event === 'ready')!;
+      expect(events.filter(event => event.event === 'draft-insert-requested')).toEqual([{
+        event: 'draft-insert-requested', version: 1, lifetimeId: ready.lifetimeId,
+        sessionKey: ready.sessionKey, text: id,
+      }]);
+      expect(screen.queryByRole('dialog')).toBeNull();
+    } else {
+      expect(within(dialog).getByRole('button', { name: 'Copy work item ID' })).toBeTruthy();
+      expect(events.some(event => event.event === 'draft-insert-requested')).toBe(false);
+    }
+    expect(run.send).not.toHaveBeenCalled();
+    expect(run.counts).toEqual({ page: 1 });
   });
 });
 

@@ -2,10 +2,10 @@ import { newUuid } from './uuid';
 import { composerModelText } from './runningModel';
 import { uncoveredRecordEvents, recordEventPresentation, titledRecordEvents } from './sessionRecordEvents';
 import type { SessionRecordEvent } from './types';
-import { Component, forwardRef, memo, useCallback, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore,
-  type AnchorHTMLAttributes, type ClipboardEvent as ReactClipboardEvent, type FormEvent, type HTMLAttributes, type ImgHTMLAttributes,
+import { Component, createContext, forwardRef, memo, useCallback, useContext, useEffect, useId, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore,
+  type ClipboardEvent as ReactClipboardEvent, type FormEvent, type HTMLAttributes, type ImgHTMLAttributes,
   type ErrorInfo, type ReactNode, type TableHTMLAttributes } from 'react';
-import ReactMarkdown from 'react-markdown';
+import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { AttachmentPreparationError } from './types';
 import { highlightRecognizedCode } from './markdownHighlight';
@@ -22,6 +22,7 @@ import { firstAfterTime, getIndex, indexValues, putIndex, type RecordIndex } fro
 import { getHostComposerSnapshot, HostComposerBridge, subscribeHostComposer } from './hostComposer';
 import { ReleaseNotesDialog, type ChatOverlay } from './ReleaseNotesDialog';
 import { WorkItems } from './WorkItemStrip';
+import { appendWorkItemId, isWorkItemId } from './workItemId';
 import { CHAT_RELEASE_VERSION, RELEASE_NOTES, recordSeenReleaseVersion, releaseNotesForBuild, unseenReleaseNotes } from './releaseNotes';
 import { MarkdownImagePreview, MessageAttachments } from './MessageAttachments';
 import { isSettingsCommand } from './settingsCommand';
@@ -605,9 +606,9 @@ const IndexedTimeline = memo(function IndexedTimelineBranch({ messages, tools, p
 });
 
 const markdownPlugins = [remarkGfm];
-function formatVisibleMarkdownIds() {
+function formatVisibleMarkdownIds(linkItems = false) {
   return (tree: unknown) => {
-    const visit = (candidate: unknown): void => {
+    const visit = (candidate: unknown, allowLink: boolean): void => {
       if (!candidate || typeof candidate !== 'object') return;
       const node = candidate as Record<string, unknown>;
       if (node.type === 'text' && typeof node.value === 'string') {
@@ -620,15 +621,40 @@ function formatVisibleMarkdownIds() {
           if (typeof value === 'string') properties[name] = formatVisibleIds(value);
         }
       }
-      if (Array.isArray(node.children)) node.children.forEach(visit);
+      if (!Array.isArray(node.children)) return;
+      const linkChildren = allowLink && !['a', 'code', 'pre'].includes(String(node.tagName));
+      node.children = node.children.flatMap(child => {
+        const value = child?.type === 'text' && typeof child.value === 'string' ? child.value : undefined;
+        if (linkChildren && value?.includes('wi_')) {
+          return value.split(/([A-Za-z0-9_-]+)/).filter(Boolean).map(token =>
+            isWorkItemId(token)
+              ? { type: 'element', tagName: 'a', properties: { href: `#${token}`, dataWorkItemId: token },
+                  children: [{ type: 'text', value: formatVisibleIds(token) }] }
+              : { type: 'text', value: formatVisibleIds(token) });
+        }
+        visit(child, linkChildren);
+        return [child];
+      });
     };
-    visit(tree);
+    visit(tree, linkItems);
   };
 }
 const markdownRehypePlugins = [formatVisibleMarkdownIds, highlightRecognizedCode];
+const workItemMarkdownPlugins = [() => formatVisibleMarkdownIds(true), highlightRecognizedCode];
+const WorkItemLinkContext = createContext<((id: string, trigger: HTMLElement) => void) | undefined>(undefined);
+const MessageLink: NonNullable<Components['a']> = ({ node, href, children, ...props }) => {
+  const open = useContext(WorkItemLinkContext);
+  const id = node?.properties.dataWorkItemId;
+  if (open && typeof id === 'string') {
+    return <a href={href} aria-haspopup="dialog" onClick={(event) => {
+      event.preventDefault();
+      open(id, event.currentTarget);
+    }}>{children}</a>;
+  }
+  return <a {...props} href={href} target="_blank" rel="noreferrer noopener">{children}</a>;
+};
 const markdownComponents = {
-  a: ({ href, children, ...props }: AnchorHTMLAttributes<HTMLAnchorElement>) =>
-    <a {...props} href={href} target="_blank" rel="noreferrer noopener">{children}</a>,
+  a: MessageLink,
   pre: ({ children, ...props }: HTMLAttributes<HTMLPreElement>) =>
     <div className="tb-chat-code-scroll"><pre {...props}>{children}</pre></div>,
   table: ({ children, ...props }: TableHTMLAttributes<HTMLTableElement>) =>
@@ -637,9 +663,10 @@ const markdownComponents = {
     <MarkdownImagePreview src={src} alt={alt} />,
 };
 
-function markdownBody(content: string): ReactNode {
+function MarkdownBody({ content }: { content: string }) {
+  const links = useContext(WorkItemLinkContext);
   return <div className="tb-chat-markdown">
-    <ReactMarkdown remarkPlugins={markdownPlugins} rehypePlugins={markdownRehypePlugins}
+    <ReactMarkdown remarkPlugins={markdownPlugins} rehypePlugins={links ? workItemMarkdownPlugins : markdownRehypePlugins}
       components={markdownComponents} skipHtml>{content}</ReactMarkdown>
   </div>;
 }
@@ -922,7 +949,7 @@ function AttachmentDisclosure({ attachments, preservePosition, reconcileLayout }
 function defaultBody(record: CanonicalMessage, readAttachment: ChatRuntime['readAttachment'],
   preservePosition: () => void, reconcileLayout: () => void,
   content = record.content, clampAs?: string): ReactNode {
-  const text = markdownBody(content || '(No text content)');
+  const text = <MarkdownBody content={content || '(No text content)'} />;
   return <>
     {clampAs ? <PromptClamp conversation={record.sessionKey} identity={clampAs} beforeExpand={preservePosition}>
       {text}</PromptClamp> : text}
@@ -1123,7 +1150,7 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, re
     // The reader's own prompts show at most ten lines until expanded; attachments stay below.
     defaultRender: () => bubble.derived
       ? ownPrompt ? <PromptClamp conversation={record.sessionKey} identity={bubblePromptIdentity(bubble)}
-        beforeExpand={preservePosition}>{markdownBody(displayContent)}</PromptClamp> : markdownBody(displayContent)
+        beforeExpand={preservePosition}><MarkdownBody content={displayContent} /></PromptClamp> : <MarkdownBody content={displayContent} />
       : defaultBody(record, readAttachment, preservePosition, reconcileLayout, displayContent,
         ownPrompt ? bubblePromptIdentity(bubble) : undefined),
     copyText: () => typeof navigator !== 'undefined' && navigator.clipboard
@@ -1337,6 +1364,7 @@ interface ComposerHandle {
   restore(content: string, items?: readonly ComposerAttachmentInput[]): void;
   contains(target: EventTarget | null): boolean;
   focusAtEnd(): boolean;
+  insertWorkItemId(id: string): boolean;
   closeStatusPopup(): void;
 }
 
@@ -1697,6 +1725,16 @@ const Composer = forwardRef<ComposerHandle, {
 
   useImperativeHandle(ref, () => ({
     restore: restoreDraft,
+    insertWorkItemId: id => {
+      const element = input.current;
+      if (!element || element.disabled) return false;
+      const content = appendWorkItemId(recoverySnapshot.draft, id);
+      recoverySnapshot.editRevision++;
+      pendingCaret.current = content.length;
+      updateDraft(content);
+      element.focus({ preventScroll: true });
+      return true;
+    },
     contains: (target) => target instanceof Node && Boolean(shell.current?.contains(target)),
     focusAtEnd: () => {
       const element = input.current;
@@ -1707,7 +1745,7 @@ const Composer = forwardRef<ComposerHandle, {
       return document.activeElement === element;
     },
     closeStatusPopup: () => setStatusOpen(false),
-  }), [restoreDraft]);
+  }), [recoverySnapshot, restoreDraft, updateDraft]);
 
   const closeStatusPopup = () => {
     setStatusOpen(false);
@@ -2576,10 +2614,26 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   const handledSettingsRevision = useRef(0);
   const overlayWasOpen = useRef(false);
   const [workItemsShown, setWorkItemsShown] = useState(false);
-  const [workItemOpen, setWorkItemOpen] = useState(false);
+  const [openedWorkItem, setOpenedWorkItem] = useState<{ id: string; trigger: HTMLElement }>();
+  const workItemOpen = openedWorkItem !== undefined && overlay === null;
+  const openWorkItem = useCallback((id: string, trigger: HTMLElement) => {
+    if (!overlayRef.current) setOpenedWorkItem({ id, trigger });
+  }, []);
+  const closeWorkItem = useCallback(() => {
+    setOpenedWorkItem(undefined);
+    openedWorkItem?.trigger.focus({ preventScroll: true });
+  }, [openedWorkItem]);
+  const insertWorkItemId = useCallback((id: string): boolean => {
+    const inserted = getHostComposerSnapshot(hostBridge).composerHidden
+      ? hostBridge?.requestDraftInsert(state.sessionKey, id)
+      : composer.current?.insertWorkItemId(id);
+    if (inserted) setOpenedWorkItem(undefined);
+    return inserted === true;
+  }, [hostBridge, state.sessionKey]);
   const [workItemsFolded, setWorkItemsFolded] = useState(false);
   const setOverlayState = useCallback((next: ChatOverlay | null) => {
     overlayRef.current = next;
+    if (next) setOpenedWorkItem(undefined);
     setOverlay(next);
   }, []);
 
@@ -3625,8 +3679,8 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
           data-send-state={send.reconciled ? 'solid' : refused ? 'refused' : timedOut ? 'timed-out' : uncertain ? 'uncertain' : 'ghosted'}>
           <div className="tb-chat-bubble-body">
             {longPromptClamp ? <PromptClamp conversation={send.sessionKey} identity={`send:${sendIdentity(send)}`}
-              beforeExpand={reading.preserveVisiblePosition}>{markdownBody(stripProvenanceMarkup(send.content))}</PromptClamp>
-              : markdownBody(stripProvenanceMarkup(send.content))}
+              beforeExpand={reading.preserveVisiblePosition}><MarkdownBody content={stripProvenanceMarkup(send.content)} /></PromptClamp>
+              : <MarkdownBody content={stripProvenanceMarkup(send.content)} />}
           </div>
           {attachmentItems.length > 0 && <PendingSendImages items={attachmentItems} />}
           {refusalCopy && <p className="tb-chat-send-refusal" aria-hidden="true">{refusalCopy}</p>}
@@ -3660,7 +3714,8 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
 
   return <ActivitySummaryProvider transport={activitySummaries}
     connected={state.liveConnectionState ? state.liveConnectionState === 'connected' : state.status === 'ready'}
-    reconcile={reading.reconcileViewportLayout}><section ref={root} className={`tb-chat ${host.composerHidden ? 'tb-chat-host-composer-hidden' : ''} ${workItemsShown ? 'tb-chat-has-work-items' : ''} ${className || ''}`}
+    reconcile={reading.reconcileViewportLayout}><WorkItemLinkContext.Provider value={runtime.workItemPills ? openWorkItem : undefined}>
+    <section ref={root} className={`tb-chat ${host.composerHidden ? 'tb-chat-host-composer-hidden' : ''} ${workItemsShown ? 'tb-chat-has-work-items' : ''} ${className || ''}`}
     aria-label={agentName ? `${agentName} conversation` : 'Conversation'}>
     {/* Outside the scrolling transcript so the notice stays in view wherever the reader is scrolled. */}
     {showRuntimeNotice && <div ref={runtimeNotice} className={`tb-chat-runtime-notice ${showToolHistoryStatusInNotice ? 'tb-chat-runtime-notice-with-tool-history ' : ''}${state.loadingOlder ? 'tb-chat-history-loading ' : ''} tb-chat-caption ${runtimeNoticeIsError
@@ -3755,11 +3810,13 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
       recoverySnapshot={recoverySnapshot} agentName={agentName}
       suppressStatus={host.optedIn} onSettings={openSettings} onSubmitted={reading.scrollToLatest} />}
     {runtime.workItemPills && <WorkItems pills={runtime.workItemPills.pills} transport={runtime.workItemPills.transport}
-      folded={workItemsFolded} sheetSlot={overlay === null} onShown={setWorkItemsShown} onSheetOpen={setWorkItemOpen} />}
+      folded={workItemsFolded} onShown={setWorkItemsShown}
+      openId={workItemOpen ? openedWorkItem.id : undefined} onOpen={openWorkItem} onClose={closeWorkItem}
+      onInsert={!host.composerHidden || (host.draftInsertRequested && host.ready) ? insertWorkItemId : undefined} />}
     {overlay && <ReleaseNotesDialog overlay={overlay} entries={bundledNotes} onClose={closeOverlay}
       onOpenReleaseNotes={openReleaseNotes} onBack={backToSettings}
       submitterAttributionEnabled={submitterAttributionEnabled === true} />}
-  </section></ActivitySummaryProvider>;
+  </section></WorkItemLinkContext.Provider></ActivitySummaryProvider>;
 }
 
 /** One host-selected session. Changing selection/identity disposes the old runtime. */
