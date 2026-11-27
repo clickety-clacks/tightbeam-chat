@@ -1,5 +1,16 @@
 [
   {
+    "version": "v0.1.118",
+    "items": [
+      {
+        "title": "Smoother scrolling during replies",
+        "description": "When pinned prompts are enabled, Chat scrolls smoothly as a reply grows and the prompt reaches its pinned position, instead of jumping."
+      }
+    ],
+    "compatibleTightbeam": ["0.1.15", "0.1.16"],
+    "breakingChanges": "none"
+  },
+  {
     "version": "v0.1.117",
     "items": [
       {
