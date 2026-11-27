@@ -4,7 +4,7 @@ import { stripProvenanceMarkup } from './displayText';
 import {
   AgentNames, foundState, readWorkItemSheet, type ChainStep, type WorkItemSheetData, type WorkItemSheetTransport,
 } from './workItemChain';
-import type { WorkItemPill, WorkItemPills, WorkItemPillState } from './workItemPills';
+import { workItemBaseState, type WorkItemPill, type WorkItemPills, type WorkItemPillState } from './workItemPills';
 import { isWorkItemId } from './workItemId';
 import { agoText, clockText, untilText } from './workItemTime';
 import './workItemPills.css';
@@ -285,8 +285,9 @@ export function WorkItemSheet({ id, pills, transport, names, onClose, onInsert }
   const data = state.status === 'ready' ? state.data : undefined;
   const item = data?.item ?? pill?.summary;
   const found: ShownState | undefined = data ? foundState(data) : undefined;
-  const shown: ShownState = found ?? pill?.state ?? 'held';
-  const ended = item && pill ? endings[pill.state] : undefined;
+  const base = pill?.state ?? (item ? workItemBaseState(item) : 'held');
+  const shown: ShownState = found ?? base;
+  const ended = item && endings[base];
   const lead = shown === 'you' ? 'The next move is yours.' : shown === 'waiting' ? 'This is what it waits on, step by step.' : undefined;
   return <div className="tb-chat-work-items tb-chat-work-layer">
     <button type="button" className="tb-chat-work-scrim" aria-label="Close work item" tabIndex={-1} onClick={onClose} />
