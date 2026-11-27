@@ -92,9 +92,16 @@ const cases: Case[] = [
   },
   {
     name: 'two complete responses with a matching boundary cover the whole failed range', newest: 8,
-    steps: [load(7, 8, 'newest'), load(3, 8, 'live'), { omit: [3, 4, 5, 6] }, refresh,
+    steps: [load(7, 8, 'newest'), load(3, 8, 'live'), { omit: [3, 4, 5, 6, 7] }, refresh,
       load(7, 8, 'live'), { omit: [] }, refresh, load(1, 8)],
     calls: [[2], [6], [2], [6, 7]], shown: range(1, 8), warnings: [true, false],
+  },
+  {
+    name: 'a shorter complete refresh does not rewind a provably advanced partial cursor',
+    newest: 8,
+    steps: [load(7, 8, 'newest'), load(3, 8, 'live'), { omit: [3, 4, 5, 6] }, refresh,
+      load(7, 8, 'live'), { omit: [] }, refresh, load(1, 8)],
+    calls: [[2], [6], [2], [6, 3]], shown: [1, 2, 7, 8], warnings: [true],
   },
   {
     name: 'a full complete refresh identifies an existing partial cursor and enables later progress', newest: 8,
