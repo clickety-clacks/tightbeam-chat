@@ -155,19 +155,27 @@ describe('scroll-pinned prompts without scroll timelines', () => {
     vi.stubGlobal('URL', Object.assign(class extends URL {}, {
       createObjectURL: () => 'blob:pinned-photo', revokeObjectURL: vi.fn(),
     }));
-    render(<MessageAttachments attachments={[{ assetId: 'photo', filename: 'sample.png', mimeType: 'image/png', size: 1 }]}
-      readAttachment={read} />, { container: rows.get('A')! });
+    render(<MessageAttachments attachments={[
+      { filename: 'ready.png', mimeType: 'image/png', data: 'YQ==' },
+      { assetId: 'photo', filename: 'sample.png', mimeType: 'image/png', size: 1 },
+    ]} readAttachment={read} />, { container: rows.get('A')! });
     const handle = createRef<ScrollPinnedPromptsHandle>();
     render(<ScrollPinnedPrompts ref={handle} prompts={prompts} viewport={{ current: viewport }}
       getRow={key => rows.get(key)} onJump={() => {}} onDismiss={() => {}} />, { container: root });
     scrollTo(500);
     const strip = slotFor('A')!.querySelector<HTMLElement>('.tb-chat-pinned-photos')!;
     expect(strip.hidden).toBe(false);
-    expect(strip.querySelector('button')).toBeNull();
+    expect(strip.querySelectorAll('button')).toHaveLength(1);
+    const readyThumbnail = strip.querySelector('button')!;
+    fireEvent.click(readyThumbnail);
+    expect(screen.getByRole('dialog', { name: 'Image: ready.png' })).toBeTruthy();
     const settled = handle.current?.settledBottom('A');
     await act(async () => { await Promise.resolve(); resolve(new Blob(['x'], { type: 'image/png' })); });
     expect(read).toHaveBeenCalledTimes(1);
-    expect(strip.querySelector('img')?.getAttribute('src')).toBe('blob:pinned-photo');
+    expect(strip.querySelectorAll('img')[1]?.getAttribute('src')).toBe('blob:pinned-photo');
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(strip.querySelector('button')).toBe(readyThumbnail);
+    expect(document.activeElement).toBe(readyThumbnail);
     expect(handle.current?.settledBottom('A')).toBe(settled);
   });
 

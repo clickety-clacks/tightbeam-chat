@@ -157,31 +157,39 @@ function syncPhotoStrip(row: HTMLElement, strip: HTMLElement) {
     return { trigger, image, label: trigger?.getAttribute('aria-label') ??
       photo.querySelector('[aria-label]')?.getAttribute('aria-label') ?? 'Photo' };
   });
-  if (strip.children.length === thumbnails.length && thumbnails.every(({ image, label }, index) => {
+  let changed = false;
+  thumbnails.forEach(({ trigger, image, label }, index) => {
     const child = strip.children[index];
-    return child.getAttribute('aria-label') === label &&
-      child.querySelector('img')?.getAttribute('src') === image?.getAttribute('src');
-  })) return false;
-  strip.replaceChildren(...thumbnails.map(({ trigger, image, label }, index) => {
-    if (!trigger || !image) {
-      const placeholder = document.createElement('span');
-      placeholder.setAttribute('role', 'img');
-      placeholder.setAttribute('aria-label', label);
-      placeholder.textContent = 'Photo';
-      return placeholder;
+    // Keep a ready sibling's button connected while another photo loads. It may
+    // be the focus return target for a preview that is currently open.
+    if (child?.getAttribute('aria-label') === label &&
+      child.querySelector('img')?.getAttribute('src') === image?.getAttribute('src')) return;
+    let replacement: HTMLElement;
+    if (trigger && image) {
+      const thumbnail = document.createElement('button');
+      thumbnail.type = 'button';
+      thumbnail.setAttribute('aria-haspopup', 'dialog');
+      thumbnail.append(image.cloneNode(false));
+      thumbnail.addEventListener('click', () => {
+        const original = photoTrigger(promptPhotos(row)[index]);
+        if (original) openAttachmentPreview(original, thumbnail);
+      });
+      replacement = thumbnail;
+    } else {
+      replacement = document.createElement('span');
+      replacement.setAttribute('role', 'img');
+      replacement.textContent = 'Photo';
     }
-    const thumbnail = document.createElement('button');
-    thumbnail.type = 'button';
-    thumbnail.setAttribute('aria-label', label);
-    thumbnail.setAttribute('aria-haspopup', 'dialog');
-    thumbnail.append(image.cloneNode(false));
-    thumbnail.addEventListener('click', () => {
-      const original = photoTrigger(promptPhotos(row)[index]);
-      if (original) openAttachmentPreview(original, thumbnail);
-    });
-    return thumbnail;
-  }));
-  return true;
+    replacement.setAttribute('aria-label', label);
+    if (child) child.replaceWith(replacement);
+    else strip.append(replacement);
+    changed = true;
+  });
+  while (strip.children.length > thumbnails.length) {
+    strip.lastElementChild?.remove();
+    changed = true;
+  }
+  return changed;
 }
 
 function copyBubble(row: HTMLElement): HTMLElement {
@@ -578,24 +586,28 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
       if (x < left || x > left + width || y < frame.top || y > frame.top + frame.height) continue;
       event.preventDefault();
       event.stopPropagation();
-      // The shrinking copy lets touches reach the transcript for scrolling. A tap
-      // on one of its visible photos still opens the original attachment preview.
-      if (frame.fade < .5) {
-        const slot = slots.current.get(identity);
-        const row = slot?.copiedFrom;
-        const copy = slot?.full;
-        if (row && copy) {
-          const photoIndex = promptPhotos(copy).findIndex(photo => {
-            const rect = photoTrigger(photo)?.getBoundingClientRect();
-            return rect && event.clientX >= rect.left && event.clientX <= rect.right &&
-              event.clientY >= rect.top && event.clientY <= rect.bottom;
-          });
-          const original = photoTrigger(promptPhotos(row)[photoIndex]);
-          const jump = slot.slot?.querySelector<HTMLButtonElement>('.tb-chat-pinned-jump');
-          if (original && jump) {
-            openAttachmentPreview(original, jump);
-            return;
-          }
+      // Keep the layer transparent to pointer input so wheels and touch pans
+      // scroll natively. Only a completed click needs to be routed to the copy.
+      const hit = (button: HTMLButtonElement | null | undefined) => {
+        const rect = button?.getBoundingClientRect();
+        return rect && rect.width > 0 && rect.height > 0 &&
+          event.clientX >= rect.left && event.clientX <= rect.right &&
+          event.clientY >= rect.top && event.clientY <= rect.bottom;
+      };
+      const slot = slots.current.get(identity);
+      if (frame.fade >= .5) {
+        const thumbnail = slot?.photos && Array.from(slot.photos.querySelectorAll('button')).find(hit);
+        if (thumbnail) {
+          thumbnail.click();
+          return;
+        }
+      } else if (slot?.copiedFrom && slot.full) {
+        const photoIndex = promptPhotos(slot.full).findIndex(photo => hit(photoTrigger(photo)));
+        const original = photoTrigger(promptPhotos(slot.copiedFrom)[photoIndex]);
+        const jump = slot.slot?.querySelector<HTMLButtonElement>('.tb-chat-pinned-jump');
+        if (original && jump) {
+          openAttachmentPreview(original, jump);
+          return;
         }
       }
       onJumpRef.current(prompt);
