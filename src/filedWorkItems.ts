@@ -6,6 +6,13 @@ const RETRY_AFTER_MS = 30_000;
 const WATCH_WAIT_MS = 1_500;
 type Position = { readonly at: number; readonly id: string };
 const newer = (a: Position, b: Position) => a.at > b.at || (a.at === b.at && a.id > b.id);
+type CompleteRange = {
+  readonly starts: Set<string | undefined>;
+  readonly ends: Set<string>;
+  readonly ids: Set<string>;
+  oldest: Position | undefined;
+  exhausted: boolean;
+};
 
 export type RecordEventLoad = 'newest' | 'older' | 'live';
 
@@ -29,7 +36,7 @@ export class FiledWorkItems {
   // continuation from its end gives us a position known to be below that end.
   private readonly partialPages = new Map<string | undefined, Map<string | null, Position | undefined>>();
   private readonly emptyPartialParents = new Map<string, Set<string>>();
-  private readonly completeStartsByEnd = new Map<string, Set<string | undefined>>();
+  private completeCoverage: CompleteRange[] = [];
   private readonly controller = new AbortController();
   private failedAt = -Infinity;
   private queue: Promise<void> = Promise.resolve();
@@ -145,7 +152,7 @@ export class FiledWorkItems {
     const signal = this.controller.signal;
     const page = await this.read(this.sessionKey, { limit, before }, signal).catch(error => {
       if (!signal.aborted) {
-        this.completeStartsByEnd.clear();
+        this.completeCoverage = [];
         const alreadyFailed = this.hasFailedCoverage;
         const failed = this.failedPages.get(before) ?? new Set<string>();
         for (const row of rows) failed.add(row.id);
@@ -215,22 +222,14 @@ export class FiledWorkItems {
     if (before !== undefined) this.observeContinuation(page, before, newest);
     if (page.partial) {
       this.failedAt = Date.now();
-      this.completeStartsByEnd.clear();
+      this.completeCoverage = [];
       const ends = this.partialPages.get(before) ?? new Map<string | null, Position | undefined>();
       if (!ends.has(page.oldestCursor)) ends.set(page.oldestCursor, undefined);
       this.partialPages.set(before, ends);
     } else if (wasFailed) {
-      const completeStarts = new Set<string | undefined>([before]);
-      if (before !== undefined) {
-        for (const start of this.completeStartsByEnd.get(before) ?? []) completeStarts.add(start);
-      }
-      if (page.hasOlder && page.oldestCursor !== null) {
-        const starts = this.completeStartsByEnd.get(page.oldestCursor) ?? new Set<string | undefined>();
-        for (const start of completeStarts) starts.add(start);
-        this.completeStartsByEnd.set(page.oldestCursor, starts);
-      }
-      const coversTail = completeStarts.has(undefined);
-      if (coversTail && !page.hasOlder) {
+      const coverage = this.addCompleteRange(page, before, oldest);
+      const coversTail = coverage.starts.has(undefined);
+      if (coversTail && coverage.exhausted) {
         this.failedPages.clear();
         this.partialPages.clear();
       } else {
@@ -240,12 +239,12 @@ export class FiledWorkItems {
         // scanned. A complete tail includes every newer start. It covers an
         // incomplete scan if its end matches or it returns a row past that end.
         for (const [start, ends] of this.partialPages) {
-          if (!coversTail && !completeStarts.has(start)) continue;
-          if (!page.hasOlder) ends.clear();
+          if (!coversTail && !coverage.starts.has(start)) continue;
+          if (coverage.exhausted) ends.clear();
           else {
-            if (page.oldestCursor !== null) ends.delete(page.oldestCursor);
             for (const [end, below] of ends) {
-              if (oldest && below && !newer(oldest, below)) ends.delete(end);
+              if ((end !== null && coverage.ends.has(end)) ||
+                (coverage.oldest && below && !newer(coverage.oldest, below))) ends.delete(end);
             }
           }
           if (!ends.size) this.partialPages.delete(start);
@@ -262,8 +261,33 @@ export class FiledWorkItems {
       this.emptyPartialParents.clear();
       this.repairableGap = false;
     }
-    if (!this.hasFailedCoverage) this.completeStartsByEnd.clear();
+    if (!this.hasFailedCoverage) this.completeCoverage = [];
     if (wasFailed !== this.hasFailedCoverage) this.onFailureChange?.(this.hasFailedCoverage);
+  }
+
+  private addCompleteRange(page: FiledWorkItemPage, before: string | undefined,
+    oldest: Position | undefined): CompleteRange {
+    const end = page.oldestCursor;
+    const ids = page.items.map(item => item.id);
+    const joined: CompleteRange = {
+      starts: new Set([before]), ends: new Set(end === null ? [] : [end]),
+      ids: new Set(ids), oldest, exhausted: !page.hasOlder,
+    };
+    // Stored ranges are disjoint. A new page can bridge any ranges that share
+    // one of its returned rows or an exact start/end cursor.
+    this.completeCoverage = this.completeCoverage.filter(range => {
+      const joins = (before !== undefined && range.ends.has(before)) ||
+        (end !== null && range.starts.has(end)) || ids.some(id => range.ids.has(id));
+      if (!joins) return true;
+      for (const start of range.starts) joined.starts.add(start);
+      for (const end of range.ends) joined.ends.add(end);
+      for (const id of range.ids) joined.ids.add(id);
+      if (range.oldest && (!joined.oldest || newer(joined.oldest, range.oldest))) joined.oldest = range.oldest;
+      joined.exhausted ||= range.exhausted;
+      return false;
+    });
+    this.completeCoverage.push(joined);
+    return joined;
   }
 
   private observeContinuation(page: FiledWorkItemPage, before: string, newest: Position | undefined): void {

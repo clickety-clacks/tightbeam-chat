@@ -108,6 +108,15 @@ const cases: Case[] = [
       { omit: [] }, load(1, 70), load(1, 70)],
     calls: [[2], [50], [50, 69]], shown: range(19, 70), warnings: [true],
   },
+  ...[52, 53, 102].map((newest): Case => ({
+    name: 'complete exhausted older page and complete newest page after recovery through ' + newest,
+    newest: 51,
+    steps: [load(50, 51, 'newest'), { newest: 52 }, load(3, 52, 'newest'), { omit: [3] }, refresh,
+      { omit: [] }, load(1, 52), { newest }, load(1, newest, 'live'), refresh],
+    calls: [[2], [1], [50], [49, 50], [50]],
+    shown: range(1, newest),
+    warnings: newest === 102 ? [true] : [true, false],
+  })),
   {
     name: 'a shorter complete refresh does not rewind a partial cursor advanced after failure',
     newest: 8,
@@ -124,8 +133,8 @@ const cases: Case[] = [
   },
 ];
 
-const ids = new Map(range(1, 70).map(number => [number, 'wi_' + number]));
-const cursors = new Map(range(1, 70).map(number => [number, 'scope-' + ((number * 37) % 83).toString(36)]));
+const ids = new Map(range(1, 102).map(number => [number, 'wi_' + number]));
+const cursors = new Map(range(1, 102).map(number => [number, 'scope-' + ((number * 37) % 127).toString(36)]));
 const item = (number: number): WorkItemSummary => ({
   id: ids.get(number)!, createdAt: number, rowVersion: 1, title: 'Item ' + number,
   state: 'open', started: false, holders: [], failReason: null,
