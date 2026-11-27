@@ -147,7 +147,7 @@ describe('the sheet', () => {
   it.each([
     ['completed', 'Completed'], ['canceled', 'Canceled'], ['superseded', 'Superseded'],
     [null, 'Closed'], ['unrecognized', 'Closed'], [undefined, 'Closed'],
-  ])('shows the closed reason %s as %s without an extra read', async (closeReason, label) => {
+  ] as const)('shows the closed reason %s as %s without an extra read', async (closeReason, label) => {
     const item = decodeWorkItemSummary({ ...summary(1, { state: 'closed', holders: [] }), closeReason });
     const run = chat([item]);
     const pill = (await pills())[0];
