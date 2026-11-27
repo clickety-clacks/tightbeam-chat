@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, 
 import { formatVisibleIds } from './activityPresentation';
 import { stripProvenanceMarkup } from './displayText';
 import {
-  AgentNames, foundState, readWorkItemSheet, type ChainStep, type WorkItemSheetData, type WorkItemSheetTransport,
+  AgentNames, foundState, readWorkItemSheet, type ChainStep, type WaitTarget, type WorkItemSheetData, type WorkItemSheetTransport,
 } from './workItemChain';
 import { workItemBaseState, type WorkItemPill, type WorkItemPills, type WorkItemPillState } from './workItemPills';
 import { isWorkItemId } from './workItemId';
@@ -167,21 +167,18 @@ function When({ since, until, untilLabel, strong = false, now }: {
   </dl>;
 }
 
-function waitText(step: Extract<ChainStep, { kind: 'wait' }>): ReactNode {
-  switch (step.target.kind) {
-    case 'item': return <>Waits for a notice about <b>{plain(step.target.title)}</b>.</>;
-    case 'notice': return <>Waits for a notice named <b>{plain(step.target.name)}</b>
-      {step.target.scope && <> ({plain(step.target.scope)})</>}.</>;
-    case 'agent': return <>Cannot go on until <b>{plain(step.target.agent)}</b> answers.</>;
-    case 'time': return step.recurring ? 'Is woken again and again on a schedule.'
-      : 'Waits until a set time. It may also be waiting for another agent to finish; Tightbeam does not let Chat read that.';
+function waitText(target: Exclude<WaitTarget, { kind: 'time' }>): ReactNode {
+  switch (target.kind) {
+    case 'item': return <>Waits for a notice about <b>{plain(target.title)}</b>.</>;
+    case 'notice': return <>Waits for a notice named <b>{plain(target.name)}</b>
+      {target.scope && <> ({plain(target.scope)})</>}.</>;
+    case 'agent': return <>Cannot go on until <b>{plain(target.agent)}</b> answers.</>;
   }
 }
 
 const endText: Readonly<Record<string, string>> = { closed: 'is done', failed: 'failed', iceboxed: 'is shelved' };
-const unreadable: Readonly<Record<Extract<ChainStep, { kind: 'unreadable' }>['what'], readonly [string, string]>> = {
+const unreadable: Readonly<Record<Exclude<Extract<ChainStep, { kind: 'unreadable' }>['what'], 'time'>, readonly [string, string]>> = {
   notice: ['Can’t tell who will send it', 'The notice names no work item that can be looked up, and Tightbeam does not record who will send it.'],
-  time: ['Can’t tell what comes next', 'Nothing Chat can read links this wait to another agent.'],
   item: ['Can’t tell what comes next', 'What this waits on could not be read.'],
   wait: ['This wait could not be read', 'It may just have ended.'],
 };
@@ -190,16 +187,25 @@ function Step({ step, now }: { readonly step: ChainStep; readonly now: number })
   const line = (icon: keyof typeof paths, kind: string, title: string, body: ReactNode, extra?: ReactNode, ring = false) =>
     <li className={`tb-chat-work-step tb-chat-work-step-${kind}`}>
       <span className={`tb-chat-work-node${ring ? ' tb-chat-work-ring' : ''}`}><Icon name={icon} /></span>
-      <div><h3>{plain(title)}</h3><p className="tb-chat-work-what">{body}</p>{extra}</div>
+      <div><h3>{plain(title)}</h3>{body !== null && <p className="tb-chat-work-what">{body}</p>}{extra}</div>
     </li>;
   switch (step.kind) {
-    case 'wait': return line('waiting', 'wait', step.agent, waitText(step), <>
-      <When since={step.since} until={step.recurring && step.target.kind === 'time' ? null : step.until}
-        untilLabel={step.target.kind === 'time' ? 'Wakes by' : 'At the latest'} strong={step.target.kind === 'time'} now={now} />
-      <p className={`tb-chat-work-why${step.reason ? '' : ' tb-chat-work-why-none'}`}>{step.reason ? plain(step.reason) : 'No reason given'}</p>
-      {!step.tied && <p className="tb-chat-work-note">The agent did not tie this wait to this work item. It may be for other work it has.</p>}
-      {step.setByOther && <p className="tb-chat-work-note">Someone else set this reminder.</p>}
-    </>);
+    case 'wait': {
+      if (step.target.kind === 'time') {
+        const reason = step.reason ? plain(step.reason) : '';
+        const checkLabel = step.until !== null && step.until > now ? 'Next check' : 'Scheduled check';
+        return line('waiting', 'wait', step.agent, step.recurring ? 'Checks on a recurring schedule.' : null, <>
+          {reason && <p className="tb-chat-work-why">{reason}</p>}
+          <When since={step.since} until={step.until} untilLabel={checkLabel} strong now={now} />
+        </>);
+      }
+      return line('waiting', 'wait', step.agent, waitText(step.target), <>
+        <When since={step.since} until={step.until} untilLabel="At the latest" now={now} />
+        <p className={`tb-chat-work-why${step.reason ? '' : ' tb-chat-work-why-none'}`}>{step.reason ? plain(step.reason) : 'No reason given'}</p>
+        {!step.tied && <p className="tb-chat-work-note">The agent did not tie this wait to this work item. It may be for other work it has.</p>}
+        {step.setByOther && <p className="tb-chat-work-note">Someone else set this reminder.</p>}
+      </>);
+    }
     case 'running': return line('working', 'run', step.agent, step.tied
       ? <>Running a turn on {step.title ? <b>{plain(step.title)}</b> : 'this work'} now.</>
       : 'Running a turn now. It is not tied to this work, so it may be about something else.',
@@ -212,7 +218,7 @@ function Step({ step, now }: { readonly step: ChainStep; readonly now: number })
     case 'nobody': return line('between-hands', 'idle', step.title, 'No agent has that work now.');
     case 'loop': return line('loop', 'loop', 'This comes back to where it started', <>It leads back to <b>{plain(step.title)}</b>, so each waits for the other and neither is running.</>);
     case 'limit': return line('unknown', 'unknown', 'Stopped here', 'There is more, but a tap follows only so far.');
-    case 'unreadable': return line('unknown', 'unknown', unreadable[step.what][0], unreadable[step.what][1]);
+    case 'unreadable': return step.what === 'time' ? null : line('unknown', 'unknown', unreadable[step.what][0], unreadable[step.what][1]);
   }
 }
 
@@ -300,6 +306,12 @@ export function WorkItemSheet({ id, pills, transport, names, onClose, onInsert }
   // Discard those details so a later return to the same state cannot revive them.
   const data = tap && item && tap.item.state === item.state && tap.item.holders.length === item.holders.length
     && tap.item.holders.every(holder => item.holders.includes(holder)) ? tap : undefined;
+  const groups = data?.groups.flatMap(group => {
+    const steps = group.steps.filter(step =>
+      !(step.kind === 'wait' && step.target.kind === 'time' && !step.tied) &&
+      !(step.kind === 'unreadable' && step.what === 'time'));
+    return steps.length ? [{ ...group, steps }] : [];
+  }) ?? [];
   useLayoutEffect(() => {
     if (tap && !data) setState({ status: 'updated' });
   }, [tap, data]);
@@ -341,12 +353,12 @@ export function WorkItemSheet({ id, pills, transport, names, onClose, onInsert }
               <When since={question.raisedAt} until={question.deadlineAt} untilLabel="Answer by" now={now} />
               <p className="tb-chat-work-note">Asked by {plain(question.asker)}</p>
             </div>)}
-            {data.groups.map((group, index) => <div key={index}>
-              {data.groups.length > 1 && <p className="tb-chat-work-group">{plain(group.agent)}</p>}
+            {groups.map((group, index) => <div key={index}>
+              {groups.length > 1 && <p className="tb-chat-work-group">{plain(group.agent)}</p>}
               <ol className="tb-chat-work-chain">{group.steps.map((step, at) => <Step key={at} step={step} now={now} />)}</ol>
             </div>)}
             {data.moreHolders > 0 && <p className="tb-chat-work-note">{data.moreHolders} more {data.moreHolders === 1 ? 'agent has' : 'agents have'} this work.</p>}
-            {data.groups.length === 0 && ended && <p className="tb-chat-work-box">{ended}{item?.failReason && ` ${plain(item.failReason)}`}</p>}
+            {groups.length === 0 && ended && <p className="tb-chat-work-box">{ended}{item?.failReason && ` ${plain(item.failReason)}`}</p>}
           </>}
         </div>
       </div>
