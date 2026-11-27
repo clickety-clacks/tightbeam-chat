@@ -1,6 +1,9 @@
 import { readFileSync } from 'node:fs';
+import { act, cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FiledWorkItems } from '../src/filedWorkItems';
+import { WorkItemStrip } from '../src/WorkItemStrip';
+import { WorkItemPills } from '../src/workItemPills';
 import { decodeWorkItemSummary } from '../src/public019';
 import { recordEventPresentation } from '../src/sessionRecordEvents';
 import type { FiledWorkItemPage, SessionRecordEvent, WorkItemSummary } from '../src/types';
@@ -14,7 +17,7 @@ const item = (n: number, rowVersion = 1): WorkItemSummary => ({ id: `wi_${n}`, t
 const flush = () => vi.advanceTimersByTimeAsync(0);
 
 /** Lists newest first by position, as the Gateway does for one creator. */
-function setup(total: number) {
+function setup(total: number, onItems?: (items: ReadonlyMap<string, WorkItemSummary>) => void) {
   const gateway = { total, unreadable: 0, version: 1, calls: [] as Array<{ limit: number; before?: string }> };
   let items: ReadonlyMap<string, WorkItemSummary> = new Map();
   const failures: boolean[] = [];
@@ -25,7 +28,7 @@ function setup(total: number) {
     // One bad row fails every page that includes it.
     if (gateway.unreadable >= start && gateway.unreadable <= end) throw new Error('unavailable');
     return { items: range(start, end).map(row => item(row.at, gateway.version)), oldestCursor: String(start), hasOlder: start > 1 };
-  }, next => { items = next; }, undefined, failed => failures.push(failed));
+  }, next => { items = next; onItems?.(next); }, undefined, failed => failures.push(failed));
   return { gateway, reader, failures, items: () => items };
 }
 
@@ -59,6 +62,46 @@ describe('filed work item reads', () => {
       expect(items().size).toBe(size);
     }
     expect(gateway.calls.map(call => call.limit)).toEqual([50, 50, 20]);
+  });
+
+  it('opens a list from the first older filing and then follows its cursor', async () => {
+    const readItem = vi.fn(async () => undefined);
+    const pills = new WorkItemPills({
+      transport: { readItem, readTurn: async () => undefined,
+        openChanges: async () => ({ watch: async () => {}, unwatch() {}, close() {} }) },
+      refreshItems: vi.fn(),
+    });
+    const { gateway, reader } = setup(3, items => pills.setItems(items));
+    try {
+      render(<WorkItemStrip pills={pills} folded={false} onOpen={() => {}} onShown={() => {}} />);
+      const newest: SessionRecordEvent = { ...event(4), kind: 'assignment.opened' };
+      await act(async () => { reader.sync([newest], 'newest'); await flush(); });
+      expect(gateway.calls).toEqual([]);
+      expect(screen.queryByRole('group')).toBeNull();
+
+      await act(async () => { reader.sync([...range(3, 3), newest], 'older'); await flush(); });
+      expect(gateway.calls).toEqual([{ limit: 1, before: undefined }]);
+      expect(screen.getByRole('button', { name: 'Title 3. Not started' })).toBeTruthy();
+
+      await act(async () => { reader.sync([...range(2, 3), newest], 'older'); await flush(); });
+      expect(gateway.calls).toEqual([{ limit: 1, before: undefined }, { limit: 1, before: '3' }]);
+      expect(screen.getByRole('button', { name: 'Title 2. Not started' })).toBeTruthy();
+      expect(readItem).not.toHaveBeenCalled();
+    } finally {
+      cleanup();
+      reader.stop();
+      pills.dispose();
+    }
+  });
+
+  it('does not use older scrolling to retry a failed initial tail', async () => {
+    const { gateway, reader } = setup(3);
+    gateway.unreadable = 3;
+    reader.sync(range(3, 3), 'newest');
+    await flush();
+    reader.sync(range(2, 3), 'older');
+    await flush();
+    expect(gateway.calls).toEqual([{ limit: 1, before: undefined }]);
   });
 
   it('makes no read for live filings, and an older page does not catch them up', async () => {
