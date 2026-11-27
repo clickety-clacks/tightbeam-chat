@@ -573,7 +573,7 @@ describe('scroll-pinned prompts with scroll timelines', () => {
     expect(slotCall.options.fill).toBeUndefined();
     // Evaluate the keyframes as a browser would at a scroll position (linear between stops,
     // the later stop winning where two share an offset).
-    const sample = (keyframes: Keyframe[], property: 'transform' | 'opacity' | 'filter', scrollTop: number) => {
+    const sample = (keyframes: Keyframe[], property: 'top' | 'opacity' | 'filter', scrollTop: number) => {
       const at = scrollTop / 1e7;
       let index = keyframes.length - 1;
       for (let i = 0; i < keyframes.length; i++) if ((keyframes[i].offset as number) > at) { index = i; break; }
@@ -581,7 +581,7 @@ describe('scroll-pinned prompts with scroll timelines', () => {
       const from = keyframes[Math.max(0, index - 1)];
       const value = (frame: Keyframe) => property === 'opacity' ? Number(frame.opacity)
         : property === 'filter' ? Number.parseFloat(String(frame.filter).match(/opacity\(([\d.]+)\)/)![1])
-        : Number.parseFloat(String(frame.transform).match(/translateY\((-?[\d.e-]+)px\)/)![1]);
+        : Number.parseFloat(String(frame.top));
       if ((to.offset as number) <= at || from === to) return value(to);
       const t = (at - (from.offset as number)) / ((to.offset as number) - (from.offset as number));
       return value(from) + (value(to) - value(from)) * t;
@@ -591,13 +591,16 @@ describe('scroll-pinned prompts with scroll timelines', () => {
       const frame = pinnedPromptFrameAt(scrollTop, geometry, 0, options);
       expect(sample(slotCall.keyframes, 'opacity', scrollTop)).toBeCloseTo(frame ? 1 : 0, 6);
       expect(sample(rowCall.keyframes, 'filter', scrollTop)).toBeCloseTo(frame ? 0 : 1, 6);
-      if (frame) expect(sample(slotCall.keyframes, 'transform', scrollTop)).toBeCloseTo(frame.top, 4);
+      if (frame) expect(sample(slotCall.keyframes, 'top', scrollTop)).toBeCloseTo(frame.top, 4);
     }
     // Hiding the original never touches its opacity, which Chat animates for its arrival fade.
     expect(rowCall.keyframes.every((frame: Keyframe) => frame.opacity === undefined)).toBe(true);
     // At the very end of the scroll range the earlier prompt shows nothing, not its last state.
     expect(sample(slotCall.keyframes, 'opacity', 1e7)).toBe(0);
-    // No style is written on scroll; the browser applies the animations.
+    // The absolute position is animated by the browser. A scroll-driven compositor
+    // transform can be painted behind the incoming prompt's actual scroll position.
+    expect(slotCall.keyframes.every(frame => frame.transform === undefined)).toBe(true);
+    expect(slot.style.top).toBe('');
     expect(slot.style.transform).toBe('');
     const before = calls.length;
     scrollTo(520);

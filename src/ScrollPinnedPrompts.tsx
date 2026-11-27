@@ -426,7 +426,10 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
     const frames = <T extends Keyframe>(make: (values: Values) => T) =>
       stops.map(stop => ({ offset: offset(stop.at), ...make(stop.values) }));
     slot.animations = [
-      slot.slot.animate(frames(values => ({ opacity: values.shown ? 1 : 0, transform: `translateY(${values.top}px)` })), timing),
+      // Interpolate the absolute position on the same layout timeline as the next
+      // prompt. WebKit can paint a stale compositor transform during push-off,
+      // even while the computed transform has advanced with the scroll position.
+      slot.slot.animate(frames(values => ({ opacity: values.shown ? 1 : 0, top: `${values.top}px` })), timing),
       slot.body.animate(frames(values => ({ transform: `translateY(${values.innerOffset}px)` })), timing),
       slot.full.animate(frames(values => ({ opacity: 1 - values.fade })), timing),
       slot.summary.animate(frames(values => ({ opacity: values.fade })), timing),
