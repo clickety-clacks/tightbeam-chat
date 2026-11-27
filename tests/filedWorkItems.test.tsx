@@ -18,7 +18,7 @@ const flush = () => vi.advanceTimersByTimeAsync(0);
 
 /** Lists newest first by position, as the Gateway does for one creator. */
 function setup(total: number, onItems?: (items: ReadonlyMap<string, WorkItemSummary>) => void) {
-  const gateway = { total, unreadable: 0, version: 1, calls: [] as Array<{ limit: number; before?: string }> };
+  const gateway = { total, unreadable: 0, absent: 0, version: 1, calls: [] as Array<{ limit: number; before?: string }> };
   let items: ReadonlyMap<string, WorkItemSummary> = new Map();
   const failures: boolean[] = [];
   const reader = new FiledWorkItems('selected', async (_key, { limit, before }): Promise<FiledWorkItemPage> => {
@@ -27,7 +27,7 @@ function setup(total: number, onItems?: (items: ReadonlyMap<string, WorkItemSumm
     const start = Math.max(1, end - limit + 1);
     // One bad row fails every page that includes it.
     if (gateway.unreadable >= start && gateway.unreadable <= end) throw new Error('unavailable');
-    return { items: range(start, end).map(row => item(row.at, gateway.version)), oldestCursor: String(start), hasOlder: start > 1 };
+    return { items: range(start, end).filter(row => row.at !== gateway.absent).map(row => item(row.at, gateway.version)), oldestCursor: String(start), hasOlder: start > 1 };
   }, next => { items = next; onItems?.(next); }, undefined, failed => failures.push(failed));
   return { gateway, reader, failures, items: () => items };
 }
@@ -253,6 +253,26 @@ describe('filed work item reads', () => {
     await reader.refresh();
     expect(gateway.calls.at(-1)).toEqual({ limit: 14, before: undefined });
     expect(items().size).toBe(14);
+    expect(failures).toEqual([true, false]);
+  });
+
+  it('clears a failed older range when an exhaustive tail omits an absent filing', async () => {
+    const { gateway, reader, failures, items } = setup(14);
+    reader.sync(range(10, 14), 'newest');
+    await flush();
+    gateway.unreadable = 1;
+    reader.sync(range(1, 14), 'older');
+    await flush();
+    expect(failures).toEqual([true]);
+
+    gateway.unreadable = 0;
+    gateway.absent = 1;
+    await reader.refresh();
+    expect(gateway.calls).toEqual([
+      { limit: 5, before: undefined }, { limit: 9, before: '10' }, { limit: 14, before: undefined },
+    ]);
+    expect(items().size).toBe(13);
+    expect(items().has('wi_1')).toBe(false);
     expect(failures).toEqual([true, false]);
   });
 
