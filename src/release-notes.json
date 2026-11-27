@@ -12,7 +12,9 @@
       }
     ],
     "compatibleTightbeam": ["0.1.15", "0.1.16"],
-    "breakingChanges": "none"
+    "breakingChanges": [
+      "Only CHAT_WORK_ITEM_PILLS=0 disables work item pills. If you explicitly set another off value such as false, change it to 0 to keep pills off."
+    ]
   },
   {
     "version": "v0.1.115",
