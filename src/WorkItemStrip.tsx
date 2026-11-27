@@ -295,7 +295,7 @@ export function WorkItemSheet({ id, pills, transport, names, onClose, onInsert }
       <header>
         <div>
           <span className="tb-chat-work-chip" data-state={shown}><Icon name={shown} />
-            {found ? words[found] : stateText(pill?.state ?? 'held', pill?.stale === true && !data)}</span>
+            {found ? words[found] : stateText(base, pill?.stale === true && !data)}</span>
           <h2 id={titleId}>{item ? plain(item.title) : 'Work item'}</h2>
         </div>
         <div className="tb-chat-work-sheet-actions">
