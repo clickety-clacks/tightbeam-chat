@@ -125,7 +125,7 @@ describe('the strip', () => {
     await pills();
     await act(async () => { Visible.all.at(-1)!.show(uuid(1)); });
     await run.file(summary(2, { title: 'Product: Filed now', createdAt: Date.now() + 1000 }));
-    await waitFor(async () => expect((await pills())[0].textContent).toBe('Filed nowHeld'), { timeout: 7_000 });
+    await waitFor(async () => expect((await pills())[0].textContent).toBe('Filed nowAssigned'), { timeout: 7_000 });
     expect(run.counts).toEqual({ page: 1, item: 1 });
     // The same read names its message; titles make none of their own for it.
     expect(run.view.container.textContent).toContain('Filed · Product: Filed now');
