@@ -704,7 +704,14 @@ export function useReadingPosition(
       if (!incoming.locked && canAnimateArrival && appendedRows.length) animateArrivalRows(appendedRows);
       if (incoming.streaming && !incoming.locked) {
         const destination = incomingMessageTarget(box, incoming);
+        const glidePastPrompt = canAnimateArrival && pinnedPromptBottomRef.current !== undefined &&
+          incoming.answeredPromptScrollKey !== undefined;
         if (arrivalStartTime.current !== undefined) {
+          // Start from the position already on screen if a chunk changes the destination.
+          if (glidePastPrompt && target.current !== undefined && Math.abs(target.current - destination) > .5) {
+            arrivalStartTop.current = box.scrollTop;
+            arrivalStartTime.current = performance.now();
+          }
           target.current = destination;
           updateLatestControl(box);
           capture();
@@ -714,7 +721,8 @@ export function useReadingPosition(
           const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
           startArrivalScroll([], reduceMotion);
         } else if (Math.abs(box.scrollTop - destination) > .5) {
-          box.scrollTop = destination;
+          if (glidePastPrompt) startArrivalScroll([], false);
+          else box.scrollTop = destination;
         }
         updateLatestControl(box);
         capture();
