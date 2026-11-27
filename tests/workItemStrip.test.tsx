@@ -170,7 +170,38 @@ describe('the sheet', () => {
     expect(run.counts).toEqual({ page: 1, cards: 1 });
   });
 
-  it.each(['open', 'failed', 'shelved'])('ignores closure reasons for %s items', (state) => {
+  it.each([false, true])('updates the open dialog after an ordinary pill refresh (reopening: %s)', async reopening => {
+    const items = [summary(1)];
+    const run = chat(items);
+    const pill = (await pills())[0];
+    if (reopening) {
+      items[0] = summary(1, { state: 'closed', closeReason: 'canceled', holders: [], rowVersion: 2 });
+    }
+    fireEvent.click(pill);
+    const dialog = await screen.findByRole('dialog');
+    const oldLabel = reopening ? 'Canceled' : 'Waiting';
+    await within(dialog).findByText(oldLabel, { exact: true });
+    const reads = { ...run.counts };
+
+    vi.useFakeTimers();
+    try {
+      await act(async () => { Visible.all.at(-1)!.show(uuid(1)); });
+      items[0] = reopening ? summary(1, { rowVersion: 3 })
+        : summary(1, { state: 'closed', closeReason: 'completed', holders: [], rowVersion: 3 });
+      await run.emit({ kind: 'item', workItemId: uuid(1) });
+      await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+      const label = reopening ? 'Held' : 'Completed';
+      expect(pill.getAttribute('aria-label')).toBe(`Product: Item 1. ${label}`);
+      expect(within(dialog).getByText(label, { exact: true })).toBeTruthy();
+      expect(within(dialog).queryByText(oldLabel, { exact: true })).toBeNull();
+      expect(within(dialog).queryByText('No reason given')).toBeNull();
+      expect(run.counts).toEqual({ ...reads, item: 1 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['open', 'failed', 'iceboxed'])('ignores closure reasons for %s items', (state) => {
     expect(decodeWorkItemSummary({ ...summary(1, { state }), closeReason: 'canceled' }).closeReason).toBeUndefined();
   });
 

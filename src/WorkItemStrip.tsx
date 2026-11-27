@@ -4,7 +4,7 @@ import { stripProvenanceMarkup } from './displayText';
 import {
   AgentNames, foundState, readWorkItemSheet, type ChainStep, type WorkItemSheetData, type WorkItemSheetTransport,
 } from './workItemChain';
-import type { WorkItemPill, WorkItemPills, WorkItemPillState } from './workItemPills';
+import { workItemBaseState, type WorkItemPill, type WorkItemPills, type WorkItemPillState } from './workItemPills';
 import type { WorkItemCloseReason, WorkItemSummary } from './types';
 import { agoText, clockText, untilText } from './workItemTime';
 import './workItemPills.css';
@@ -275,11 +275,14 @@ export function WorkItemSheet({ id, pills, transport, names, onClose }: {
     return () => document.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  const data = state.status === 'ready' ? state.data : undefined;
-  const item = data?.item ?? pill?.summary;
-  const found: ShownState | undefined = data ? foundState(data) : undefined;
-  const shown: ShownState = item?.state === 'closed' ? 'done' : found ?? pill?.state ?? 'held';
-  const ended = shown === 'done' ? `${stateText(shown, false, item)}.` : item && pill ? endings[pill.state] : undefined;
+  const tap = state.status === 'ready' ? state.data : undefined;
+  const summary = pill?.summary;
+  const item = tap && (!summary || tap.item.rowVersion > summary.rowVersion) ? tap.item : summary;
+  // Waits and questions from the tap no longer describe an item that changed state.
+  const data = tap?.item.state === item?.state ? tap : undefined;
+  const base = item && item !== summary ? workItemBaseState(item) : pill?.state ?? 'held';
+  const shown: ShownState = (data && foundState(data)) ?? base;
+  const ended = base === 'done' ? `${stateText(base, false, item)}.` : item && endings[base];
   const lead = shown === 'you' ? 'The next move is yours.' : shown === 'waiting' ? 'This is what it waits on, step by step.' : undefined;
   return <div className="tb-chat-work-items tb-chat-work-layer">
     <button type="button" className="tb-chat-work-scrim" aria-label="Close work item" tabIndex={-1} onClick={onClose} />
@@ -293,7 +296,7 @@ export function WorkItemSheet({ id, pills, transport, names, onClose }: {
         <button ref={closeButton} type="button" className="tb-chat-modal-close" aria-label="Close work item" onClick={onClose}>×</button>
       </header>
       <div className="tb-chat-work-sheet-body" tabIndex={0} aria-live="polite" aria-busy={state.status === 'looking' && readNow.current}>
-        {settled && !data && <p className="tb-chat-work-box">{ended}{item?.failReason && ` ${plain(item.failReason)}`}</p>}
+        {(settled || tap) && !data && ended && <p className="tb-chat-work-box">{ended}{item?.failReason && ` ${plain(item.failReason)}`}</p>}
         {readNow.current && state.status === 'looking' && <p className="tb-chat-work-note" role="status">Looking…</p>}
         {readNow.current && state.status === 'gone' && <p className="tb-chat-work-box">This work item is no longer available.</p>}
         {readNow.current && state.status === 'failed' && <p className="tb-chat-work-box">This could not be read. <button type="button"

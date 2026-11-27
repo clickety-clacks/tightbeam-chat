@@ -83,7 +83,7 @@ export interface WorkItemPillsOptions {
 
 const finished: Readonly<Record<string, WorkItemPillState>> = { closed: 'done', failed: 'failed', iceboxed: 'shelved' };
 
-function baseState(summary: WorkItemSummary): WorkItemPillState {
+export function workItemBaseState(summary: WorkItemSummary): WorkItemPillState {
   const end = finished[summary.state];
   if (end) return end;
   if (summary.holders.length) return 'held';
@@ -485,7 +485,7 @@ export class WorkItemPills {
       .map((entry): WorkItemPill => {
         const ringing = this.ringing(entry);
         return Object.freeze({ id: entry.summary.id, title: entry.summary.title, summary: entry.summary,
-          state: ringing ? 'working' : baseState(entry.summary),
+          state: ringing ? 'working' : workItemBaseState(entry.summary),
           // A confirmed running turn is the newest thing known, so the ring stands.
           stale: entry.stale && !ringing });
       });
