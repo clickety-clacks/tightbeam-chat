@@ -293,14 +293,7 @@ body {
   color: var(--tb-chat-muted);
   font-size: .7rem;
 }
-.tb-chat-pinned-slot[data-pinned] .tb-chat-pinned-photos:not([inert]) > button {
-  position: relative;
-  z-index: 1;
-  pointer-events: auto;
-  touch-action: pan-y;
-  cursor: zoom-in;
-  padding: 0;
-}
+.tb-chat-pinned-photos > button { padding: 0; }
 .tb-chat-pinned-photos img {
   display: block;
   width: 100%;
