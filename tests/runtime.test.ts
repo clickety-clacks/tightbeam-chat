@@ -2011,7 +2011,8 @@ describe('framework-independent runtime', () => {
     expect(runtime.getSnapshot().records).toHaveLength(0);
     pending.resolve({ outcome: 'accepted' });
     await settle();
-    expect(runtime.getSnapshot().sends.find((send) => send.clientMessageId === id)).toBeUndefined();
+    // The reader's own unconfirmed text stays, with its Restore action; a late reply changes nothing.
+    expect(runtime.getSnapshot().sends).toMatchObject([{ clientMessageId: id, content: 'private', status: 'uncertain' }]);
     expect(transport.closed).toBeGreaterThan(0);
     runtime.dispose();
   });
@@ -2022,10 +2023,27 @@ describe('framework-independent runtime', () => {
     const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
     await runtime.rebuild();
     expect(runtime.getSnapshot().records.length).toBeGreaterThan(0);
-    runtime.send('private');
+    const id = runtime.send('private');
     await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('unauthorized'));
     expect(runtime.getSnapshot().records).toHaveLength(0);
-    expect(runtime.getSnapshot().sends).toHaveLength(0);
+    expect(runtime.getSnapshot().sends).toMatchObject([
+      { clientMessageId: id, content: 'private', status: 'failed', reason: 'human access revoked' }]);
+    runtime.dispose();
+  });
+
+  it.each(['pending', 'uncertain'] as const)('keeps the text of a %s send when rereading history loses authorization', async (status) => {
+    const transport = new ControlledTransport();
+    transport.nextSend = status === 'pending' ? () => new Promise<never>(() => {})
+      : async () => ({ outcome: 'uncertain', reason: 'Socket dropped' });
+    const runtime = createTightbeamAdapter(transport, profile).open(sessionKey);
+    await runtime.rebuild();
+    const id = runtime.send('still mine');
+    await vi.waitFor(() => expect(runtime.getSnapshot().sends[0]?.status).toBe(status));
+    // A rebuild rereads either the newest page or the rows after the held cursor; refuse both.
+    transport.readTail = transport.readAfter = async () => { throw new AuthorizationError('History is not authorized.'); };
+    await runtime.rebuild();
+    await vi.waitFor(() => expect(runtime.getSnapshot().status).toBe('unauthorized'));
+    expect(runtime.getSnapshot().sends).toMatchObject([{ clientMessageId: id, content: 'still mine', status: 'uncertain' }]);
     runtime.dispose();
   });
 });
@@ -2290,6 +2308,53 @@ it.each([true, false])('shows events and stays ready while the one filed titles 
   expect(runtime.getSnapshot()).toMatchObject({ status: 'ready', recordEventsError: undefined });
   if (!succeeds) expect(runtime.getSnapshot().workItems).toBeUndefined();
   expect(gates).toHaveLength(1);
+  runtime.dispose();
+});
+
+it('keeps today\'s wording and makes at most one title read per settled load when the filed-items read keeps failing (HTTP 500)', async () => {
+  const transport = new ControlledTransport();
+  const filed = (n: number) => ({ eventId: `work_item.filed:wi_${n}`, sessionKey, kind: 'work_item.filed', at: n,
+    record: { type: 'work-item', id: `wi_${n}`, workItemId: `wi_${n}`, detail: `/api/work-items/wi_${n}` },
+    actorSessionKey: sessionKey, tiedAs: ['creator'], cause: null, noticeMessageIds: [] });
+  let titleReads = 0;
+  const extended: ChatTransport = Object.assign(transport, {
+    readRecordEvents: async (_key: string, before: string | undefined) => before
+      ? { items: [97, 98, 99].map(filed), oldestCursor: null, hasOlder: false }
+      : { items: [100, 101, 102].map(filed), oldestCursor: 'older-record-events', hasOlder: true },
+    // The Gateway's recorded-merge failure: the list route answers 500, which the transport raises as an error.
+    readFiledWorkItems: async () => { titleReads++; throw new Error('Tightbeam REST request failed with HTTP 500.'); },
+  });
+  const runtime = createTightbeamAdapter(extended, profile).open(sessionKey);
+  const settle = () => new Promise(resolve => setTimeout(resolve, 60));
+  await vi.waitFor(() => expect(runtime.getSnapshot().recordEvents).toHaveLength(3));
+  await settle();
+  // One read for the newest load; the failure changes nothing the person sees.
+  expect(titleReads).toBe(1);
+  expect(runtime.getSnapshot()).toMatchObject({ status: 'ready', recordEventsError: undefined });
+  expect(runtime.getSnapshot().workItems).toBeUndefined();
+  // Paging in older history does not re-read the failed range.
+  for (let attempt = 0; attempt < 6 && (runtime.getSnapshot().recordEvents?.length ?? 0) < 6; attempt++) { await runtime.loadOlder!(); await settle(); }
+  expect(runtime.getSnapshot().recordEvents).toHaveLength(6);
+  expect(titleReads).toBe(1);
+  // A reconnect inside the 30 second cooldown makes no new read either.
+  transport.doubt();
+  await runtime.rebuild({ restart: true });
+  await settle();
+  expect(titleReads).toBe(1);
+  // After the cooldown, a reconnect makes exactly one more read, still without any change in what is shown.
+  const real = Date.now;
+  vi.spyOn(Date, 'now').mockImplementation(() => real() + 31_000);
+  transport.doubt();
+  await runtime.rebuild({ restart: true });
+  await settle();
+  expect(titleReads).toBe(2);
+  // Nothing re-reads on its own: no timer, no tight loop.
+  await new Promise(resolve => setTimeout(resolve, 300));
+  expect(titleReads).toBe(2);
+  expect(runtime.getSnapshot()).toMatchObject({ status: 'ready', recordEventsError: undefined });
+  expect(runtime.getSnapshot().workItems).toBeUndefined();
+  expect(runtime.send('the conversation is unharmed')).not.toBeNull();
+  vi.restoreAllMocks();
   runtime.dispose();
 });
 

@@ -10,6 +10,25 @@ A `vMAJOR.MINOR.PATCH` tag runs the Chat checks, builds the browser application 
 
 The packaged `release.json` records supported Gateway versions. `GET /__chat/version` returns that compatibility list alongside the Chat tag and source commit, plus whether `CHAT_REST_HUMAN_SEND` is enabled in the running service.
 
+## Support window and release statements
+
+Chat supports the current Tightbeam release and the one before it. Outside that window Chat relies on its runtime capability checks to degrade gracefully: a missing route or field is treated as unavailable.
+
+Each tagged version states two fields in `src/release-notes.json`, and the release body carries them:
+
+- `compatibleTightbeam`: the Tightbeam versions verified with this build, for example `["0.1.15", "0.1.16"]`. It must match the versions the package declares as supported, and the tag workflow proves it: it finds the support window in the public Tightbeam releases (the release marked latest, and the newest published build of the version numbered below it), downloads each Linux package, and runs the packaged Chat against it in headless Chrome with a stand-in model: sign-in and load, send and receive, reconnect across a Gateway restart, and paging to older history. No draft is staged unless every version passes and the notes and package claim exactly those versions. Each version gets one retry. Attachments, REST send mode, upgrading an existing installation, macOS and embedded hosts are not covered.
+- `breakingChanges`: `"none"`, or a list of sentences.
+
+The reviewer of the release notes then confirms the breaking-changes section in a commit of their own on the same pull request, adding to that version's entry:
+
+```json
+"breakingChangesReview": { "reviewer": "<role>", "commit": "<full SHA of the reviewed head>", "result": "confirmed" }
+```
+
+The tag job refuses to stage a draft unless that commit is part of the tag and the tag differs from it by nothing but this field, so any later change needs a new confirmation. It records who confirmed; the repository's single account cannot prove it. Merge the pull request with a merge commit while nothing else has landed: a squash or rebase merge drops the reviewed commit, and other changes on `main` void the confirmation. In either case confirm the landed commit in a follow-up pull request that changes only this field.
+
+The tag job also fails when either field is missing. Compared with the previous release tag, it also requires `breakingChanges` to name each of these: the oldest supported Tightbeam rising (name the version dropped), a `CHAT_` setting or `/__chat/` route removed or renamed, a browser storage key removed or renamed, or a stored value changing format. Stored values are held in `scripts/chat-storage-contract.json`; a test checks that the build still reads and writes each one. A previous tag from before that file is compared with the values v0.1.114 stored. The installed updater also refuses a published release after v0.1.114 whose notes do not end with the two lines the packaging script writes, `Compatible with Tightbeam: <versions>` and then `Breaking changes: <none, or the sentences on one line>`, with nothing after them. A release body edited by hand must keep them last. This protects only an installation that already runs a release containing that check: the watcher runs the installed updater and looks only at the latest release, so an installation still on an older release, or one that skipped the first guarded release, installs an unstated one. Where the protection is relied on, confirm the installed release includes it. It does not stop such a release being published, or show that anyone reviewed it. Settings, routes and keys are read from source with comments removed, so the comparison cannot see a handler that stops working while its name remains, or a change of meaning under unchanged names. It only checks that each change is named, not what the sentence says about it; the reviewer's confirmation of the exact commit is what judges that.
+
 The tag workflow creates a draft and uploads the complete asset set, then stops. Its summary and the draft notes show the exact source commit, package name and SHA-256. Check the package against that checksum, then publish the draft. Releases need no human approval; see [AGENTS.md](../AGENTS.md). The updater accepts only published releases, so the draft is retained for review without becoming available for automatic installation. No npm package is published.
 
 Before publishing each draft, run the existing one-app, one-page Tuner-hosted XCUITest against the exact Chat candidate. Confirm that Chat loads the selected conversation transcript, emits one host-lifetime ready event, and reaches the connected state. Record the Chat source/build identity, Tuner source/build identity, Gateway compatibility version, and test evidence with the release review. Do not send a message or open another page as part of this check. A synthetic browser result or a result from a different candidate is not a pass; keep the draft unpublished if the exact-candidate check has not completed successfully.

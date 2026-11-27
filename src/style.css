@@ -200,6 +200,104 @@ body {
 }
 .tb-chat-latest-user-prompt-dismiss:hover { background: color-mix(in srgb, var(--tb-chat-human-surface) 78%, var(--tb-chat-text)); }
 .tb-chat-tool-history-status-placeholder { visibility: hidden; pointer-events: none; }
+/* Scroll-pinned prompts (CHAT_SCROLL_PINNED_PROMPTS). A copy of the bubble at its own
+   position and width; script sets its geometry, scroll-driven animations move it. */
+.tb-chat-pinned-layer {
+  position: absolute;
+  /* Above the transcript, below the composer, notices, pills and the scroll-to-latest control:
+     a tall prompt still shrinking passes under them like the transcript does. */
+  z-index: 2;
+  overflow: hidden;
+  pointer-events: none;
+}
+.tb-chat-pinned-slot {
+  position: absolute;
+  top: 0;
+  opacity: 0;
+  will-change: transform, opacity;
+  filter: drop-shadow(0 4px 10px color-mix(in srgb, var(--tb-chat-shadow) 8%, transparent))
+    drop-shadow(0 1px 2px color-mix(in srgb, var(--tb-chat-shadow) 5%, transparent));
+}
+.tb-chat-pinned-window {
+  position: absolute;
+  inset: 0;
+  overflow: clip;
+  border-radius: var(--tb-chat-pinned-radius-top-left, 28px) var(--tb-chat-pinned-radius-top-right, 28px) 0 0;
+}
+.tb-chat-pinned-body {
+  position: absolute;
+  inset: 0;
+  overflow: clip;
+  border-radius: 0 0 var(--tb-chat-pinned-radius-bottom-right, 4px) var(--tb-chat-pinned-radius-bottom-left, 28px);
+  background: linear-gradient(135deg, var(--tb-chat-human-surface), var(--tb-chat-human-surface-end));
+  will-change: transform;
+}
+.tb-chat-pinned-full { position: absolute; inset: 0 auto auto 0; will-change: opacity; }
+/* The original bubble while its pinned copy stands in for it (no scroll timelines). It
+   stays in the transcript for layout and screen readers. */
+/* A filter, not opacity, so the row's own opacity (its arrival fade, a sending state) is left alone. */
+.tb-chat-bubble[data-pinned-original] { filter: opacity(0); }
+.tb-chat-pinned-copy {
+  margin: 0 !important;
+  max-width: none !important;
+  min-width: 0 !important;
+  box-shadow: none !important;
+}
+.tb-chat-pinned-summary {
+  position: absolute;
+  left: 0;
+  right: 0;
+  color: var(--tb-chat-text);
+  font-size: .9375rem;
+  font-weight: 400;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  opacity: 0;
+  will-change: opacity;
+}
+/* Clamped inside the padding, so lines past the third cannot show in the bottom padding. */
+.tb-chat-pinned-summary-text {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+}
+.tb-chat-pinned-summary-measure {
+  top: 0;
+  left: 0;
+  right: auto;
+  height: auto;
+  visibility: hidden;
+}
+.tb-chat-pinned-jump {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.tb-chat-pinned-dismiss {
+  position: absolute;
+  top: -.35rem;
+  left: -.35rem;
+  display: grid;
+  place-items: center;
+  width: 1.55rem;
+  height: 1.55rem;
+  padding: 0;
+  border: 1px solid var(--tb-chat-border);
+  border-radius: 50%;
+  background: var(--tb-chat-human-surface);
+  color: var(--tb-chat-text);
+  font-size: 1rem !important;
+  line-height: 1;
+}
+/* Touches on the pinned copy reach the transcript, so a drag or fling there scrolls it;
+   a tap on the copy is recognised by the transcript (see ScrollPinnedPrompts). */
+.tb-chat-pinned-slot[data-pinned] .tb-chat-pinned-dismiss { pointer-events: auto; }
+.tb-chat-pinned-dismiss:hover { background: color-mix(in srgb, var(--tb-chat-human-surface) 78%, var(--tb-chat-text)); }
+
 .tb-chat-scroll-latest {
   display: inline-flex;
   align-items: center;
@@ -275,6 +373,10 @@ body {
 .tb-chat-bubble:has(.tb-chat-bubble-body > .tb-chat-markdown > .tb-chat-code-scroll:only-child),
 .tb-chat-bubble:has(.tb-chat-bubble-body > .tb-chat-markdown > .tb-chat-table-scroll:only-child:not(:has(tbody > tr:nth-child(6)))),
 .tb-chat-bubble:has(.tb-chat-bubble-body > .tb-chat-markdown > p:only-child > .tb-chat-markdown-image:only-child),
+/* The same, for the reader's own prompts, whose text sits inside the ten-line clamp. */
+.tb-chat-bubble:has(.tb-chat-bubble-body > .tb-chat-prompt-clamp > .tb-chat-prompt-clamp-content > .tb-chat-markdown > .tb-chat-code-scroll:only-child),
+.tb-chat-bubble:has(.tb-chat-bubble-body > .tb-chat-prompt-clamp > .tb-chat-prompt-clamp-content > .tb-chat-markdown > .tb-chat-table-scroll:only-child:not(:has(tbody > tr:nth-child(6)))),
+.tb-chat-bubble:has(.tb-chat-bubble-body > .tb-chat-prompt-clamp > .tb-chat-prompt-clamp-content > .tb-chat-markdown > p:only-child > .tb-chat-markdown-image:only-child),
 .tb-chat-bubble:has(.tb-chat-bubble-body > .tb-chat-image-attachments:only-child > .tb-chat-image-attachment:only-child) {
   border-color: transparent;
   background: transparent;
@@ -286,6 +388,34 @@ body {
 .tb-chat-local[data-send-state="timed-out"] { border-color: var(--tb-chat-danger); }
 .tb-chat-bubble[data-message-state="failed"] { border-color: var(--tb-chat-danger); }
 .tb-chat-bubble-body { min-width: 0; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
+/* The reader's own long prompts: at most ten lines of text until expanded (no collapse). The
+   text stays in the page for copy, find and selection; attachments and status lines are outside. */
+.tb-chat-prompt-clamp:not([data-expanded]) > .tb-chat-prompt-clamp-content {
+  max-height: 15em;
+  max-height: 10lh;
+  overflow: clip;
+}
+.tb-chat-prompt-clamp[data-clamped] > .tb-chat-prompt-clamp-content {
+  -webkit-mask-image: linear-gradient(to bottom, currentColor calc(100% - 1lh), transparent);
+  mask-image: linear-gradient(to bottom, currentColor calc(100% - 1lh), transparent);
+}
+/* Focus moves to the message after Show full message; it is not a control, so no focus ring. */
+.tb-chat-prompt-clamp-content:focus { outline: none; }
+.tb-chat-prompt-expand {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem;
+  margin-top: .25rem;
+  padding: .25rem 0;
+  border: 0;
+  background: transparent;
+  color: var(--tb-chat-fjord);
+  font-size: .875rem !important;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: .15em;
+}
+.tb-chat-prompt-expand:hover { text-decoration-thickness: 2px; }
 .tb-chat-markdown { min-width: 0; overflow-wrap: anywhere; }
 .tb-chat-markdown > :first-child { margin-top: 0; }
 .tb-chat-markdown > :last-child { margin-bottom: 0; }
@@ -344,6 +474,16 @@ body {
   font: inherit;
 }
 .tb-chat-image-alt { color: var(--tb-chat-muted); font-style: italic; }
+/* Sender and time share one line under a person's message: sender at the start, time at the end. */
+.tb-chat-bubble-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: .75rem;
+  margin-top: .5rem;
+}
+.tb-chat-bubble-meta > .tb-chat-bubble-sender { min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tb-chat-bubble-meta > .tb-chat-time { flex: 0 0 auto; margin: 0 0 0 auto; }
 .tb-chat-time { display: block; margin-top: .5rem; color: var(--tb-chat-muted); font-size: .6875rem; font-variant-numeric: tabular-nums; line-height: 1.2; text-align: end; }
 .tb-chat-send-indicator { display: flex; align-items: center; min-height: .9rem; margin: .35rem 0 0; }
 .tb-chat-send-refusal { margin: .35rem 0 0; color: var(--tb-chat-danger); font-size: .82rem; }

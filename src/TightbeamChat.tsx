@@ -12,6 +12,8 @@ import { highlightRecognizedCode } from './markdownHighlight';
 import type { AttachmentInput, AttachmentReference, ChatRuntime, CanonicalMessage, CanonicalTransition, ToolCallRecord, ToolCallIndex, ConversationRecord, LocalSend, RuntimeState, TightbeamAdapter, TurnProvenance } from './types';
 import { projectMessages, type HumanMember } from './messageVisibility';
 import { ActivitySummaryProvider, useActivitySummary } from './ActivitySummaryView';
+import { ScrollPinnedPrompts, type ScrollPinnedPrompt, type ScrollPinnedPromptsHandle } from './ScrollPinnedPrompts';
+import { PromptClamp } from './PromptClamp';
 import type { SummaryAnswer, ActivitySummaryTransport } from './activitySummaries';
 import { buildActivityTrail, type ActivityFold, type ActivityLine, type ActivityOverflow, type MessageActivityItem } from './activityTrail';
 import { formatVisibleIds, type ActivityPillIcon, type ActivityPillPresentation } from './activityPresentation';
@@ -45,6 +47,17 @@ export interface TightbeamChatProps {
   readonly configuredConversationHref?: string;
   /** Enables canonical submitter labels once the compatible Gateway contract is available. */
   readonly submitterAttributionEnabled?: boolean;
+  /**
+   * Pins the reader's prompts by scroll position: each one shortens as it scrolls under
+   * the pin line, fades to its summary and is pushed off by the next. Unfinished; off by
+   * default (CHAT_SCROLL_PINNED_PROMPTS, docs/feature-flags.md).
+   */
+  readonly scrollPinnedPrompts?: boolean;
+  /**
+   * Shows the reader's own long prompts at most ten lines tall with a button to expand them.
+   * Unfinished; off by default (CHAT_LONG_PROMPT_CLAMP, docs/feature-flags.md).
+   */
+  readonly longPromptClamp?: boolean;
   /** Change when the host changes principal or transport lifetime. */
   readonly identityKey?: string;
   readonly renderMessage?: (record: ConversationRecord, context: RenderContext) => ReactNode | undefined;
@@ -130,19 +143,26 @@ function dismissedPromptStorageKey(sessionKey: string): string {
   return `${dismissedPromptStoragePrefix}${encodeURIComponent(sessionKey)}`;
 }
 
-function readDismissedPrompt(sessionKey: string): boolean {
+export function readDismissedPrompt(sessionKey: string): boolean {
   if (typeof window === 'undefined') return false;
   try { return window.localStorage.getItem(dismissedPromptStorageKey(sessionKey)) === 'true'; }
   catch { return false; }
 }
 
-function storeDismissedPrompt(sessionKey: string, dismissed: boolean): void {
+export function storeDismissedPrompt(sessionKey: string, dismissed: boolean): void {
   if (typeof window === 'undefined') return;
   try {
     const key = dismissedPromptStorageKey(sessionKey);
     if (dismissed) window.localStorage.setItem(key, 'true');
     else window.localStorage.removeItem(key);
   } catch { /* Storage may be unavailable. */ }
+}
+
+/** An element's top in the page from layout (its offset chain); scrolling of any kind leaves it alone. */
+function pageOffsetTop(element: HTMLElement): number {
+  let top = 0;
+  for (let node: HTMLElement | null = element; node; node = node.offsetParent as HTMLElement | null) top += node.offsetTop;
+  return top;
 }
 
 function nearestPromptAboveLine(prompts: readonly UserPrompt[], viewport: HTMLElement,
@@ -901,9 +921,11 @@ function AttachmentDisclosure({ attachments, preservePosition, reconcileLayout }
 
 function defaultBody(record: CanonicalMessage, readAttachment: ChatRuntime['readAttachment'],
   preservePosition: () => void, reconcileLayout: () => void,
-  content = record.content): ReactNode {
+  content = record.content, clampAs?: string): ReactNode {
+  const text = markdownBody(content || '(No text content)');
   return <>
-    {markdownBody(content || '(No text content)')}
+    {clampAs ? <PromptClamp conversation={record.sessionKey} identity={clampAs} beforeExpand={preservePosition}>
+      {text}</PromptClamp> : text}
     <AttachmentDetails record={record} readAttachment={readAttachment}
       preservePosition={preservePosition} reconcileLayout={reconcileLayout} />
   </>;
@@ -1066,7 +1088,8 @@ function StatusIcon({ state }: { state: RuntimeState }) {
 }
 
 const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, registerRow, readAttachment, preservePosition,
-  reconcileLayout, onRetryRender, onRestoreFailedMessage, canEditResend, scrollKey: scrollKeyOverride, promptTargetPrefix }: {
+  reconcileLayout, onRetryRender, onRestoreFailedMessage, canEditResend, scrollKey: scrollKeyOverride, promptTargetPrefix,
+  longPromptClamp }: {
   bubble: Bubble;
   renderMessage?: TightbeamChatProps['renderMessage'];
   agentName: string;
@@ -1077,6 +1100,7 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, re
   onRetryRender: () => void;
   onRestoreFailedMessage: (bubble: Bubble) => void;
   canEditResend: boolean;
+  longPromptClamp?: boolean;
   scrollKey?: string;
   promptTargetPrefix: string;
 }) {
@@ -1088,6 +1112,7 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, re
   const time = localTimestamp(record.createdAt ?? bubble.segmentTime ?? record.receivedAt);
   const displayContent = stripProvenanceMarkup(bubble.displayContent ?? record.content);
   const failureReason = bubble.failureReason;
+  const ownPrompt = longPromptClamp === true && bubble.side === 'human' && bubble.ownerScoped;
   const context: RenderContext = {
     sessionKey: record.sessionKey,
     recordKey: bubble.key,
@@ -1095,8 +1120,12 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, re
       id: record.id, sessionKey: record.sessionKey, seq: record.seq, rowVersion: record.rowVersion,
       sender: record.sender, messageType: record.messageType, turnSeq: record.turnSeq, createdAt: record.createdAt,
     }), member: Object.freeze({ ...bubble.member }) } : {}),
-    defaultRender: () => bubble.derived ? markdownBody(displayContent)
-      : defaultBody(record, readAttachment, preservePosition, reconcileLayout, displayContent),
+    // The reader's own prompts show at most ten lines until expanded; attachments stay below.
+    defaultRender: () => bubble.derived
+      ? ownPrompt ? <PromptClamp conversation={record.sessionKey} identity={bubblePromptIdentity(bubble)}
+        beforeExpand={preservePosition}>{markdownBody(displayContent)}</PromptClamp> : markdownBody(displayContent)
+      : defaultBody(record, readAttachment, preservePosition, reconcileLayout, displayContent,
+        ownPrompt ? bubblePromptIdentity(bubble) : undefined),
     copyText: () => typeof navigator !== 'undefined' && navigator.clipboard
       ? navigator.clipboard.writeText(bubble.displayContent ?? record.content)
       : Promise.reject(new Error('Copying is unavailable here.')),
@@ -1114,7 +1143,6 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, re
     className={`tb-chat-bubble tb-chat-bubble-${bubble.side}`} data-record-key={bubble.key} data-scroll-key={scrollKey}
     data-message-state={failureReason ? 'failed' : undefined}
     aria-label={`Message from ${formatVisibleIds(bubble.sender || sourceLabel(bubble.side, agentName))}${failureReason ? `. Failed. Reason: ${failureReason}` : ''}`}>
-    {bubble.side === 'human' && <span className="tb-chat-bubble-sender" aria-hidden="true">{formatVisibleIds(bubble.sender)}</span>}
     <div className="tb-chat-bubble-body">
       <TranscriptRenderBoundary resetKey={record.rowVersion} onRecovered={reconcileLayout}
         onRetry={onRetryRender} fallback={retry => <TranscriptRenderFailure scope="message"
@@ -1132,7 +1160,11 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, re
       {bubble.side === 'human' && bubble.ownerScoped && canEditResend && <button type="button" className="tb-chat-send-retry"
         onClick={() => onRestoreFailedMessage(bubble)}>Edit and resend</button>}
     </div>}
-    <time className="tb-chat-time" dateTime={time.dateTime}>{time.text}</time>
+    {/* A person's message carries its sender on the same line as the time, sender first. */}
+    {bubble.side === 'human' ? <div className="tb-chat-bubble-meta">
+      <span className="tb-chat-bubble-sender" aria-hidden="true">{formatVisibleIds(bubble.sender)}</span>
+      <time className="tb-chat-time" dateTime={time.dateTime}>{time.text}</time>
+    </div> : <time className="tb-chat-time" dateTime={time.dateTime}>{time.text}</time>}
   </article>;
 }, (previous, next) => {
   const before = previous.bubble;
@@ -1148,7 +1180,7 @@ const RecordRow = memo(function RecordRow({ bubble, renderMessage, agentName, re
     before.derived === after.derived && sameMember && previous.renderMessage === next.renderMessage &&
     previous.onRetryRender === next.onRetryRender && previous.readAttachment === next.readAttachment &&
     previous.onRestoreFailedMessage === next.onRestoreFailedMessage &&
-    previous.promptTargetPrefix === next.promptTargetPrefix &&
+    previous.promptTargetPrefix === next.promptTargetPrefix && previous.longPromptClamp === next.longPromptClamp &&
     previous.agentName === next.agentName && previous.registerRow === next.registerRow &&
     previous.preservePosition === next.preservePosition && previous.reconcileLayout === next.reconcileLayout &&
     previous.scrollKey === next.scrollKey;
@@ -1309,7 +1341,12 @@ interface ComposerHandle {
 }
 
 interface SubmittedDraft {
-  readonly revision: number;
+  /** The text that was sent, so a failed send can put it back. */
+  readonly content: string;
+  /** The composer's edit count after Chat last cleared or restored it; any later edit leaves the draft alone. */
+  revision: number;
+  /** True while the failed text is back in the composer. */
+  restored: boolean;
   // Set once the send's delivery became uncertain or failed. From then on only
   // its reconciled canonical row confirms delivery, not a later acceptance.
   awaitingCanonical: boolean;
@@ -1705,20 +1742,30 @@ const Composer = forwardRef<ComposerHandle, {
   }, [draft]);
 
   useEffect(() => {
-    // The composer keeps a sent message's text until that message is confirmed
-    // delivered. An uncertain or failed send stays tracked, so a later Check and
-    // retry that reconciles its row clears the text and a second Send cannot
-    // post it again. Any edit since the send leaves the draft alone.
+    // Submit clears the composer at once, so a posted message never sits in it too. A definite
+    // failure puts the text back if the composer is still empty. An uncertain send does not, because
+    // the message may exist; its bubble offers Check and retry and Restore. If a failed text is back
+    // in the composer, a retry or its confirmation clears it again so a second Send cannot post it twice.
     for (const send of state.sends) {
       const submitted = recoverySnapshot.submittedRevisions.get(send.clientMessageId);
       if (!submitted) continue;
-      if (send.status === 'uncertain' || send.status === 'failed') submitted.awaitingCanonical = true;
-      const confirmed = send.reconciled || (send.status === 'accepted' && !submitted.awaitingCanonical);
-      if (!confirmed) continue;
-      recoverySnapshot.submittedRevisions.delete(send.clientMessageId);
-      if (recoverySnapshot.editRevision === submitted.revision) {
+      const untouched = recoverySnapshot.editRevision === submitted.revision;
+      const replace = (content: string, restored: boolean) => {
         recoverySnapshot.editRevision++;
-        updateDraft('');
+        submitted.revision = recoverySnapshot.editRevision;
+        submitted.restored = restored;
+        updateDraft(content);
+      };
+      if (send.status === 'uncertain' || send.status === 'failed') submitted.awaitingCanonical = true;
+      if (send.reconciled || (send.status === 'accepted' && !submitted.awaitingCanonical)) {
+        recoverySnapshot.submittedRevisions.delete(send.clientMessageId);
+        if (submitted.restored && untouched) replace('', false);
+        continue;
+      }
+      if (send.status === 'failed' && !submitted.restored && untouched && !recoverySnapshot.draft) {
+        replace(submitted.content, true);
+      } else if (send.status === 'pending' && submitted.restored && untouched) {
+        replace('', false);
       }
     }
   }, [recoverySnapshot, state.sends, updateDraft]);
@@ -1761,7 +1808,7 @@ const Composer = forwardRef<ComposerHandle, {
       preparationController.current?.abort();
       preparationController.current = null;
       publishAttachments([]);
-      recoverySnapshot.submittedRevisions.set(sendId, { revision: recoverySnapshot.editRevision, awaitingCanonical: false });
+      // Photo and file sends already clear at submit; their text is restored by the bubble's actions.
       recoverySnapshot.editRevision++;
       updateDraft('');
     } else {
@@ -1771,7 +1818,13 @@ const Composer = forwardRef<ComposerHandle, {
         setAcquisitionError(`The message was not submitted: ${errorReason(error)}. Your draft is still here.`);
         return;
       }
-      if (sendId) recoverySnapshot.submittedRevisions.set(sendId, { revision: recoverySnapshot.editRevision, awaitingCanonical: false });
+      if (sendId) {
+        const content = draft;
+        recoverySnapshot.editRevision++;
+        updateDraft('');
+        recoverySnapshot.submittedRevisions.set(sendId,
+          { content, revision: recoverySnapshot.editRevision, restored: false, awaitingCanonical: false });
+      }
     }
     if (sendId) {
       setAcquisitionError(null);
@@ -2304,7 +2357,7 @@ const ActivityRunRow = memo(function ActivityRunRow({ entry, expanded, toggle, r
 const WORK_ITEMS_MIN_HEIGHT = 380;
 
 function ChatBody({ runtime, renderMessage, className, hostBridge, configuredConversationHref, activitySummaries,
-  submitterAttributionEnabled,
+  submitterAttributionEnabled, scrollPinnedPrompts, longPromptClamp,
   recoverySnapshot }: {
   activitySummaries?: ActivitySummaryTransport;
   runtime: ChatRuntime;
@@ -2313,6 +2366,8 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   hostBridge: HostComposerBridge | null;
   configuredConversationHref?: string;
   submitterAttributionEnabled?: boolean;
+  scrollPinnedPrompts?: boolean;
+  longPromptClamp?: boolean;
   recoverySnapshot: ChatRecoverySnapshot;
 }) {
   const state = useSyncExternalStore(runtime.subscribe, runtime.getSnapshot, runtime.getSnapshot);
@@ -2447,9 +2502,13 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
   const arrivalEligible = state.status === 'ready' && priorArrivalContext?.ready === true &&
     priorArrivalContext.sessionKey === state.sessionKey && priorArrivalContext.generation === state.generation &&
     priorArrivalContext.recoveryRevision === recoveryRevision;
+  const scrollPinnedPromptsHandle = useRef<ScrollPinnedPromptsHandle>(null);
+  const pinnedPromptBottom = useCallback((scrollKey: string) =>
+    scrollPinnedPromptsHandle.current?.settledBottom(scrollKey), []);
   const reading = useReadingPosition(state.status === 'ready', readingRevision, box =>
     Boolean(state.loadingOlder || state.recordEventsLoading || (!state.historyError && (state.hasOlder || state.recordEventsHasOlder) && box.scrollTop < olderHistoryPrefetchDistance(box))),
-    arrivalEligible, state.sessionKey, markReadPosition, state.activeTurn?.turn.status === 'running');
+    arrivalEligible, state.sessionKey, markReadPosition, state.activeTurn?.turn.status === 'running',
+    scrollPinnedPrompts ? pinnedPromptBottom : undefined);
   const { viewport } = reading;
   const rememberReadingPosition = useCallback(() => {
     const box = viewport.current;
@@ -2850,7 +2909,11 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     if (element) {
       const rootTop = element.getBoundingClientRect().top;
       const safeAreaTop = Number.parseFloat(getComputedStyle(element).getPropertyValue('--tb-chat-safe-area-top')) || 0;
-      const safeTop = Math.max(10, safeAreaTop - rootTop + 10);
+      // The safe area is measured from the top of the page. On iOS the viewport moves while the
+      // keyboard opens, which moves the root on screen; with scroll-pinned prompts use the root's
+      // layout place in the page (its offset chain), which no viewport movement changes.
+      const rootPageTop = scrollPinnedPrompts ? pageOffsetTop(element) : rootTop;
+      const safeTop = Math.max(10, safeAreaTop - rootPageTop + 10);
       const noticeBottom = notice?.getBoundingClientRect().bottom;
       const toolStatusBottom = toolHistoryStatus.current?.getBoundingClientRect().bottom;
       const blockingBottom = Math.max(noticeBottom ?? Number.NEGATIVE_INFINITY,
@@ -2859,8 +2922,11 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
       const topValue = `${top}px`;
       if (element.style.getPropertyValue('--tb-chat-floating-prompt-top') !== topValue) {
         element.style.setProperty('--tb-chat-floating-prompt-top', topValue);
+        if (scrollPinnedPrompts) scrollPinnedPromptsHandle.current?.remeasure();
       }
     }
+    // Scroll-pinned prompts follow the scroll position themselves and need only the pin line.
+    if (scrollPinnedPrompts) return;
 
     const box = viewport.current;
     const viewportBounds = box?.getBoundingClientRect();
@@ -2947,7 +3013,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     if (stickyPromptIdentity === identity) reading.reconcileReducedMotionTopAnchor();
     else setStickyPromptIdentity(identity);
   }, [promptCandidates, promptsByIdentity, reading.getRow, reading.getTopAnchoredPromptScrollKey,
-    reading.reconcileReducedMotionTopAnchor, stickyPromptIdentity, promptHandoff?.identity]);
+    reading.reconcileReducedMotionTopAnchor, stickyPromptIdentity, promptHandoff?.identity, scrollPinnedPrompts]);
   const restorePromptHandoffSource = useCallback(() => {
     const source = promptHandoffSource.current;
     if (!source) return;
@@ -3374,10 +3440,10 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     !isOriginalPromptVisible(stickyPromptIdentity!) &&
     (!overlappingPromptIdentity || overlappingPromptIdentity === stickyPromptIdentity);
   const showStickyPrompt = promptHandoff ? activeHandoffVisible : candidatePromptVisible;
-  const jumpToStickyPrompt = () => {
+  const jumpToPrompt = (prompt: { readonly scrollKey: string }) => {
     const box = viewport.current;
-    if (!box || !displayedPrompt || !displayedPromptTargetId) return;
-    const target = reading.getRow(displayedPrompt.scrollKey);
+    if (!box) return;
+    const target = reading.getRow(prompt.scrollKey);
     if (!target) return;
     const viewportRect = box.getBoundingClientRect();
     const targetRect = target.getBoundingClientRect();
@@ -3391,6 +3457,30 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
     box.scrollTo({ top: destination, behavior: reducedMotion ? 'instant' : 'smooth' });
     updateStickyPrompt();
   };
+  const jumpToStickyPrompt = () => {
+    if (displayedPrompt && displayedPromptTargetId) jumpToPrompt(displayedPrompt);
+  };
+  const dismissLatestPrompt = () => {
+    storeDismissedPrompt(state.sessionKey, true);
+    setPromptDismissal({ sessionKey: state.sessionKey, dismissed: true });
+  };
+  // Timeline updates (a streamed reply, a tool call) rebuild the candidates; keep the same
+  // list while the prompts themselves are unchanged, so the pinned layer does not re-measure.
+  const stableScrollPinnedPromptList = useRef<readonly ScrollPinnedPrompt[]>([]);
+  const nextScrollPinnedPromptList = useMemo<readonly ScrollPinnedPrompt[]>(() => scrollPinnedPrompts
+    // Blank lines between paragraphs would spend the summary's three lines on nothing.
+    ? promptCandidates.map(prompt => ({ identity: prompt.identity,
+      text: formatVisibleIds(prompt.content).replace(/\n[^\S\n]*(?:\n[^\S\n]*)+/g, '\n').trim(),
+      scrollKey: prompt.scrollKey, targetId: `${promptTargetPrefix}-${encodeURIComponent(prompt.targetKey)}` }))
+    : [], [scrollPinnedPrompts, promptCandidates, promptTargetPrefix]);
+  const previousList = stableScrollPinnedPromptList.current;
+  const scrollPinnedPromptList = previousList.length === nextScrollPinnedPromptList.length &&
+    previousList.every((prompt, index) => {
+      const next = nextScrollPinnedPromptList[index];
+      return prompt.identity === next.identity && prompt.text === next.text &&
+        prompt.scrollKey === next.scrollKey && prompt.targetId === next.targetId;
+    }) ? previousList : nextScrollPinnedPromptList;
+  stableScrollPinnedPromptList.current = scrollPinnedPromptList;
   const renderToolHistoryStatus = (placeholder = false) => <div
     ref={placeholder ? undefined : toolHistoryStatus}
     className={`tb-chat-tool-history-status${placeholder ? ' tb-chat-tool-history-status-placeholder' : ''}`}
@@ -3477,7 +3567,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
             readAttachment={runtime.readAttachment}
             preservePosition={preserveReadingPosition} reconcileLayout={reading.reconcileViewportLayout}
             onRetryRender={retryTranscript} onRestoreFailedMessage={restoreFailedMessage} canEditResend={canEditResend}
-            promptTargetPrefix={promptTargetPrefix} />;
+            promptTargetPrefix={promptTargetPrefix} longPromptClamp={longPromptClamp} />;
         }
         const { send } = item;
         const time = localTimestamp(send.submittedAt);
@@ -3505,7 +3595,11 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
             ? 'The server refused this prompt because it is too large. Shorten it and try again.'
             : send.reason === 'invalid_message_id'
               ? 'This message could not be sent because its ID is invalid.'
-              : undefined
+              : send.reason === 'not_deliverable'
+                ? 'The agent cannot receive this message right now. Your draft is still here.'
+                : send.reason === 'client_message_conflict'
+                  ? 'This message conflicts with one already sent with the same ID. Check the conversation; if it is missing, restore the text and send it as a new message. Your draft is still here.'
+                  : undefined
           : undefined;
         const announcement = send.reconciled
           ? 'Your message is in the conversation.'
@@ -3529,7 +3623,11 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
           data-record-key={targetKey} data-scroll-key={targetKey}
           aria-label={formatVisibleIds(announcement)}
           data-send-state={send.reconciled ? 'solid' : refused ? 'refused' : timedOut ? 'timed-out' : uncertain ? 'uncertain' : 'ghosted'}>
-          <div className="tb-chat-bubble-body">{markdownBody(stripProvenanceMarkup(send.content))}</div>
+          <div className="tb-chat-bubble-body">
+            {longPromptClamp ? <PromptClamp conversation={send.sessionKey} identity={`send:${sendIdentity(send)}`}
+              beforeExpand={reading.preserveVisiblePosition}>{markdownBody(stripProvenanceMarkup(send.content))}</PromptClamp>
+              : markdownBody(stripProvenanceMarkup(send.content))}
+          </div>
           {attachmentItems.length > 0 && <PendingSendImages items={attachmentItems} />}
           {refusalCopy && <p className="tb-chat-send-refusal" aria-hidden="true">{refusalCopy}</p>}
           {timedOut && <p className="tb-chat-send-timeout">{timeoutCopy}</p>}
@@ -3547,13 +3645,17 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
             {retryAvailable && state.status === 'unauthorized' && <span>Access to this conversation is unavailable.</span>}
             {restoreAvailable && <button type="button" onClick={() => composer.current?.restore(send.content, attachmentItems)}>{restoreLabel}</button>}
           </div>}
-          <time className="tb-chat-time" dateTime={time.dateTime}>{time.text}</time>
+          {/* The same sender-and-time line as a delivered message, under any status or actions. */}
+          <div className="tb-chat-bubble-meta">
+            <span className="tb-chat-bubble-sender" aria-hidden="true">You</span>
+            <time className="tb-chat-time" dateTime={time.dateTime}>{time.text}</time>
+          </div>
         </article>;
   }, [state.workItems, activityPlan.toolItems, expandedActivityRuns, expandedToolCalls, toggleActivityRun, setToolCallExpanded,
     revealingActivityItems, finishActivityReveal, reading.registerRow, reading.preserveVisiblePosition,
     reading.reconcileViewportLayout, preserveReadingPosition, expandRun,
     renderMessage, agentName, state.status, runtime, retryTranscript, restoreFailedMessage,
-    pendingSendClock, promptTargetPrefix, sendsByIdentity, host.composerHidden, host.restoreRequested, host.ready,
+    pendingSendClock, promptTargetPrefix, sendsByIdentity, longPromptClamp, host.composerHidden, host.restoreRequested, host.ready,
     state.sessionKey, projection.compactionsDuringFailedTurn]);
 
   return <ActivitySummaryProvider transport={activitySummaries}
@@ -3619,23 +3721,23 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
       </TranscriptRenderBoundary>
       </div>
     </div>
-    {measurementPrompt && <div ref={stickyPromptMeasurement} className="tb-chat-latest-user-prompt-measurement"
+    {scrollPinnedPrompts && !latestPromptDismissed && <ScrollPinnedPrompts ref={scrollPinnedPromptsHandle}
+      prompts={scrollPinnedPromptList} viewport={viewport} getRow={reading.getRow}
+      onJump={jumpToPrompt} onDismiss={dismissLatestPrompt} />}
+    {!scrollPinnedPrompts && measurementPrompt && <div ref={stickyPromptMeasurement} className="tb-chat-latest-user-prompt-measurement"
       aria-hidden="true" inert>
       <button type="button" className="tb-chat-latest-user-prompt-jump" tabIndex={-1}>
         <span className="tb-chat-latest-user-prompt-text">{formatVisibleIds(measurementPrompt.content)}</span>
       </button>
       <button type="button" className="tb-chat-latest-user-prompt-dismiss" tabIndex={-1}>×</button>
     </div>}
-    {showStickyPrompt && displayedPrompt && <div ref={stickyPromptOverlay} className="tb-chat-latest-user-prompt">
+    {!scrollPinnedPrompts && showStickyPrompt && displayedPrompt && <div ref={stickyPromptOverlay} className="tb-chat-latest-user-prompt">
       <button type="button" className="tb-chat-latest-user-prompt-jump" aria-controls={displayedPromptTargetId}
         aria-label="Jump to user prompt" onClick={jumpToStickyPrompt}>
         <span className="tb-chat-latest-user-prompt-text">{formatVisibleIds(displayedPrompt.content)}</span>
       </button>
       <button type="button" className="tb-chat-latest-user-prompt-dismiss" aria-label="Dismiss user prompt preview"
-        onClick={() => {
-          storeDismissedPrompt(state.sessionKey, true);
-          setPromptDismissal({ sessionKey: state.sessionKey, dismissed: true });
-        }}>×</button>
+        onClick={dismissLatestPrompt}>×</button>
     </div>}
     {reading.showLatest && <button type="button" className="tb-chat-scroll-latest" data-scroll-latest="true"
       data-scroll-control-hidden={reading.hideLatestControl ? 'true' : undefined}
@@ -3662,7 +3764,7 @@ function ChatBody({ runtime, renderMessage, className, hostBridge, configuredCon
 
 /** One host-selected session. Changing selection/identity disposes the old runtime. */
 export function TightbeamChat({ sessionKey, adapter, identityKey, renderMessage, className,
-  configuredConversationHref, submitterAttributionEnabled }: TightbeamChatProps) {
+  configuredConversationHref, submitterAttributionEnabled, scrollPinnedPrompts, longPromptClamp }: TightbeamChatProps) {
   const key = `${sessionKey}\u0000${identityKey || ''}`;
   const recoverySnapshot = useRef<ChatRecoverySnapshot>({ key, draft: '', editRevision: 0,
     submittedRevisions: new Map(), scrollTop: 0, followLatest: true, hasReadingPosition: false });
@@ -3715,7 +3817,8 @@ export function TightbeamChat({ sessionKey, adapter, identityKey, renderMessage,
   </section>}>
     <ChatBody key={key} runtime={opened.runtime} renderMessage={renderMessage}
       className={className} hostBridge={hostBridge} configuredConversationHref={configuredConversationHref}
-      submitterAttributionEnabled={submitterAttributionEnabled}
+      submitterAttributionEnabled={submitterAttributionEnabled} scrollPinnedPrompts={scrollPinnedPrompts === true}
+      longPromptClamp={longPromptClamp === true}
       activitySummaries={adapter.activitySummaries} recoverySnapshot={recoverySnapshot.current} />
   </TranscriptRenderBoundary>;
 }

@@ -11,6 +11,7 @@ import { stageChatRelease } from '../scripts/stage-chat-release.mjs';
 import {
   CHAT_RELEASE_REPOSITORY,
   CHAT_SERVICE_NAME,
+  fetchVerifiedChatRelease,
   installChatRelease,
   rollbackChatRelease,
 } from '../scripts/chat-release-updater.mjs';
@@ -320,6 +321,7 @@ async function createBundleFixture(tag, sourceCommit, { noticeContent, includeEx
     draft: false,
     prerelease: false,
     published_at: '2026-01-01T00:00:00Z',
+    body: 'Compatible with Tightbeam: 0.1.16\n\nBreaking changes: none\n',
     assets: [...assets.entries()].map(([name, bytes]) => ({
       name,
       size: bytes.length,
@@ -344,6 +346,9 @@ async function createPackageSourceFixture(rootDir) {
     'LICENSE',
     'THIRD_PARTY_NOTICES.md',
   ];
+  await fs.mkdir(path.join(rootDir, 'src'), { recursive: true });
+  await fs.writeFile(path.join(rootDir, 'src/release-notes.json'), JSON.stringify(['v1.2.3', 'v1.2.4'].map(version =>
+    ({ version, items: [], compatibleTightbeam: ['0.1.15', '0.1.16'], breakingChanges: 'none' }))));
   for (const relative of files) {
     const filename = path.join(rootDir, relative);
     await fs.mkdir(path.dirname(filename), { recursive: true });
@@ -454,6 +459,33 @@ async function setupExistingChat(homeDir, { tag = 'v0.1.0' } = {}) {
 }
 
 describe('Chat release packaging and updater', () => {
+  const trailer = 'Compatible with Tightbeam: 0.1.16\n\nBreaking changes: none\n';
+  it.each([
+    ['no statements', 'Tightbeam Chat v1.2.3\n'],
+    ['no compatibility line', 'Notes\n\nBreaking changes: none\n'],
+    ['no breaking-changes line', 'Notes\n\nCompatible with Tightbeam: 0.1.16\n'],
+    ['an empty breaking-changes line', 'Compatible with Tightbeam: 0.1.16\n\nBreaking changes:\n'],
+    ['a version with trailing text', 'Compatible with Tightbeam: 0.1.16oops\n\nBreaking changes: none\n'],
+    ['anything after the two lines', `${trailer}\nOne more thing.\n`],
+    ['the two lines closed inside a fence', `\`\`\`\n${trailer}\`\`\`\n`],
+    ['the lines in the other order', 'Breaking changes: none\nCompatible with Tightbeam: 0.1.16\n'],
+    ['indented lines', '    Compatible with Tightbeam: 0.1.16\n    Breaking changes: none\n'],
+  ])('refuses a newer published release with %s, whatever lineage its tag has', async (_label, body) => {
+    const fixture = await createBundleFixture('v1.2.3', SOURCE_COMMIT);
+    const fetchImpl = fixtureFetch('v1.2.3', SOURCE_COMMIT, { ...fixture, release: { ...fixture.release, body } });
+    await expect(fetchVerifiedChatRelease('v1.2.3', { fetchImpl })).rejects.toThrow(/does not end with its .*not installing it/);
+  });
+
+  it.each([
+    ['v1.2.3', `Notes\r\n\r\nCompatible with Tightbeam: 0.1.16\r\n\r\nBreaking changes: The route /__chat/x is gone.\r\n`],
+    ['v0.1.115', 'Compatible with Tightbeam: 0.1.15, 0.1.16\n\nBreaking changes: none\n\n\n'],
+    ['v0.1.114', 'Tightbeam Chat v0.1.114\n'],
+  ])('accepts %s when it ends with both lines, or predates the rule', async (tag, body) => {
+    const fixture = await createBundleFixture(tag, SOURCE_COMMIT);
+    const fetchImpl = fixtureFetch(tag, SOURCE_COMMIT, { ...fixture, release: { ...fixture.release, body } });
+    await expect(fetchVerifiedChatRelease(tag, { fetchImpl })).resolves.toMatchObject({ provenance: { tag } });
+  });
+
   it('packages a tagged server with a checksum and exact source provenance', async () => {
     const rootDir = await temporaryDirectory('chat-package-source-');
     const notices = await fs.readFile(path.resolve('THIRD_PARTY_NOTICES.md'));
@@ -474,6 +506,9 @@ describe('Chat release packaging and updater', () => {
         : relative === 'THIRD_PARTY_NOTICES.md' ? notices : Buffer.from(`source ${relative}`);
       await fs.writeFile(filename, content);
     }
+    await fs.mkdir(path.join(rootDir, 'src'), { recursive: true });
+    await fs.writeFile(path.join(rootDir, 'src/release-notes.json'), JSON.stringify(
+      [{ version: 'v1.2.3', items: [], compatibleTightbeam: ['0.1.15', '0.1.16'], breakingChanges: 'none' }]));
     const outputDir = path.join(rootDir, 'release-output');
     const builtAt = '2026-10-16T00:00:00.000Z';
     const result = await packageChatRelease({
@@ -489,10 +524,11 @@ describe('Chat release packaging and updater', () => {
     const releaseNotes = await fs.readFile(path.join(outputDir, 'release-notes.md'), 'utf8');
     expect(releaseNotes).toContain(`Package: tightbeam-chat-v1.2.3.tar.gz`);
     expect(releaseNotes).toContain(`SHA-256: ${actualHash}`);
+    expect(releaseNotes).toContain('\nCompatible with Tightbeam: 0.1.15, 0.1.16\n\nBreaking changes: none\n');
     expect(JSON.parse(await fs.readFile(path.join(outputDir, 'release-provenance.json'), 'utf8')))
       .toMatchObject({ tag: 'v1.2.3', sourceCommit: SOURCE_COMMIT, sha256: actualHash, nodeVersion: 'v24.7.0' });
     expect(JSON.parse(execFileSync('tar', ['-xOzf', result.assetPath, './release.json'], { encoding: 'utf8' })))
-      .toMatchObject({ gatewayCompatibility: { supportedVersions: ['0.1.16'] } });
+      .toMatchObject({ gatewayCompatibility: { supportedVersions: ['0.1.15', '0.1.16'] } });
     const members = execFileSync('tar', ['-tzf', result.assetPath], { encoding: 'utf8' });
     expect(members).toContain('./public/index.html');
     expect(members).toContain('./server/chat-server.mjs');
@@ -540,6 +576,7 @@ describe('Chat release packaging and updater', () => {
       draft: false,
       prerelease: false,
       published_at: '2026-10-30T00:00:00Z',
+      body: 'Compatible with Tightbeam: 0.1.16\n\nBreaking changes: none\n',
       assets: [...assets.entries()].map(([name, bytes]) => ({
         name,
         size: bytes.length,

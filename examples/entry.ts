@@ -9,6 +9,8 @@ export interface ChatTarget {
   readonly readMarkerRoute?: 'gateway-configured-user' | 'gateway-user-device';
   readonly restHumanSendEnabled?: boolean;
   readonly workItemPillsEnabled?: boolean;
+  readonly scrollPinnedPromptsEnabled?: boolean;
+  readonly longPromptClampEnabled?: boolean;
   readonly submitter?: SubmitterAttribution;
 }
 
@@ -25,6 +27,8 @@ export interface ConfiguredChatTarget {
   readonly readMarkerRoute?: 'gateway-configured-user' | 'gateway-user-device';
   readonly restHumanSendEnabled?: boolean;
   readonly workItemPillsEnabled?: boolean;
+  readonly scrollPinnedPromptsEnabled?: boolean;
+  readonly longPromptClampEnabled?: boolean;
   readonly submitter?: SubmitterAttribution;
 }
 
@@ -67,6 +71,8 @@ export async function loadConfiguredChatTarget(
     config.restHumanSendEnabled === true,
     normalizeSubmitterAttribution(config.submitter),
     config.workItemPillsEnabled === true,
+    config.scrollPinnedPromptsEnabled === true,
+    config.longPromptClampEnabled === true,
   );
   if (!target) throw new Error('The Chat server returned an invalid default target.');
   return target;
@@ -105,6 +111,8 @@ function targetFrom(
   restHumanSendEnabled: boolean,
   submitter?: SubmitterAttribution,
   workItemPillsEnabled = false,
+  scrollPinnedPromptsEnabled = false,
+  longPromptClampEnabled = false,
 ): ChatTarget | undefined {
   const normalizedGateway = canonicalGateway(gateway);
   if (!normalizedGateway || !sessionKey?.trim() || !principalKey?.trim() || !deviceId?.trim()) return undefined;
@@ -117,13 +125,16 @@ function targetFrom(
     ...(restHumanSendEnabled ? { restHumanSendEnabled: true } : {}),
     ...(restHumanSendEnabled && submitter ? { submitter } : {}),
     ...(workItemPillsEnabled ? { workItemPillsEnabled: true } : {}),
+    ...(scrollPinnedPromptsEnabled ? { scrollPinnedPromptsEnabled: true } : {}),
+    ...(longPromptClampEnabled ? { longPromptClampEnabled: true } : {}),
   };
 }
 
 function configuredTarget(value: ConfiguredChatTarget | undefined): ChatTarget | undefined {
   return targetFrom(value?.gateway, value?.sessionKey, value?.principalKey, value?.deviceId,
     value?.readMarkerRoute, value?.restHumanSendEnabled === true,
-    normalizeSubmitterAttribution(value?.submitter), value?.workItemPillsEnabled === true);
+    normalizeSubmitterAttribution(value?.submitter), value?.workItemPillsEnabled === true,
+    value?.scrollPinnedPromptsEnabled === true, value?.longPromptClampEnabled === true);
 }
 
 function wellFormedQuery(search: string): boolean {
@@ -172,7 +183,8 @@ export function resolveEntrySelection(
       canRecoverToConfigured: false,
     };
   }
-  const { readMarkerRoute, restHumanSendEnabled, workItemPillsEnabled, submitter, ...configuredIdentity } = fallback;
+  const { readMarkerRoute, restHumanSendEnabled, workItemPillsEnabled, scrollPinnedPromptsEnabled, longPromptClampEnabled, submitter,
+    ...configuredIdentity } = fallback;
   const target: ChatTarget = {
     ...configuredIdentity,
     gateway,
@@ -180,6 +192,9 @@ export function resolveEntrySelection(
     ...(gateway === fallback.gateway && readMarkerRoute ? { readMarkerRoute } : {}),
     ...(gateway === fallback.gateway && restHumanSendEnabled ? { restHumanSendEnabled: true } : {}),
     ...(gateway === fallback.gateway && workItemPillsEnabled ? { workItemPillsEnabled: true } : {}),
+    // A display setting of this Chat service, so it applies to any selected conversation.
+    ...(scrollPinnedPromptsEnabled ? { scrollPinnedPromptsEnabled: true } : {}),
+    ...(longPromptClampEnabled ? { longPromptClampEnabled: true } : {}),
     // Attribution travels only with the REST transport, and only for the configured Gateway.
     ...(gateway === fallback.gateway && restHumanSendEnabled && submitter ? { submitter } : {}),
   };

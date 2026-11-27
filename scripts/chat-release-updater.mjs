@@ -85,6 +85,28 @@ function parseChecksum(checksumBytes, tag, assetName, expectedHash) {
   }
 }
 
+// The tag job writes these two statements. A tag cut from before that job existed runs the old one, so
+// the installed updater refuses a newer release without them. Releases through v0.1.114 predate this.
+const LAST_UNSTATED_RELEASE = [0, 1, 114];
+
+// The packaging script ends the release body with exactly these two lines, so only the last two lines
+// with anything on them count, and nothing may follow them. No Markdown is read.
+const TRAILER = [
+  ['"Compatible with Tightbeam:" line', /^Compatible with Tightbeam: \d+\.\d+\.\d+(?:, \d+\.\d+\.\d+)*$/],
+  ['"Breaking changes:" line', /^Breaking changes: \S.*$/],
+];
+
+function requireReleaseStatements(tag, body) {
+  const parts = tag.slice(1).split('.').map(Number);
+  const newer = parts.findIndex((part, index) => part !== LAST_UNSTATED_RELEASE[index]);
+  if (newer === -1 || parts[newer] < LAST_UNSTATED_RELEASE[newer]) return;
+  const lines = (typeof body === 'string' ? body : '').split(/\r?\n/).filter(line => line.trim()).slice(-2);
+  const missing = TRAILER.filter(([, pattern], index) => !pattern.test(lines[index] ?? '')).map(([name]) => name);
+  if (missing.length) {
+    throw new Error(`Published release ${tag} does not end with its ${missing.join(' and ')}; not installing it.`);
+  }
+}
+
 export async function fetchVerifiedChatRelease(tag, { fetchImpl = globalThis.fetch } = {}) {
   validateTag(tag);
   if (typeof fetchImpl !== 'function') throw new Error('A release transport is required.');
@@ -92,6 +114,7 @@ export async function fetchVerifiedChatRelease(tag, { fetchImpl = globalThis.fet
   if (release.tag_name !== tag || release.draft !== false || typeof release.published_at !== 'string' || !release.published_at) {
     throw new Error(`Chat tag ${tag} has no published release.`);
   }
+  requireReleaseStatements(tag, release.body);
 
   const names = [assetNameFor(tag), 'SHA256SUMS', 'release-provenance.json'];
   const assets = names.map((name) => findPublishedAsset(release, name, tag));

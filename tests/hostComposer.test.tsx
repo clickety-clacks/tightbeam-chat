@@ -636,6 +636,27 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     expect(screen.queryByRole('button', { name: 'Retry message' })).toBeNull();
   });
 
+  it.each([
+    ['not_deliverable', 'The agent cannot receive this message right now.'],
+    ['client_message_conflict', 'This message conflicts with one already sent with the same ID.'],
+  ])('words a %s refusal as a sentence and keeps the text restorable', async (code, sentence) => {
+    const events: HostComposerEvent[] = [];
+    const transport = new HostComposerTransport();
+    transport.nextSend = async () => ({ outcome: 'refused', reason: code });
+    installDeclaration(events);
+    openChat(transport, 'conversation-a');
+    const ready = await waitForReady(events, 'conversation-a');
+    act(() => commandEntry()({ type: 'send', lifetimeId: ready.lifetimeId, sessionKey: ready.sessionKey,
+      correlationId: correlation, content: 'a refused message' }));
+    await waitFor(() => expect(events.some((event) => event.event === 'failed' && event.reason === 'refused')).toBe(true));
+    expect(events.find((event) => event.event === 'failed')).toMatchObject({ detail: code });
+    expect(screen.getByRole('alert').textContent).toContain('Your message was not sent.');
+    expect(screen.getByRole('alert').textContent).toContain(sentence);
+    expect(screen.getByRole('alert').textContent).not.toContain(code);
+    expect(screen.getByRole('alert').textContent).toContain('Your draft is still here.');
+    if (code === 'client_message_conflict') expect(screen.getByRole('alert').textContent).toContain('send it as a new message');
+  });
+
   it('restores readiness after a per-message refusal without a runtime rebuild', async () => {
     const events: HostComposerEvent[] = [];
     const transport = new HostComposerTransport();

@@ -1026,7 +1026,7 @@ class SessionRuntime implements ChatRuntime {
       turnEvents: Object.freeze([]), turnEventsLoading: false, turnEventsError: undefined,
       recordEvents: Object.freeze([]), recordEventsHasOlder: false, recordEventsLoading: false, recordEventsError: undefined,
       workItems: undefined,
-      records: Object.freeze([]), sends: Object.freeze([]), hasOlder: false,
+      records: Object.freeze([]), sends: this.sendsKeptWithoutAccess('Access changed before delivery was confirmed.'), hasOlder: false,
       session: undefined, agentDisplayName: undefined, provenance: Object.freeze([]),
       activitySenderDisplayNames: new Map(),
       activeTurn: undefined, historyError: undefined, loadingOlder: false,
@@ -1442,7 +1442,19 @@ class SessionRuntime implements ChatRuntime {
     return true;
   }
 
-  private failClosed(reason: string): void {
+  /**
+   * Losing access clears the conversation, but not what the reader wrote: every unconfirmed send keeps
+   * its row, which offers Restore. The refused post failed; any other may or may not have arrived.
+   * Host-composer sends are dropped as before, because the host holds their drafts.
+   */
+  private sendsKeptWithoutAccess(reason: string, refusedId?: string): readonly LocalSend[] {
+    return Object.freeze(this.state.sends.filter(send => !send.reconciled && !send.hostSend).map(send =>
+      send.status === 'failed' ? send : Object.freeze({ ...send, reason, attachmentPhase: undefined,
+        status: send.clientMessageId === refusedId ? 'failed' as const : 'uncertain' as const })));
+  }
+
+  private failClosed(reason: string, refusedId?: string): void {
+    const sends = this.sendsKeptWithoutAccess(reason, refusedId);
     this.generation++;
     this.initializing = false;
     this.pendingFeedCoverage = undefined;
@@ -1485,7 +1497,7 @@ class SessionRuntime implements ChatRuntime {
       turnEvents: Object.freeze([]), turnEventsLoading: false, turnEventsError: undefined,
       recordEvents: Object.freeze([]), recordEventsHasOlder: false, recordEventsLoading: false, recordEventsError: undefined,
       workItems: undefined,
-      records: Object.freeze([]), sends: Object.freeze([]), session: undefined,
+      records: Object.freeze([]), sends, session: undefined,
       agentDisplayName: undefined, provenance: noProvenance, provenanceAvailable: false, activeTurn: undefined,
       hasOlder: false, loadingOlder: false, historyError: undefined,
       ...this.activityStatePatch(),
@@ -2425,7 +2437,7 @@ class SessionRuntime implements ChatRuntime {
           this.notifyHostSend(submission.clientMessageId, {
             kind: 'failed', reason: 'refused', detail: 'unauthorized',
           });
-          this.failClosed(errorText(error));
+          this.failClosed(errorText(error), submission.clientMessageId);
           return;
         }
         this.updateSend(submission.clientMessageId, (send) => send.reconciled ? send

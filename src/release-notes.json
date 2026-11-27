@@ -1,5 +1,63 @@
 [
   {
+    "version": "v0.1.115",
+    "items": [
+      {
+        "title": "Sender and time on one line",
+        "description": "Messages from people now show the sender on the same line as the time, below the message."
+      },
+      {
+        "title": "Pinned prompt fixes",
+        "description": "Where pinned prompts are switched on, this fixes them jumping when the keyboard opens and stretching or sitting out of place near the end of the conversation."
+      },
+      {
+        "title": "Gateway compatibility",
+        "description": "Chat supports Gateway 0.1.15 and 0.1.16. Human prompts use the authenticated WebSocket connection by default."
+      }
+    ],
+    "compatibleTightbeam": ["0.1.15", "0.1.16"],
+    "breakingChanges": "none",
+    "breakingChangesReview": { "reviewer": "independent-chat-reviewer", "commit": "8cd9d1325145416b5adfb4e4e2c3587a34747d30", "result": "confirmed" }
+  },
+  {
+    "version": "v0.1.114",
+    "items": [
+      {
+        "title": "Sending clears the message box at once",
+        "description": "The message box now clears as soon as you send, so a message no longer shows in the conversation and in the box at the same time. If a send fails or is refused, your text comes back to the box or can be restored from the message. If Chat loses access, your unconfirmed messages stay on screen with Restore text."
+      },
+      {
+        "title": "Clearer refusal messages",
+        "description": "Two rare messages about a refused send now read as plain sentences."
+      },
+      {
+        "title": "Gateway compatibility",
+        "description": "Chat supports Gateway 0.1.16. Human prompts use the authenticated WebSocket connection by default."
+      }
+    ]
+  },
+  {
+    "version": "v0.1.113",
+    "items": [
+      {
+        "title": "Work item titles on one line",
+        "description": "Filed work items show their title on one line, including notices that cover several records. Chat loads the titles in one small batch for each page of history it shows."
+      },
+      {
+        "title": "Large prompts are refused clearly",
+        "description": "Chat's own server no longer stops when the Gateway refuses a very large message. Where prompts are sent through the Gateway's request route, a prompt that is too large is refused with a clear message and your draft stays in the box."
+      },
+      {
+        "title": "Photos and files record your read position",
+        "description": "Sending a photo or file now records your read position the way a text message does, on installations where read-position syncing is switched on."
+      },
+      {
+        "title": "Gateway compatibility",
+        "description": "Chat supports Gateway 0.1.16. Human prompts use the authenticated WebSocket connection by default."
+      }
+    ]
+  },
+  {
     "version": "v0.1.112",
     "items": [
       {
