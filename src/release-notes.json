@@ -1,5 +1,16 @@
 [
   {
+    "version": "v0.1.122",
+    "items": [
+      {
+        "title": "Scheduled checks in work item details",
+        "description": "Work item details show Next check for a scheduled wait linked to that item, along with its recorded reason when available. Unrelated reminders stay out of the details."
+      }
+    ],
+    "compatibleTightbeam": ["0.1.15", "0.1.16"],
+    "breakingChanges": "none"
+  },
+  {
     "version": "v0.1.121",
     "items": [
       {
