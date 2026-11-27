@@ -463,10 +463,10 @@ describe('conversation reading position', () => {
     const firstReply = box.querySelector<HTMLElement>('[data-scroll-key="message-20"]')!;
     const viewportTop = box.getBoundingClientRect().top;
     const promptBounds = prompt.getBoundingClientRect();
-    // This prompt fits its three-line summary, so it pins at its own height: its top sits
-    // on the pin line and the reply starts below it, uncovered.
+    // The smaller summary sets the pinned bottom. The reply starts below it.
+    const summaryHeight = chat.querySelector('.tb-chat-pinned-summary-measure')!.getBoundingClientRect().height;
     expect(chat.querySelector('.tb-chat-latest-user-prompt')).toBeNull();
-    expect(promptBounds.top).toBeCloseTo(viewportTop + 10);
+    expect(promptBounds.bottom).toBeCloseTo(viewportTop + 10 + summaryHeight);
     expect(firstReply.getBoundingClientRect().top).toBeGreaterThan(promptBounds.bottom);
   });
 

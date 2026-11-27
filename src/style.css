@@ -248,7 +248,7 @@ body {
   left: 0;
   right: 0;
   color: var(--tb-chat-text);
-  font-size: .9375rem;
+  font-size: .8125rem;
   font-weight: 400;
   line-height: 1.5;
   overflow-wrap: anywhere;
@@ -256,11 +256,12 @@ body {
   opacity: 0;
   will-change: opacity;
 }
-/* Clamped inside the padding, so lines past the third cannot show in the bottom padding. */
+/* Clamp the text inside the padding, independently of any photo strip. */
 .tb-chat-pinned-summary-text {
   display: -webkit-box;
   overflow: hidden;
   -webkit-box-orient: vertical;
+  -webkit-line-clamp: var(--tb-chat-pinned-summary-lines, 2);
 }
 .tb-chat-pinned-summary-measure {
   top: 0;
