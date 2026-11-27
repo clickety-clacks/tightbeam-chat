@@ -91,17 +91,18 @@ const cases: Case[] = [
     calls: [[2], [2, 7], [2, 5], [6]], shown: range(3, 8), warnings: [true],
   },
   {
-    name: 'two complete responses with a matching boundary cover the whole failed range', newest: 8,
-    steps: [load(7, 8, 'newest'), load(3, 8, 'live'), { omit: [3, 4, 5, 6, 7] }, refresh,
+    name: 'a cached-only partial refresh preserves the healthy boundary for complete recovery', newest: 8,
+    steps: [load(7, 8, 'newest'), load(3, 8, 'live'), { omit: [3, 4, 5, 6] }, refresh,
       load(7, 8, 'live'), { omit: [] }, refresh, load(1, 8)],
     calls: [[2], [6], [2], [6, 7]], shown: range(1, 8), warnings: [true, false],
   },
   {
-    name: 'a shorter complete refresh does not rewind a provably advanced partial cursor',
+    name: 'a shorter complete refresh does not rewind a partial cursor advanced after failure',
     newest: 8,
-    steps: [load(7, 8, 'newest'), load(3, 8, 'live'), { omit: [3, 4, 5, 6] }, refresh,
+    steps: [load(7, 8, 'newest'), { failBefore: 7 }, load(3, 8),
+      { failBefore: null, omit: [3, 4, 5, 6] }, refresh,
       load(7, 8, 'live'), { omit: [] }, refresh, load(1, 8)],
-    calls: [[2], [6], [2], [6, 3]], shown: [1, 2, 7, 8], warnings: [true],
+    calls: [[2], [4, 7], [6], [2], [6, 3]], shown: [1, 2, 7, 8], warnings: [true],
   },
   {
     name: 'a full complete refresh identifies an existing partial cursor and enables later progress', newest: 8,

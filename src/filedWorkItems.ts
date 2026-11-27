@@ -161,7 +161,10 @@ export class FiledWorkItems {
     }
     this.updateCoverage(page, rows, before, newest, oldest);
     const floorAdvanced = oldest !== undefined && (!previousFloor || newer(previousFloor, oldest));
-    if (floorAdvanced) this.floor = oldest;
+    // A wider partial refresh can skip omitted rows that the existing healthy
+    // cursor could still recover on the next ordinary older load.
+    const keepsHealthyCursor = before === undefined && page.partial && this.cursor && !this.olderFailed;
+    if (floorAdvanced && !keepsHealthyCursor) this.floor = oldest;
     const followsCursor = before === this.cursor;
     const completeTail = before === undefined && !page.partial && !page.hasOlder;
     const nextCursor = page.hasOlder ? page.oldestCursor : null;
@@ -175,7 +178,7 @@ export class FiledWorkItems {
     // Independent tail scans cannot order two opaque ends when a partial page
     // may have scanned beyond the oldest decoded row.
     const canMove = this.cursorPastFloor ? followsCursor || completeTail : floorAdvanced || (page.partial && followsCursor);
-    if (nextCursor !== this.cursor && (canMove || advancesAnchor)) {
+    if (!keepsHealthyCursor && nextCursor !== this.cursor && (canMove || advancesAnchor)) {
       this.cursor = nextCursor;
       this.cursorAnchor = undefined;
       this.cursorPastFloor = page.hasOlder && (page.partial === true || !floorAdvanced && this.cursorPastFloor);
