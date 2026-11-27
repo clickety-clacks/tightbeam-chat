@@ -1,5 +1,24 @@
 [
   {
+    "version": "v0.1.120",
+    "items": [
+      {
+        "title": "Work item details with the keyboard open",
+        "description": "The work item dialog fits above the on-screen keyboard. Long titles and details scroll together, with Close within reach."
+      },
+      {
+        "title": "Why a work item closed",
+        "description": "Closed work items show Completed, Canceled, or Superseded when that reason is available. They still show Closed when the reason is missing or unrecognized."
+      },
+      {
+        "title": "Work item loading status",
+        "description": "Chat warns when it can't load work items, keeps any pills already loaded, and clears the warning when the list loads successfully."
+      }
+    ],
+    "compatibleTightbeam": ["0.1.15", "0.1.16"],
+    "breakingChanges": "none"
+  },
+  {
     "version": "v0.1.119",
     "items": [
       {
