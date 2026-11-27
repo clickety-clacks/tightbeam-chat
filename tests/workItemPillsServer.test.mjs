@@ -103,6 +103,21 @@ describe('work item pill routes', () => {
     expect(JSON.stringify(chat.seen)).not.toContain('secret');
   });
 
+  it('passes an optional close reason through the scoped list, detail and dialog reads', async () => {
+    const closed = { ...item, state: 'closed', closeReason: 'canceled' };
+    const chat = await service((request, body) => {
+      if (body?.verb === 'work-item-get') return { body: { result: { workItem: closed, assignments: [] } } };
+      if (request.url.startsWith('/api/work-items/')) return { body: { item: closed } };
+      return { body: { items: [closed, { ...item, id: 'wi_2' }], page: { hasMoreBefore: false } } };
+    });
+    const summary = { ...projected, state: 'closed', closeReason: 'canceled' };
+    expect((await chat.get('/__chat/api/sessions/agent%3Aexample/filed-work-items?limit=2')).body.items)
+      .toEqual([summary, { ...projected, id: 'wi_2' }]);
+    expect((await chat.get('/__chat/api/pills/work-item/wi_1')).body).toEqual({ item: summary });
+    expect((await chat.get('/__chat/api/pills/cards/wi_1')).body).toEqual({ item: summary, cards: [] });
+    expect(chat.seen).toHaveLength(3);
+  });
+
   it('reads a work item through the open card that is doing something, or names every idle holder', async () => {
     let result = { reason: 'open_assignment_lively', evidence: { assignment: { id: 'asg_1', reason: 'running_turn', evidence: {
       assignment: { holderKey: 'agent:a' }, turn: { seq: 7, sessionKey: 'agent:a', assignmentId: 'asg_1', jobRef: 'wi_1', startedAt: 3 } } } } };

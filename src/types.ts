@@ -141,6 +141,8 @@ export interface RecordEventPage {
   readonly hasOlder: boolean;
 }
 
+export type WorkItemCloseReason = 'completed' | 'canceled' | 'superseded';
+
 /** The few work item fields Chat needs; never the body, counts or landings. */
 export interface WorkItemSummary {
   readonly id: string;
@@ -149,6 +151,7 @@ export interface WorkItemSummary {
   readonly started: boolean;
   readonly holders: readonly string[];
   readonly failReason: string | null;
+  readonly closeReason?: WorkItemCloseReason;
   readonly createdAt: number;
   readonly rowVersion: number;
 }
@@ -504,6 +507,7 @@ export interface RuntimeState {
   readonly recordEventsError?: string;
   /** Known summaries of filed items, by work item id. Absence means unknown. */
   readonly workItems?: ReadonlyMap<string, WorkItemSummary>;
+  readonly workItemPillsFetchFailed?: boolean;
   readonly toolCallsEnabled?: boolean;
   /** Optional array for custom hosts; the live runtime uses the persistent index. */
   readonly toolCalls?: readonly ToolCallRecord[];

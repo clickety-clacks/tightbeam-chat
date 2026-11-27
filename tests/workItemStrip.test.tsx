@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LocalFixtureTransport, fixtureTarget } from '../examples/mockTransport';
 import { createTightbeamAdapter, TightbeamChat } from '../src';
 import { pillTitle } from '../src/WorkItemStrip';
+import { decodeWorkItemSummary } from '../src/public019';
 import { agoText, clockText, durationText, untilText } from '../src/workItemTime';
 import type { ChangeCallbacks, SessionRecordEvent, WorkItemSummary } from '../src/types';
 import type { WorkItemChange } from '../src/workItemPills';
@@ -25,7 +26,7 @@ class Visible {
   }
 }
 
-function chat(items: readonly WorkItemSummary[], options: { pills?: boolean; failList?: boolean } = {}) {
+function chat(items: readonly WorkItemSummary[], options: { pills?: boolean; failList?: boolean | 'network'; emptyList?: boolean } = {}) {
   const counts: Record<string, number> = {};
   const count = (name: string) => { counts[name] = (counts[name] ?? 0) + 1; };
   let emit: (change: WorkItemChange) => void = () => {};
@@ -50,18 +51,38 @@ function chat(items: readonly WorkItemSummary[], options: { pills?: boolean; fai
     readAgentQuestions: async () => { count('agent questions'); return []; },
     readAgentName: async () => { count('name'); return 'Coder'; },
   };
+  const { openChanges, readTail, readOlder } = fixture;
+  const forSession = async (sessionKey: string, result: ReturnType<typeof readTail>) => {
+    const page = await result;
+    return { ...page, records: page.records.map(record => ({ ...record, sessionKey })) };
+  };
   const transport = Object.assign(fixture, { targetGateway: 'https://gateway.example',
-    openChanges: ((open) => (key: string, callbacks: ChangeCallbacks, signal: AbortSignal) => { notices = callbacks; return open(key, callbacks, signal); })(fixture.openChanges),
+    openChanges: (_key: string, callbacks: ChangeCallbacks, signal: AbortSignal) => {
+      notices = callbacks;
+      return openChanges('fixture-session', callbacks, signal);
+    },
+    readTail: (key: string) => forSession(key, readTail()),
+    readOlder: (key: string, before: string) => forSession(key, readOlder(key, before)),
     readRecordEvents: async (sessionKey: string) => ({ items: items.map((item) => filed(item, sessionKey)), oldestCursor: null, hasOlder: false }),
-    readFiledWorkItems: async () => { count('page'); order.push('page'); if (options.failList) throw new Error('HTTP 500'); return { items: [...items], oldestCursor: null, hasOlder: false }; },
+    readFiledWorkItems: async (sessionKey: string) => {
+      count('page');
+      order.push('page');
+      if (sessionKey === 'fixture-session') {
+        if (options.failList === 'network') throw new TypeError('Failed to fetch');
+        if (options.failList) throw new Error('HTTP 500');
+      }
+      return { items: options.emptyList ? [] : [...items], oldestCursor: null, hasOlder: false };
+    },
     ...(options.pills === false ? {} : { workItemPills: pills }),
   });
-  const view = render(<TightbeamChat sessionKey="fixture-session" adapter={createTightbeamAdapter(transport, { ...fixtureTarget, label: 'fixture' })} />);
+  const adapter = createTightbeamAdapter(transport, { ...fixtureTarget, label: 'fixture' });
+  const view = render(<TightbeamChat sessionKey="fixture-session" adapter={adapter} />);
+  const switchSession = () => view.rerender(<TightbeamChat sessionKey="next-session" adapter={adapter} />);
   const file = (item: WorkItemSummary) => act(async () => {
     (items as WorkItemSummary[]).push(item);
     notices!.onNotice({ operation: 'record-event', event: filed(item, 'fixture-session') });
   });
-  return { view, counts, order, file, emit: (change: WorkItemChange) => act(async () => { emit(change); }) };
+  return { view, counts, order, file, switchSession, emit: (change: WorkItemChange) => act(async () => { emit(change); }) };
 }
 const strip = () => screen.findByRole('group', { name: 'Work items, newest first' });
 const pills = async () => within(await strip()).getAllByRole('button');
@@ -143,6 +164,103 @@ describe('the strip', () => {
 });
 
 describe('the sheet', () => {
+  it.each([
+    ['completed', 'Completed'], ['canceled', 'Canceled'], ['superseded', 'Superseded'],
+    [null, 'Closed'], ['unrecognized', 'Closed'], [undefined, 'Closed'],
+  ] as const)('shows the closed reason %s as %s without an extra read', async (closeReason, label) => {
+    const item = decodeWorkItemSummary({ ...summary(1, { state: 'closed', holders: [] }), closeReason });
+    const run = chat([item]);
+    const pill = (await pills())[0];
+    expect(pill.textContent).toBe(`Item 1${label}`);
+    expect(pill.getAttribute('aria-label')).toBe(`Product: Item 1. ${label}`);
+    fireEvent.click(pill);
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(label, { exact: true })).toBeTruthy();
+    expect(run.counts).toEqual({ page: 1 });
+  });
+
+  it('uses the closed reason from the existing dialog read', async () => {
+    const items = [summary(1)];
+    const run = chat(items);
+    const pill = (await pills())[0];
+    items[0] = summary(1, { state: 'closed', closeReason: 'superseded', holders: [], rowVersion: 2 });
+    fireEvent.click(pill);
+    const dialog = await screen.findByRole('dialog');
+    expect(await within(dialog).findByText('Superseded', { exact: true })).toBeTruthy();
+    expect(run.counts).toEqual({ page: 1, cards: 1 });
+  });
+
+  it.each([false, true])('updates the open dialog after an ordinary pill refresh (reopening: %s)', async reopening => {
+    const items = [summary(1)];
+    const run = chat(items);
+    const pill = (await pills())[0];
+    if (reopening) {
+      items[0] = summary(1, { state: 'closed', closeReason: 'canceled', holders: [], rowVersion: 2 });
+    }
+    fireEvent.click(pill);
+    const dialog = await screen.findByRole('dialog');
+    const oldLabel = reopening ? 'Canceled' : 'Waiting';
+    await within(dialog).findByText(oldLabel, { exact: true });
+    const reads = { ...run.counts };
+
+    await act(async () => { Visible.all.at(-1)!.show(uuid(1)); });
+    items[0] = reopening ? summary(1, { rowVersion: 3 })
+      : summary(1, { state: 'closed', closeReason: 'completed', holders: [], rowVersion: 3 });
+    await run.emit({ kind: 'item', workItemId: uuid(1) });
+    const label = reopening ? 'Assigned' : 'Completed';
+    await waitFor(() => expect(pill.getAttribute('aria-label')).toBe(`Product: Item 1. ${label}`), { timeout: 8_000 });
+    expect(within(dialog).getByText(label, { exact: true })).toBeTruthy();
+    expect(within(dialog).queryByText(oldLabel, { exact: true })).toBeNull();
+    expect(within(dialog).queryByText('No reason given')).toBeNull();
+    expect(run.counts).toEqual({ ...reads, item: 1 });
+  }, 12_000);
+
+  it.each([false, true])('keeps title updates but discards stale wait details (close/reopen: %s)', async reopen => {
+    let now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      const items = [summary(1)];
+      const run = chat(items);
+      fireEvent.click((await pills())[0]);
+      const dialog = await screen.findByRole('dialog');
+      await within(dialog).findByText('Waiting', { exact: true });
+      const reads = { ...run.counts };
+
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      await act(async () => { Visible.all.at(-1)!.show(uuid(1)); });
+      const refresh = async (patch: Partial<WorkItemSummary>) => {
+        items[0] = { ...items[0], ...patch, rowVersion: items[0].rowVersion + 1 };
+        await run.emit({ kind: 'item', workItemId: uuid(1) });
+        now += 120_000;
+        await act(async () => { await vi.advanceTimersByTimeAsync(120_000); });
+      };
+
+      await refresh({ title: 'Renamed work item' });
+      expect(within(dialog).getByRole('heading', { name: 'Renamed work item' })).toBeTruthy();
+      expect(within(dialog).getByText('Waiting', { exact: true })).toBeTruthy();
+
+      if (reopen) {
+        await refresh({ state: 'closed', closeReason: 'completed', holders: [] });
+        expect(within(dialog).getByText('Completed', { exact: true })).toBeTruthy();
+        await refresh({ state: 'open', closeReason: undefined, holders: ['agent:a'] });
+        expect(within(dialog).getByText('Assigned', { exact: true })).toBeTruthy();
+      } else {
+        await refresh({ holders: [] });
+        expect(within(dialog).getByText('Between hands', { exact: true })).toBeTruthy();
+      }
+      expect(within(dialog).queryByText('Waiting', { exact: true })).toBeNull();
+      expect(within(dialog).queryByText('Coder')).toBeNull();
+      expect(run.counts).toEqual({ ...reads, item: reopen ? 3 : 2 });
+    } finally {
+      vi.useRealTimers();
+      clock.mockRestore();
+    }
+  });
+
+  it.each(['open', 'failed', 'iceboxed'])('ignores closure reasons for %s items', (state) => {
+    expect(decodeWorkItemSummary({ ...summary(1, { state }), closeReason: 'canceled' }).closeReason).toBeUndefined();
+  });
+
   it('reads nothing until a tap, then shows the wait, its time and that no reason was given', async () => {
     const run = chat([summary(1)]);
     fireEvent.click((await pills())[0]);
@@ -180,16 +298,24 @@ describe('the sheet', () => {
       expect(dialog.textContent).toContain('Waiting on you');
     });
 
-  it('hides the strip and asks once when the list read fails, without touching another page', async () => {
-    const broken = chat([summary(1)], { failList: true });
-    await waitFor(() => expect(broken.counts.page).toBe(1));
-    const healthy = chat([summary(2)]);
-    await waitFor(() => expect(healthy.view.container.querySelectorAll('.tb-chat-work-pill')).toHaveLength(1));
-    await new Promise((resolve) => setTimeout(resolve, 2_000));
-    expect(broken.view.container.querySelector('.tb-chat-work-strip')).toBeNull();
-    expect(broken.view.container.querySelector('.tb-chat-has-work-items')).toBeNull();
-    expect(broken.counts).toEqual({ page: 1 });
-    expect(healthy.counts).toEqual({ page: 1 });
+  it.each([true, 'network'] as const)('shows a failed list (%s) and isolates it from the next session', async failList => {
+    const run = chat([summary(1)], { failList });
+    const failure = await screen.findByText('Couldn’t load work items');
+    expect(failure.getAttribute('role')).toBe('status');
+    expect(failure.closest('.tb-chat-work-strip')).not.toBeNull();
+    expect(screen.queryByRole('group', { name: 'Work items, newest first' })).toBeNull();
+    expect(run.counts).toEqual({ page: 1 });
+    run.switchSession();
+    expect(await pills()).toHaveLength(1);
+    expect(screen.queryByText('Couldn’t load work items')).toBeNull();
+    expect(run.counts).toEqual({ page: 2 });
+  });
+
+  it('leaves the strip absent after a successful empty list', async () => {
+    const run = chat([summary(1)], { emptyList: true });
+    await waitFor(() => expect(run.counts).toEqual({ page: 1 }));
+    expect(run.view.container.querySelector('.tb-chat-work-strip')).toBeNull();
+    expect(screen.queryByText('Couldn’t load work items')).toBeNull();
   });
 
   it('tabs from Close to the scroll region around both the title and details', async () => {

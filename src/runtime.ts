@@ -399,7 +399,11 @@ class SessionRuntime implements ChatRuntime {
           pills?.setItems(workItems);
           this.publish({ workItems });
         }
-      }, pills && (ids => pills.watch(ids)));
+      }, pills && (ids => pills.watch(ids)), pills && (workItemPillsFetchFailed => {
+        if (!this.disposed && this.checkIdentity() && this.state.status !== 'unauthorized') {
+          this.publish({ workItemPillsFetchFailed });
+        }
+      }));
     if (typeof document !== 'undefined') document.addEventListener('visibilitychange', this.onVisibilityChange);
     if (typeof window !== 'undefined') {
       window.addEventListener('pagehide', this.onPageHide);
