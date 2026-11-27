@@ -624,7 +624,7 @@ function formatVisibleMarkdownIds(linkItems = false) {
       if (!Array.isArray(node.children)) return;
       const linkChildren = allowLink && !['a', 'code', 'pre'].includes(String(node.tagName));
       node.children = node.children.flatMap(child => {
-        const value = child?.type === 'text' && typeof child.value === 'string' ? child.value : undefined;
+        const value: string | undefined = child?.type === 'text' && typeof child.value === 'string' ? child.value : undefined;
         if (linkChildren && value?.includes('wi_')) {
           return value.split(/([A-Za-z0-9_-]+)/).filter(Boolean).map(token =>
             isWorkItemId(token)
