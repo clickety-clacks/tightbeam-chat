@@ -28,7 +28,8 @@ class Visible {
 }
 
 function chat(items: readonly WorkItemSummary[], options: {
-  pills?: boolean; failList?: boolean | 'network'; message?: string; emptyList?: boolean; missingOnTap?: boolean;
+  pills?: boolean; failList?: boolean | 'network'; message?: string; emptyList?: boolean; missingOnTap?: boolean; waitReason?: string;
+  waitOnItem?: string;
 } = {}) {
   const counts: Record<string, number> = {};
   const count = (name: string) => { counts[name] = (counts[name] ?? 0) + 1; };
@@ -37,6 +38,7 @@ function chat(items: readonly WorkItemSummary[], options: {
   let notices: ChangeCallbacks | undefined;
   const fixture = new LocalFixtureTransport();
   const send = vi.spyOn(fixture, 'sendHuman');
+  const wakeDueAt = Date.now() + 3_600_000;
   const filed = (item: WorkItemSummary, sessionKey: string): SessionRecordEvent => ({ eventId: `work_item.filed:${item.id}`, sessionKey,
     kind: 'work_item.filed', at: item.createdAt, record: { type: 'work-item', id: item.id, workItemId: item.id, detail: '' },
     actorSessionKey: sessionKey, tiedAs: ['creator'], cause: null, noticeMessageIds: [] });
@@ -49,10 +51,23 @@ function chat(items: readonly WorkItemSummary[], options: {
       const item = items.find((row) => row.id === id);
       if (!item || options.missingOnTap) return undefined;
       return { item, cards: [{ id: 'asg_1', open: item.holders.length > 0, holderKey: 'agent:a' }] }; },
-    readBreathing: async () => { count('breathing'); return { reason: 'pending_wake', holders: [],
-      wake: { wakeId: 'w1', sessionKey: 'agent:a', dueAt: Date.now() + 3_600_000, createdAt: 1 } }; },
-    readWait: async (id) => { count('wait'); return { id, sessionKey: 'agent:a', creatorSessionKey: 'agent:a', state: 'pending', recurring: false,
-      conditionKind: null, conditionScope: null, dueAt: Date.now() + 3_600_000, createdAt: Date.now() - 60_000, reason: null }; },
+    readBreathing: async (kind) => {
+      count('breathing');
+      if (options.waitOnItem && kind === 'work-item') return { reason: 'idle', holders: ['agent:b'] };
+      if (options.waitOnItem && kind === 'session') return { reason: 'pending_wake', holders: [],
+        wake: { wakeId: 'packaging', sessionKey: 'agent:b', dueAt: wakeDueAt, createdAt: 1 } };
+      return { reason: 'pending_wake', holders: [],
+        wake: { wakeId: 'w1', sessionKey: 'agent:a', dueAt: wakeDueAt, createdAt: 1 } };
+    },
+    readWait: async (id) => {
+      count('wait');
+      const agent = id === 'packaging' ? 'agent:b' : 'agent:a';
+      const target = id === 'w1' ? options.waitOnItem : undefined;
+      return { id, sessionKey: agent, creatorSessionKey: agent, state: 'pending', recurring: false,
+        conditionKind: target ? 'work_item.closed' : null, conditionScope: target ?? null,
+        dueAt: wakeDueAt, createdAt: Date.now() - 60_000,
+        reason: id === 'packaging' ? 'Packaging reminder for other work.' : options.waitReason ?? null };
+    },
     readMyQuestions: async () => { count('questions'); return items.some((row) => !row.holders.length) ? [{ id: 'dr_1', question: 'Go ahead?', options: ['Yes'],
       assignmentId: 'asg_1', raiserId: null, raisedAt: 1, deadlineAt: null }] : []; },
     readAgentQuestions: async () => { count('agent questions'); return []; },
@@ -91,7 +106,7 @@ function chat(items: readonly WorkItemSummary[], options: {
     (items as WorkItemSummary[]).push(item);
     notices!.onNotice({ operation: 'record-event', event: filed(item, 'fixture-session') });
   });
-  return { view, counts, order, file, send, switchSession, emit: (change: WorkItemChange) => act(async () => { emit(change); }) };
+  return { view, counts, order, file, send, switchSession, wakeDueAt, emit: (change: WorkItemChange) => act(async () => { emit(change); }) };
 }
 const strip = () => screen.findByRole('group', { name: 'Work items, newest first' });
 const pills = async () => within(await strip()).getAllByRole('button');
@@ -220,7 +235,7 @@ describe('the sheet', () => {
     await waitFor(() => expect(pill.getAttribute('aria-label')).toBe(`Product: Item 1. ${label}`), { timeout: 8_000 });
     expect(within(dialog).getByText(label, { exact: true })).toBeTruthy();
     expect(within(dialog).queryByText(oldLabel, { exact: true })).toBeNull();
-    expect(within(dialog).queryByText('No reason given')).toBeNull();
+    expect(within(dialog).queryByText('Next check')).toBeNull();
     expect(run.counts).toEqual({ ...reads, item: 1 });
   }, 12_000);
 
@@ -270,19 +285,41 @@ describe('the sheet', () => {
     expect(decodeWorkItemSummary({ ...summary(1, { state }), closeReason: 'canceled' }).closeReason).toBeUndefined();
   });
 
-  it('reads nothing until a tap, then shows the wait, its time and that no reason was given', async () => {
-    const run = chat([summary(1)]);
-    fireEvent.click((await pills())[0]);
-    const dialog = screen.getByRole('dialog');
-    expect(within(dialog).getByText('Assigned', { exact: true })).toBeTruthy();
-    expect(await within(dialog).findByText('This is what it waits on, step by step.')).toBeTruthy();
-    expect(dialog.textContent).toContain('Waiting');
-    expect(dialog.textContent).toContain('Coder');
-    expect(dialog.textContent).toContain('No reason given');
-    expect(dialog.textContent).toContain('in 1 h');
-    expect(dialog.textContent).toContain('Can’t tell what comes next');
-    expect(run.counts).toEqual({ page: 1, cards: 1, questions: 1, 'agent questions': 1, breathing: 1, wait: 1, name: 1 });
-    expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: 'Close work item' }));
+  it.each([{ waitReason: undefined }, { waitReason: 'Waiting for the GitHub checks to finish.' }])(
+    'shows the scheduled check and only the recorded reason ($waitReason) using the existing tap reads', async ({ waitReason }) => {
+      const run = chat([summary(1)], { waitReason });
+      const [pill] = await pills();
+      expect(run.counts).toEqual({ page: 1 });
+      fireEvent.click(pill);
+      const dialog = screen.getByRole('dialog');
+      expect(within(dialog).getByText('Assigned', { exact: true })).toBeTruthy();
+      expect(await within(dialog).findByText('This is what it waits on, step by step.')).toBeTruthy();
+      expect(dialog.textContent).toContain('Waiting');
+      expect(dialog.textContent).toContain('Coder');
+      const label = within(dialog).getByText('Next check');
+      expect(label.nextElementSibling?.querySelector('b')?.textContent).toBe(clockText(run.wakeDueAt, Date.now()));
+      expect(within(dialog).queryByText('No reason given')).toBeNull();
+      expect(within(dialog).queryByText(/Can’t tell what comes next|waiting for another agent|Tightbeam does not let Chat read/)).toBeNull();
+      expect(within(dialog).queryByRole('link')).toBeNull();
+      expect(dialog.querySelector('.tb-chat-work-why')?.textContent).toBe(waitReason);
+      expect(run.counts).toEqual({ page: 1, cards: 1, questions: 1, 'agent questions': 1, breathing: 1, wait: 1, name: 1 });
+      expect(document.activeElement).toBe(within(dialog).getByRole('button', { name: 'Close work item' }));
+    });
+
+  it('shows the linked item without presenting its holder’s session reminder as a dependency', async () => {
+    const dependency = summary(2, { title: 'Product: Dependency item', holders: ['agent:b'] });
+    const run = chat([summary(1), dependency], { waitOnItem: dependency.id });
+    const [pill] = await pills();
+    expect(run.counts).toEqual({ page: 1 });
+    fireEvent.click(pill);
+    const dialog = await screen.findByRole('dialog', { name: 'Product: Item 1' });
+    expect(await within(dialog).findByText(dependency.title)).toBeTruthy();
+    expect(within(dialog).getByText('Waiting', { exact: true })).toBeTruthy();
+    expect(within(dialog).queryByText('Packaging reminder for other work.')).toBeNull();
+    expect(within(dialog).queryByText('Next check')).toBeNull();
+    expect(within(dialog).queryByRole('link')).toBeNull();
+    expect(dialog.querySelectorAll('.tb-chat-work-chain > li')).toHaveLength(1);
+    expect(run.counts).toEqual({ page: 1, cards: 1, questions: 1, 'agent questions': 1, breathing: 3, wait: 2, name: 2, item: 1 });
   });
 
   it('opens finished work without a read, and reads it once it has changed', async () => {
@@ -333,7 +370,7 @@ describe('the sheet', () => {
     pill.focus();
     fireEvent.click(pill);
     const dialog = await screen.findByRole('dialog');
-    const detail = await within(dialog).findByText('No reason given');
+    const detail = await within(dialog).findByText('Next check');
     const close = within(dialog).getByRole('button', { name: 'Close work item' });
     const scroll = dialog.querySelector<HTMLElement>('.tb-chat-work-sheet-scroll')!;
     const counts = { ...run.counts };
