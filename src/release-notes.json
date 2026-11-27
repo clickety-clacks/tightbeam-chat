@@ -1,5 +1,16 @@
 [
   {
+    "version": "v0.1.121",
+    "items": [
+      {
+        "title": "Work item links in messages",
+        "description": "Select a full work item ID in a message to open its details. From there, you can insert the ID into your draft without sending it. In apps that don't support draft insertion, you can copy the ID."
+      }
+    ],
+    "compatibleTightbeam": ["0.1.15", "0.1.16"],
+    "breakingChanges": "none"
+  },
+  {
     "version": "v0.1.120",
     "items": [
       {
