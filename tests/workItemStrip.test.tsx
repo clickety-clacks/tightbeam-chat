@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LocalFixtureTransport, fixtureTarget } from '../examples/mockTransport';
 import { createTightbeamAdapter, TightbeamChat } from '../src';
 import { pillTitle } from '../src/WorkItemStrip';
+import { decodeWorkItemSummary } from '../src/public019';
 import { agoText, clockText, durationText, untilText } from '../src/workItemTime';
 import type { ChangeCallbacks, SessionRecordEvent, WorkItemSummary } from '../src/types';
 import type { WorkItemChange } from '../src/workItemPills';
@@ -143,6 +144,103 @@ describe('the strip', () => {
 });
 
 describe('the sheet', () => {
+  it.each([
+    ['completed', 'Completed'], ['canceled', 'Canceled'], ['superseded', 'Superseded'],
+    [null, 'Closed'], ['unrecognized', 'Closed'], [undefined, 'Closed'],
+  ] as const)('shows the closed reason %s as %s without an extra read', async (closeReason, label) => {
+    const item = decodeWorkItemSummary({ ...summary(1, { state: 'closed', holders: [] }), closeReason });
+    const run = chat([item]);
+    const pill = (await pills())[0];
+    expect(pill.textContent).toBe(`Item 1${label}`);
+    expect(pill.getAttribute('aria-label')).toBe(`Product: Item 1. ${label}`);
+    fireEvent.click(pill);
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(label, { exact: true })).toBeTruthy();
+    expect(run.counts).toEqual({ page: 1 });
+  });
+
+  it('uses the closed reason from the existing dialog read', async () => {
+    const items = [summary(1)];
+    const run = chat(items);
+    const pill = (await pills())[0];
+    items[0] = summary(1, { state: 'closed', closeReason: 'superseded', holders: [], rowVersion: 2 });
+    fireEvent.click(pill);
+    const dialog = await screen.findByRole('dialog');
+    expect(await within(dialog).findByText('Superseded', { exact: true })).toBeTruthy();
+    expect(run.counts).toEqual({ page: 1, cards: 1 });
+  });
+
+  it.each([false, true])('updates the open dialog after an ordinary pill refresh (reopening: %s)', async reopening => {
+    const items = [summary(1)];
+    const run = chat(items);
+    const pill = (await pills())[0];
+    if (reopening) {
+      items[0] = summary(1, { state: 'closed', closeReason: 'canceled', holders: [], rowVersion: 2 });
+    }
+    fireEvent.click(pill);
+    const dialog = await screen.findByRole('dialog');
+    const oldLabel = reopening ? 'Canceled' : 'Waiting';
+    await within(dialog).findByText(oldLabel, { exact: true });
+    const reads = { ...run.counts };
+
+    await act(async () => { Visible.all.at(-1)!.show(uuid(1)); });
+    items[0] = reopening ? summary(1, { rowVersion: 3 })
+      : summary(1, { state: 'closed', closeReason: 'completed', holders: [], rowVersion: 3 });
+    await run.emit({ kind: 'item', workItemId: uuid(1) });
+    const label = reopening ? 'Held' : 'Completed';
+    await waitFor(() => expect(pill.getAttribute('aria-label')).toBe(`Product: Item 1. ${label}`), { timeout: 8_000 });
+    expect(within(dialog).getByText(label, { exact: true })).toBeTruthy();
+    expect(within(dialog).queryByText(oldLabel, { exact: true })).toBeNull();
+    expect(within(dialog).queryByText('No reason given')).toBeNull();
+    expect(run.counts).toEqual({ ...reads, item: 1 });
+  }, 12_000);
+
+  it.each([false, true])('keeps title updates but discards stale wait details (close/reopen: %s)', async reopen => {
+    let now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      const items = [summary(1)];
+      const run = chat(items);
+      fireEvent.click((await pills())[0]);
+      const dialog = await screen.findByRole('dialog');
+      await within(dialog).findByText('Waiting', { exact: true });
+      const reads = { ...run.counts };
+
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      await act(async () => { Visible.all.at(-1)!.show(uuid(1)); });
+      const refresh = async (patch: Partial<WorkItemSummary>) => {
+        items[0] = { ...items[0], ...patch, rowVersion: items[0].rowVersion + 1 };
+        await run.emit({ kind: 'item', workItemId: uuid(1) });
+        now += 120_000;
+        await act(async () => { await vi.advanceTimersByTimeAsync(120_000); });
+      };
+
+      await refresh({ title: 'Renamed work item' });
+      expect(within(dialog).getByRole('heading', { name: 'Renamed work item' })).toBeTruthy();
+      expect(within(dialog).getByText('Waiting', { exact: true })).toBeTruthy();
+
+      if (reopen) {
+        await refresh({ state: 'closed', closeReason: 'completed', holders: [] });
+        expect(within(dialog).getByText('Completed', { exact: true })).toBeTruthy();
+        await refresh({ state: 'open', closeReason: undefined, holders: ['agent:a'] });
+        expect(within(dialog).getByText('Held', { exact: true })).toBeTruthy();
+      } else {
+        await refresh({ holders: [] });
+        expect(within(dialog).getByText('Between hands', { exact: true })).toBeTruthy();
+      }
+      expect(within(dialog).queryByText('Waiting', { exact: true })).toBeNull();
+      expect(within(dialog).queryByText('Coder')).toBeNull();
+      expect(run.counts).toEqual({ ...reads, item: reopen ? 3 : 2 });
+    } finally {
+      vi.useRealTimers();
+      clock.mockRestore();
+    }
+  });
+
+  it.each(['open', 'failed', 'iceboxed'])('ignores closure reasons for %s items', (state) => {
+    expect(decodeWorkItemSummary({ ...summary(1, { state }), closeReason: 'canceled' }).closeReason).toBeUndefined();
+  });
+
   it('reads nothing until a tap, then shows the wait, its time and that no reason was given', async () => {
     const run = chat([summary(1)]);
     fireEvent.click((await pills())[0]);
