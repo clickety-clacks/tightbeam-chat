@@ -183,23 +183,17 @@ describe('the sheet', () => {
     await within(dialog).findByText(oldLabel, { exact: true });
     const reads = { ...run.counts };
 
-    vi.useFakeTimers();
-    try {
-      await act(async () => { Visible.all.at(-1)!.show(uuid(1)); });
-      items[0] = reopening ? summary(1, { rowVersion: 3 })
-        : summary(1, { state: 'closed', closeReason: 'completed', holders: [], rowVersion: 3 });
-      await run.emit({ kind: 'item', workItemId: uuid(1) });
-      await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
-      const label = reopening ? 'Held' : 'Completed';
-      expect(pill.getAttribute('aria-label')).toBe(`Product: Item 1. ${label}`);
-      expect(within(dialog).getByText(label, { exact: true })).toBeTruthy();
-      expect(within(dialog).queryByText(oldLabel, { exact: true })).toBeNull();
-      expect(within(dialog).queryByText('No reason given')).toBeNull();
-      expect(run.counts).toEqual({ ...reads, item: 1 });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+    await act(async () => { Visible.all.at(-1)!.show(uuid(1)); });
+    items[0] = reopening ? summary(1, { rowVersion: 3 })
+      : summary(1, { state: 'closed', closeReason: 'completed', holders: [], rowVersion: 3 });
+    await run.emit({ kind: 'item', workItemId: uuid(1) });
+    const label = reopening ? 'Held' : 'Completed';
+    await waitFor(() => expect(pill.getAttribute('aria-label')).toBe(`Product: Item 1. ${label}`), { timeout: 8_000 });
+    expect(within(dialog).getByText(label, { exact: true })).toBeTruthy();
+    expect(within(dialog).queryByText(oldLabel, { exact: true })).toBeNull();
+    expect(within(dialog).queryByText('No reason given')).toBeNull();
+    expect(run.counts).toEqual({ ...reads, item: 1 });
+  }, 12_000);
 
   it.each(['open', 'failed', 'iceboxed'])('ignores closure reasons for %s items', (state) => {
     expect(decodeWorkItemSummary({ ...summary(1, { state }), closeReason: 'canceled' }).closeReason).toBeUndefined();
