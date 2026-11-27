@@ -195,6 +195,48 @@ describe('the sheet', () => {
     expect(run.counts).toEqual({ ...reads, item: 1 });
   }, 12_000);
 
+  it.each([false, true])('keeps title updates but discards stale wait details (close/reopen: %s)', async reopen => {
+    let now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      const items = [summary(1)];
+      const run = chat(items);
+      fireEvent.click((await pills())[0]);
+      const dialog = await screen.findByRole('dialog');
+      await within(dialog).findByText('Waiting', { exact: true });
+      const reads = { ...run.counts };
+
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+      await act(async () => { Visible.all.at(-1)!.show(uuid(1)); });
+      const refresh = async (patch: Partial<WorkItemSummary>) => {
+        items[0] = { ...items[0], ...patch, rowVersion: items[0].rowVersion + 1 };
+        await run.emit({ kind: 'item', workItemId: uuid(1) });
+        now += 120_000;
+        await act(async () => { await vi.advanceTimersByTimeAsync(120_000); });
+      };
+
+      await refresh({ title: 'Renamed work item' });
+      expect(within(dialog).getByRole('heading', { name: 'Renamed work item' })).toBeTruthy();
+      expect(within(dialog).getByText('Waiting', { exact: true })).toBeTruthy();
+
+      if (reopen) {
+        await refresh({ state: 'closed', closeReason: 'completed', holders: [] });
+        expect(within(dialog).getByText('Completed', { exact: true })).toBeTruthy();
+        await refresh({ state: 'open', closeReason: undefined, holders: ['agent:a'] });
+        expect(within(dialog).getByText('Held', { exact: true })).toBeTruthy();
+      } else {
+        await refresh({ holders: [] });
+        expect(within(dialog).getByText('Between hands', { exact: true })).toBeTruthy();
+      }
+      expect(within(dialog).queryByText('Waiting', { exact: true })).toBeNull();
+      expect(within(dialog).queryByText('Coder')).toBeNull();
+      expect(run.counts).toEqual({ ...reads, item: reopen ? 3 : 2 });
+    } finally {
+      vi.useRealTimers();
+      clock.mockRestore();
+    }
+  });
+
   it.each(['open', 'failed', 'iceboxed'])('ignores closure reasons for %s items', (state) => {
     expect(decodeWorkItemSummary({ ...summary(1, { state }), closeReason: 'canceled' }).closeReason).toBeUndefined();
   });

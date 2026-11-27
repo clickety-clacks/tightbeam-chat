@@ -219,7 +219,7 @@ const endings: Readonly<Partial<Record<WorkItemPillState, string>>> = {
 };
 
 type SheetState = { readonly status: 'looking' } | { readonly status: 'failed' } | { readonly status: 'gone' }
-  | { readonly status: 'ready'; readonly data: WorkItemSheetData };
+  | { readonly status: 'ready'; readonly data: WorkItemSheetData } | { readonly status: 'updated' };
 
 /** Everything here is read only because the reader tapped this one pill. */
 export function WorkItemSheet({ id, pills, transport, names, onClose }: {
@@ -278,8 +278,13 @@ export function WorkItemSheet({ id, pills, transport, names, onClose }: {
   const tap = state.status === 'ready' ? state.data : undefined;
   const summary = pill?.summary;
   const item = tap && (!summary || tap.item.rowVersion > summary.rowVersion) ? tap.item : summary;
-  // Waits and questions from the tap no longer describe an item that changed state.
-  const data = tap?.item.state === item?.state ? tap : undefined;
+  // A state or holder change can invalidate the tap's wait chain and questions.
+  // Discard those details so a later return to the same state cannot revive them.
+  const data = tap && item && tap.item.state === item.state && tap.item.holders.length === item.holders.length
+    && tap.item.holders.every(holder => item.holders.includes(holder)) ? tap : undefined;
+  useLayoutEffect(() => {
+    if (tap && !data) setState({ status: 'updated' });
+  }, [tap, data]);
   const base = item && item !== summary ? workItemBaseState(item) : pill?.state ?? 'held';
   const shown: ShownState = (data && foundState(data)) ?? base;
   const ended = base === 'done' ? `${stateText(base, false, item)}.` : item && endings[base];
@@ -296,7 +301,7 @@ export function WorkItemSheet({ id, pills, transport, names, onClose }: {
         <button ref={closeButton} type="button" className="tb-chat-modal-close" aria-label="Close work item" onClick={onClose}>×</button>
       </header>
       <div className="tb-chat-work-sheet-body" tabIndex={0} aria-live="polite" aria-busy={state.status === 'looking' && readNow.current}>
-        {(settled || tap) && !data && ended && <p className="tb-chat-work-box">{ended}{item?.failReason && ` ${plain(item.failReason)}`}</p>}
+        {(settled || state.status === 'updated') && !data && ended && <p className="tb-chat-work-box">{ended}{item?.failReason && ` ${plain(item.failReason)}`}</p>}
         {readNow.current && state.status === 'looking' && <p className="tb-chat-work-note" role="status">Looking…</p>}
         {readNow.current && state.status === 'gone' && <p className="tb-chat-work-box">This work item is no longer available.</p>}
         {readNow.current && state.status === 'failed' && <p className="tb-chat-work-box">This could not be read. <button type="button"
