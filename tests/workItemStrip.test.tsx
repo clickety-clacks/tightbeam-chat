@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LocalFixtureTransport, fixtureTarget } from '../examples/mockTransport';
 import { createTightbeamAdapter, TightbeamChat } from '../src';
 import { pillTitle } from '../src/WorkItemStrip';
+import { decodeWorkItemSummary } from '../src/public019';
 import { agoText, clockText, durationText, untilText } from '../src/workItemTime';
 import type { ChangeCallbacks, SessionRecordEvent, WorkItemSummary } from '../src/types';
 import type { WorkItemChange } from '../src/workItemPills';
@@ -143,6 +144,36 @@ describe('the strip', () => {
 });
 
 describe('the sheet', () => {
+  it.each([
+    ['completed', 'Completed'], ['canceled', 'Canceled'], ['superseded', 'Superseded'],
+    [null, 'Closed'], ['unrecognized', 'Closed'], [undefined, 'Closed'],
+  ])('shows the closed reason %s as %s without an extra read', async (closeReason, label) => {
+    const item = decodeWorkItemSummary({ ...summary(1, { state: 'closed', holders: [] }), closeReason });
+    const run = chat([item]);
+    const pill = (await pills())[0];
+    expect(pill.textContent).toBe(`Item 1${label}`);
+    expect(pill.getAttribute('aria-label')).toBe(`Product: Item 1. ${label}`);
+    fireEvent.click(pill);
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(label, { exact: true })).toBeTruthy();
+    expect(run.counts).toEqual({ page: 1 });
+  });
+
+  it('uses the closed reason from the existing dialog read', async () => {
+    const items = [summary(1)];
+    const run = chat(items);
+    const pill = (await pills())[0];
+    items[0] = summary(1, { state: 'closed', closeReason: 'superseded', holders: [], rowVersion: 2 });
+    fireEvent.click(pill);
+    const dialog = await screen.findByRole('dialog');
+    expect(await within(dialog).findByText('Superseded', { exact: true })).toBeTruthy();
+    expect(run.counts).toEqual({ page: 1, cards: 1 });
+  });
+
+  it.each(['open', 'failed', 'shelved'])('ignores closure reasons for %s items', (state) => {
+    expect(decodeWorkItemSummary({ ...summary(1, { state }), closeReason: 'canceled' }).closeReason).toBeUndefined();
+  });
+
   it('reads nothing until a tap, then shows the wait, its time and that no reason was given', async () => {
     const run = chat([summary(1)]);
     fireEvent.click((await pills())[0]);
