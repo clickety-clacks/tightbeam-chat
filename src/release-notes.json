@@ -1,5 +1,16 @@
 [
   {
+    "version": "v0.1.119",
+    "items": [
+      {
+        "title": "Closed work items",
+        "description": "Closed work items now show Closed on their pill and in the details dialog. Screen readers announce the same status."
+      }
+    ],
+    "compatibleTightbeam": ["0.1.15", "0.1.16"],
+    "breakingChanges": "none"
+  },
+  {
     "version": "v0.1.118",
     "items": [
       {
