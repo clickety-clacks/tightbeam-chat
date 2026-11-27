@@ -155,7 +155,7 @@ export class FiledWorkItems {
     const completeTail = before === undefined && !page.partial && !page.hasOlder;
     // Advance even when every row in the scanned window was omitted. A newer
     // cursor-free refresh cannot rewind a cursor already past the decoded floor.
-    if (followsCursor || completeTail || (floorAdvanced && !this.cursorPastFloor)) {
+    if (this.cursorPastFloor ? followsCursor || completeTail : floorAdvanced || (page.partial && followsCursor)) {
       this.cursor = page.hasOlder ? page.oldestCursor : null;
       this.cursorPastFloor = page.hasOlder && (page.partial === true || !floorAdvanced && this.cursorPastFloor);
     }

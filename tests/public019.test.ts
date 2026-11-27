@@ -1677,14 +1677,16 @@ describe('Gateway wire mapping and behavior checks', () => {
     expect(candidate.paths.slice(before).filter(path => path.includes('/filed-work-items'))).toHaveLength(1);
   });
 
-  it('decodes partial filed work item coverage without dropping the scanned cursor on an empty page', async () => {
+  it.each([true, false, undefined])('decodes a scanned cursor on an empty page (partial: %s)', async partial => {
     const candidate = setup();
     candidate.host.fetch = async (input: RequestInfo | URL) => {
       candidate.paths.push(String(input));
-      return new Response(JSON.stringify({ items: [], oldestCursor: 'scanned-window', hasOlder: true, partial: true }));
+      return new Response(JSON.stringify({ items: [], oldestCursor: 'scanned-window', hasOlder: true, partial }));
     };
     await expect(candidate.transport.readFiledWorkItems!(sessionKey, { limit: 3, before: 'previous' },
-      new AbortController().signal)).resolves.toEqual({ items: [], oldestCursor: 'scanned-window', hasOlder: true, partial: true });
+      new AbortController().signal)).resolves.toEqual({
+        items: [], oldestCursor: 'scanned-window', hasOlder: true, ...(partial ? { partial: true } : {}),
+      });
     expect(candidate.paths.filter(path => path.includes('/filed-work-items'))).toHaveLength(1);
   });
 

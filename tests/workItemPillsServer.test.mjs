@@ -123,7 +123,7 @@ describe('work item pill routes', () => {
       const before = new URL(request.url, gatewayOrigin).searchParams.get('before');
       if (!before) return { body: { items: [item], page: { oldestCursor: 'scanned-a', hasMoreBefore: true, partial: true } } };
       if (before === 'scanned-a') return { body: { items: [], page: { oldestCursor: 'scanned-b', hasMoreBefore: true, partial: true } } };
-      return { body: { items: [{ ...item, id: 'wi_2' }], page: { hasMoreBefore: false } } };
+      return { body: { items: [{ ...item, id: 'wi_2' }], page: { hasMoreBefore: false, partial: false } } };
     });
     const route = '/__chat/api/sessions/agent%3Aexample/filed-work-items?limit=2';
     expect(await chat.get(route)).toEqual({ status: 200,
