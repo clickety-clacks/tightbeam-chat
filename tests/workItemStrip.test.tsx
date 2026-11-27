@@ -96,10 +96,15 @@ describe('the strip', () => {
   });
 
   it('shows each state in words, drops the product from the pill and keeps it in the label', async () => {
-    chat([summary(1), summary(2, { holders: [] }), summary(3, { holders: [], started: false }), summary(4, { state: 'closed', holders: [] })]);
+    const run = chat([summary(1), summary(2, { holders: [] }), summary(3, { holders: [], started: false }), summary(4, { state: 'closed', holders: [] })]);
     const shown = await pills();
-    expect(shown.map((pill) => pill.textContent)).toEqual(['Item 1Held', 'Item 2Between hands', 'Item 3Not started', 'Item 4Done']);
+    expect(shown.map((pill) => pill.textContent)).toEqual(['Item 1Held', 'Item 2Between hands', 'Item 3Not started', 'Item 4Closed']);
     expect(shown[0].getAttribute('aria-label')).toBe('Product: Item 1. Held');
+    expect(shown[3].getAttribute('aria-label')).toBe('Product: Item 4. Closed');
+    fireEvent.click(shown[3]);
+    const dialog = await screen.findByRole('dialog', { name: 'Product: Item 4' });
+    expect(within(dialog).getByText('Closed', { exact: true })).toBeTruthy();
+    expect(run.counts).toEqual({ page: 1 });
   });
 
   it('marks a changed pill as past and rings only after its turn is read', async () => {
