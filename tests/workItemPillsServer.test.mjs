@@ -118,6 +118,27 @@ describe('work item pill routes', () => {
     expect(chat.seen).toHaveLength(3);
   });
 
+  it('passes partial coverage and scanned cursors through the normal scoped list, even when no rows project', async () => {
+    const chat = await service((request) => {
+      const before = new URL(request.url, gatewayOrigin).searchParams.get('before');
+      if (!before) return { body: { items: [item], page: { oldestCursor: 'scanned-a', hasMoreBefore: true, partial: true } } };
+      if (before === 'scanned-a') return { body: { items: [], page: { oldestCursor: 'scanned-b', hasMoreBefore: true, partial: true } } };
+      return { body: { items: [{ ...item, id: 'wi_2' }], page: { hasMoreBefore: false } } };
+    });
+    const route = '/__chat/api/sessions/agent%3Aexample/filed-work-items?limit=2';
+    expect(await chat.get(route)).toEqual({ status: 200,
+      body: { items: [projected], oldestCursor: 'scanned-a', hasOlder: true, partial: true } });
+    expect(await chat.get(route + '&before=scanned-a')).toEqual({ status: 200,
+      body: { items: [], oldestCursor: 'scanned-b', hasOlder: true, partial: true } });
+    expect(await chat.get(route + '&before=scanned-b')).toEqual({ status: 200,
+      body: { items: [{ ...projected, id: 'wi_2' }], oldestCursor: null, hasOlder: false } });
+    expect(chat.seen.map(({ url }) => url)).toEqual([
+      '/api/work-items?asUser=example-user&createdBySession=agent%3Aexample&limit=2&tail=true',
+      '/api/work-items?asUser=example-user&createdBySession=agent%3Aexample&limit=2&before=scanned-a',
+      '/api/work-items?asUser=example-user&createdBySession=agent%3Aexample&limit=2&before=scanned-b',
+    ]);
+  });
+
   it('reads a work item through the open card that is doing something, or names every idle holder', async () => {
     let result = { reason: 'open_assignment_lively', evidence: { assignment: { id: 'asg_1', reason: 'running_turn', evidence: {
       assignment: { holderKey: 'agent:a' }, turn: { seq: 7, sessionKey: 'agent:a', assignmentId: 'asg_1', jobRef: 'wi_1', startedAt: 3 } } } } };

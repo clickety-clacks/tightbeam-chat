@@ -773,7 +773,8 @@ function filedWorkItemsReply(reply) {
   const value = JSON.parse(reply.body.toString('utf8'));
   const items = value.items.map(pillWorkItem).filter(Boolean);
   return { ...reply, body: Buffer.from(JSON.stringify({ items,
-    oldestCursor: value.page?.oldestCursor ?? null, hasOlder: value.page?.hasMoreBefore === true })) };
+    oldestCursor: value.page?.oldestCursor ?? null, hasOlder: value.page?.hasMoreBefore === true,
+    ...(value.page?.partial === true ? { partial: true } : {}) })) };
 }
 
 async function serviceHttp(request, response, runtime) {

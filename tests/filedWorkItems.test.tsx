@@ -18,7 +18,8 @@ const flush = () => vi.advanceTimersByTimeAsync(0);
 
 /** Lists newest first by position, as the Gateway does for one creator. */
 function setup(total: number, onItems?: (items: ReadonlyMap<string, WorkItemSummary>) => void) {
-  const gateway = { total, unreadable: 0, absent: 0, version: 1, calls: [] as Array<{ limit: number; before?: string }> };
+  const gateway = { total, unreadable: 0, absent: 0, omitted: new Set<number>(), version: 1,
+    calls: [] as Array<{ limit: number; before?: string }> };
   let items: ReadonlyMap<string, WorkItemSummary> = new Map();
   const failures: boolean[] = [];
   const reader = new FiledWorkItems('selected', async (_key, { limit, before }): Promise<FiledWorkItemPage> => {
@@ -27,7 +28,10 @@ function setup(total: number, onItems?: (items: ReadonlyMap<string, WorkItemSumm
     const start = Math.max(1, end - limit + 1);
     // One bad row fails every page that includes it.
     if (gateway.unreadable >= start && gateway.unreadable <= end) throw new Error('unavailable');
-    return { items: range(start, end).filter(row => row.at !== gateway.absent).map(row => item(row.at, gateway.version)), oldestCursor: String(start), hasOlder: start > 1 };
+    const scanned = range(start, end);
+    return { items: scanned.filter(row => row.at !== gateway.absent && !gateway.omitted.has(row.at))
+      .map(row => item(row.at, gateway.version)), oldestCursor: String(start), hasOlder: start > 1,
+    ...(scanned.some(row => gateway.omitted.has(row.at)) ? { partial: true } : {}) };
   }, next => { items = next; onItems?.(next); }, undefined, failed => failures.push(failed));
   return { gateway, reader, failures, items: () => items };
 }
@@ -274,6 +278,65 @@ describe('filed work item reads', () => {
     expect(items().size).toBe(13);
     expect(items().has('wi_1')).toBe(false);
     expect(failures).toEqual([true, false]);
+  });
+
+  it('keeps good rows and existing warning on an exhausted partial refresh until a covering complete read', async () => {
+    const { gateway, reader, failures, items } = setup(4);
+    reader.sync(range(1, 4), 'newest');
+    await flush();
+    gateway.unreadable = 1;
+    await reader.refresh();
+    gateway.unreadable = 0;
+    gateway.omitted.add(1);
+    gateway.version = 2;
+    await reader.refresh();
+    expect(failures).toEqual([true]);
+    expect(items().get('wi_1')?.rowVersion).toBe(1);
+    expect(items().get('wi_4')?.rowVersion).toBe(2);
+    gateway.total = 5;
+    reader.sync(range(1, 5), 'newest');
+    await flush();
+    expect(gateway.calls).toHaveLength(3);
+    await vi.advanceTimersByTimeAsync(30_000);
+    reader.sync(range(1, 5), 'newest');
+    await flush();
+    expect(gateway.calls.at(-1)).toEqual({ limit: 1, before: undefined });
+    expect(failures).toEqual([true]);
+    gateway.omitted.clear();
+    await reader.refresh();
+    expect(gateway.calls.map(call => call.limit)).toEqual([4, 4, 4, 1, 5]);
+    expect(failures).toEqual([true, false]);
+  });
+
+  it.each([false, true])('follows the scanned cursor past omitted rows (all bad: %s)', async allBad => {
+    const { gateway, reader, failures, items } = setup(5);
+    gateway.omitted.add(4);
+    gateway.omitted.add(2);
+    if (allBad) {
+      gateway.omitted.add(5);
+      gateway.omitted.add(3);
+    }
+    reader.sync(range(4, 5), 'newest');
+    await flush();
+    expect(failures).toEqual([true]);
+    expect([...items().keys()]).toEqual(allBad ? [] : ['wi_5']);
+    reader.sync(range(4, 5), 'older');
+    await flush();
+    expect(gateway.calls).toEqual([{ limit: 2, before: undefined }]);
+    reader.sync(range(2, 5), 'older');
+    await flush();
+    expect(gateway.calls.at(-1)).toEqual({ limit: 2, before: '4' });
+    reader.sync(range(1, 5), 'older');
+    await flush();
+    expect(gateway.calls.at(-1)).toEqual({ limit: 1, before: '2' });
+    expect(items().has('wi_1')).toBe(true);
+    expect(failures).toEqual([true]);
+    expect(gateway.calls).toHaveLength(3);
+    gateway.omitted.clear();
+    await reader.refresh();
+    expect(items().size).toBe(5);
+    expect(failures).toEqual([true, false]);
+    expect(gateway.calls).toHaveLength(4);
   });
 
   it('refreshes known rows with one read and stops cleanly', async () => {

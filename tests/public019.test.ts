@@ -1677,6 +1677,17 @@ describe('Gateway wire mapping and behavior checks', () => {
     expect(candidate.paths.slice(before).filter(path => path.includes('/filed-work-items'))).toHaveLength(1);
   });
 
+  it('decodes partial filed work item coverage without dropping the scanned cursor on an empty page', async () => {
+    const candidate = setup();
+    candidate.host.fetch = async (input: RequestInfo | URL) => {
+      candidate.paths.push(String(input));
+      return new Response(JSON.stringify({ items: [], oldestCursor: 'scanned-window', hasOlder: true, partial: true }));
+    };
+    await expect(candidate.transport.readFiledWorkItems!(sessionKey, { limit: 3, before: 'previous' },
+      new AbortController().signal)).resolves.toEqual({ items: [], oldestCursor: 'scanned-window', hasOlder: true, partial: true });
+    expect(candidate.paths.filter(path => path.includes('/filed-work-items'))).toHaveLength(1);
+  });
+
   it('treats a 502 after a large body as retryable, not as refused or accepted', async () => {
     const candidate = setup();
     candidate.dispatchResponses.push(new Response(JSON.stringify({ error: { code: 'gateway_unavailable' } }), { status: 502 }));
