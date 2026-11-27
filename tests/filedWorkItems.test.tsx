@@ -180,6 +180,39 @@ describe('filed work item reads', () => {
     expect(gateway.calls).toHaveLength(3);
   });
 
+  it('does not clear a failed full tail when a smaller tail succeeds', async () => {
+    const { gateway, reader, failures } = setup(14);
+    reader.sync(range(1, 14), 'newest');
+    await flush();
+    gateway.unreadable = 1;
+    await reader.refresh();
+    gateway.total = 15;
+    reader.sync(range(1, 15), 'newest');
+    await flush();
+    expect(gateway.calls.map(call => call.limit)).toEqual([14, 14, 1]);
+    expect(failures).toEqual([true]);
+    gateway.unreadable = 0;
+    await reader.refresh();
+    expect(gateway.calls.map(call => call.limit)).toEqual([14, 14, 1, 15]);
+    expect(failures).toEqual([true, false]);
+  });
+
+  it('clears a failed older range when a later tail returns all its rows', async () => {
+    const { gateway, reader, failures, items } = setup(14);
+    reader.sync(range(10, 14), 'newest');
+    await flush();
+    gateway.unreadable = 1;
+    reader.sync(range(1, 14), 'older');
+    await flush();
+    expect(gateway.calls).toEqual([{ limit: 5, before: undefined }, { limit: 9, before: '10' }]);
+    expect(failures).toEqual([true]);
+    gateway.unreadable = 0;
+    await reader.refresh();
+    expect(gateway.calls.at(-1)).toEqual({ limit: 14, before: undefined });
+    expect(items().size).toBe(14);
+    expect(failures).toEqual([true, false]);
+  });
+
   it('refreshes known rows with one read and stops cleanly', async () => {
     const { gateway, reader, items } = setup(5);
     reader.sync(range(1, 5), 'newest');

@@ -20,7 +20,7 @@ export class FiledWorkItems {
   private floor?: Position; // Oldest row listed so far; `cursor` continues below it.
   private cursor: string | null = null;
   private olderFailed = false;
-  private readonly failedPages = new Set<string | undefined>();
+  private readonly failedPages = new Map<string | undefined, Set<string>>();
   private readonly controller = new AbortController();
   private failedAt = -Infinity;
   private queue: Promise<void> = Promise.resolve();
@@ -51,7 +51,7 @@ export class FiledWorkItems {
   async refresh(): Promise<void> {
     const limit = Math.min(PAGE_LIMIT, this.filed.length);
     if (!limit || this.controller.signal.aborted) return;
-    try { await this.page(limit); } catch { /* Keep the last known rows. */ }
+    try { await this.page(limit, this.filed.slice(0, limit)); } catch { /* Keep the last known rows. */ }
   }
 
   /** A row another read already brought, so its title shows without a read here. */
@@ -86,7 +86,7 @@ export class FiledWorkItems {
     if (above.length) {
       const limit = newest.indexOf(above[above.length - 1]) + 1;
       await this.watchFirst();
-      await this.page(limit);
+      await this.page(limit, newest.slice(0, limit));
       for (const row of this.missing(newest.slice(0, limit))) this.absent.add(row.id);
       return;
     }
@@ -99,7 +99,8 @@ export class FiledWorkItems {
     await this.watchFirst();
     const rows = this.below(this.filed);
     this.olderFailed = true;
-    await this.page(Math.min(PAGE_LIMIT, count), this.cursor);
+    const limit = Math.min(PAGE_LIMIT, count);
+    await this.page(limit, rows.slice(0, limit), this.cursor);
     this.olderFailed = false;
     const floor = this.floor;
     for (const row of this.missing(rows)) if (floor && newer(row, floor)) this.absent.add(row.id);
@@ -114,19 +115,33 @@ export class FiledWorkItems {
     clearTimeout(timer);
   }
 
-  private async page(limit: number, before?: string): Promise<void> {
+  private async page(limit: number, rows: readonly Position[], before?: string): Promise<void> {
     if (this.controller.signal.aborted) return;
     const signal = this.controller.signal;
     const page = await this.read(this.sessionKey, { limit, before }, signal).catch(error => {
       if (!signal.aborted) {
         const alreadyFailed = this.failedPages.size > 0;
-        this.failedPages.add(before);
+        const failed = this.failedPages.get(before) ?? new Set<string>();
+        for (const row of rows) failed.add(row.id);
+        this.failedPages.set(before, failed);
         if (!alreadyFailed) this.onFailureChange?.(true);
       }
       throw error;
     });
     if (signal.aborted) return;
-    if (this.failedPages.delete(before) && !this.failedPages.size) this.onFailureChange?.(false);
+    if (this.failedPages.size) {
+      // A different request can recover rows it returns. Only the same cursor
+      // can also resolve a requested row that the server legitimately omitted.
+      const returned = new Set(page.items.map(item => item.id));
+      const requested = new Set(rows.map(row => row.id));
+      for (const [cursor, failed] of this.failedPages) {
+        for (const id of failed) {
+          if (returned.has(id) || (cursor === before && requested.has(id))) failed.delete(id);
+        }
+        if (!failed.size) this.failedPages.delete(cursor);
+      }
+      if (!this.failedPages.size) this.onFailureChange?.(false);
+    }
     if (!page.items.length) return;
     const items = new Map(this.items);
     for (const item of page.items) {
