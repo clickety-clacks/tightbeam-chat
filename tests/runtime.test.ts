@@ -1,6 +1,7 @@
 import { indexValues } from '../src/recordIndex';
 import { describe, expect, it, vi } from 'vitest';
 import { createTightbeamAdapter } from '../src/runtime';
+import { decodeTurnEvent } from '../src/public019';
 import { AuthorizationError, AttachmentUploadError, UnsupportedTargetError } from '../src/types';
 import { ToolHistoryUnavailableError } from '../src/toolHistory';
 import { projectTurnEvents } from '../src/turnEvents';
@@ -307,7 +308,10 @@ describe('framework-independent runtime', () => {
     const liveCreatedAt = new Date(2_000).toISOString();
     transport.emitTurnEvent({ ...events[0], liveCreatedAt });
     transport.emitTurnEvent(events[3]);
-    snapshot.resolve(events.slice(0, 3));
+    const [segment, ...history] = events.slice(0, 3);
+    snapshot.resolve([decodeTurnEvent({
+      ...segment, content: { ...segment.content, futureMetadata: { source: 'history' } },
+    }, sessionKey), ...history]);
     await vi.waitFor(() => expect(runtime.getSnapshot().turnEvents).toHaveLength(4));
 
     const liveEntries = projectTurnEvents(runtime.getSnapshot().turnEvents!);

@@ -471,18 +471,18 @@ describe('versioned host composer seam on the real adapter and surface', () => {
     expect((window as unknown as Record<string, unknown>)[HOST_COMMAND_NAME]).toBeUndefined();
   });
 
-  it('posts the host correlation through the authenticated send path and reports canonical delivery', async () => {
+  it.each([{}, { futureMetadata: { enabled: true } }])('posts the host correlation and reports canonical delivery with extra fields %j', async extra => {
     const events: HostComposerEvent[] = [];
     const transport = new HostComposerTransport();
     transport.nextSend = async (submission) => {
       transport.addCanonical(submission);
       return { outcome: 'accepted' };
     };
-    installDeclaration(events);
+    installDeclaration(events, [1], extra);
     openChat(transport, 'conversation-a');
     const ready = await waitForReady(events, 'conversation-a');
 
-    act(() => commandEntry()({ type: 'send', lifetimeId: ready.lifetimeId, sessionKey: ready.sessionKey,
+    act(() => commandEntry()({ ...extra, type: 'send', lifetimeId: ready.lifetimeId, sessionKey: ready.sessionKey,
       correlationId: correlation, content: 'Hello from the host' }));
     await waitFor(() => expect(events.some((event) => event.event === 'delivered' && event.correlationId === correlation)).toBe(true));
 
@@ -491,7 +491,7 @@ describe('versioned host composer seam on the real adapter and surface', () => {
       deviceId: identity.deviceId, clientMessageId: correlation, content: 'Hello from the host' });
     expect(events.filter((event) => ['accepted', 'delivered'].includes(event.event)).map((event) => event.event))
       .toEqual(['accepted', 'delivered']);
-    act(() => commandEntry()({ type: 'send', lifetimeId: ready.lifetimeId, sessionKey: ready.sessionKey,
+    act(() => commandEntry()({ ...extra, type: 'send', lifetimeId: ready.lifetimeId, sessionKey: ready.sessionKey,
       correlationId: correlation, content: 'Hello from the host', retry: true }));
     expect(events.at(-1)).toMatchObject({ event: 'rejected', reason: 'already-delivered' });
     expect(transport.submissions).toHaveLength(1);
