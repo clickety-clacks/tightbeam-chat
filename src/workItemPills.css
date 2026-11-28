@@ -207,7 +207,7 @@
   align-items: center;
   gap: .25rem .5rem;
 }
-.tb-chat-work-id-caption {
+.tb-chat .tb-chat-work-id-caption {
   display: inline-flex;
   align-items: center;
   justify-content: center;
