@@ -544,9 +544,13 @@ describe('scroll-pinned prompt styles', () => {
     expect(rule('.tb-chat-pinned-slot')).toMatch(/visibility:\s*hidden/);
     expect(rule('.tb-chat-pinned-slot')).not.toMatch(/opacity/);
     expect(rule('.tb-chat-pinned-slot[data-pinned]')).toMatch(/visibility:\s*visible/);
-    // A copied message can set its own visibility (a host's renderMessage, for one); a
-    // waiting copy must still paint none of it.
-    expect(rule('.tb-chat-pinned-slot:not([data-pinned]) *')).toMatch(/visibility:\s*hidden\s*!important/);
+    // A copied message can set its own visibility, on an element or a generated ::after box
+    // (a host's renderMessage, for one); a waiting copy must paint none of it. Opacity on the
+    // copy as a whole covers both, where a descendant visibility rule cannot reach pseudo-elements.
+    expect(rule('.tb-chat-pinned-slot:not([data-pinned])')).toMatch(/opacity:\s*0\s*;/);
+    expect(css).not.toMatch(/\.tb-chat-pinned-slot:not\(\[data-pinned\]\)\s+\*/);
+    // Never animated: the copy's own keyframes carry position only (see above).
+    expect(rule('.tb-chat-pinned-slot[data-pinned]')).not.toMatch(/opacity/);
     expect(rule('.tb-chat-bubble[data-pinned-original]')).toMatch(/filter:\s*opacity\(0\)/);
   });
 });
