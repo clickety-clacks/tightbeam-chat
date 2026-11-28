@@ -207,6 +207,9 @@ function copyBubble(row: HTMLElement): HTMLElement {
   copy.removeAttribute('data-scroll-key');
   copy.removeAttribute('data-record-key');
   copy.removeAttribute('aria-label');
+  // A pinned original carries the attribute that hides it; the copy is made again whenever
+  // the original changes, including while it is pinned, and must never inherit that.
+  copy.removeAttribute(HIDDEN_ORIGINAL);
   copy.classList.add('tb-chat-pinned-copy');
   return copy;
 }

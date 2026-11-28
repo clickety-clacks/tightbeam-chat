@@ -540,6 +540,22 @@ describe('scroll-pinned prompts without scroll timelines', () => {
     expect(translate(slotFor('B'))).toBe(10);
   });
 
+  it('copies an original that changes while pinned without its hiding attribute', async () => {
+    const caption = document.createElement('span');
+    caption.textContent = 'First caption';
+    rows.get('A')!.append(caption);
+    mount();
+    scrollTo(500);
+    expect(rows.get('A')!.hasAttribute('data-pinned-original')).toBe(true);
+    caption.textContent = 'Updated caption';
+    await act(async () => { await Promise.resolve(); });
+    scrollTo(0);
+    scrollTo(500);
+    const copy = slotFor('A')!.querySelector<HTMLElement>('.tb-chat-pinned-full > .tb-chat-pinned-copy')!;
+    expect(copy.textContent).toContain('Updated caption');
+    expect(copy.hasAttribute('data-pinned-original')).toBe(false);
+  });
+
   it('gives the original back when it unmounts', () => {
     const result = mount();
     scrollTo(500);
@@ -642,6 +658,28 @@ describe('scroll-pinned prompts with scroll timelines', () => {
       if (slot) expect(slot.hasAttribute('inert'), `inert at ${position}`).toBe(!pinned);
       expect(rows.get('A')!.hasAttribute('data-pinned-original'), `original at ${position}`).toBe(pinned);
     }
+  });
+
+  it('copies an original that changes while pinned without its hiding attribute, then repins it shown', async () => {
+    class FakeScrollTimeline { constructor(readonly options: unknown) {} }
+    (globalThis as { ScrollTimeline?: unknown }).ScrollTimeline = FakeScrollTimeline;
+    Element.prototype.animate = vi.fn(() => ({ cancel: vi.fn() }) as unknown as Animation) as unknown as Element['animate'];
+    const caption = document.createElement('span');
+    caption.textContent = 'First caption';
+    rows.get('A')!.append(caption);
+    mount();
+    scrollTo(500);
+    expect(rows.get('A')!.hasAttribute('data-pinned-original')).toBe(true);
+    // A host's renderMessage child updates while A is pinned: the copy is made again from the
+    // original, which still carries the attribute that hides it.
+    caption.textContent = 'Updated caption';
+    await act(async () => { await Promise.resolve(); });
+    scrollTo(0);
+    scrollTo(500);
+    const copy = slotFor('A')!.querySelector<HTMLElement>('.tb-chat-pinned-full > .tb-chat-pinned-copy')!;
+    expect(copy.textContent).toContain('Updated caption');
+    expect(copy.hasAttribute('data-pinned-original')).toBe(false);
+    expect(copy.querySelector('[data-pinned-original]')).toBeNull();
   });
 
   it('switches an original to its animation when it gains media, and gives it back', () => {
