@@ -1,5 +1,29 @@
 [
   {
+    "version": "v0.1.125",
+    "items": [
+      {
+        "title": "Scroll-pinned prompts",
+        "description": "The changes and limits below apply when scroll-pinned prompts are enabled."
+      },
+      {
+        "title": "Pinned prompts stay visible while scrolling",
+        "description": "Pinned prompts stay visible during wheel scrolling in WebKit. Successive prompts also avoid painting over each other as one pushes the other out."
+      },
+      {
+        "title": "Photos and compact text in pinned prompts",
+        "description": "Pinned prompts show attached photos, including prompts with no text. Pinned text uses 13 px type and fits on one line up to 540 px of usable pane width, or two lines in wider panes."
+      },
+      {
+        "title": "Known limits",
+        "description": "A brief blank flash can still appear when a prompt first pins. The gap between successive prompts can briefly narrow to 2 px as one pushes the other out."
+      }
+    ],
+    "compatibleTightbeam": ["0.1.15", "0.1.16"],
+    "breakingChanges": "none",
+    "breakingChangesReview": {"reviewer": "review:chat-pinned-algorithm", "commit": "a4e28b079720359da800c6f657ea9e157679953c", "result": "confirmed"}
+  },
+  {
     "version": "v0.1.124",
     "items": [
       {
