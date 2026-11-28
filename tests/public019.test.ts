@@ -1860,6 +1860,12 @@ describe('tool-call contract and transition category', () => {
       kind: 'tool.ended', messageId: null, toolCallId: call.id, content: null, toolCall: completed, rowVersion: 1 };
     expect(decodeTurnEvent(segment1, sessionKey)).toMatchObject({ id: 'event-1', turnEventSeq: 1,
       kind: 'assistant.segment', messageId: 'message-7', content: { text: 'Before' } });
+    expect(decodeTurnEvent({
+      ...segment1, futureField: true, content: { ...segment1.content, futureMetadata: {} },
+    }, sessionKey)).toEqual(decodeTurnEvent(segment1, sessionKey));
+    expect(() => decodeTurnEvent({
+      ...segment1, content: { ...segment1.content, text: false, futureMetadata: {} },
+    }, sessionKey)).toThrow('Assistant turn event does not contain a text segment.');
     const segmentNotice = { type: 'change', schemaVersion: 2, class: 'message.segment_recorded',
       resource: 'turn events', op: 'upsert', refs: { sessionKey, turnEventId: 'event-1' }, payload: segment1 };
     expect(decodePublic019Notice({ ...segmentNotice, occurredAt: 1_500 }, sessionKey))

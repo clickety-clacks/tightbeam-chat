@@ -460,10 +460,12 @@ export function decodeTurnEvent(value: unknown, sessionKey: string): TurnEventRe
     if (!messageId || toolCallId || !row.content || typeof row.content !== 'object' || Array.isArray(row.content)) {
       throw new UnsupportedTargetError('Assistant turn event has an invalid message segment.');
     }
-    content = Object.freeze({ ...(row.content as Record<string, unknown>) });
-    if (content.type !== 'text' || typeof content.text !== 'string') {
+    const segment = record(row.content);
+    if (segment.type !== 'text' || typeof segment.text !== 'string') {
       throw new UnsupportedTargetError('Assistant turn event does not contain a text segment.');
     }
+    // History and live delivery compare the fields Chat actually uses.
+    content = Object.freeze({ type: segment.type, text: segment.text });
     if (row.toolCall !== null && row.toolCall !== undefined) {
       throw new UnsupportedTargetError('Assistant turn event unexpectedly contains a tool call.');
     }
