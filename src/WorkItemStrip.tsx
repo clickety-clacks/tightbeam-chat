@@ -13,7 +13,7 @@ import './workItemPills.css';
 type ShownState = WorkItemPillState | 'waiting' | 'you';
 
 const words: Readonly<Record<ShownState, string>> = {
-  'not-started': 'Not started', held: 'Assigned', working: 'Working now', 'between-hands': 'Between hands', done: 'Closed',
+  'not-started': 'No direct assignment', held: 'Assigned', working: 'Working now', 'between-hands': 'Between hands', done: 'Closed',
   failed: 'Failed', shelved: 'Shelved', waiting: 'Waiting', you: 'Waiting on you',
 };
 
@@ -49,6 +49,7 @@ const closeWords: Readonly<Record<WorkItemCloseReason, string>> = {
 };
 
 function stateText(state: ShownState, stale: boolean, item?: WorkItemSummary): string {
+  if (stale && state === 'not-started') return 'Had no direct assignment';
   const reason = state === 'done' && item?.state === 'closed' ? item.closeReason : undefined;
   const word = (reason && closeWords[reason]) || words[state];
   return stale ? `Was ${word.toLowerCase()}` : word;
@@ -223,7 +224,7 @@ function Step({ step, now }: { readonly step: ChainStep; readonly now: number })
 }
 
 const endings: Readonly<Partial<Record<WorkItemPillState, string>>> = {
-  'not-started': 'No agent has been given this yet.',
+  'not-started': 'Work tracked on a separate item doesn’t affect this status.',
   'between-hands': 'It was started and no agent has it now.',
   failed: 'Ended without being done.', shelved: 'Put aside on purpose.',
 };

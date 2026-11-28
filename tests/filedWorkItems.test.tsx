@@ -85,11 +85,11 @@ describe('filed work item reads', () => {
 
       await act(async () => { reader.sync([...range(3, 3), newest], 'older'); await flush(); });
       expect(gateway.calls).toEqual([{ limit: 1, before: undefined }]);
-      expect(screen.getByRole('button', { name: 'Title 3. Not started' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Title 3. No direct assignment' })).toBeTruthy();
 
       await act(async () => { reader.sync([...range(2, 3), newest], 'older'); await flush(); });
       expect(gateway.calls).toEqual([{ limit: 1, before: undefined }, { limit: 1, before: '3' }]);
-      expect(screen.getByRole('button', { name: 'Title 2. Not started' })).toBeTruthy();
+      expect(screen.getByRole('button', { name: 'Title 2. No direct assignment' })).toBeTruthy();
       expect(readItem).not.toHaveBeenCalled();
     } finally {
       cleanup();

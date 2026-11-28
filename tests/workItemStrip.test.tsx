@@ -50,7 +50,7 @@ function chat(items: readonly WorkItemSummary[], options: {
       count('cards');
       const item = items.find((row) => row.id === id);
       if (!item || options.missingOnTap) return undefined;
-      return { item, cards: [{ id: 'asg_1', open: item.holders.length > 0, holderKey: 'agent:a' }] }; },
+      return { item, cards: item.started ? [{ id: 'asg_1', open: item.holders.length > 0, holderKey: 'agent:a' }] : [] }; },
     readBreathing: async (kind) => {
       count('breathing');
       if (options.waitOnItem && kind === 'work-item') return { reason: 'idle', holders: ['agent:b'] };
@@ -68,7 +68,7 @@ function chat(items: readonly WorkItemSummary[], options: {
         dueAt: wakeDueAt, createdAt: Date.now() - 60_000,
         reason: id === 'packaging' ? 'Packaging reminder for other work.' : options.waitReason ?? null };
     },
-    readMyQuestions: async () => { count('questions'); return items.some((row) => !row.holders.length) ? [{ id: 'dr_1', question: 'Go ahead?', options: ['Yes'],
+    readMyQuestions: async () => { count('questions'); return items.some((row) => row.started && !row.holders.length) ? [{ id: 'dr_1', question: 'Go ahead?', options: ['Yes'],
       assignmentId: 'asg_1', raiserId: null, raisedAt: 1, deadlineAt: null }] : []; },
     readAgentQuestions: async () => { count('agent questions'); return []; },
     readAgentName: async () => { count('name'); return 'Coder'; },
@@ -146,7 +146,7 @@ describe('the strip', () => {
   it('shows each state in words, drops the product from the pill and keeps it in the label', async () => {
     const run = chat([summary(1), summary(2, { holders: [] }), summary(3, { holders: [], started: false }), summary(4, { state: 'closed', holders: [] })]);
     const shown = await pills();
-    expect(shown.map((pill) => pill.textContent)).toEqual(['Item 1Assigned', 'Item 2Between hands', 'Item 3Not started', 'Item 4Closed']);
+    expect(shown.map((pill) => pill.textContent)).toEqual(['Item 1Assigned', 'Item 2Between hands', 'Item 3No direct assignment', 'Item 4Closed']);
     expect(shown[0].getAttribute('aria-label')).toBe('Product: Item 1. Assigned');
     expect(shown[3].getAttribute('aria-label')).toBe('Product: Item 4. Closed');
     fireEvent.click(shown[3]);
@@ -337,15 +337,60 @@ describe('the sheet', () => {
     await waitFor(() => expect(run.counts.cards).toBe(1));
   });
 
-  it.each([['between hands', { holders: [] }], ['not started', { holders: [], started: false }]])(
-    'still reads the open questions of work %s', async (_name, patch) => {
-      const run = chat([summary(1, patch)]);
-      fireEvent.click((await pills())[0]);
-      const dialog = await screen.findByRole('dialog');
-      await waitFor(() => expect(run.counts).toEqual({ page: 1, cards: 1, questions: 1 }));
-      expect(await within(dialog).findByText(/Go ahead\?/)).toBeTruthy();
-      expect(dialog.textContent).toContain('Waiting on you');
-    });
+  it('still reads the open questions of work between hands', async () => {
+    const run = chat([summary(1, { holders: [] })]);
+    fireEvent.click((await pills())[0]);
+    const dialog = await screen.findByRole('dialog');
+    await waitFor(() => expect(run.counts).toEqual({ page: 1, cards: 1, questions: 1 }));
+    expect(await within(dialog).findByText(/Go ahead\?/)).toBeTruthy();
+    expect(dialog.textContent).toContain('Waiting on you');
+  });
+
+  it('labels direct assignment coverage without inferring progress from separate work', async () => {
+    const unassigned = { holders: [], started: false };
+    const untouched = summary(1, { ...unassigned, title: 'Untouched item' });
+    const umbrella = summary(2, { ...unassigned, title: 'Umbrella item' });
+    const delivery = summary(3, { title: 'Separate delivery item' });
+    const run = chat([untouched, umbrella, delivery], { message: `Umbrella delivery is tracked in ${delivery.id}.` });
+    expect(await pills()).toHaveLength(3);
+    expect(run.counts).toEqual({ page: 1 });
+
+    for (const [index, item] of [untouched, umbrella].entries()) {
+      const pill = screen.getByRole('button', { name: `${item.title}. No direct assignment` });
+      expect(pill.textContent).toContain('No direct assignment');
+      fireEvent.click(pill);
+      const dialog = screen.getByRole('dialog', { name: item.title });
+      expect(within(dialog).getByText('No direct assignment', { exact: true })).toBeTruthy();
+      expect(await within(dialog).findByText('Work tracked on a separate item doesn’t affect this status.')).toBeTruthy();
+      expect(within(dialog).queryByRole('link')).toBeNull();
+      expect(within(dialog).queryByText(delivery.title)).toBeNull();
+      expect(run.counts).toEqual({ page: 1, cards: index + 1, questions: index + 1 });
+      fireEvent.keyDown(document, { key: 'Escape' });
+    }
+
+    fireEvent.click(screen.getByRole('button', { name: 'Separate delivery item. Assigned' }));
+    const dialog = screen.getByRole('dialog', { name: delivery.title });
+    await within(dialog).findByText('Next check');
+    expect(within(dialog).getByText('Waiting', { exact: true })).toBeTruthy();
+    expect(run.counts).toEqual({ page: 1, cards: 3, questions: 3, 'agent questions': 1, breathing: 1, wait: 1, name: 1 });
+  });
+
+  it('uses the past-tense assignment label until the normal tap read refreshes it', async () => {
+    const item = summary(1, { started: false, holders: [] });
+    const run = chat([item]);
+    await pills();
+    await run.emit({ kind: 'item', workItemId: item.id });
+    const pill = screen.getByRole('button', { name: 'Product: Item 1. Had no direct assignment. Changed, not read again yet' });
+    expect(pill.textContent).toContain('Had no direct assignment');
+    expect(run.counts).toEqual({ page: 1 });
+
+    fireEvent.click(pill);
+    const dialog = screen.getByRole('dialog', { name: item.title });
+    expect(within(dialog).getByText('Had no direct assignment', { exact: true })).toBeTruthy();
+    expect(await within(dialog).findByText('No direct assignment', { exact: true })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Product: Item 1. No direct assignment' })).toBe(pill);
+    expect(run.counts).toEqual({ page: 1, cards: 1, questions: 1 });
+  });
 
   it.each([true, 'network'] as const)('shows a failed list (%s) and isolates it from the next session', async failList => {
     const run = chat([summary(1)], { failList });
