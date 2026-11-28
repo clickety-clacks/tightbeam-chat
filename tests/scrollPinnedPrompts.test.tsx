@@ -131,7 +131,7 @@ describe('scroll-pinned prompts without scroll timelines', () => {
   it('leaves prompts in their natural place until the top reaches the pin line', () => {
     mount();
     scrollTo(90);
-    expect(slotFor('A')?.style.opacity).toBe('0');
+    expect(slotFor('A')?.style.visibility).toBe('hidden');
     expect(slotFor('A')?.hasAttribute('data-pinned')).toBe(false);
     expect(slotFor('A')?.getAttribute('aria-hidden')).toBe('true');
     expect(rows.get('A')!.hasAttribute('data-pinned-original')).toBe(false);
@@ -141,7 +141,7 @@ describe('scroll-pinned prompts without scroll timelines', () => {
     mount();
     scrollTo(190);
     const slot = slotFor('A')!;
-    expect(slot.style.opacity).toBe('1');
+    expect(slot.style.visibility).toBe('visible');
     expect(slot.style.left).toBe('120px');
     expect(slot.style.width).toBe('240px');
     expect(translate(slot)).toBe(10);
@@ -188,19 +188,19 @@ describe('scroll-pinned prompts without scroll timelines', () => {
     expect(translate(slotFor('A'))).toBe(1000 - 950 - 8 - 80);
     scrollTo(1000);
     // Kept ready, unseen, in case the reader scrolls back.
-    expect(slotFor('A')!.style.opacity).toBe('0');
+    expect(slotFor('A')!.style.visibility).toBe('hidden');
     expect(slotFor('A')!.hasAttribute('data-pinned')).toBe(false);
     expect(rows.get('A')!.hasAttribute('data-pinned-original')).toBe(false);
-    expect(slotFor('B')!.style.opacity).toBe('1');
+    expect(slotFor('B')!.style.visibility).toBe('visible');
   });
 
   it('lands in the state of the position after a jump, either way', () => {
     mount();
     scrollTo(1400);
-    expect(slotFor('C')!.style.opacity).toBe('1');
+    expect(slotFor('C')!.style.visibility).toBe('visible');
     expect(slotFor('A')).toBeNull();
     scrollTo(200);
-    expect(slotFor('C')?.style.opacity ?? '0').toBe('0');
+    expect(slotFor('C')?.style.visibility ?? 'hidden').toBe('hidden');
     expect(rows.get('C')!.hasAttribute('data-pinned-original')).toBe(false);
     expect(translate(slotFor('A')?.querySelector<HTMLElement>('.tb-chat-pinned-body'))).toBe(-110);
   });
@@ -407,7 +407,7 @@ describe('scroll-pinned prompts without scroll timelines', () => {
     scrollTo(2400);
     expect(translate(slotFor('C'))).toBe(atEnd);
     scrollTo(-80);
-    expect(slotFor('A')?.style.opacity ?? '0').toBe('0');
+    expect(slotFor('A')?.style.visibility ?? 'hidden').toBe('hidden');
   });
 
   it('keeps every prompt in place when the end-of-chat padding toggles while scrolled to the end', () => {
@@ -440,7 +440,7 @@ describe('scroll-pinned prompts without scroll timelines', () => {
     scrollTo(950);
     expect(translate(slotFor('A'))).toBe(1000 - 950 - 8 - 80);
     scrollTo(991);
-    expect(slotFor('B')!.style.opacity).toBe('1');
+    expect(slotFor('B')!.style.visibility).toBe('visible');
     expect(translate(slotFor('B'))).toBe(10);
   });
 
@@ -476,14 +476,19 @@ describe('scroll-pinned prompts with scroll timelines', () => {
     expect(slotCall.options.fill).toBeUndefined();
     // Evaluate the keyframes as a browser would at a scroll position (linear between stops,
     // the later stop winning where two share an offset).
-    const sample = (keyframes: Keyframe[], property: 'transform' | 'opacity' | 'filter', scrollTop: number) => {
+    const sample = (keyframes: Keyframe[], property: 'transform' | 'visibility' | 'filter', scrollTop: number) => {
       const at = scrollTop / 1e7;
       let index = keyframes.length - 1;
       for (let i = 0; i < keyframes.length; i++) if ((keyframes[i].offset as number) > at) { index = i; break; }
       const to = keyframes[index];
       const from = keyframes[Math.max(0, index - 1)];
-      const value = (frame: Keyframe) => property === 'opacity' ? Number(frame.opacity)
-        : property === 'filter' ? Number.parseFloat(String(frame.filter).match(/opacity\(([\d.]+)\)/)![1])
+      if (property === 'visibility') {
+        // Visibility is visible between two stops when either is visible (CSS interpolation).
+        const visible = (frame: Keyframe) => frame.visibility === 'visible' ? 1 : 0;
+        if ((to.offset as number) <= at || from === to) return visible(to);
+        return at > (from.offset as number) ? Math.max(visible(from), visible(to)) : visible(from);
+      }
+      const value = (frame: Keyframe) => property === 'filter' ? Number.parseFloat(String(frame.filter).match(/opacity\(([\d.]+)\)/)![1])
         : Number.parseFloat(String(frame.transform).match(/translateY\((-?[\d.e-]+)px\)/)![1]);
       if ((to.offset as number) <= at || from === to) return value(to);
       const t = (at - (from.offset as number)) / ((to.offset as number) - (from.offset as number));
@@ -492,14 +497,17 @@ describe('scroll-pinned prompts with scroll timelines', () => {
     // 90 is exactly A's pin point, where the model still has it in its natural place.
     for (const scrollTop of [0, 89, 90, 90.5, 150, 330, 600, 950, 991, 1500, 2400]) {
       const frame = pinnedPromptFrameAt(scrollTop, geometry, 0, options);
-      expect(sample(slotCall.keyframes, 'opacity', scrollTop)).toBeCloseTo(frame ? 1 : 0, 6);
+      expect(sample(slotCall.keyframes, 'visibility', scrollTop)).toBe(frame ? 1 : 0);
       expect(sample(rowCall.keyframes, 'filter', scrollTop)).toBeCloseTo(frame ? 0 : 1, 6);
       if (frame) expect(sample(slotCall.keyframes, 'transform', scrollTop)).toBeCloseTo(frame.top, 4);
     }
+    // The copy never depends on compositor-run opacity to be seen: WebKit can leave a
+    // scroll-driven opacity unpainted during wheel scrolling, and the pinned prompt vanished.
+    expect(slotCall.keyframes.every((frame: Keyframe) => frame.opacity === undefined)).toBe(true);
     // Hiding the original never touches its opacity, which Chat animates for its arrival fade.
     expect(rowCall.keyframes.every((frame: Keyframe) => frame.opacity === undefined)).toBe(true);
     // At the very end of the scroll range the earlier prompt shows nothing, not its last state.
-    expect(sample(slotCall.keyframes, 'opacity', 1e7)).toBe(0);
+    expect(sample(slotCall.keyframes, 'visibility', 1e7)).toBe(0);
     // No style is written on scroll; the browser applies the animations.
     expect(slot.style.transform).toBe('');
     const before = calls.length;
@@ -509,7 +517,7 @@ describe('scroll-pinned prompts with scroll timelines', () => {
     scrollTo(1400);
     // The latest prompt holds its pinned state to the end of the range.
     const latest = lastCall(call => call.element === slotFor('C'))!;
-    expect(latest.keyframes.at(-1)!.opacity).toBe(1);
+    expect(latest.keyframes.at(-1)!.visibility).toBe('visible');
     expect(latest.keyframes.at(-1)!.offset).toBe(1);
   });
 });
