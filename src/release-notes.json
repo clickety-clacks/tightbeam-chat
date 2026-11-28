@@ -1,5 +1,17 @@
 [
   {
+    "version": "v0.1.123",
+    "items": [
+      {
+        "title": "Keep work item pills when a list is incomplete",
+        "description": "When Tightbeam returns an incomplete work item list, Chat keeps the pills it can show and displays a warning. The warning clears after Chat successfully loads the affected part of the list."
+      }
+    ],
+    "compatibleTightbeam": ["0.1.15", "0.1.16"],
+    "breakingChanges": "none",
+    "breakingChangesReview": {"reviewer": "review:chat-pinned-algorithm", "commit": "350ab620ec40033508a4e6b6b4b4dc37d0713be1", "result": "confirmed"}
+  },
+  {
     "version": "v0.1.122",
     "items": [
       {
