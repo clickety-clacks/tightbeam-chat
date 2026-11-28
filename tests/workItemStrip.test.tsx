@@ -372,6 +372,23 @@ describe('the sheet', () => {
     expect(run.counts).toEqual({ page: 1, cards: 3, questions: 3, 'agent questions': 1, breathing: 1, wait: 1, name: 1 });
   });
 
+  it('uses the past-tense assignment label until the normal tap read refreshes it', async () => {
+    const item = summary(1, { started: false, holders: [] });
+    const run = chat([item]);
+    await pills();
+    await run.emit({ kind: 'item', workItemId: item.id });
+    const pill = screen.getByRole('button', { name: 'Product: Item 1. Had no direct assignment. Changed, not read again yet' });
+    expect(pill.textContent).toContain('Had no direct assignment');
+    expect(run.counts).toEqual({ page: 1 });
+
+    fireEvent.click(pill);
+    const dialog = screen.getByRole('dialog', { name: item.title });
+    expect(within(dialog).getByText('Had no direct assignment', { exact: true })).toBeTruthy();
+    expect(await within(dialog).findByText('No direct assignment', { exact: true })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Product: Item 1. No direct assignment' })).toBe(pill);
+    expect(run.counts).toEqual({ page: 1, cards: 1, questions: 1 });
+  });
+
   it.each([true, 'network'] as const)('shows a failed list (%s) and isolates it from the next session', async failList => {
     const run = chat([summary(1)], { failList });
     const failure = await screen.findByText('Couldn’t load work items');

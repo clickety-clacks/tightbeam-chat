@@ -49,6 +49,7 @@ const closeWords: Readonly<Record<WorkItemCloseReason, string>> = {
 };
 
 function stateText(state: ShownState, stale: boolean, item?: WorkItemSummary): string {
+  if (stale && state === 'not-started') return 'Had no direct assignment';
   const reason = state === 'done' && item?.state === 'closed' ? item.closeReason : undefined;
   const word = (reason && closeWords[reason]) || words[state];
   return stale ? `Was ${word.toLowerCase()}` : word;
