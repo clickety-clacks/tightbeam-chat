@@ -1,5 +1,24 @@
 [
   {
+    "version": "v0.1.124",
+    "items": [
+      {
+        "title": "Reply history",
+        "description": "Chat no longer reports a history conflict when two copies of an assistant reply differ only in extra fields Chat doesn't use."
+      },
+      {
+        "title": "Copy a work item ID",
+        "description": "Select the short work item ID beside the status in its details to copy the full ID."
+      },
+      {
+        "title": "No direct assignment",
+        "description": "Open work items without a direct assignment now show No direct assignment. Work tracked separately doesn't affect that status."
+      }
+    ],
+    "compatibleTightbeam": ["0.1.15", "0.1.16"],
+    "breakingChanges": "none"
+  },
+  {
     "version": "v0.1.123",
     "items": [
       {
