@@ -1,4 +1,5 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { MessageAttachments } from '../src/MessageAttachments';
 import { createRef } from 'react';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -25,6 +26,8 @@ const geometry = (['A', 'B', 'C'] as const).map(key => ({
 }));
 
 let scrollTop = 0;
+let paneWidth = 800;
+let responsiveSummary = false;
 // The scroller's content is 2400px longer than its 600px viewport.
 const SCROLL_HEIGHT = 3000;
 // Where things are drawn on screen. Normally the reported scrollTop; WebKit can report a
@@ -44,6 +47,8 @@ function rect(top: number, height: number, left = 0, width = 400): DOMRect {
 
 beforeEach(() => {
   scrollTop = 0;
+  paneWidth = 800;
+  responsiveSummary = false;
   screenScroll = undefined;
   extraHeight = 0;
   root = document.createElement('section');
@@ -66,7 +71,7 @@ beforeEach(() => {
   document.body.append(root);
   Object.defineProperty(viewport, 'scrollTop', { configurable: true, get: () => scrollTop, set: value => { scrollTop = value; } });
   Object.defineProperty(viewport, 'clientHeight', { configurable: true, value: 600 });
-  Object.defineProperty(viewport, 'clientWidth', { configurable: true, value: 400 });
+  Object.defineProperty(viewport, 'clientWidth', { configurable: true, get: () => paneWidth });
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
     if (this === viewport || this === root) return rect(0, 600);
     if (this === viewport.firstElementChild) return rect(-drawnScroll(), SCROLL_HEIGHT);
@@ -75,7 +80,10 @@ beforeEach(() => {
       const box = layout[key];
       return rect(box.top - drawnScroll(), box.height, box.left, box.width);
     }
-    if (this.classList.contains('tb-chat-pinned-summary-measure')) return rect(0, summaryHeight);
+    if (this.classList.contains('tb-chat-pinned-summary-measure')) {
+      const narrow = this.parentElement?.style.getPropertyValue('--tb-chat-pinned-summary-lines') === '1';
+      return rect(0, responsiveSummary && narrow ? 60 : summaryHeight);
+    }
     return rect(0, 0);
   });
   // The summary probe reports three clamped lines; long text is cut, the short prompt is not.
@@ -130,6 +138,78 @@ const translate = (element: HTMLElement | null | undefined) =>
   Number.parseFloat(element?.style.transform.match(/translateY\((-?[\d.e-]+)px\)/)?.[1] ?? 'NaN');
 
 describe('scroll-pinned prompts without scroll timelines', () => {
+  it.each(['', 'Text alongside the photo'])('keeps a prompt photo available in the settled summary (%j)', text => {
+    const photo = { filename: 'sample.png', mimeType: 'image/png', data: 'YQ==' };
+    render(<MessageAttachments attachments={[photo]} />, { container: rows.get('A')! });
+    mount({}, prompts.map(prompt => prompt.scrollKey === 'A' ? { ...prompt, text } : prompt));
+    scrollTo(500);
+    const strip = slotFor('A')!.querySelector<HTMLElement>('.tb-chat-pinned-photos')!;
+    const thumbnail = strip.querySelector('button')!;
+    expect(thumbnail.getAttribute('aria-label')).toBe('Enlarge Image: sample.png');
+    expect(thumbnail.querySelector('img')?.getAttribute('src')).toBe('data:image/png;base64,YQ==');
+    expect(strip.hasAttribute('inert')).toBe(false);
+    fireEvent.click(thumbnail);
+    expect(screen.getByRole('dialog', { name: 'Image: sample.png' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Close image preview' }));
+    expect(document.activeElement).toBe(thumbnail);
+    scrollTo(90);
+    expect(strip.hasAttribute('inert')).toBe(true);
+  });
+
+  it('reuses a delayed authorized photo without changing the measured summary', async () => {
+    let resolve!: (blob: Blob) => void;
+    const read = vi.fn(() => new Promise<Blob>(done => { resolve = done; }));
+    vi.stubGlobal('URL', Object.assign(class extends URL {}, {
+      createObjectURL: () => 'blob:pinned-photo', revokeObjectURL: vi.fn(),
+    }));
+    render(<MessageAttachments attachments={[
+      { filename: 'ready.png', mimeType: 'image/png', data: 'YQ==' },
+      { assetId: 'photo', filename: 'sample.png', mimeType: 'image/png', size: 1 },
+    ]} readAttachment={read} />, { container: rows.get('A')! });
+    const handle = createRef<ScrollPinnedPromptsHandle>();
+    render(<ScrollPinnedPrompts ref={handle} prompts={prompts} viewport={{ current: viewport }}
+      getRow={key => rows.get(key)} onJump={() => {}} onDismiss={() => {}} />, { container: root });
+    scrollTo(500);
+    const strip = slotFor('A')!.querySelector<HTMLElement>('.tb-chat-pinned-photos')!;
+    expect(strip.hidden).toBe(false);
+    expect(strip.querySelectorAll('button')).toHaveLength(1);
+    const readyThumbnail = strip.querySelector('button')!;
+    fireEvent.click(readyThumbnail);
+    expect(screen.getByRole('dialog', { name: 'Image: ready.png' })).toBeTruthy();
+    const settled = handle.current?.settledBottom('A');
+    await act(async () => { await Promise.resolve(); resolve(new Blob(['x'], { type: 'image/png' })); });
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(strip.querySelectorAll('img')[1]?.getAttribute('src')).toBe('blob:pinned-photo');
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(strip.querySelector('button')).toBe(readyThumbnail);
+    expect(document.activeElement).toBe(readyThumbnail);
+    expect(handle.current?.settledBottom('A')).toBe(settled);
+  });
+
+  it('remeasures compressed text when the pane crosses the line-cap breakpoint', () => {
+    responsiveSummary = true;
+    observeResizes();
+    const handle = createRef<ScrollPinnedPromptsHandle>();
+    render(<ScrollPinnedPrompts ref={handle} prompts={prompts} viewport={{ current: viewport }}
+      getRow={key => rows.get(key)} onJump={() => {}} onDismiss={() => {}} />, { container: root });
+    const layer = root.querySelector<HTMLElement>('.tb-chat-pinned-layer')!;
+    scrollTo(500);
+    const scrollBody = slotFor('A')!.querySelector<HTMLElement>('.tb-chat-pinned-body');
+    const check = (lines: string, height: number) => {
+      expect(layer.style.getPropertyValue('--tb-chat-pinned-summary-lines')).toBe(lines);
+      expect(handle.current!.settledBottom('A')).toBe(10 + height);
+      expect(translate(scrollBody)).toBe(-(layout.A.height - height));
+      expect(slotFor('A')!.style.width).toBe('240px');
+    };
+    check('2', 80);
+    for (const [width, lines, height] of [[540, '1', 60], [541, '2', 80]] as const) {
+      paneWidth = width;
+      const observers = (globalThis as { __pinTestObservers?: ResizeObserverCallback[] }).__pinTestObservers;
+      act(() => observers?.forEach(observer => observer([], {} as ResizeObserver)));
+      check(lines, height);
+    }
+  });
+
   it('leaves prompts in their natural place until the top reaches the pin line', () => {
     mount();
     scrollTo(90);
@@ -226,33 +306,50 @@ describe('scroll-pinned prompts without scroll timelines', () => {
     expect(handle.current!.settledBottom('missing')).toBeUndefined();
   });
 
-  it('lets touches through to the transcript and treats a tap on the visible copy as a jump', () => {
+  it('routes a tap through the pinned copy and leaves drags and keyboard clicks to the transcript', () => {
     const onJump = vi.fn();
     mount({ onJump });
+    root.append(viewport);
     scrollTo(500);
-    const reply = document.createElement('a');
-    reply.href = '#reply';
+    const reply = document.createElement('button');
     viewport.firstElementChild!.append(reply);
     const replyClicked = vi.fn();
     reply.addEventListener('click', replyClicked);
-    // Inside the pinned copy (x 120-360, y 10-90 at summary height): the jump wins.
-    fireEvent.click(reply, { clientX: 200, clientY: 50, button: 0 });
+    const pointer = (type: string, x: number, y: number) => {
+      fireEvent(reply, new MouseEvent(type, { bubbles: true, button: 0, clientX: x, clientY: y }));
+    };
+    const click = (x: number, y: number, detail = 1) => fireEvent.click(reply, { clientX: x, clientY: y, button: 0, detail });
+
+    // The summary spans x 120–360 and y 10–90. Preserve a drag that enters it,
+    // including one that crosses it and comes back to the press position.
+    pointer('pointerdown', 200, 120);
+    pointer('pointermove', 200, 50);
+    click(200, 50);
+    pointer('pointerdown', 200, 50);
+    pointer('pointermove', 243, 50);
+    pointer('pointermove', 200, 50);
+    click(200, 50);
+    pointer('pointerdown', 200, 50);
+    pointer('pointercancel', 200, 50);
+    click(200, 50);
+    click(200, 50, 0);
+    expect(onJump).not.toHaveBeenCalled();
+    expect(replyClicked).toHaveBeenCalledTimes(4);
+
+    pointer('pointerdown', 200, 50);
+    click(200, 50);
     expect(onJump).toHaveBeenCalledWith(prompts[0]);
-    expect(replyClicked).not.toHaveBeenCalled();
-    // Below the copy, the tap belongs to the transcript.
-    fireEvent.click(reply, { clientX: 200, clientY: 120, button: 0 });
-    expect(onJump).toHaveBeenCalledTimes(1);
-    expect(replyClicked).toHaveBeenCalledTimes(1);
+    expect(replyClicked).toHaveBeenCalledTimes(4);
   });
 
-  it('keeps the copied bubble and summary out of reach of focus and screen readers while pinned', () => {
+  it('keeps the copied bubble and summary text out of reach of focus and screen readers while pinned', () => {
     rows.get('A')!.innerHTML = 'See <a href="#x">this link</a> <button type="button">Retry</button>';
     mount();
     scrollTo(200);
     const slot = slotFor('A')!;
     expect(slot.hasAttribute('data-pinned')).toBe(true);
     expect(slot.hasAttribute('inert')).toBe(false);
-    for (const layer of ['.tb-chat-pinned-full', '.tb-chat-pinned-summary']) {
+    for (const layer of ['.tb-chat-pinned-full', '.tb-chat-pinned-summary-text']) {
       const element = slot.querySelector<HTMLElement>(layer)!;
       expect(element.hasAttribute('inert')).toBe(true);
       expect(element.getAttribute('aria-hidden')).toBe('true');
@@ -475,14 +572,14 @@ describe('scroll-pinned prompts with scroll timelines', () => {
     expect(slotCall.options.fill).toBeUndefined();
     // Evaluate the keyframes as a browser would at a scroll position (linear between stops,
     // the later stop winning where two share an offset).
-    const sample = (keyframes: Keyframe[], property: 'transform' | 'filter', scrollTop: number) => {
+    const sample = (keyframes: Keyframe[], property: 'top' | 'filter', scrollTop: number) => {
       const at = scrollTop / 1e7;
       let index = keyframes.length - 1;
       for (let i = 0; i < keyframes.length; i++) if ((keyframes[i].offset as number) > at) { index = i; break; }
       const to = keyframes[index];
       const from = keyframes[Math.max(0, index - 1)];
       const value = (frame: Keyframe) => property === 'filter' ? Number.parseFloat(String(frame.filter).match(/opacity\(([\d.]+)\)/)![1])
-        : Number.parseFloat(String(frame.transform).match(/translateY\((-?[\d.e-]+)px\)/)![1]);
+        : Number.parseFloat(String(frame.top));
       if ((to.offset as number) <= at || from === to) return value(to);
       const t = (at - (from.offset as number)) / ((to.offset as number) - (from.offset as number));
       return value(from) + (value(to) - value(from)) * t;
@@ -491,7 +588,7 @@ describe('scroll-pinned prompts with scroll timelines', () => {
     for (const scrollTop of [0, 89, 90, 90.5, 150, 330, 600, 950, 991, 1500, 2400]) {
       const frame = pinnedPromptFrameAt(scrollTop, geometry, 0, options);
       expect(sample(rowCall.keyframes, 'filter', scrollTop)).toBeCloseTo(frame ? 0 : 1, 6);
-      if (frame) expect(sample(slotCall.keyframes, 'transform', scrollTop)).toBeCloseTo(frame.top, 4);
+      if (frame) expect(sample(slotCall.keyframes, 'top', scrollTop)).toBeCloseTo(frame.top, 4);
     }
     // Whether the copy is seen is never animated. WebKit can leave a scroll-driven opacity
     // unpainted during wheel scrolling (the prompt vanished), and a discrete property could
@@ -504,7 +601,10 @@ describe('scroll-pinned prompts with scroll timelines', () => {
     expect(rowCall.keyframes.every((frame: Keyframe) => frame.opacity === undefined)).toBe(true);
     // At the very end of the scroll range the earlier prompt's original is back in view.
     expect(sample(rowCall.keyframes, 'filter', 1e7)).toBe(1);
-    // No style is written on scroll; the browser applies the animations.
+    // The absolute position is animated by the browser. A scroll-driven compositor
+    // transform can be painted behind the incoming prompt's actual scroll position.
+    expect(slotCall.keyframes.every(frame => frame.transform === undefined)).toBe(true);
+    expect(slot.style.top).toBe('');
     expect(slot.style.transform).toBe('');
     const before = calls.length;
     scrollTo(520);

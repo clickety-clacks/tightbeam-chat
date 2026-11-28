@@ -1,3 +1,4 @@
+import { openAttachmentPreview } from './MessageAttachments';
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from 'react';
 import {
   effectiveSummaryHeight, pinnedPromptBreakpoints, pinnedPromptFrameAt, pinnedPromptKeyframes,
@@ -63,8 +64,8 @@ const HIDDEN_ORIGINAL = 'data-pinned-original';
 const PIN_HANDOVER = 0.01;
 /** The scroll range every pinned-prompt animation spans, far beyond any real conversation. */
 const ANIMATION_RANGE = 1e7;
-/** Lines in a summary. */
-const SUMMARY_LINES = 3;
+// Match Chat's compact layout cutoff, but use the transcript's usable pane width.
+const NARROW_SUMMARY_WIDTH = 540;
 
 interface Measured extends PinnedPromptGeometry {
   readonly identity: string;
@@ -121,6 +122,7 @@ interface SlotElements {
   body?: HTMLDivElement;
   full?: HTMLDivElement;
   summary?: HTMLDivElement;
+  photos?: HTMLDivElement;
   /** The original row the full layer was copied from. */
   copiedFrom?: HTMLElement;
   copyObserver?: MutationObserver;
@@ -136,6 +138,58 @@ function scrollTimelineConstructor(): TimelineConstructor | undefined {
   const candidate = (globalThis as { ScrollTimeline?: TimelineConstructor }).ScrollTimeline;
   return typeof candidate === 'function' && typeof Element !== 'undefined' &&
     typeof Element.prototype.animate === 'function' ? candidate : undefined;
+}
+
+function promptPhotos(row: HTMLElement) {
+  return Array.from(row.querySelectorAll<HTMLElement>('.tb-chat-image-attachment'));
+}
+
+function photoTrigger(photo: HTMLElement | undefined) {
+  return photo?.querySelector<HTMLButtonElement>('.tb-chat-image-preview-trigger');
+}
+
+function syncPhotoStrip(row: HTMLElement, strip: HTMLElement) {
+  const photos = promptPhotos(row);
+  strip.hidden = photos.length === 0;
+  const thumbnails = photos.map(photo => {
+    const trigger = photoTrigger(photo);
+    const image = trigger?.querySelector('img');
+    return { trigger, image, label: trigger?.getAttribute('aria-label') ??
+      photo.querySelector('[aria-label]')?.getAttribute('aria-label') ?? 'Photo' };
+  });
+  let changed = false;
+  thumbnails.forEach(({ trigger, image, label }, index) => {
+    const child = strip.children[index];
+    // Keep a ready sibling's button connected while another photo loads. It may
+    // be the focus return target for a preview that is currently open.
+    if (child?.getAttribute('aria-label') === label &&
+      child.querySelector('img')?.getAttribute('src') === image?.getAttribute('src')) return;
+    let replacement: HTMLElement;
+    if (trigger && image) {
+      const thumbnail = document.createElement('button');
+      thumbnail.type = 'button';
+      thumbnail.setAttribute('aria-haspopup', 'dialog');
+      thumbnail.append(image.cloneNode(false));
+      thumbnail.addEventListener('click', () => {
+        const original = photoTrigger(promptPhotos(row)[index]);
+        if (original) openAttachmentPreview(original, thumbnail);
+      });
+      replacement = thumbnail;
+    } else {
+      replacement = document.createElement('span');
+      replacement.setAttribute('role', 'img');
+      replacement.textContent = 'Photo';
+    }
+    replacement.setAttribute('aria-label', label);
+    if (child) child.replaceWith(replacement);
+    else strip.append(replacement);
+    changed = true;
+  });
+  while (strip.children.length > thumbnails.length) {
+    strip.lastElementChild?.remove();
+    changed = true;
+  }
+  return changed;
 }
 
 function copyBubble(row: HTMLElement): HTMLElement {
@@ -220,7 +274,10 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
     const portLeft = boxBounds.left + box.clientLeft;
     overlay.style.top = `${portTop - rootBounds.top}px`;
     overlay.style.left = `${portLeft - rootBounds.left}px`;
-    overlay.style.width = `${box.clientWidth}px`;
+    const paneWidth = box.clientWidth;
+    const summaryLines = paneWidth <= NARROW_SUMMARY_WIDTH ? 1 : 2;
+    overlay.style.width = `${paneWidth}px`;
+    overlay.style.setProperty('--tb-chat-pinned-summary-lines', String(summaryLines));
     overlay.style.height = `${box.clientHeight}px`;
     const pinFromRoot = Number.parseFloat(root.style.getPropertyValue('--tb-chat-floating-prompt-top')) || 10;
     // The scrollport's top relative to the root does not change with scrolling.
@@ -257,12 +314,12 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
         minSummaryHeight: previousOptions.minSummaryHeight ?? 0 }, maxScroll };
     const near = new Set(wantedSlots(scrollTop, 1));
     const ownAnimations = new Set([...slots.current.values()].flatMap(slot => slot.animations ?? []));
-    let minSummaryHeight = previousOptions.minSummaryHeight ?? 0;
+    let minSummaryHeight = 0;
     measured.forEach((prompt, index) => {
       if (!near.has(prompt.identity)) return;
       const row = rowsByIndex[index];
       const text = promptsByIdentity.current.get(prompt.identity)?.text ?? '';
-      const summary = summaryFor(row, prompt.width, text);
+      const summary = summaryFor(row, prompt.width, text, summaryLines);
       if (summary) {
         if (!minSummaryHeight) minSummaryHeight = summary.minimum;
         measured[index] = { ...prompt, summaryHeight: summary.summaryHeight };
@@ -277,17 +334,13 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
     layout.current = { ...layout.current, options: { ...layout.current.options, minSummaryHeight } };
   }, [getRow, viewport]);
 
-  /**
-   * A prompt's summary: its text clamped to three lines. A prompt whose text fits and
-   * that holds nothing but text is already at pinned size; one with images, code or a
-   * table is taller than its text, so it shrinks to the text summary like a long prompt.
-   * Cached per row, width and text.
-   */
-  const summaryFor = useCallback((row: HTMLElement, width: number, text: string) => {
+  /** Measure the smaller, clamped text and any photo strip at the bubble's own width. */
+  const summaryFor = useCallback((row: HTMLElement, width: number, text: string, lines: number) => {
     const probe = measure.current;
     const style = getComputedStyle(row);
     const padding = `${style.paddingTop} ${style.paddingRight} ${style.paddingBottom} ${style.paddingLeft}`;
-    const key = `${width}\u0000${padding}\u0000${style.fontSize}\u0000${text}`;
+    const photos = promptPhotos(row).length;
+    const key = `${lines}\u0000${photos}\u0000${width}\u0000${padding}\u0000${style.fontSize}\u0000${text}`;
     const cached = summaries.current.get(row);
     if (cached?.key === key) return cached;
     if (!probe) return undefined;
@@ -295,13 +348,11 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
     probe.style.padding = padding;
     const probeText = probe.firstElementChild as HTMLElement;
     probeText.textContent = text;
-    const height = probe.getBoundingClientRect().height;
-    const truncated = probeText.scrollHeight > probeText.clientHeight + 1;
-    const hasMedia = !!row.querySelector('img, video, pre, table, .tb-chat-attachments, .tb-chat-image-attachments');
-    const fontSize = Number.parseFloat(style.fontSize) || 0;
-    const lineHeight = Number.parseFloat(style.lineHeight) || fontSize * 1.5;
-    const entry = { key, summaryHeight: truncated || hasMedia ? height : row.getBoundingClientRect().height,
-      // Rule 4's floor: one line of prompt text plus the bubble's vertical padding.
+    (probe.lastElementChild as HTMLElement).hidden = photos === 0;
+    const summaryStyle = getComputedStyle(probeText);
+    const lineHeight = Number.parseFloat(summaryStyle.lineHeight) ||
+      (Number.parseFloat(summaryStyle.fontSize) || 0) * 1.5;
+    const entry = { key, summaryHeight: probe.getBoundingClientRect().height,
       minimum: lineHeight + (Number.parseFloat(style.paddingTop) || 0) + (Number.parseFloat(style.paddingBottom) || 0) };
     summaries.current.set(row, entry);
     return entry;
@@ -381,7 +432,10 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
       stops.map(stop => ({ offset: offset(stop.at), ...make(stop.values) }));
     slot.animations = [
       // Position only. Whether the copy is seen follows its pin state (see the top of this file).
-      slot.slot.animate(frames(values => ({ transform: `translateY(${values.top}px)` })), timing),
+      // Interpolate the absolute position on the same layout timeline as the next
+      // prompt. WebKit can paint a stale compositor transform during push-off,
+      // even while the computed transform has advanced with the scroll position.
+      slot.slot.animate(frames(values => ({ top: `${values.top}px` })), timing),
       slot.body.animate(frames(values => ({ transform: `translateY(${values.innerOffset}px)` })), timing),
       slot.full.animate(frames(values => ({ opacity: 1 - values.fade })), timing),
       slot.summary.animate(frames(values => ({ opacity: values.fade })), timing),
@@ -429,6 +483,7 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
       const bubble = copyBubble(row);
       bubble.style.width = `${current()?.width ?? row.getBoundingClientRect().width}px`;
       slot.full!.replaceChildren(bubble);
+      if (slot.photos && syncPhotoStrip(row, slot.photos)) scheduleRefresh.current();
     };
     copy();
     slot.copiedFrom = row;
@@ -468,7 +523,12 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
     const source = timeline.current;
     for (const [identity, slot] of slots.current) {
       const index = byIdentity.get(identity);
-      const pinned = index !== undefined && !!pinnedPromptFrameAt(scrollTop, measured, index, options);
+      const frame = index === undefined ? undefined : pinnedPromptFrameAt(scrollTop, measured, index, options);
+      const pinned = frame !== undefined;
+      const photoStripInactive = !frame || frame.fade < .5;
+      if (slot.photos && !slot.photos.hidden && slot.photos.hasAttribute('inert') !== photoStripInactive) {
+        slot.photos.toggleAttribute('inert', photoStripInactive);
+      }
       if (!source) writeFrame(identity, slot, scrollTop);
       if (slot.pinned === pinned || !slot.slot) continue;
       slot.pinned = pinned;
@@ -524,6 +584,30 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
       if (x < left || x > left + width || y < frame.top || y > frame.top + frame.height) continue;
       event.preventDefault();
       event.stopPropagation();
+      // Keep the layer transparent to pointer input so wheels and touch pans
+      // scroll natively. Only a completed click needs to be routed to the copy.
+      const hit = (button: HTMLButtonElement | null | undefined) => {
+        const rect = button?.getBoundingClientRect();
+        return rect && rect.width > 0 && rect.height > 0 &&
+          event.clientX >= rect.left && event.clientX <= rect.right &&
+          event.clientY >= rect.top && event.clientY <= rect.bottom;
+      };
+      const slot = slots.current.get(identity);
+      if (frame.fade >= .5) {
+        const thumbnail = slot?.photos && Array.from(slot.photos.querySelectorAll('button')).find(hit);
+        if (thumbnail) {
+          thumbnail.click();
+          return;
+        }
+      } else if (slot?.copiedFrom && slot.full) {
+        const photoIndex = promptPhotos(slot.full).findIndex(photo => hit(photoTrigger(photo)));
+        const original = photoTrigger(promptPhotos(slot.copiedFrom)[photoIndex]);
+        const jump = slot.slot?.querySelector<HTMLButtonElement>('.tb-chat-pinned-jump');
+        if (original && jump) {
+          openAttachmentPreview(original, jump);
+          return;
+        }
+      }
       onJumpRef.current(prompt);
       return;
     }
@@ -533,7 +617,35 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
     const box = viewport.current;
     if (!box) return;
     box.addEventListener('scroll', onScroll, { passive: true });
-    box.addEventListener('click', onTranscriptClick, { capture: true });
+    const document = box.ownerDocument;
+    // WebKit can emit a click after selecting text. Only a primary press that
+    // stayed within tap slop may be routed to the pinned overlay.
+    let press: { id: number; x: number; y: number; slop: number; dragged: boolean } | undefined;
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.isPrimary === false) return;
+      press = event.button === 0 && event.target instanceof Node && box.contains(event.target)
+        ? { id: event.pointerId, x: event.clientX, y: event.clientY,
+          slop: event.pointerType === 'touch' ? 8 : 4, dragged: false }
+        : undefined;
+    };
+    const onPointerMove = (event: PointerEvent) => {
+      if (press && press.id === event.pointerId &&
+        Math.hypot(event.clientX - press.x, event.clientY - press.y) > press.slop) press.dragged = true;
+    };
+    const onPointerCancel = (event: PointerEvent) => {
+      if (press?.id === event.pointerId) press = undefined;
+    };
+    const onClick = (event: MouseEvent) => {
+      const gesture = press;
+      press = undefined;
+      if (event.detail === 0 || !gesture || gesture.dragged ||
+        Math.hypot(event.clientX - gesture.x, event.clientY - gesture.y) > gesture.slop) return;
+      onTranscriptClick(event);
+    };
+    document.addEventListener('pointerdown', onPointerDown, true);
+    document.addEventListener('pointermove', onPointerMove, true);
+    document.addEventListener('pointercancel', onPointerCancel, true);
+    box.addEventListener('click', onClick, true);
     let frame = 0;
     const schedule = () => {
       if (frame) return;
@@ -553,7 +665,10 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
     void document.fonts?.ready.then(schedule);
     return () => {
       box.removeEventListener('scroll', onScroll);
-      box.removeEventListener('click', onTranscriptClick, { capture: true });
+      box.removeEventListener('click', onClick, true);
+      document.removeEventListener('pointerdown', onPointerDown, true);
+      document.removeEventListener('pointermove', onPointerMove, true);
+      document.removeEventListener('pointercancel', onPointerCancel, true);
       observer?.disconnect();
       window.removeEventListener('resize', schedule);
       if (frame) cancelAnimationFrame(frame);
@@ -572,13 +687,13 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
 
   // Ref callbacks are kept per slot part so React does not detach and reattach them on every render.
   const slotRefs = useRef(new Map<string, (element: HTMLDivElement | null) => void>());
-  const slotRef = (identity: string, part: 'slot' | 'body' | 'full' | 'summary') => {
+  const slotRef = (identity: string, part: 'slot' | 'body' | 'full' | 'summary' | 'photos') => {
     const cacheKey = `${part}\u0000${identity}`;
     let callback = slotRefs.current.get(cacheKey);
     if (!callback) slotRefs.current.set(cacheKey, callback = attachSlotPart(identity, part));
     return callback;
   };
-  const attachSlotPart = (identity: string, part: 'slot' | 'body' | 'full' | 'summary') => (element: HTMLDivElement | null) => {
+  const attachSlotPart = (identity: string, part: 'slot' | 'body' | 'full' | 'summary' | 'photos') => (element: HTMLDivElement | null) => {
     let slot = slots.current.get(identity);
     if (!slot) {
       if (!element) return;
@@ -593,7 +708,7 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
       releaseRow(slot);
       slot.copyObserver?.disconnect();
       slots.current.delete(identity);
-      for (const name of ['slot', 'body', 'full', 'summary']) slotRefs.current.delete(`${name}\u0000${identity}`);
+      for (const name of ['slot', 'body', 'full', 'summary', 'photos']) slotRefs.current.delete(`${name}\u0000${identity}`);
     } else {
       slot[part] = undefined;
     }
@@ -601,7 +716,8 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
 
   return <div ref={layer} className="tb-chat-pinned-layer">
     <div ref={measure} className="tb-chat-pinned-summary tb-chat-pinned-summary-measure" aria-hidden="true">
-      <div className="tb-chat-pinned-summary-text" style={{ WebkitLineClamp: SUMMARY_LINES }} />
+      <div className="tb-chat-pinned-summary-text" />
+      <div className="tb-chat-pinned-photos" hidden />
     </div>
     {mounted.map(identity => {
       const prompt = promptsByIdentity.current.get(identity);
@@ -611,8 +727,9 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
         <div className="tb-chat-pinned-window">
           <div ref={slotRef(identity, 'body')} className="tb-chat-pinned-body">
             <div ref={slotRef(identity, 'full')} className="tb-chat-pinned-full" aria-hidden="true" inert />
-            <div ref={slotRef(identity, 'summary')} className="tb-chat-pinned-summary" aria-hidden="true" inert>
-              <div className="tb-chat-pinned-summary-text" style={{ WebkitLineClamp: SUMMARY_LINES }}>{prompt.text}</div>
+            <div ref={slotRef(identity, 'summary')} className="tb-chat-pinned-summary">
+              <div className="tb-chat-pinned-summary-text" aria-hidden="true" inert>{prompt.text}</div>
+              <div ref={slotRef(identity, 'photos')} className="tb-chat-pinned-photos" hidden inert />
             </div>
             <button type="button" className="tb-chat-pinned-jump" aria-label="Jump to user prompt"
               aria-controls={prompt.targetId} onClick={() => onJump(prompt)} />
