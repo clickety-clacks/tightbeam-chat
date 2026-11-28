@@ -3,6 +3,10 @@
     "version": "v0.1.125",
     "items": [
       {
+        "title": "Scroll-pinned prompts",
+        "description": "The changes and limits below apply when scroll-pinned prompts are enabled."
+      },
+      {
         "title": "Pinned prompts stay visible while scrolling",
         "description": "Pinned prompts stay visible during wheel scrolling in WebKit. Successive prompts also avoid painting over each other as one pushes the other out."
       },
