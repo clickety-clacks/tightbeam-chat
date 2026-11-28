@@ -496,6 +496,7 @@ describe('work item IDs in messages and the composer', () => {
     fireEvent.click((await pills())[0]);
     const dialog = await screen.findByRole('dialog');
     const caption = within(dialog).getByRole('button', { name: 'Copy work item ID wi_0000' });
+    const status = within(dialog).getByRole('status');
     const writeText = vi.fn(async () => {
       if (!succeeds) throw new Error('Clipboard access denied');
     });
@@ -506,7 +507,6 @@ describe('work item IDs in messages and the composer', () => {
       expect(caption.textContent).toBe('wi_0000');
       await act(async () => { fireEvent.click(caption); });
       expect(writeText).toHaveBeenCalledExactlyOnceWith(id);
-      const status = within(dialog).getByRole('status');
       if (succeeds) {
         expect(status.textContent).toBe('Copied');
         expect(caption.textContent?.trim()).toBe('Copied');
