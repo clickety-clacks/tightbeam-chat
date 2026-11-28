@@ -16,7 +16,8 @@
       }
     ],
     "compatibleTightbeam": ["0.1.15", "0.1.16"],
-    "breakingChanges": "none"
+    "breakingChanges": "none",
+    "breakingChangesReview": {"reviewer": "review:chat-pinned-algorithm", "commit": "f5fbf79aa391c0856e0517977f222f35c891772d", "result": "confirmed"}
   },
   {
     "version": "v0.1.123",
