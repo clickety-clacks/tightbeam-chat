@@ -247,7 +247,7 @@ export function WorkItemSheet({ id, pills, transport, names, onClose, onInsert }
   const settled = pill && !pill.stale && pill.summary.state !== 'open';
   const [state, setState] = useState<SheetState>({ status: 'looking' });
   const [attempt, setAttempt] = useState(0);
-  const [copyStatus, setCopyStatus] = useState<'copied' | 'unavailable'>();
+  const [copyFeedback, setCopyFeedback] = useState<{ status: 'copied' | 'unavailable' }>();
   const [now, setNow] = useState(() => Date.now());
   const sheet = useRef<HTMLElement>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
@@ -271,6 +271,11 @@ export function WorkItemSheet({ id, pills, transport, names, onClose, onInsert }
     const timer = setInterval(() => setNow(Date.now()), 30_000);
     return () => clearInterval(timer);
   }, []);
+  useEffect(() => {
+    if (copyFeedback?.status !== 'copied') return;
+    const timer = setTimeout(() => setCopyFeedback(undefined), 1_500);
+    return () => clearTimeout(timer);
+  }, [copyFeedback]);
   useLayoutEffect(() => { closeButton.current?.focus({ preventScroll: true }); }, []);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -287,16 +292,12 @@ export function WorkItemSheet({ id, pills, transport, names, onClose, onInsert }
     return () => document.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  const insertOrCopy = async () => {
-    if (onInsert) {
-      if (!onInsert(id)) setCopyStatus('unavailable');
-      return;
-    }
+  const copyId = async () => {
     try {
       await navigator.clipboard.writeText(id);
-      setCopyStatus('copied');
+      setCopyFeedback({ status: 'copied' });
     } catch {
-      setCopyStatus('unavailable');
+      setCopyFeedback({ status: 'unavailable' });
     }
   };
   const tap = state.status === 'ready' ? state.data : undefined;
@@ -319,6 +320,8 @@ export function WorkItemSheet({ id, pills, transport, names, onClose, onInsert }
   const shown: ShownState = (data && foundState(data)) ?? base;
   const ended = base === 'done' ? `${stateText(base, false, item)}.` : item && endings[base];
   const canUseId = state.status !== 'gone' && item && isWorkItemId(id);
+  const shortId = formatVisibleIds(id);
+  const copied = copyFeedback?.status === 'copied';
   const lead = shown === 'you' ? 'The next move is yours.' : shown === 'waiting' ? 'This is what it waits on, step by step.' : undefined;
   return <div className="tb-chat-work-items tb-chat-work-layer">
     <button type="button" className="tb-chat-work-scrim" aria-label="Close work item" tabIndex={-1} onClick={onClose} />
@@ -326,18 +329,26 @@ export function WorkItemSheet({ id, pills, transport, names, onClose, onInsert }
       <button ref={closeButton} type="button" className="tb-chat-modal-close" aria-label="Close work item" onClick={onClose}>×</button>
       <div className="tb-chat-work-sheet-scroll" tabIndex={0}>
         <header>
-          <div>
+          <div className="tb-chat-work-sheet-meta">
             <span className="tb-chat-work-chip" data-state={shown}><Icon name={shown} />
               {stateText(shown, pill?.stale === true && !data, item)}</span>
-            <h2 id={titleId}>{item ? plain(item.title) : 'Work item'}</h2>
+            {canUseId && <>
+              <button type="button" className="tb-chat-work-id-caption" aria-label={`Copy work item ID ${shortId}`}
+                onClick={() => { void copyId(); }}>
+                {copied ? <><Icon name="done" /> Copied</> : shortId}
+              </button>
+              <span className="tb-chat-sr-only" role="status">{copied ? 'Copied' : ''}</span>
+            </>}
           </div>
-          {canUseId && <button type="button" className="tb-chat-work-id-action" onClick={() => { void insertOrCopy(); }}>
-            {onInsert ? 'Insert work item ID' : 'Copy work item ID'}
+          <h2 id={titleId}>{item ? plain(item.title) : 'Work item'}</h2>
+          {canUseId && onInsert && <button type="button" className="tb-chat-work-id-action" onClick={() => {
+            if (!onInsert(id)) setCopyFeedback({ status: 'unavailable' });
+          }}>
+            Insert work item ID
           </button>}
         </header>
         <div className="tb-chat-work-sheet-body" aria-live="polite" aria-busy={state.status === 'looking' && readNow.current}>
-          {canUseId && copyStatus === 'copied' && <p role="status">Work item ID copied.</p>}
-          {canUseId && copyStatus === 'unavailable' && <p role="status">Select the work item ID to copy it. <code>{id}</code></p>}
+          {canUseId && copyFeedback?.status === 'unavailable' && <p role="status">Select the work item ID to copy it. <code>{id}</code></p>}
           {(settled || state.status === 'updated') && !data && ended && <p className="tb-chat-work-box">{ended}{item?.failReason && ` ${plain(item.failReason)}`}</p>}
           {readNow.current && state.status === 'looking' && <p className="tb-chat-work-note" role="status">Looking…</p>}
           {readNow.current && state.status === 'gone' && <p className="tb-chat-work-box">This work item is no longer available.</p>}

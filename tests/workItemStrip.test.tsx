@@ -391,6 +391,9 @@ describe('the sheet', () => {
     expect(scroll.contains(within(dialog).getByRole('heading', { level: 2 }))).toBe(true);
     expect(scroll.contains(detail)).toBe(true);
     fireEvent.keyDown(scroll, { key: 'Tab' });
+    const caption = within(dialog).getByRole('button', { name: 'Copy work item ID wi_0000' });
+    expect(document.activeElement).toBe(caption);
+    fireEvent.keyDown(caption, { key: 'Tab' });
     const insert = within(dialog).getByRole('button', { name: 'Insert work item ID' });
     expect(document.activeElement).toBe(insert);
     fireEvent.keyDown(insert, { key: 'Tab' });
@@ -497,6 +500,48 @@ describe('work item IDs in messages and the composer', () => {
     expect(run.counts).toEqual({ page: 1 });
   });
 
+  it.each([true, false])('copies from the short caption and only announces success (%s)', async succeeds => {
+    const run = chat([summary(1, { state: 'closed', holders: [] })]);
+    const composer = await screen.findByRole<HTMLTextAreaElement>('textbox', { name: /Message to/ });
+    fireEvent.change(composer, { target: { value: 'Keep my draft' } });
+    fireEvent.click((await pills())[0]);
+    const dialog = await screen.findByRole('dialog');
+    const caption = within(dialog).getByRole('button', { name: 'Copy work item ID wi_0000' });
+    const status = within(dialog).getByRole('status');
+    const writeText = vi.fn(async () => {
+      if (!succeeds) throw new Error('Clipboard access denied');
+    });
+    const original = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    vi.useFakeTimers();
+    try {
+      expect(caption.textContent).toBe('wi_0000');
+      await act(async () => { fireEvent.click(caption); });
+      expect(writeText).toHaveBeenCalledExactlyOnceWith(id);
+      if (succeeds) {
+        expect(status.textContent).toBe('Copied');
+        expect(caption.textContent?.trim()).toBe('Copied');
+        expect(caption.querySelector('svg[aria-hidden="true"]')).toBeTruthy();
+        act(() => { vi.advanceTimersByTime(1_499); });
+        expect(status.textContent).toBe('Copied');
+        act(() => { vi.advanceTimersByTime(1); });
+        expect(status.textContent).toBe('');
+        expect(caption.textContent).toBe('wi_0000');
+      } else {
+        expect(status.textContent).toBe('');
+        expect(caption.textContent).toBe('wi_0000');
+        expect(within(dialog).getByText(id).tagName).toBe('CODE');
+      }
+      expect(composer.value).toBe('Keep my draft');
+      expect(run.counts).toEqual({ page: 1 });
+      expect(run.send).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+      if (original) Object.defineProperty(navigator, 'clipboard', original);
+      else Reflect.deleteProperty(navigator, 'clipboard');
+    }
+  });
+
   it.each([true, false])('respects native draft-insert capability (%s)', async supportsInsert => {
     const events: HostComposerEvent[] = [];
     vi.stubGlobal('__TIGHTBEAM_CHAT_HOST__', {
@@ -508,6 +553,7 @@ describe('work item IDs in messages and the composer', () => {
     expect(screen.queryByRole('textbox', { name: /Message to/ })).toBeNull();
     fireEvent.click((await pills())[0]);
     const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByRole('button', { name: 'Copy work item ID wi_0000' })).toBeTruthy();
     if (supportsInsert) {
       fireEvent.click(within(dialog).getByRole('button', { name: 'Insert work item ID' }));
       const ready = events.find(event => event.event === 'ready')!;
@@ -517,7 +563,7 @@ describe('work item IDs in messages and the composer', () => {
       }]);
       expect(screen.queryByRole('dialog')).toBeNull();
     } else {
-      expect(within(dialog).getByRole('button', { name: 'Copy work item ID' })).toBeTruthy();
+      expect(within(dialog).queryByRole('button', { name: 'Insert work item ID' })).toBeNull();
       expect(events.some(event => event.event === 'draft-insert-requested')).toBe(false);
     }
     expect(run.send).not.toHaveBeenCalled();
