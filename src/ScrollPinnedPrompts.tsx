@@ -11,11 +11,18 @@ import {
  * Each pinned prompt is drawn in a layer over the transcript at the original bubble's
  * own position and width. Where it is drawn comes from `pinnedPromptLayout`. Where the
  * browser has scroll timelines, every per-frame change (position, height, inner offset,
- * fade, showing the copy and hiding the original) is a scroll-driven animation of
- * transform, opacity or visibility, so the browser applies it in step with its own
- * scrolling and no script runs per frame. Elsewhere a scroll listener writes the same
- * values. Script only reacts to layout changes and to a prompt starting or stopping being
- * pinned (which slots exist, which are interactive).
+ * fade, and hiding the original) is a scroll-driven animation of transform, opacity or
+ * filter, so the browser applies it in step with its own scrolling and no script runs per
+ * frame. Elsewhere a scroll listener writes the same values. Script only reacts to layout
+ * changes and to a prompt starting or stopping being pinned (which slots exist, which are
+ * interactive).
+ *
+ * Whether the copy itself is seen follows the model's pin state directly: its
+ * `data-pinned`, styled in style.css, the same state that makes it pressable. It is not a
+ * scroll-driven animation. WebKit runs scroll-driven opacity on its compositor and could
+ * leave the copy unpainted during wheel scrolling, and a discrete property animated over
+ * this range could switch a hair before the pin point, showing the copy and its dismiss
+ * button while the original still owns the pin line.
  */
 
 export interface ScrollPinnedPrompt {
@@ -321,11 +328,9 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
     const row = index === undefined ? undefined : getRow(promptsByIdentity.current.get(identity)?.scrollKey ?? '');
     if (!slot.slot || !slot.body || !slot.full || !slot.summary) return;
     if (!frame || !row) {
-      slot.slot.style.visibility = 'hidden';
       releaseRow(slot);
       return;
     }
-    slot.slot.style.visibility = 'visible';
     slot.slot.style.transform = `translateY(${frame.top}px)`;
     slot.body.style.transform = `translateY(${frame.innerOffset}px)`;
     slot.full.style.opacity = String(1 - frame.fade);
@@ -375,11 +380,8 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
     const frames = <T extends Keyframe>(make: (values: Values) => T) =>
       stops.map(stop => ({ offset: offset(stop.at), ...make(stop.values) }));
     slot.animations = [
-      // Shown and hidden through visibility, never opacity. WebKit runs scroll-driven opacity
-      // on its compositor, and during ordinary wheel scrolling it can leave the copy unpainted
-      // at the pin line while the page itself reports it shown, so the prompt vanishes.
-      // Visibility is applied by the page itself, in step with the scroll position.
-      slot.slot.animate(frames(values => ({ visibility: values.shown ? 'visible' : 'hidden', transform: `translateY(${values.top}px)` })), timing),
+      // Position only. Whether the copy is seen follows its pin state (see the top of this file).
+      slot.slot.animate(frames(values => ({ transform: `translateY(${values.top}px)` })), timing),
       slot.body.animate(frames(values => ({ transform: `translateY(${values.innerOffset}px)` })), timing),
       slot.full.animate(frames(values => ({ opacity: 1 - values.fade })), timing),
       slot.summary.animate(frames(values => ({ opacity: values.fade })), timing),
