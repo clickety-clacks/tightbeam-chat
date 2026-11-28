@@ -540,6 +540,22 @@ describe('scroll-pinned prompts without scroll timelines', () => {
     expect(translate(slotFor('B'))).toBe(10);
   });
 
+  it('copies an original that changes while pinned without its hiding attribute', async () => {
+    const caption = document.createElement('span');
+    caption.textContent = 'First caption';
+    rows.get('A')!.append(caption);
+    mount();
+    scrollTo(500);
+    expect(rows.get('A')!.hasAttribute('data-pinned-original')).toBe(true);
+    caption.textContent = 'Updated caption';
+    await act(async () => { await Promise.resolve(); });
+    scrollTo(0);
+    scrollTo(500);
+    const copy = slotFor('A')!.querySelector<HTMLElement>('.tb-chat-pinned-full > .tb-chat-pinned-copy')!;
+    expect(copy.textContent).toContain('Updated caption');
+    expect(copy.hasAttribute('data-pinned-original')).toBe(false);
+  });
+
   it('gives the original back when it unmounts', () => {
     const result = mount();
     scrollTo(500);
@@ -551,6 +567,9 @@ describe('scroll-pinned prompts without scroll timelines', () => {
 
 describe('scroll-pinned prompts with scroll timelines', () => {
   it('hands the layout to the browser as scroll-driven keyframes and runs nothing per frame', () => {
+    // A with a photo: its original is hidden by a scroll-driven filter (see the next test for
+    // prompts without media).
+    rows.get('A')!.append(document.createElement('img'));
     class FakeScrollTimeline { constructor(readonly options: unknown) {} }
     (globalThis as { ScrollTimeline?: unknown }).ScrollTimeline = FakeScrollTimeline;
     const calls: Array<{ element: Element; keyframes: Keyframe[]; options: KeyframeAnimationOptions }> = [];
@@ -599,6 +618,9 @@ describe('scroll-pinned prompts with scroll timelines', () => {
     }
     // Hiding the original never touches its opacity, which Chat animates for its arrival fade.
     expect(rowCall.keyframes.every((frame: Keyframe) => frame.opacity === undefined)).toBe(true);
+    // Hidden by the animation alone: never by attribute, which would hide it from layout's
+    // point of view before its photo has painted.
+    expect(rows.get('A')!.hasAttribute('data-pinned-original')).toBe(false);
     // At the very end of the scroll range the earlier prompt's original is back in view.
     expect(sample(rowCall.keyframes, 'filter', 1e7)).toBe(1);
     // The absolute position is animated by the browser. A scroll-driven compositor
@@ -616,11 +638,16 @@ describe('scroll-pinned prompts with scroll timelines', () => {
     expect(latest.keyframes.at(-1)!.offset).toBe(1);
   });
 
-  it('shows the copy exactly while the model has the prompt pinned, as when it can be pressed', () => {
+  it('shows the copy, and hides an original without media, exactly while the model has it pinned', () => {
     class FakeScrollTimeline { constructor(readonly options: unknown) {} }
     (globalThis as { ScrollTimeline?: unknown }).ScrollTimeline = FakeScrollTimeline;
-    Element.prototype.animate = vi.fn(() => ({ cancel: vi.fn() }) as unknown as Animation) as unknown as Element['animate'];
+    const animated: Element[] = [];
+    Element.prototype.animate = vi.fn(function (this: Element) { animated.push(this); return { cancel: vi.fn() } as unknown as Animation; }) as unknown as Element['animate'];
     mount();
+    // A holds only text: its original is not animated. A scroll-driven filter runs on WebKit's
+    // compositor and hid the original a frame or two before the copy appeared, blanking the
+    // prompt on large wheel steps; the pin state switches both in the same frame.
+    expect(animated).not.toContain(rows.get('A'));
     // Fractional positions either side of A's pin point (90) and push-off (992), where a
     // scroll-driven switch would land on either side depending on the browser's rounding.
     for (const position of [0, 89.99, 90, 90.001, 90.4, 500, 991.99, 992, 992.01, 600, 90.001, 90, 13]) {
@@ -629,7 +656,51 @@ describe('scroll-pinned prompts with scroll timelines', () => {
       const slot = slotFor('A');
       expect(slot?.hasAttribute('data-pinned') ?? false, `copy at ${position}`).toBe(pinned);
       if (slot) expect(slot.hasAttribute('inert'), `inert at ${position}`).toBe(!pinned);
+      expect(rows.get('A')!.hasAttribute('data-pinned-original'), `original at ${position}`).toBe(pinned);
     }
+  });
+
+  it('copies an original that changes while pinned without its hiding attribute, then repins it shown', async () => {
+    class FakeScrollTimeline { constructor(readonly options: unknown) {} }
+    (globalThis as { ScrollTimeline?: unknown }).ScrollTimeline = FakeScrollTimeline;
+    Element.prototype.animate = vi.fn(() => ({ cancel: vi.fn() }) as unknown as Animation) as unknown as Element['animate'];
+    const caption = document.createElement('span');
+    caption.textContent = 'First caption';
+    rows.get('A')!.append(caption);
+    mount();
+    scrollTo(500);
+    expect(rows.get('A')!.hasAttribute('data-pinned-original')).toBe(true);
+    // A host's renderMessage child updates while A is pinned: the copy is made again from the
+    // original, which still carries the attribute that hides it.
+    caption.textContent = 'Updated caption';
+    await act(async () => { await Promise.resolve(); });
+    scrollTo(0);
+    scrollTo(500);
+    const copy = slotFor('A')!.querySelector<HTMLElement>('.tb-chat-pinned-full > .tb-chat-pinned-copy')!;
+    expect(copy.textContent).toContain('Updated caption');
+    expect(copy.hasAttribute('data-pinned-original')).toBe(false);
+    expect(copy.querySelector('[data-pinned-original]')).toBeNull();
+  });
+
+  it('switches an original to its animation when it gains media, and gives it back', () => {
+    class FakeScrollTimeline { constructor(readonly options: unknown) {} }
+    (globalThis as { ScrollTimeline?: unknown }).ScrollTimeline = FakeScrollTimeline;
+    const animated: Element[] = [];
+    Element.prototype.animate = vi.fn(function (this: Element) { animated.push(this); return { cancel: vi.fn() } as unknown as Animation; }) as unknown as Element['animate'];
+    observeResizes();
+    const result = mount();
+    scrollTo(500);
+    expect(rows.get('A')!.hasAttribute('data-pinned-original')).toBe(true);
+    // A photo arrives in A while it is pinned: from the next layout pass it is hidden by its
+    // animation, and the attribute is removed.
+    rows.get('A')!.append(document.createElement('img'));
+    act(() => {
+      for (const callback of (globalThis as { __pinTestObservers?: ResizeObserverCallback[] }).__pinTestObservers ?? []) callback([], {} as ResizeObserver);
+    });
+    expect(animated).toContain(rows.get('A'));
+    expect(rows.get('A')!.hasAttribute('data-pinned-original')).toBe(false);
+    result.unmount();
+    expect(rows.get('A')!.hasAttribute('data-pinned-original')).toBe(false);
   });
 });
 

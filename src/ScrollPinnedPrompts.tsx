@@ -12,11 +12,11 @@ import {
  * Each pinned prompt is drawn in a layer over the transcript at the original bubble's
  * own position and width. Where it is drawn comes from `pinnedPromptLayout`. Where the
  * browser has scroll timelines, every per-frame change (position, height, inner offset,
- * fade, and hiding the original) is a scroll-driven animation of transform, opacity or
- * filter, so the browser applies it in step with its own scrolling and no script runs per
- * frame. Elsewhere a scroll listener writes the same values. Script only reacts to layout
- * changes and to a prompt starting or stopping being pinned (which slots exist, which are
- * interactive).
+ * fade, and hiding an original with media) is a scroll-driven animation of transform,
+ * opacity or filter, so the browser applies it in step with its own scrolling and no script
+ * runs per frame. Elsewhere a scroll listener writes the same values. Script only reacts to
+ * layout changes and to a prompt starting or stopping being pinned (which slots exist, which
+ * are interactive, and which originals without media are hidden; see `animate`).
  *
  * Whether the copy itself is seen follows the model's pin state directly: its
  * `data-pinned`, styled in style.css, the same state that makes it pressable. It is not a
@@ -128,9 +128,17 @@ interface SlotElements {
   copyObserver?: MutationObserver;
   animations?: Animation[];
   animationKey?: string;
+  /** The row the scroll-driven animations were made for. */
+  animatedRow?: HTMLElement;
+  /** Whether that row holds media, so its original is hidden by animation, not by pin state. */
+  animatedRowHasMedia?: boolean;
+  /** The original currently hidden by attribute. */
   hiddenRow?: HTMLElement;
   pinned?: boolean;
 }
+
+/** Content whose layout can depend on being painted (see `animate`). */
+const MEDIA = 'img, video, picture, canvas, iframe, .tb-chat-image-attachments, .tb-chat-attachments';
 
 type TimelineConstructor = new (options: { source: Element; axis: 'block' }) => AnimationTimeline;
 
@@ -199,6 +207,9 @@ function copyBubble(row: HTMLElement): HTMLElement {
   copy.removeAttribute('data-scroll-key');
   copy.removeAttribute('data-record-key');
   copy.removeAttribute('aria-label');
+  // A pinned original carries the attribute that hides it; the copy is made again whenever
+  // the original changes, including while it is pinned, and must never inherit that.
+  copy.removeAttribute(HIDDEN_ORIGINAL);
   copy.classList.add('tb-chat-pinned-copy');
   return copy;
 }
@@ -358,8 +369,9 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
     return entry;
   }, []);
 
-  // Without scroll timelines the original is hidden by an attribute (styled in style.css),
-  // never by inline style, so Chat's own row styles and animations are left alone.
+  // Where the original is hidden by an attribute (styled in style.css), it is never by inline
+  // style, so Chat's own row styles and animations are left alone. That is every original
+  // without scroll timelines, and originals without media with them (see `animate`).
   const releaseRow = (slot: SlotElements) => {
     slot.hiddenRow?.removeAttribute(HIDDEN_ORIGINAL);
     slot.hiddenRow = undefined;
@@ -369,6 +381,7 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
     for (const animation of slot.animations ?? []) animation.cancel();
     slot.animations = undefined;
     slot.animationKey = undefined;
+    slot.animatedRow = undefined;
   };
 
   /** Writes the frame for the current scroll position. Used where scroll timelines are missing. */
@@ -404,8 +417,9 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
     }
     const keyframes = pinnedPromptKeyframes(measured, index, options);
     const latest = !Number.isFinite(pinnedPromptBreakpoints(measured, index, options).gone);
-    const key = JSON.stringify([keyframes, latest, measured[index].left, measured[index].width]);
-    if (slot.animationKey === key && slot.hiddenRow === row && slot.animations?.length) return;
+    const media = !!row.querySelector(MEDIA);
+    const key = JSON.stringify([keyframes, latest, measured[index].left, measured[index].width, media]);
+    if (slot.animationKey === key && slot.animatedRow === row && slot.animations?.length) return;
     cancelAnimations(slot);
     // Every animation spans the same range, from the top of the scroll range to far beyond any
     // real scroll position, with explicit holds before the prompt pins and after it has gone.
@@ -439,13 +453,23 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
       slot.body.animate(frames(values => ({ transform: `translateY(${values.innerOffset}px)` })), timing),
       slot.full.animate(frames(values => ({ opacity: 1 - values.fade })), timing),
       slot.summary.animate(frames(values => ({ opacity: values.fade })), timing),
-      // The original stays in the transcript for layout and screen readers, unseen while its copy
-      // is shown. A filter, not opacity: Chat animates the row's own opacity (its arrival fade),
-      // and the two must not replace each other; filter opacity multiplies with it instead.
-      row.animate(frames(values => ({ filter: values.shown ? 'opacity(0)' : 'opacity(1)' })), timing),
     ];
+    // The original stays in the transcript for layout and screen readers, unseen while its copy
+    // is shown. A filter, not opacity: Chat animates the row's own opacity (its arrival fade),
+    // and the two must not replace each other; filter opacity multiplies with it instead.
+    //
+    // Without media, the original is hidden by the same pin state that shows the copy (in
+    // onScroll), so the two change in the same frame. A scroll-driven filter runs on WebKit's
+    // compositor and lands as soon as the compositor scrolls, a frame or two before the copy
+    // appears, which blanked the prompt on large wheel steps across the pin line.
+    //
+    // With media, it stays a scroll-driven animation. Hidden by style before it has ever been
+    // painted, WebKit lays out a photo original narrower (its bubble shrinks to fit content the
+    // photo has not yet contributed), and the transcript would shift when it unpinned.
+    if (media) slot.animations.push(row.animate(frames(values => ({ filter: values.shown ? 'opacity(0)' : 'opacity(1)' })), timing));
     slot.animationKey = key;
-    slot.hiddenRow = row;
+    slot.animatedRow = row;
+    slot.animatedRowHasMedia = media;
   }, [getRow]);
 
   /** Copies the original bubble into the slot, and again whenever the original changes. */
@@ -530,6 +554,14 @@ export const ScrollPinnedPrompts = forwardRef<ScrollPinnedPromptsHandle, Props>(
         slot.photos.toggleAttribute('inert', photoStripInactive);
       }
       if (!source) writeFrame(identity, slot, scrollTop);
+      else {
+        const byPinState = pinned && slot.animatedRow && slot.animatedRowHasMedia === false ? slot.animatedRow : undefined;
+        if (slot.hiddenRow !== byPinState) {
+          releaseRow(slot);
+          byPinState?.setAttribute(HIDDEN_ORIGINAL, '');
+          slot.hiddenRow = byPinState;
+        }
+      }
       if (slot.pinned === pinned || !slot.slot) continue;
       slot.pinned = pinned;
       // Only a pinned copy can be pressed or read; otherwise the original is in view.
