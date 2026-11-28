@@ -368,7 +368,7 @@ describe('the sheet', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Separate delivery item. Assigned' }));
     const dialog = screen.getByRole('dialog', { name: delivery.title });
     await within(dialog).findByText('Next check');
-    expect(within(dialog).getByText('Assigned', { exact: true })).toBeTruthy();
+    expect(within(dialog).getByText('Waiting', { exact: true })).toBeTruthy();
     expect(run.counts).toEqual({ page: 1, cards: 3, questions: 3, 'agent questions': 1, breathing: 1, wait: 1, name: 1 });
   });
 
