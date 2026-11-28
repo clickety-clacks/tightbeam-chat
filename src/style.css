@@ -213,11 +213,17 @@ body {
 .tb-chat-pinned-slot {
   position: absolute;
   top: 0;
-  opacity: 0;
-  will-change: transform, opacity;
+  /* Seen exactly while pinned (data-pinned follows the pin state; see ScrollPinnedPrompts). */
+  visibility: hidden;
+  will-change: transform;
   filter: drop-shadow(0 4px 10px color-mix(in srgb, var(--tb-chat-shadow) 8%, transparent))
     drop-shadow(0 1px 2px color-mix(in srgb, var(--tb-chat-shadow) 5%, transparent));
 }
+.tb-chat-pinned-slot[data-pinned] { visibility: visible; }
+/* A waiting copy paints nothing at all. Opacity applies to the copy as one group, so no
+   descendant or generated box can show through (a copied message may set its own
+   visibility). It is static and switched with the pin state, never animated. */
+.tb-chat-pinned-slot:not([data-pinned]) { opacity: 0; }
 .tb-chat-pinned-window {
   position: absolute;
   inset: 0;
