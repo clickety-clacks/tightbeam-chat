@@ -201,6 +201,31 @@
   padding-block: 1.1rem .4rem;
   padding-inline: 1.1rem 4.5rem;
 }
+.tb-chat-work-sheet-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .25rem .5rem;
+}
+.tb-chat .tb-chat-work-id-caption {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: .2rem;
+  min-inline-size: 4.5rem;
+  min-block-size: 1.7rem;
+  padding: 0 .15rem;
+  border: 0;
+  border-radius: .25rem;
+  background: transparent;
+  color: var(--tb-chat-accent);
+  font-size: .75rem;
+  line-height: 1;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.tb-chat-work-id-caption:focus-visible { outline: 2px solid var(--tb-chat-accent); }
+.tb-chat-work-id-caption svg { inline-size: .8rem; block-size: .8rem; }
 .tb-chat-work-id-action {
   margin-block-start: .65rem;
   min-height: 2.5rem;
