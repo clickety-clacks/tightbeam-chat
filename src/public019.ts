@@ -1385,7 +1385,8 @@ export function createPublic019Transport(config: Public019Config): { transport: 
         }
       }
       return Object.freeze({ items: Object.freeze(items),
-        oldestCursor: typeof body.oldestCursor === 'string' ? body.oldestCursor : null, hasOlder: body.hasOlder === true });
+        oldestCursor: typeof body.oldestCursor === 'string' ? body.oldestCursor : null, hasOlder: body.hasOlder === true,
+        ...(body.partial === true ? { partial: true as const } : {}) });
     },
     async readToolCalls(sessionKey, range, signal) {
       const filters = new URLSearchParams({ limit: '50', afterMessageSeqFromInclusive: String(range.fromInclusive) });

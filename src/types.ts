@@ -159,6 +159,7 @@ export interface FiledWorkItemPage {
   readonly items: readonly WorkItemSummary[];
   readonly oldestCursor: string | null;
   readonly hasOlder: boolean;
+  readonly partial?: true;
 }
 
 export type ToolCallIndex = RecordIndex<RecordIndex<ToolCallRecord>>;

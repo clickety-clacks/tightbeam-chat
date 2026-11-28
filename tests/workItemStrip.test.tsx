@@ -28,8 +28,8 @@ class Visible {
 }
 
 function chat(items: readonly WorkItemSummary[], options: {
-  pills?: boolean; failList?: boolean | 'network'; message?: string; emptyList?: boolean; missingOnTap?: boolean; waitReason?: string;
-  waitOnItem?: string;
+  pills?: boolean; failList?: boolean | 'network'; partialList?: number; message?: string;
+  emptyList?: boolean; missingOnTap?: boolean; waitReason?: string; waitOnItem?: string;
 } = {}) {
   const counts: Record<string, number> = {};
   const count = (name: string) => { counts[name] = (counts[name] ?? 0) + 1; };
@@ -94,6 +94,9 @@ function chat(items: readonly WorkItemSummary[], options: {
       if (sessionKey === 'fixture-session') {
         if (options.failList === 'network') throw new TypeError('Failed to fetch');
         if (options.failList) throw new Error('HTTP 500');
+      }
+      if (options.partialList !== undefined) {
+        return { items: items.slice(0, options.partialList), oldestCursor: null, hasOlder: false, partial: true as const };
       }
       return { items: options.emptyList ? [] : [...items], oldestCursor: null, hasOlder: false };
     },
@@ -362,6 +365,14 @@ describe('the sheet', () => {
     await waitFor(() => expect(run.counts).toEqual({ page: 1 }));
     expect(run.view.container.querySelector('.tb-chat-work-strip')).toBeNull();
     expect(screen.queryByText('Couldn’t load work items')).toBeNull();
+  });
+
+  it.each([0, 1])('shows incomplete coverage with %i good rows and no detail reads', async good => {
+    const run = chat([summary(1), summary(2)], { partialList: good });
+    expect((await screen.findByText('Couldn’t load work items')).getAttribute('role')).toBe('status');
+    const group = screen.queryByRole('group', { name: 'Work items, newest first' });
+    expect(group?.querySelectorAll('.tb-chat-work-pill').length ?? 0).toBe(good);
+    expect(run.counts).toEqual({ page: 1 });
   });
 
   it('tabs from Close to the scroll region around both the title and details', async () => {
